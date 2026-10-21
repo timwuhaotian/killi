@@ -29,8 +29,13 @@ pub fn edit(ctx: &Context, args: &Value) -> Output {
     }
     let file = TextFile::decode(&bytes);
     match apply(&file.text, &edits, path) {
-        Ok((text, count)) => match fs::write(&full, file.encode(&text)) {
-            Ok(()) => Output::ok(format!("Applied {count} replacement(s) to {path}.")),
+        Ok(applied) => match fs::write(&full, file.encode(&applied.text)) {
+            Ok(()) => {
+                let mut output = Output::ok(format!("Applied {} replacement(s) to {path}.", applied.count))
+                    .brief(format!("+{} −{}", applied.added, applied.removed));
+                output.display = Some(applied.diff);
+                output
+            }
             Err(e) => Output::error(format!("Could not write {path}: {e}")),
         },
         Err(message) => Output::error(message),
@@ -64,9 +69,18 @@ fn parse_edits(args: &Value) -> Result<Vec<Edit>, String> {
         .collect()
 }
 
+struct Applied {
+    text: String,
+    count: usize,
+    added: usize,
+    removed: usize,
+    /// `@@ line`, `-` and `+` lines for the terminal.
+    diff: String,
+}
+
 /// Matches every edit against the original text: exactly first, then ignoring trailing
 /// whitespace, smart quotes, Unicode dashes and special spaces.
-fn apply(text: &str, edits: &[Edit], path: &str) -> Result<(String, usize), String> {
+fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
     let label = |i: usize| if edits.len() == 1 { "old_string".to_string() } else { format!("edits[{i}].old_string") };
     let mut normalized: Option<Normalized> = None;
     let mut ranges: Vec<(usize, usize, usize)> = Vec::new();
@@ -113,13 +127,28 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<(String, usize), Stri
         }
     }
     let mut out = text.to_string();
+    let mut diff = String::new();
+    let (mut added, mut removed) = (0, 0);
+    for &(start, end, i) in &ranges {
+        let new = edits[i].new.replace("\r\n", "\n");
+        let line = text[..start].matches('\n').count() + 1;
+        diff.push_str(&format!("@@ line {line}\n"));
+        for old in text[start..end].lines() {
+            diff.push_str(&format!("- {old}\n"));
+            removed += 1;
+        }
+        for new in new.lines() {
+            diff.push_str(&format!("+ {new}\n"));
+            added += 1;
+        }
+    }
     for &(start, end, i) in ranges.iter().rev() {
         out.replace_range(start..end, &edits[i].new.replace("\r\n", "\n"));
     }
     if out == text {
         return Err(format!("No changes made to {path}: the replacement produced identical content."));
     }
-    Ok((out, ranges.len()))
+    Ok(Applied { text: out, count: ranges.len(), added, removed, diff })
 }
 
 /// Text with trailing whitespace removed from each line and look-alike characters folded,
@@ -167,7 +196,7 @@ mod tests {
     use serde_json::json;
 
     fn run(text: &str, args: Value) -> Result<String, String> {
-        apply(text, &parse_edits(&args)?, "f").map(|(out, _)| out)
+        apply(text, &parse_edits(&args)?, "f").map(|applied| applied.text)
     }
 
     #[test]

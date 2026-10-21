@@ -2,6 +2,7 @@ mod agent;
 mod config;
 mod hooks;
 mod llm;
+mod mcp;
 mod plan;
 mod prompt;
 mod session;
@@ -114,7 +115,7 @@ fn parse(args: Vec<String>) -> Result<Options> {
 
 async fn run_once(config: config::Config, model: &Option<String>, resume: Option<PathBuf>, prompt: String, json_mode: bool) -> Result<ExitCode> {
     let cwd = std::env::current_dir()?;
-    let setup = Setup::new(config, &cwd, model.as_deref())?;
+    let setup = Setup::new(config, &cwd, model.as_deref()).await?;
     let printer = Rc::new(RefCell::new(Printer::new(&cwd)));
     let sink: Sink = if json_mode {
         Rc::new(|_| {})

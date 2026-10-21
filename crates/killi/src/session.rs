@@ -99,6 +99,38 @@ pub fn load(path: &Path) -> Result<Loaded> {
     Ok(loaded)
 }
 
+pub const COMPACTED_MARK: &str = "<system-reminder>This conversation was compacted";
+
+/// What the user typed, oldest first: reminders killi added are left out, and a compaction's
+/// summary gives back the requests it kept.
+pub fn user_prompts(messages: &[Value]) -> Vec<String> {
+    let mut prompts = Vec::new();
+    for text in messages.iter().filter(|m| m["role"] == "user").filter_map(|m| m["content"].as_str()) {
+        if text.starts_with(COMPACTED_MARK) {
+            let mut rest = text;
+            while let Some(start) = rest.find("<request>\n") {
+                let body = &rest[start + 10..];
+                let end = body.find("\n</request>").unwrap_or(body.len());
+                prompts.push(body[..end].to_string());
+                rest = &body[end..];
+            }
+        } else if let Some(prompt) = strip_reminders(text) {
+            prompts.push(prompt.to_string());
+        }
+    }
+    prompts
+}
+
+/// A user message without the reminders in front of it, or `None` if it is only reminders.
+fn strip_reminders(text: &str) -> Option<&str> {
+    let mut rest = text;
+    while let Some(after) = rest.strip_prefix("<system-reminder>") {
+        let end = after.find("</system-reminder>")?;
+        rest = after[end + 18..].trim_start();
+    }
+    (!rest.is_empty()).then_some(rest)
+}
+
 /// This folder's sessions, newest first.
 pub fn list(cwd: &Path) -> Vec<Listed> {
     let Ok(entries) = fs::read_dir(project_dir(cwd)) else { return Vec::new() };
@@ -108,14 +140,7 @@ pub fn list(cwd: &Path) -> Vec<Listed> {
         .filter(|path| path.extension().is_some_and(|e| e == "jsonl"))
         .filter_map(|path| {
             let modified = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
-            let text = fs::read_to_string(&path).ok()?;
-            let prompts: Vec<String> = text
-                .lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .filter(|e| e["type"] == "message" && e["message"]["role"] == "user")
-                .filter_map(|e| e["message"]["content"].as_str().map(String::from))
-                .filter(|text| !text.starts_with("<system-reminder>"))
-                .collect();
+            let prompts = user_prompts(&load(&path).ok()?.messages);
             let first_prompt = prompts.first()?.lines().next().unwrap_or_default().to_string();
             Some(Listed { path, modified, first_prompt, prompts: prompts.len() })
         })
@@ -128,6 +153,15 @@ pub fn list(cwd: &Path) -> Vec<Listed> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn prompts_come_back_without_reminders() {
+        assert_eq!(strip_reminders("<system-reminder>a</system-reminder>\n\nfix it"), Some("fix it"));
+        assert_eq!(strip_reminders("<system-reminder>Plan mode is on.</system-reminder>"), None);
+        let compacted = format!("{COMPACTED_MARK} to save space.</system-reminder>\n\n<user-requests>\n<request>\none\n</request>\n<request>\ntwo\n</request>\n</user-requests>");
+        let messages = vec![json!({"role": "user", "content": compacted}), json!({"role": "user", "content": "three"})];
+        assert_eq!(user_prompts(&messages), ["one", "two", "three"]);
+    }
 
     #[test]
     fn load_restarts_at_a_compaction() {

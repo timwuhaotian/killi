@@ -100,6 +100,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nested_agents_files_are_found_once() {
+        let root = std::env::temp_dir().join(format!("killi-nested-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("web/src")).unwrap();
+        fs::write(root.join("web/AGENTS.md"), "use pnpm").unwrap();
+        let mut instructions = Instructions::new(&root, &[]);
+        instructions.touched(&root.join("web/src/app.ts"));
+        instructions.touched(&root.join("web/src/other.ts"));
+        let found = instructions.take_found();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("web/AGENTS.md"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn claude_md_imports_are_expanded() {
         let dir = std::env::temp_dir().join(format!("killi-prompt-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -107,4 +123,62 @@ mod tests {
         assert_eq!(expand_imports(&dir, "intro\n@RULES.md\n@missing.md"), "intro\nbe terse\n@missing.md");
         fs::remove_dir_all(dir).unwrap();
     }
+}
+
+/// Instruction files beyond the system prompt: nested `AGENTS.md` files found as the agent
+/// works in subfolders, and loaded ones that change on disk. Both reach the model as appended
+/// reminders, so the system prompt and its cache stay as they are.
+#[derive(Clone, Default)]
+pub struct Instructions {
+    root: PathBuf,
+    known: std::collections::HashSet<PathBuf>,
+    found: Vec<String>,
+    loaded: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+}
+
+impl Instructions {
+    pub fn new(cwd: &Path, loaded: &[PathBuf]) -> Self {
+        let root = cwd.ancestors().find(|dir| dir.join(".git").exists()).unwrap_or(cwd).to_path_buf();
+        Self {
+            root,
+            known: loaded.iter().cloned().collect(),
+            found: Vec::new(),
+            loaded: loaded.iter().map(|p| (p.clone(), modified(p))).collect(),
+        }
+    }
+
+    /// Notes any AGENTS.md between the project root and `path` that the model hasn't seen.
+    pub fn touched(&mut self, path: &Path) {
+        let Ok(relative) = path.strip_prefix(&self.root) else { return };
+        let mut dir = self.root.clone();
+        for part in relative.parent().into_iter().flat_map(Path::components) {
+            dir.push(part);
+            let Some(file) = first_existing(&dir, &["AGENTS.md", "agents.md", "CLAUDE.md"]) else { continue };
+            let file = fs::canonicalize(&file).unwrap_or(file);
+            if self.known.insert(file.clone()) && path != file {
+                self.found.push(file.display().to_string());
+            }
+        }
+    }
+
+    pub fn take_found(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.found)
+    }
+
+    /// Loaded instruction files that changed since the last check.
+    pub fn changed(&mut self) -> Vec<String> {
+        let mut changed = Vec::new();
+        for (path, seen) in &mut self.loaded {
+            let now = modified(path);
+            if now != *seen {
+                *seen = now;
+                changed.push(path.display().to_string());
+            }
+        }
+        changed
+    }
+}
+
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).and_then(|m| m.modified()).ok()
 }

@@ -56,11 +56,16 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
         out.push_str(&entry);
         last = i + 1;
     }
+    let brief = match (offset, total) {
+        (1, 1) => "1 line".to_string(),
+        (1, _) if last == total => format!("{total} lines"),
+        _ => format!("lines {offset}-{last} of {total}"),
+    };
     if last < total {
         let why = if hit_bytes { " (50KB limit)" } else { "" };
         out.push_str(&format!("[Showing lines {offset}-{last} of {total}{why}. Use offset={} to continue.]", last + 1));
     }
-    Output::ok(out)
+    Output::ok(out).brief(brief)
 }
 
 fn image_type(path: &Path) -> Option<&'static str> {
@@ -146,7 +151,8 @@ pub fn write(ctx: &Context, args: &Value) -> Output {
         return Output::error(format!("Could not write {path}: {e}"));
     }
     let verb = if existed { "Overwrote" } else { "Created" };
-    Output::ok(format!("{verb} {path} ({} lines).", content.lines().count()))
+    let lines = content.lines().count();
+    Output::ok(format!("{verb} {path} ({lines} lines).")).brief(format!("{} {lines} lines", verb.to_lowercase()))
 }
 
 /// A text file as read and edit see it: BOM removed, and CRLF shown as LF when every line

@@ -78,6 +78,9 @@ pub struct Settings {
     pub plan_allow: Vec<String>,
     pub skills: Skills,
     pub hooks: Rc<HooksConfig>,
+    pub mcp: Rc<crate::mcp::Mcp>,
+    /// Instruction files already in the system prompt.
+    pub instruction_files: Vec<std::path::PathBuf>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -119,6 +122,7 @@ pub struct Agent {
     /// Index of the assistant message whose tool calls are running.
     current_reply: usize,
     session_started: bool,
+    instructions: crate::prompt::Instructions,
 }
 
 impl Agent {
@@ -178,6 +182,7 @@ impl Agent {
         sink: Sink,
         session: Session,
     ) -> Self {
+        let settings_files = settings.instruction_files.clone();
         let mut ctx = tools::Context::new(cwd.to_path_buf(), session.dir.clone());
         ctx.images = client.model.images;
         Self {
@@ -199,6 +204,7 @@ impl Agent {
             children: 0,
             current_reply: 0,
             session_started: false,
+            instructions: crate::prompt::Instructions::new(cwd, &settings_files),
         }
     }
 
@@ -235,13 +241,7 @@ impl Agent {
 
     /// The user prompts of this session, oldest first, for history and pickers.
     pub fn user_prompts(&self) -> Vec<String> {
-        self.messages
-            .iter()
-            .filter(|m| m["role"] == "user")
-            .filter_map(|m| m["content"].as_str())
-            .filter(|text| !text.starts_with("<system-reminder>"))
-            .map(String::from)
-            .collect()
+        crate::session::user_prompts(&self.messages)
     }
 
     /// Runs one user turn to completion and returns the final reply text.
@@ -249,6 +249,13 @@ impl Agent {
         let mut notes = Vec::new();
         if std::mem::take(&mut self.interrupted) {
             notes.push("The user interrupted your previous turn.".to_string());
+        }
+        let changed = self.instructions.changed();
+        if !changed.is_empty() {
+            notes.push(format!(
+                "These instruction files changed on disk since your instructions were loaded; read them again and follow the current version: {}",
+                changed.join(", ")
+            ));
         }
         if !std::mem::replace(&mut self.session_started, true) {
             notes.extend(self.hook("SessionStart", None, json!({"source": "startup"})).await.context);
@@ -317,6 +324,11 @@ impl Agent {
         if !finished.is_empty() && self.depth == 0 {
             let text = format!("<system-reminder>{} Read the output with task_output.</system-reminder>", finished.join(" "));
             self.push(json!({"role": "user", "content": text}))?;
+        }
+        let found = self.instructions.take_found();
+        if !found.is_empty() {
+            let list: String = found.iter().map(|p| format!("\n- {p}")).collect();
+            self.push(json!({"role": "user", "content": format!("<system-reminder>These AGENTS.md files apply to paths you just used but aren't in your instructions. Read them before changing anything in those folders:{list}</system-reminder>")}))?;
         }
         if self.compaction_due() {
             self.compact(None).await?;
@@ -451,6 +463,9 @@ impl Agent {
         if let Some(reason) = before.block {
             return tools::Output::error(format!("A hook blocked this call: {reason}"));
         }
+        if let Some(path) = args["path"].as_str() {
+            self.instructions.touched(&tools::resolve(&self.ctx, path));
+        }
         let mut output = self.dispatch(call, &args).await;
         let after = self.hook("PostToolUse", Some(&call.name), tool_payload(&call.name, &args, Some(&output.text))).await;
         if let Some(note) = after.block.or_else(|| (!after.context.is_empty()).then(|| after.context.join("\n"))) {
@@ -464,6 +479,8 @@ impl Agent {
         let args = args.clone();
         match call.name.as_str() {
             "skill" => self.settings.skills.run(&args),
+            "mcp" => self.settings.mcp.run(&args, self.ctx.images).await,
+            name if self.settings.mcp.is_native(name) => self.settings.mcp.call_native(name, args, self.ctx.images).await,
             "todo_write" => self.todo_write(&args),
             "ask_user_question" => self.ask(&args).await,
             "exit_plan_mode" => self.exit_plan(&args).await,
@@ -673,6 +690,7 @@ impl Agent {
             children: 0,
             current_reply: 0,
             session_started: true,
+            instructions: self.instructions.clone(),
         })
     }
 
@@ -704,8 +722,9 @@ impl Agent {
         kept.reverse();
         let requests: String = kept.iter().map(|p| format!("<request>\n{p}\n</request>\n")).collect();
         let summary = format!(
-            "<system-reminder>This conversation was compacted to save space. Below are the user's requests so far, word for word, and a summary of the work. Continue from where it left off; don't redo finished work.</system-reminder>\n\n<user-requests>\n{requests}</user-requests>\n\n<summary>\n{}\n</summary>",
-            reply.text.trim()
+            "{mark} to save space. Below are the user's requests so far, word for word, and a summary of the work. Continue from where it left off; don't redo finished work.</system-reminder>\n\n<user-requests>\n{requests}</user-requests>\n\n<summary>\n{}\n</summary>",
+            reply.text.trim(),
+            mark = crate::session::COMPACTED_MARK,
         );
         self.messages = vec![self.messages[0].clone(), json!({"role": "user", "content": summary})];
         self.session.record(&json!({"type": "compaction", "messages": self.messages}))?;

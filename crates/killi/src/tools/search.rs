@@ -103,7 +103,7 @@ fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
     if !notes.is_empty() {
         out.push_str(&format!("[{}]", notes.join(" ")));
     }
-    Output::ok(out.trim_end().to_string())
+    Output::ok(out.trim_end().to_string()).brief(format!("{matches} match{}", if matches == 1 { "" } else { "es" }))
 }
 
 fn glob_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
@@ -136,11 +136,12 @@ fn glob_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
     if found.is_empty() {
         return Output::ok(format!("No files match `{pattern}` under {}.", display_root(cwd, root)));
     }
+    let count = found.len();
     let mut out = found.join("\n");
     if more {
         out.push_str(&format!("\n[{MAX_FILES} results limit reached; narrow the pattern or path.]"));
     }
-    Output::ok(out)
+    Output::ok(out).brief(format!("{count}{} file{}", if more { "+" } else { "" }, if count == 1 { "" } else { "s" }))
 }
 
 fn display_root(cwd: &Path, root: &Path) -> String {

@@ -22,6 +22,16 @@ pub struct Config {
     pub skills: SkillsConfig,
     #[serde(default)]
     pub hooks: crate::hooks::HooksConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
+}
+
+/// `[mcp]`: MCP servers to start with every session, with native tool definitions. A project
+/// can name its own in `.killi/config.toml`.
+#[derive(Debug, Default, Deserialize)]
+pub struct McpConfig {
+    #[serde(default)]
+    pub eager: Vec<String>,
 }
 
 /// `[agent]`: how the agent behaves.
@@ -245,6 +255,14 @@ pub fn import_kimi(force: bool) -> Result<()> {
     file.write_all(toml::to_string(&out)?.as_bytes())?;
 
     println!("Imported {provider_count} providers and {model_count} models into {}", dst.display());
+    let mcp_src = home().join(".kimi-code/mcp.json");
+    let mcp_dst = dir.join("mcp.json");
+    if mcp_src.exists() && (!mcp_dst.exists() || force) {
+        let text = fs::read(&mcp_src)?;
+        let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&mcp_dst)?;
+        file.write_all(&text)?;
+        println!("Copied MCP servers into {}", mcp_dst.display());
+    }
     if !skipped.is_empty() {
         println!("Skipped providers without an API key (Kimi account login): {}", skipped.join(", "));
     }

@@ -55,7 +55,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         let _ = tx.send(event);
     });
     let controls = Controls { interactive: true, ..Controls::default() };
-    let session = Setup::new(config, &cwd, start.model.as_deref())?;
+    let session = Setup::new(config, &cwd, start.model.as_deref()).await?;
     let mut agent = match &start.resume {
         Some(log) => session.resume(log, controls.clone(), sink.clone())?,
         None => session.start(controls.clone(), sink.clone())?,
@@ -490,6 +490,10 @@ impl App {
             KeyCode::Esc => return true,
             KeyCode::Char('c') if ctrl => return true,
             KeyCode::Enter if !newline_key(&key) => {
+                if self.editor.text().trim_start().starts_with('/') {
+                    self.notice("Commands run when the agent is idle: wait for this turn to finish, or press Esc.");
+                    return false;
+                }
                 let text = self.editor.take();
                 if !text.trim().is_empty() {
                     self.controls.steer.borrow_mut().push_back(text.clone());
@@ -785,9 +789,14 @@ impl App {
         }
     }
 
+    /// Ends a thought: one dim line when it took a while, with the full text behind Ctrl+O.
     fn end_thinking(&mut self) {
         if let Some((started, text)) = self.thinking.take() {
             let seconds = started.elapsed().as_secs_f32();
+            self.detail = Some(("Thinking".into(), text.clone()));
+            if seconds < 2.0 {
+                return;
+            }
             let first = first_sentence(&text);
             let gist = if first.is_empty() { String::new() } else { format!(": {first}") };
             self.commit(format!("{DIM}{ITALIC}∴ Thought for {seconds:.0}s{gist}{RESET}"));

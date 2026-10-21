@@ -180,8 +180,13 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
         }
     };
     let (mut text, _) = take_output(ctx, &process, 0);
+    let lines = match text.lines().count() {
+        _ if text == "(no output)" => "no output".to_string(),
+        1 => "1 line".to_string(),
+        n => format!("{n} lines"),
+    };
     match exit {
-        Exit::Code(0) => Output::ok(text).brief("ok"),
+        Exit::Code(0) => Output::ok(text).brief(lines),
         other => {
             text.push_str(&format!("\n[Command {}]", other.describe()));
             Output::error(text).brief(other.describe())
