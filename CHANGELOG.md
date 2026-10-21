@@ -5,6 +5,34 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.0 — 2026-10-22
+
+- **Interactive mode.** Run `killi` with no arguments: the conversation prints into your
+  terminal's scrollback, with a live area at the bottom for what's happening, the task list,
+  the prompt and a status line (model, plan mode, context used, git branch, tokens).
+  - Type while the agent works and your message reaches it at its next step; Esc interrupts.
+  - Thinking shows as one dim line; Ctrl+O prints the last thought or tool output in full.
+  - Edits show a small diff; every tool line says what it found ("412 lines", "7 matches").
+  - A desktop notification when a turn takes longer than 10 seconds.
+- **Plan mode** (Shift+Tab or `/plan`): the agent researches and plans, writes are blocked and
+  bash runs only read-only commands, until you approve its plan.
+- **Anthropic and OpenAI Responses providers** besides OpenAI chat: MiniMax, Claude and any
+  `type = "anthropic"` or `protocol = "openai_responses"` model work, with prompt caching.
+- **Subagents**: the `agent` tool runs up to 4 in parallel on the same model and cached prompt;
+  `fork: true` gives one the whole conversation.
+- **Background tasks**: `bash` with `run_in_background`, or any command that outlives its
+  timeout, keeps running; `task_output` and `task_stop` manage it.
+- **Sessions**: `killi -c` continues the last session here, `killi -r` or `/resume` picks one;
+  long conversations compact themselves (or `/compact`), keeping your requests word for word.
+- **Undo**: `/undo` puts files back as they were before the last turn, including changes made
+  by commands, using a separate git store under `~/.killi/snapshots/`.
+- **Skills** from `~/.agents/skills` and the project: names in the prompt, loaded on demand, or
+  run as `/skill-name`. **MCP servers** through one `mcp` tool, started on first use.
+  **Hooks** with Claude Code's protocol, configured in `[[hooks.<Event>]]`.
+- `fetch_url` reads web pages as Markdown; `read` shows images to models that can see them;
+  `todo_write` and `ask_user_question` tools.
+- Nested `AGENTS.md` files are pointed out when the agent works in their folders.
+
 ## 0.1.1 — 2026-10-22
 
 - **Tidier output.** Tool calls are one line each, the model's text sits between them with a

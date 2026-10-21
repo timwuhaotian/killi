@@ -1,0 +1,3 @@
+kind = "rust"
+prompt = "Add `pub fn to_json(&self) -> String` to `Report` in src/lib.rs. It must produce valid, compact JSON (no spaces) with keys in the field order, and must work for any strings, including quotes, backslashes, newlines, control characters and non-ASCII text. Don't add dependencies: this crate must keep building offline with no crates."
+check = "! grep -q '^[a-z_-]* *=' <(sed -n '/^\\[dependencies\\]/,/^\\[/p' Cargo.toml | grep -v '^\\[') && cargo test --quiet"

@@ -1,0 +1,3 @@
+kind = "typescript"
+prompt = "mapLimit in src/pool.ts sometimes hangs forever and sometimes returns results in the wrong order. The tests (`node --test`) show it. Fix it without changing its signature or the tests."
+check = "node --test --test-timeout=10000"
