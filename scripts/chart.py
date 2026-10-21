@@ -83,6 +83,70 @@ def render(data, c):
     return "\n".join([head, *out, "</svg>\n"])
 
 
+def kilo(value):
+    return f"{value / 1000:,.1f}k" if value >= 1000 else f"{value:.0f}"
+
+
+EVAL_PANELS = [
+    ("passed", "Tasks passed", lambda s: f'{s["passed"]} of {s["runs"]}', False),
+    ("avg_input", "Input tokens per task", lambda s: kilo(s["avg_input"]), True),
+    ("avg_wall_s", "Time per task", lambda s: f'{s["avg_wall_s"]:.0f} s', False),
+    ("avg_memory_mb", "Peak memory", lambda s: mb(s["avg_memory_mb"]), True),
+]
+
+
+def render_eval_svg(summary, c):
+    tools = [summary[k] for k in ("killi", "kimi", "claude") if k in summary]
+    killi = tools[0]
+    others = " · ".join(f'{t["name"]}: {t["passed"]} of {t["runs"]}, {kilo(t["avg_input"])} tokens' for t in tools[1:])
+    out = [
+        f'<text x="32" y="58" font-size="26" font-weight="700" fill="{c["text"]}">killi passed '
+        f'<tspan fill="{c["accent"]}">{killi["passed"]} of {killi["runs"]}</tspan> tasks with '
+        f'<tspan fill="{c["accent"]}">{kilo(killi["avg_input"])}</tspan> input tokens each.</text>',
+        f'<text x="32" y="86" font-size="15" fill="{c["sub"]}">{escape(others)}.</text>',
+    ]
+    y = 124
+    for key, title, fmt, show_ratio in EVAL_PANELS:
+        out.append(f'<text x="32" y="{y}" font-size="13" font-weight="700" fill="{c["muted"]}" letter-spacing="0.4">{escape(title.upper())}</text>')
+        y += 10
+        top = max(t[key] for t in tools) or 1
+        for tool in tools:
+            first = tool is killi
+            if first:
+                out.append(f'<rect x="20" y="{y}" width="920" height="{ROW - 2}" rx="8" fill="{c["highlight"]}"/>')
+            weight = 700 if first else 500
+            model = MODELS.get(tool["model"], tool["model"])
+            out.append(f'<text x="{LABEL_X}" y="{y + 17}" font-size="15" font-weight="{weight}" fill="{c["text"]}" text-anchor="end">{escape(tool["name"])}</text>')
+            out.append(f'<text x="{LABEL_X}" y="{y + 32}" font-size="11" fill="{c["muted"]}" text-anchor="end">{escape(model)}</text>')
+            width = max(6.0, tool[key] / top * BAR_MAX)
+            out.append(f'<rect x="{BAR_X}" y="{y + 12}" width="{width:.1f}" height="14" rx="4" fill="{c["accent"] if first else c["bar"]}"/>')
+            extra = ""
+            if show_ratio and not first and killi[key]:
+                extra = f'<tspan dx="8" font-size="12" font-weight="400" fill="{c["muted"]}">· {times(tool[key], killi[key])} killi</tspan>'
+            out.append(f'<text x="{BAR_X + width + 10:.1f}" y="{y + 24}" font-size="14" font-weight="{weight}" fill="{c["text"]}">{escape(fmt(tool))}{extra}</text>')
+            y += ROW
+        y += 34
+    notes = [
+        "Ten Rust and TypeScript tasks from evals/tasks, run once per tool with scripts/eval.py; a task passes when its check succeeds",
+        "after the tool finishes, with the tests restored first. Peak memory is the tool's own process, not the compilers it starts.",
+    ]
+    y -= 8
+    for note in notes:
+        out.append(f'<text x="32" y="{y}" font-size="12" fill="{c["muted"]}">{escape(note)}</text>')
+        y += 18
+    height = y + 6
+    label = "; ".join(f'{t["name"]}: {t["passed"]} of {t["runs"]} passed, {kilo(t["avg_input"])} input tokens per task' for t in tools)
+    head = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{height}" viewBox="0 0 {WIDTH} {height}" '
+            f'font-family="-apple-system, BlinkMacSystemFont, \'Segoe UI\', Helvetica, Arial, sans-serif" role="img" aria-label="{escape(label)}">\n'
+            f'<rect x="0.5" y="0.5" width="{WIDTH - 1}" height="{height - 1}" rx="12" fill="{c["bg"]}" stroke="{c["border"]}"/>')
+    return "\n".join([head, *out, "</svg>\n"])
+
+
+def render_eval(summary):
+    for name, colors in THEMES.items():
+        (ROOT / f"docs/eval-{name}.svg").write_text(render_eval_svg(summary, colors))
+
+
 def main():
     data = json.loads((ROOT / "docs/bench.json").read_text())
     for name, colors in THEMES.items():

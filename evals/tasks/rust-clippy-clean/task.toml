@@ -1,0 +1,3 @@
+kind = "rust"
+prompt = "Make `cargo clippy --all-targets -- -D warnings` pass without changing behavior or silencing lints with allow attributes. The tests must keep passing."
+check = "! grep -rn 'allow(' src && cargo clippy --all-targets --quiet -- -D warnings && cargo test --quiet"

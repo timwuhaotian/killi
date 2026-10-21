@@ -1,0 +1,3 @@
+kind = "reading"
+prompt = "Answer from the code, not the README: when a request arrives without an Accept-Language header and no environment variables are set, which locale does the server answer in, and which function makes that final choice? Write the answer to ANSWER.txt as exactly `<locale> <functionName>`, for example `fr-FR pickLocale`."
+check = "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = 'pt-BRresolveFallbackLocale'"

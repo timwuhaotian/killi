@@ -1,0 +1,3 @@
+kind = "rust"
+prompt = "Implement parse_duration in src/lib.rs as its doc comment describes, so that cargo test passes."
+check = "cargo test --quiet"

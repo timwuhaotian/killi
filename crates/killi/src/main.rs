@@ -214,6 +214,7 @@ impl Printer {
                 self.line_open = true;
                 self.last = Last::Text;
             }
+            Event::Llm(Delta::Reasoning(_)) => {}
             Event::Llm(Delta::Retry { attempt, wait, reason }) => {
                 self.end_text();
                 eprintln!(

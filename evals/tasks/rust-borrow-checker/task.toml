@@ -1,0 +1,3 @@
+kind = "rust"
+prompt = "This crate doesn't compile. Fix the compile errors in src/lib.rs without changing its public API, so that cargo test passes."
+check = "cargo test --quiet"

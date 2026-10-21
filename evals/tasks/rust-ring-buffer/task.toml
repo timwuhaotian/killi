@@ -1,0 +1,3 @@
+kind = "rust"
+prompt = "The tests in tests/ring.rs fail. Find and fix the bug in the ring buffer. Don't change the tests."
+check = "cargo test --quiet"

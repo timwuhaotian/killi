@@ -1,0 +1,8 @@
+kind = "typescript"
+prompt = """Add priorities to the task tracker.
+- A task has a priority: "high", "normal" or "low". It defaults to "normal"; `store.add(title, { priority })` sets it.
+- `store.list()` returns open tasks before done ones; within each group, high before normal before low, then by id.
+- `formatTask` puts `! ` before the title of a high-priority task, e.g. `[ ] ! Pay rent`, and `(low) ` before a low-priority one.
+- `store.setPriority(id, priority)` changes a task's priority and throws a RangeError for an unknown id.
+Keep the existing behavior and tests working; the tests run with `node --test`."""
+check = "node --test"

@@ -15,7 +15,7 @@ pub struct Config {
     #[serde(default)]
     pub models: BTreeMap<String, Model>,
     #[serde(default)]
-    pub thinking: Thinking,
+    pub thinking: ThinkingConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,7 +41,7 @@ pub struct Model {
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub struct Thinking {
+pub struct ThinkingConfig {
     pub enabled: Option<bool>,
     pub effort: Option<String>,
 }
@@ -51,12 +51,31 @@ pub struct Thinking {
 pub struct ResolvedModel {
     pub alias: String,
     pub model: String,
+    pub protocol: Protocol,
     pub base_url: String,
     pub api_key: String,
     pub headers: BTreeMap<String, String>,
     pub max_output: Option<u64>,
-    /// `None` leaves reasoning at the provider default.
-    pub effort: Option<String>,
+    pub thinking: Thinking,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Protocol {
+    /// OpenAI Chat Completions.
+    OpenAi,
+    /// Anthropic Messages.
+    Anthropic,
+    /// OpenAI Responses.
+    Responses,
+}
+
+/// How much the model should reason, resolved the way Kimi Code does it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Thinking {
+    Off,
+    /// On at the provider's default effort.
+    On,
+    Effort(String),
 }
 
 pub fn killi_home() -> PathBuf {
@@ -86,14 +105,18 @@ impl Config {
         let Some(provider) = self.providers.get(&model.provider) else {
             bail!("model `{alias}` names provider `{}`, which isn't configured", model.provider);
         };
-        let protocol = model.protocol.as_deref().unwrap_or(&provider.kind);
-        if protocol != "openai" {
-            bail!(
-                "model `{alias}` uses the `{protocol}` API, which killi doesn't support yet; pick a model whose provider has type = \"openai\""
-            );
-        }
-        let Some(base_url) = &provider.base_url else {
-            bail!("provider `{}` has no base_url", model.provider);
+        let protocol = match model.protocol.as_deref().unwrap_or(&provider.kind) {
+            "openai" => Protocol::OpenAi,
+            "anthropic" => Protocol::Anthropic,
+            "openai_responses" => Protocol::Responses,
+            other => bail!(
+                "model `{alias}` uses the `{other}` API, which killi doesn't support; use openai, anthropic or openai_responses"
+            ),
+        };
+        let base_url = match (&provider.base_url, protocol) {
+            (Some(url), _) => url.clone(),
+            (None, Protocol::Anthropic) => "https://api.anthropic.com".to_string(),
+            (None, _) => "https://api.openai.com/v1".to_string(),
         };
         let api_key = match (&provider.api_key, &provider.api_key_env) {
             (_, Some(var)) => std::env::var(var)
@@ -104,25 +127,30 @@ impl Config {
         Ok(ResolvedModel {
             alias: alias.to_string(),
             model: model.model.clone(),
+            protocol,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             headers: provider.custom_headers.clone(),
             max_output: model.max_output_size,
-            effort: self.effort_for(model),
+            thinking: self.thinking_for(model),
         })
     }
 
-    /// Kimi Code's generic order: `thinking.enabled = false` turns reasoning off, then the
-    /// configured effort, then the model's own default; `on` and `off` send nothing.
-    fn effort_for(&self, model: &Model) -> Option<String> {
+    /// Kimi Code's order: `thinking.enabled = false` turns reasoning off, then the configured
+    /// effort, then the model's default effort, then the middle of its supported efforts.
+    fn thinking_for(&self, model: &Model) -> Thinking {
         if self.thinking.enabled == Some(false) {
-            return None;
+            return Thinking::Off;
         }
         let effort = self.thinking.effort.clone().or_else(|| model.default_effort.clone()).or_else(|| {
             let efforts = &model.support_efforts;
             (!efforts.is_empty()).then(|| efforts[efforts.len() / 2].clone())
-        })?;
-        (effort != "on" && effort != "off").then_some(effort)
+        });
+        match effort.as_deref() {
+            None | Some("on") => Thinking::On,
+            Some("off") => Thinking::Off,
+            Some(effort) => Thinking::Effort(effort.to_string()),
+        }
     }
 }
 

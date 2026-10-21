@@ -142,6 +142,9 @@ impl Agent {
         if let Some(key) = reply.reasoning_key.filter(|_| !reply.reasoning.is_empty()) {
             message[key] = reply.reasoning.clone().into();
         }
+        if !reply.reasoning_items.is_empty() {
+            message["reasoning_items"] = reply.reasoning_items.clone().into();
+        }
         if !calls.is_empty() {
             message["tool_calls"] = calls
                 .iter()

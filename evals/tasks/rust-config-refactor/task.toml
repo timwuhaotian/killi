@@ -1,0 +1,3 @@
+kind = "rust"
+prompt = "Refactor the config loading: rename Config::load_from to Config::from_path everywhere, and split its parsing into a new public function Config::from_str_contents(text: &str) -> Result<Config, ConfigError> that from_path calls. Behavior must stay the same. Then make sure everything builds and the tests pass."
+check = "! grep -rn load_from src tests && cargo test --quiet"

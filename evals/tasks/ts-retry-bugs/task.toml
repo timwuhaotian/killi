@@ -1,0 +1,3 @@
+kind = "typescript"
+prompt = "Our retry helper in src/retry.ts misbehaves in production: some failures escape without being retried, and it gives up too early. The tests (`node --test`) fail. Fix the helper; don't change the tests."
+check = "node --test"

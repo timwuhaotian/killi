@@ -1,0 +1,3 @@
+kind = "typescript"
+prompt = "The LRU cache in src/lru.ts doesn't behave like an LRU cache and its tests fail (run them with `node --test`). Fix the cache. Don't change the tests."
+check = "node --test"

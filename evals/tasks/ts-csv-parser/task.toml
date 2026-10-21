@@ -1,0 +1,3 @@
+kind = "typescript"
+prompt = "Implement parseCsv in src/csv.ts following RFC 4180, as its doc comment describes. The tests run with `node --test`."
+check = "node --test"
