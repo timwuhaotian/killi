@@ -23,8 +23,8 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 
 ## Features
 
-- **Small and quick.** One 6 MB binary with no runtime to install. It starts in 4 ms and its
-  own process stays around 14 MB while it works.
+- **Small and quick.** One 6 MB binary with no runtime to install. It starts in 5 ms and uses
+  about 16 MB of memory running a prompt, where Kimi Code uses 417 MB and Claude Code 323 MB.
 - **Few tokens.** The system prompt and every tool together come to about 2,200 tokens, plus
   your `AGENTS.md` files and about 4 tokens per installed skill. In the
   [capability tests](#capability-tests) killi passed every task Kimi Code passed, on the same
