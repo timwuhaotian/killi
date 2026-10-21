@@ -1,0 +1,36 @@
+{
+  "measured": "2026-10-22",
+  "prompt": "Reply with the single word OK.",
+  "tools": [
+    {
+      "name": "killi",
+      "version": "0.1.0",
+      "runtime": "Rust",
+      "model": "mimo-v2.6-pro",
+      "size_mb": 4.3,
+      "startup_ms": 4,
+      "memory_mb": 13.7,
+      "tokens": 1323
+    },
+    {
+      "name": "Kimi Code",
+      "version": "2.2.0",
+      "runtime": "Node.js",
+      "model": "mimo-v2.6-pro",
+      "size_mb": 187.2,
+      "startup_ms": 227,
+      "memory_mb": 419.8,
+      "tokens": 39508
+    },
+    {
+      "name": "Claude Code",
+      "version": "2.1.306",
+      "runtime": "Bun",
+      "model": "claude-opus-5-5",
+      "size_mb": 260.3,
+      "startup_ms": 8,
+      "memory_mb": 319.3,
+      "tokens": 46468
+    }
+  ]
+}

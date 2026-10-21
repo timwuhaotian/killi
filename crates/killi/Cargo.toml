@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository = "https://github.com/timwuhaotian/killi"
+readme = "../../README.md"
 
 [dependencies]
 anyhow.workspace = true
