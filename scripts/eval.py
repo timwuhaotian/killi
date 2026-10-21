@@ -134,7 +134,13 @@ def tool_commands():
     }
 
 
-def run_one(tool, task_dir, spec, log_dir):
+def version_of(tool):
+    command, _ = tool_commands()[tool]
+    words = subprocess.run([command("")[0], "--version"], capture_output=True, text=True, env=ENV).stdout.split()
+    return next((w for w in words if w[:1].isdigit()), "?")
+
+
+def run_one(tool, task_dir, spec, log_dir, version):
     command, metrics = tool_commands()[tool]
     workdir = prepare(task_dir)
     started = time.time()
@@ -148,6 +154,7 @@ def run_one(tool, task_dir, spec, log_dir):
     footprint = re.search(r"(\d+)\s+peak memory footprint", stderr)
     record = {
         "tool": tool,
+        "version": version,
         "task": task_dir.name,
         "kind": spec["kind"],
         "when": datetime.now().isoformat(timespec="seconds"),
@@ -172,10 +179,11 @@ def run_one(tool, task_dir, spec, log_dir):
 def run(tools, names, repeat):
     log_dir = RUNS / datetime.now().strftime("%Y%m%d-%H%M%S")
     log_dir.mkdir(parents=True)
+    versions = {tool: version_of(tool) for tool in tools}
     for _ in range(repeat):
         for task_dir, spec in tasks(names):
             for tool in tools:
-                record = run_one(tool, task_dir, spec, log_dir)
+                record = run_one(tool, task_dir, spec, log_dir, versions[tool])
                 with RESULTS.open("a") as f:
                     f.write(json.dumps(record) + "\n")
                 tokens = record.get("input_fresh", 0) + record.get("input_cached", 0)
@@ -201,12 +209,13 @@ def report():
     task_names = sorted({task for _, task in latest})
     summary = {}
     for tool in names:
-        runs = [r for (t, _), rs in latest.items() if t == tool for r in rs]
+        runs = [rs[-1] for (t, _), rs in latest.items() if t == tool]
         if not runs:
             continue
         count = len(runs)
         summary[tool] = {
             "name": labels[tool],
+            "version": runs[-1].get("version", "?"),
             "model": runs[-1].get("model", "?"),
             "runs": count,
             "passed": sum(r["passed"] for r in runs),
@@ -222,11 +231,12 @@ def report():
     chart.render_eval(summary)
 
     lines = ["# Capability tests", "",
-             "Ten coding tasks, each run through killi, Kimi Code and Claude Code with `scripts/eval.py`.",
+             f"{len(task_names)} coding tasks, each run through killi, Kimi Code and Claude Code with `scripts/eval.py`.",
              "A task passes when its check (the project's tests, clippy, or an exact answer) succeeds after the",
              "tool finishes; the tests are restored first, so editing them doesn't help.", ""]
     lines += ["| | " + " | ".join(summary[t]["name"] for t in summary) + " |", "|---|" + "---|" * len(summary)]
     rows = [
+        ("Version", lambda s: s["version"]),
         ("Model", lambda s: s["model"]),
         ("Passed", lambda s: f'{s["passed"]} / {s["runs"]}'),
         ("Input tokens per task", lambda s: f'{s["avg_input"]:,.0f}'),
@@ -251,6 +261,22 @@ def report():
             tokens = r.get("input_fresh", 0) + r.get("input_cached", 0)
             cells.append(f'{"✓" if r["passed"] else "✗"} {tokens / 1000:.0f}k · {r["wall_s"]:.0f} s')
         lines.append(f"| `{task}` | " + " | ".join(cells) + " |")
+    every = [json.loads(line) for line in RESULTS.read_text().splitlines() if line.strip()]
+    versions = {}
+    for row in every:
+        if row["tool"] == "killi":
+            versions.setdefault(row.get("version", "?"), []).append(row)
+    if len(versions) > 1:
+        lines += ["", "## killi across versions", "", "Every run of killi, by version, on the tasks that version ran.", "",
+                  "| Version | Passed | Input tokens per task | … not from cache | Requests per task | Time per task |", "|---|---|---|---|---|---|"]
+        for version, rows in sorted(versions.items()):
+            n = len(rows)
+            lines.append(
+                f"| {version} | {sum(r['passed'] for r in rows)} / {n} | "
+                f"{sum(r.get('input_fresh', 0) + r.get('input_cached', 0) for r in rows) / n:,.0f} | "
+                f"{sum(r.get('input_fresh', 0) for r in rows) / n:,.0f} | "
+                f"{sum(r.get('requests', 0) for r in rows) / n:.1f} | {sum(r['wall_s'] for r in rows) / n:.0f} s |"
+            )
     lines += ["", "Peak memory is the tool's own process (macOS peak memory footprint), not the compilers or",
               "test runners it starts. Claude Code's tokens include this machine's skills, plugins and MCP",
               "servers, as configured; so do Kimi Code's.", ""]

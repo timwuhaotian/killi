@@ -17,6 +17,10 @@ pub struct SystemPrompt {
 
 pub fn build(cwd: &Path, skills: &Skills) -> SystemPrompt {
     let mut text = BASE.replace("{cwd}", &cwd.display().to_string()).replace("{date}", &today());
+    let listing = top_level(cwd);
+    if !listing.is_empty() {
+        text.push_str(&format!("- Top of the working directory: {listing}\n"));
+    }
     let files = instruction_files(cwd);
     let mut instructions = String::new();
     for (path, content) in &files {
@@ -34,6 +38,31 @@ pub fn build(cwd: &Path, skills: &Skills) -> SystemPrompt {
         instruction_files: files.into_iter().map(|(path, _)| path).collect(),
         instruction_tokens: instructions.len().div_ceil(4),
     }
+}
+
+/// The working directory's entries, folders marked with `/`, honoring .gitignore; at most 50.
+fn top_level(cwd: &Path) -> String {
+    const MAX: usize = 50;
+    let mut names: Vec<String> = ignore::WalkBuilder::new(cwd)
+        .max_depth(Some(1))
+        .hidden(false)
+        .filter_entry(|e| e.file_name() != ".git")
+        .build()
+        .flatten()
+        .filter(|e| e.depth() == 1)
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if e.file_type().is_some_and(|t| t.is_dir()) { format!("{name}/") } else { name }
+        })
+        .collect();
+    names.sort();
+    let more = names.len().saturating_sub(MAX);
+    names.truncate(MAX);
+    let mut listing = names.join(", ");
+    if more > 0 {
+        listing.push_str(&format!(" and {more} more"));
+    }
+    listing
 }
 
 /// `~/.agents/AGENTS.md`, then for each directory from the git root down to `cwd` its
@@ -98,6 +127,19 @@ fn today() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn top_level_lists_entries_and_skips_ignored_ones() {
+        let root = std::env::temp_dir().join(format!("killi-listing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        fs::write(root.join("Cargo.toml"), "").unwrap();
+        assert_eq!(top_level(&root), ".gitignore, Cargo.toml, src/");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn nested_agents_files_are_found_once() {

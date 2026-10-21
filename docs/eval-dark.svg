@@ -1,63 +1,63 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="814" viewBox="0 0 960 814" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="killi: 10 of 10 passed, 17.1k input tokens per task; Kimi Code: 10 of 10 passed, 209.6k input tokens per task; Claude Code: 10 of 10 passed, 252.6k input tokens per task">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="814" viewBox="0 0 960 814" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="killi: 14 of 14 passed, 27.6k input tokens per task; Kimi Code: 14 of 14 passed, 206.8k input tokens per task; Claude Code: 14 of 14 passed, 278.9k input tokens per task">
 <rect x="0.5" y="0.5" width="959" height="813" rx="12" fill="#0d1117" stroke="#30363d"/>
-<text x="32" y="58" font-size="26" font-weight="700" fill="#f0f6fc">killi passed <tspan fill="#5b9bff">10 of 10</tspan> tasks with <tspan fill="#5b9bff">17.1k</tspan> input tokens each.</text>
-<text x="32" y="86" font-size="15" fill="#9ea7b3">Kimi Code: 10 of 10, 209.6k tokens · Claude Code: 10 of 10, 252.6k tokens.</text>
+<text x="32" y="58" font-size="26" font-weight="700" fill="#f0f6fc">killi passed <tspan fill="#5b9bff">14 of 14</tspan> tasks with <tspan fill="#5b9bff">27.6k</tspan> input tokens each.</text>
+<text x="32" y="86" font-size="15" fill="#9ea7b3">Kimi Code: 14 of 14, 206.8k tokens · Claude Code: 14 of 14, 278.9k tokens.</text>
 <text x="32" y="124" font-size="13" font-weight="700" fill="#7d8590" letter-spacing="0.4">TASKS PASSED</text>
 <rect x="20" y="134" width="920" height="38" rx="8" fill="#13213a"/>
 <text x="182" y="151" font-size="15" font-weight="700" fill="#f0f6fc" text-anchor="end">killi</text>
 <text x="182" y="166" font-size="11" fill="#7d8590" text-anchor="end">MiMo-V2.6-Pro</text>
 <rect x="194" y="146" width="560.0" height="14" rx="4" fill="#5b9bff"/>
-<text x="764.0" y="158" font-size="14" font-weight="700" fill="#f0f6fc">10 of 10</text>
+<text x="764.0" y="158" font-size="14" font-weight="700" fill="#f0f6fc">14 of 14</text>
 <text x="182" y="191" font-size="15" font-weight="500" fill="#f0f6fc" text-anchor="end">Kimi Code</text>
 <text x="182" y="206" font-size="11" fill="#7d8590" text-anchor="end">MiMo-V2.6-Pro</text>
 <rect x="194" y="186" width="560.0" height="14" rx="4" fill="#3a414b"/>
-<text x="764.0" y="198" font-size="14" font-weight="500" fill="#f0f6fc">10 of 10</text>
+<text x="764.0" y="198" font-size="14" font-weight="500" fill="#f0f6fc">14 of 14</text>
 <text x="182" y="231" font-size="15" font-weight="500" fill="#f0f6fc" text-anchor="end">Claude Code</text>
 <text x="182" y="246" font-size="11" fill="#7d8590" text-anchor="end">Claude Opus 5.5</text>
 <rect x="194" y="226" width="560.0" height="14" rx="4" fill="#3a414b"/>
-<text x="764.0" y="238" font-size="14" font-weight="500" fill="#f0f6fc">10 of 10</text>
+<text x="764.0" y="238" font-size="14" font-weight="500" fill="#f0f6fc">14 of 14</text>
 <text x="32" y="288" font-size="13" font-weight="700" fill="#7d8590" letter-spacing="0.4">INPUT TOKENS PER TASK</text>
 <rect x="20" y="298" width="920" height="38" rx="8" fill="#13213a"/>
 <text x="182" y="315" font-size="15" font-weight="700" fill="#f0f6fc" text-anchor="end">killi</text>
 <text x="182" y="330" font-size="11" fill="#7d8590" text-anchor="end">MiMo-V2.6-Pro</text>
-<rect x="194" y="310" width="37.8" height="14" rx="4" fill="#5b9bff"/>
-<text x="241.8" y="322" font-size="14" font-weight="700" fill="#f0f6fc">17.1k</text>
+<rect x="194" y="310" width="55.4" height="14" rx="4" fill="#5b9bff"/>
+<text x="259.4" y="322" font-size="14" font-weight="700" fill="#f0f6fc">27.6k</text>
 <text x="182" y="355" font-size="15" font-weight="500" fill="#f0f6fc" text-anchor="end">Kimi Code</text>
 <text x="182" y="370" font-size="11" fill="#7d8590" text-anchor="end">MiMo-V2.6-Pro</text>
-<rect x="194" y="350" width="464.7" height="14" rx="4" fill="#3a414b"/>
-<text x="668.7" y="362" font-size="14" font-weight="500" fill="#f0f6fc">209.6k<tspan dx="8" font-size="12" font-weight="400" fill="#7d8590">· 12× killi</tspan></text>
+<rect x="194" y="350" width="415.2" height="14" rx="4" fill="#3a414b"/>
+<text x="619.2" y="362" font-size="14" font-weight="500" fill="#f0f6fc">206.8k<tspan dx="8" font-size="12" font-weight="400" fill="#7d8590">· 7.5× killi</tspan></text>
 <text x="182" y="395" font-size="15" font-weight="500" fill="#f0f6fc" text-anchor="end">Claude Code</text>
 <text x="182" y="410" font-size="11" fill="#7d8590" text-anchor="end">Claude Opus 5.5</text>
 <rect x="194" y="390" width="560.0" height="14" rx="4" fill="#3a414b"/>
-<text x="764.0" y="402" font-size="14" font-weight="500" fill="#f0f6fc">252.6k<tspan dx="8" font-size="12" font-weight="400" fill="#7d8590">· 15× killi</tspan></text>
+<text x="764.0" y="402" font-size="14" font-weight="500" fill="#f0f6fc">278.9k<tspan dx="8" font-size="12" font-weight="400" fill="#7d8590">· 10× killi</tspan></text>
 <text x="32" y="452" font-size="13" font-weight="700" fill="#7d8590" letter-spacing="0.4">TIME PER TASK</text>
 <rect x="20" y="462" width="920" height="38" rx="8" fill="#13213a"/>
 <text x="182" y="479" font-size="15" font-weight="700" fill="#f0f6fc" text-anchor="end">killi</text>
 <text x="182" y="494" font-size="11" fill="#7d8590" text-anchor="end">MiMo-V2.6-Pro</text>
-<rect x="194" y="474" width="440.7" height="14" rx="4" fill="#5b9bff"/>
-<text x="644.7" y="486" font-size="14" font-weight="700" fill="#f0f6fc">46 s</text>
+<rect x="194" y="474" width="447.9" height="14" rx="4" fill="#5b9bff"/>
+<text x="651.9" y="486" font-size="14" font-weight="700" fill="#f0f6fc">48 s</text>
 <text x="182" y="519" font-size="15" font-weight="500" fill="#f0f6fc" text-anchor="end">Kimi Code</text>
 <text x="182" y="534" font-size="11" fill="#7d8590" text-anchor="end">MiMo-V2.6-Pro</text>
 <rect x="194" y="514" width="560.0" height="14" rx="4" fill="#3a414b"/>
-<text x="764.0" y="526" font-size="14" font-weight="500" fill="#f0f6fc">58 s</text>
+<text x="764.0" y="526" font-size="14" font-weight="500" fill="#f0f6fc">60 s</text>
 <text x="182" y="559" font-size="15" font-weight="500" fill="#f0f6fc" text-anchor="end">Claude Code</text>
 <text x="182" y="574" font-size="11" fill="#7d8590" text-anchor="end">Claude Opus 5.5</text>
-<rect x="194" y="554" width="392.3" height="14" rx="4" fill="#3a414b"/>
-<text x="596.3" y="566" font-size="14" font-weight="500" fill="#f0f6fc">41 s</text>
+<rect x="194" y="554" width="447.2" height="14" rx="4" fill="#3a414b"/>
+<text x="651.2" y="566" font-size="14" font-weight="500" fill="#f0f6fc">48 s</text>
 <text x="32" y="616" font-size="13" font-weight="700" fill="#7d8590" letter-spacing="0.4">PEAK MEMORY</text>
 <rect x="20" y="626" width="920" height="38" rx="8" fill="#13213a"/>
 <text x="182" y="643" font-size="15" font-weight="700" fill="#f0f6fc" text-anchor="end">killi</text>
 <text x="182" y="658" font-size="11" fill="#7d8590" text-anchor="end">MiMo-V2.6-Pro</text>
-<rect x="194" y="638" width="7.3" height="14" rx="4" fill="#5b9bff"/>
-<text x="211.3" y="650" font-size="14" font-weight="700" fill="#f0f6fc">4.4 MB</text>
+<rect x="194" y="638" width="9.0" height="14" rx="4" fill="#5b9bff"/>
+<text x="213.0" y="650" font-size="14" font-weight="700" fill="#f0f6fc">5.4 MB</text>
 <text x="182" y="683" font-size="15" font-weight="500" fill="#f0f6fc" text-anchor="end">Kimi Code</text>
 <text x="182" y="698" font-size="11" fill="#7d8590" text-anchor="end">MiMo-V2.6-Pro</text>
 <rect x="194" y="678" width="560.0" height="14" rx="4" fill="#3a414b"/>
-<text x="764.0" y="690" font-size="14" font-weight="500" fill="#f0f6fc">336.0 MB<tspan dx="8" font-size="12" font-weight="400" fill="#7d8590">· 77× killi</tspan></text>
+<text x="764.0" y="690" font-size="14" font-weight="500" fill="#f0f6fc">335.2 MB<tspan dx="8" font-size="12" font-weight="400" fill="#7d8590">· 62× killi</tspan></text>
 <text x="182" y="723" font-size="15" font-weight="500" fill="#f0f6fc" text-anchor="end">Claude Code</text>
 <text x="182" y="738" font-size="11" fill="#7d8590" text-anchor="end">Claude Opus 5.5</text>
-<rect x="194" y="718" width="310.2" height="14" rx="4" fill="#3a414b"/>
-<text x="514.2" y="730" font-size="14" font-weight="500" fill="#f0f6fc">186.2 MB<tspan dx="8" font-size="12" font-weight="400" fill="#7d8590">· 43× killi</tspan></text>
-<text x="32" y="772" font-size="12" fill="#7d8590">Ten Rust and TypeScript tasks from evals/tasks, run once per tool with scripts/eval.py; a task passes when its check succeeds</text>
-<text x="32" y="790" font-size="12" fill="#7d8590">after the tool finishes, with the tests restored first. Peak memory is the tool&#x27;s own process, not the compilers it starts.</text>
+<rect x="194" y="718" width="319.7" height="14" rx="4" fill="#3a414b"/>
+<text x="523.7" y="730" font-size="14" font-weight="500" fill="#f0f6fc">191.4 MB<tspan dx="8" font-size="12" font-weight="400" fill="#7d8590">· 35× killi</tspan></text>
+<text x="32" y="772" font-size="12" fill="#7d8590">14 Rust and TypeScript tasks from evals/tasks, run once per tool with scripts/eval.py; a task passes when its check</text>
+<text x="32" y="790" font-size="12" fill="#7d8590">succeeds after the tool finishes, with the tests restored first. Peak memory is the tool&#x27;s own process, not the compilers it starts.</text>
 </svg>

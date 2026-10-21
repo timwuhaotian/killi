@@ -49,7 +49,11 @@ impl Output {
     }
     pub fn error(text: impl Into<String>) -> Self {
         let text = text.into();
-        let brief = crate::llm::truncate(text.lines().next().unwrap_or_default(), 80).to_string();
+        let first = text.lines().next().unwrap_or_default();
+        let brief = match crate::llm::truncate(first, 80) {
+            short if short.len() == first.len() => short.to_string(),
+            short => format!("{}…", short.rsplit_once(' ').map_or(short, |(head, _)| head)),
+        };
         Self { text, is_error: true, brief, display: None, image: None }
     }
     pub fn brief(mut self, brief: impl Into<String>) -> Self {

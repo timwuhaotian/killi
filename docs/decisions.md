@@ -180,21 +180,29 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
 
 ## Status
 
-The first slice (phase 0 plus the headless core of phase 1) was built on 2026-10-22:
-- config, `import-kimi`, the OpenAI chat adapter, the agent loop;
-- `read` / `write` / `edit` / `bash` / `grep` / `glob`;
-- the session log, `-p` / `--json`, `update`, `install.sh`, `scripts/release.sh`.
+All build phases are done as of 0.2.0 (2026-10-22): the headless core, the interactive TUI,
+the Anthropic and OpenAI Responses adapters, compaction, resume, plan mode, subagents,
+background tasks, undo, `fetch_url`, images, skills, MCP, hooks and nested `AGENTS.md`
+reminders. `scripts/eval.py` is the `killi eval` of decision 15, run with Python so the same
+harness can drive Kimi Code and Claude Code.
 
-Measured on MiMo:
+Measured:
+- Release binary: 6.0 MB (4.3 MB before the TUI, `fetch_url` and MCP).
+- First request on MiMo, on the user's machine: 3,224 tokens, of which the 204 skill names are
+  about 860 and the global `AGENTS.md` 130; Kimi Code's was 39,508.
+- Capability tests (`docs/eval.md`), 14 tasks: killi 0.2.1, Kimi Code 2.2.0 and Claude Code
+  2.1.306 all passed 14 of 14. Per task, killi used 27.6k input tokens (4.9k not cached),
+  Kimi Code 206.8k on the same model and Claude Code 278.9k; killi's own process peaked at
+  5 MB against 335 MB and 191 MB.
+- The top-level listing added in 0.2.1 cut killi's input tokens per task by 16% against
+  0.2.0, with the same pass rate.
 
-| Measure | Result |
-|---|---|
-| Release binary | 4.33 MB |
-| First request (system prompt, 6 tools, 130-token global `AGENTS.md`, user message) | 1,359 prompt tokens |
-| Fix-a-failing-test task | 5 requests, 71% cached, 20 s |
-| Read-only task | 4 requests, 90% cached; killi's own peak memory 18.5 MB footprint, 29.8 MB maximum resident |
-
-Still to port from phase 1: tool-argument repair beyond accepting alternative `edit` shapes; `killi eval`.
+Seen in testing, left as they are:
+- MiMo now and then writes its native tool-call markup (`<tool_call><function=…>`) into the
+  reply text and sends a broken call; the invalid-arguments error lets it recover on the next
+  step. Kimi Code doesn't handle this either.
+- Paths that look like `-Users-<name>-…` in the working directory lead the model to guess other
+  paths under `/Users/<name>/`. Real projects don't have such paths.
 
 ## Baseline to beat
 

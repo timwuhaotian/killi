@@ -69,7 +69,7 @@ def render(data, c):
     notes = [
         f'Measured {data["measured"]} on an Apple M4 Pro (macOS 27) with scripts/bench.py, each tool given “{data["prompt"]}” in an empty folder.',
         "Size is the installed binary (Kimi Code’s includes its bundled rg and fd). Memory is the median maximum resident set size of 3 runs.",
-        "Tokens are the first request’s input as each tool reports it; Kimi Code and Claude Code include this machine’s skills and MCP servers.",
+        "Tokens are the first request’s input as each tool reports it, with this machine’s skills, instructions and MCP servers loaded.",
     ]
     y -= 8
     for note in notes:
@@ -127,8 +127,8 @@ def render_eval_svg(summary, c):
             y += ROW
         y += 34
     notes = [
-        "Ten Rust and TypeScript tasks from evals/tasks, run once per tool with scripts/eval.py; a task passes when its check succeeds",
-        "after the tool finishes, with the tests restored first. Peak memory is the tool's own process, not the compilers it starts.",
+        f"{killi['runs']} Rust and TypeScript tasks from evals/tasks, run once per tool with scripts/eval.py; a task passes when its check",
+        "succeeds after the tool finishes, with the tests restored first. Peak memory is the tool's own process, not the compilers it starts.",
     ]
     y -= 8
     for note in notes:

@@ -5,6 +5,20 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.1 — 2026-10-22
+
+- `killi init` writes a starting `~/.killi/config.toml` for machines without Kimi Code.
+- The system prompt lists the top of the working directory, so the agent starts without an
+  `ls` round trip, as Kimi Code does.
+- A message typed during the agent's final reply is answered in the same turn instead of
+  waiting for your next prompt.
+- `/undo` and other commands typed while the agent works stay in the prompt instead of being
+  sent to the model.
+- Cleaner transcript: no doubled blank lines, and short error summaries end on a whole word.
+  The live area never grows taller than the window, and resizing no longer shifts it.
+- Resumed and compacted sessions list your earlier prompts again, in the banner, the history
+  and `/resume`.
+
 ## 0.2.0 — 2026-10-22
 
 - **Interactive mode.** Run `killi` with no arguments: the conversation prints into your

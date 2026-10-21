@@ -293,6 +293,9 @@ impl Agent {
                     self.push(json!({"role": "user", "content": "<system-reminder>Your reply was cut off at the output token limit. Continue exactly where it stopped.</system-reminder>"}))?;
                     continue;
                 }
+                if !self.controls.steer.borrow().is_empty() {
+                    continue;
+                }
                 let event = if self.depth == 0 { "Stop" } else { "SubagentStop" };
                 let stop = self.hook(event, None, json!({"stop_hook_active": stop_blocks > 0})).await;
                 if let Some(reason) = stop.block.filter(|_| stop_blocks < 3) {

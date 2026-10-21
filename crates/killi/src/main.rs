@@ -34,7 +34,8 @@ Usage:
   killi -c | --continue                        Continue the latest session in this folder
   killi -r | --resume [<log>]                  Pick an earlier session (or open a log) and continue it
   killi -p <prompt> [-m <model>] [-c] [--json] Run one task, print the answer and exit
-  killi import-kimi [--force]                  Copy providers and models from Kimi Code
+  killi init                                   Write a starting ~/.killi/config.toml
+  killi import-kimi [--force]                  Copy providers, models and MCP servers from Kimi Code
   killi update                                 Install the latest published version
   killi --version
 
@@ -63,6 +64,7 @@ fn main() -> ExitCode {
 
 async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
     match args.first().map(String::as_str) {
+        Some("init") => config::init().map(|()| ExitCode::SUCCESS),
         Some("import-kimi") => config::import_kimi(args.iter().any(|a| a == "--force")).map(|()| ExitCode::SUCCESS),
         Some("update") => update::update().await.map(|()| ExitCode::SUCCESS),
         Some("-V" | "--version") => {

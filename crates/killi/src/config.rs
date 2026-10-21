@@ -131,7 +131,7 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = killi_home().join("config.toml");
         let text = fs::read_to_string(&path).with_context(|| {
-            format!("could not read {}; run `killi import-kimi` to create it", path.display())
+            format!("could not read {}; run `killi init` to create one, or `killi import-kimi` to copy Kimi Code's", path.display())
         })?;
         toml::from_str(&text).with_context(|| format!("invalid config in {}", path.display()))
     }
@@ -195,6 +195,51 @@ impl Config {
             Some(effort) => Thinking::Effort(effort.to_string()),
         }
     }
+}
+
+const TEMPLATE: &str = r#"# killi's config. Models are named "<provider>/<model>"; pick one with -m or default_model.
+default_model = "openai/gpt-5.5"
+
+[thinking]
+effort = "high"                 # or: enabled = false
+
+[providers.openai]
+type = "openai"                 # OpenAI chat completions, and compatible APIs
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"  # or: api_key = "..."
+
+[providers.anthropic]
+type = "anthropic"              # Anthropic Messages, and compatible APIs
+api_key_env = "ANTHROPIC_API_KEY"
+
+[models."openai/gpt-5.5"]
+provider = "openai"
+model = "gpt-5.5"
+protocol = "openai_responses"   # use the Responses API for this model
+max_context_size = 400000
+max_output_size = 128000
+capabilities = ["image_in", "thinking", "tool_use"]
+
+[models."anthropic/claude-sonnet-5-5"]
+provider = "anthropic"
+model = "claude-sonnet-5-5"
+max_context_size = 1000000
+max_output_size = 128000
+capabilities = ["image_in", "thinking", "tool_use"]
+"#;
+
+/// Writes a starting `~/.killi/config.toml` to edit.
+pub fn init() -> Result<()> {
+    let dir = killi_home();
+    let path = dir.join("config.toml");
+    if path.exists() {
+        bail!("{} already exists", path.display());
+    }
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+    file.write_all(TEMPLATE.as_bytes())?;
+    println!("Wrote {}. Set your providers' keys and models there, then run `killi`.", path.display());
+    Ok(())
 }
 
 /// Copies providers, models, `default_model` and `[thinking]` from Kimi Code's config.
@@ -267,4 +312,18 @@ pub fn import_kimi(force: bool) -> Result<()> {
         println!("Skipped providers without an API key (Kimi account login): {}", skipped.join(", "));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn template_parses_and_resolves() {
+        let config: super::Config = toml::from_str(super::TEMPLATE).unwrap();
+        assert_eq!(config.models.len(), 2);
+        // SAFETY: tests that read this variable don't run concurrently with one that changes it.
+        unsafe { std::env::set_var("OPENAI_API_KEY", "test-key") };
+        let model = config.resolve(None).unwrap();
+        assert_eq!(model.protocol, super::Protocol::Responses);
+        assert_eq!(model.thinking, super::Thinking::Effort("high".into()));
+    }
 }

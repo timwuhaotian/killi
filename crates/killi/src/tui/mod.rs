@@ -287,6 +287,7 @@ struct Status {
 struct App {
     out: Stdout,
     width: usize,
+    height: usize,
     /// Rows from the top of the live area to the cursor, to find the area again.
     cursor_row: usize,
     /// Lines waiting to be printed above the live area.
@@ -295,6 +296,10 @@ struct App {
     markdown: Markdown,
     /// Streamed text after the last line break.
     partial: String,
+    /// A blank line in the model's text, printed only if more text follows it.
+    held_blank: bool,
+    /// The last line printed was blank.
+    last_blank: bool,
     last_kind: Kind,
     thinking: Option<(Instant, String)>,
     running: Vec<Running>,
@@ -324,15 +329,18 @@ enum Kind {
 
 impl App {
     fn new(agent: &Agent, controls: Controls, cwd: &Path) -> Self {
-        let (columns, _) = terminal::size().unwrap_or((100, 40));
+        let (columns, rows) = terminal::size().unwrap_or((100, 40));
         let mut app = Self {
             out: stdout(),
             width: usize::from(columns).max(20),
+            height: usize::from(rows).max(5),
             cursor_row: 0,
             pending: Vec::new(),
             editor: Editor::with_history(agent.user_prompts()),
             markdown: Markdown::default(),
             partial: String::new(),
+            held_blank: false,
+            last_blank: false,
             last_kind: Kind::None,
             thinking: None,
             running: Vec::new(),
@@ -402,8 +410,8 @@ impl App {
                 self.editor.insert(&text);
                 return Idle::Continue;
             }
-            TermEvent::Resize(columns, _) => {
-                self.resize(columns);
+            TermEvent::Resize(columns, rows) => {
+                self.resize(columns, rows);
                 return Idle::Continue;
             }
             TermEvent::Key(key) if key.kind != KeyEventKind::Release => key,
@@ -475,8 +483,8 @@ impl App {
                 self.editor.insert(&text);
                 return false;
             }
-            TermEvent::Resize(columns, _) => {
-                self.resize(columns);
+            TermEvent::Resize(columns, rows) => {
+                self.resize(columns, rows);
                 return false;
             }
             TermEvent::Key(key) if key.kind != KeyEventKind::Release => key,
@@ -666,15 +674,27 @@ impl App {
     fn on_agent(&mut self, event: Event) {
         match event {
             Event::Text(text) => {
+                let text = if self.last_kind == Kind::Text { text.as_str() } else { text.trim_start() };
+                if text.is_empty() {
+                    return;
+                }
                 self.end_thinking();
                 if self.last_kind == Kind::Tool {
                     self.commit(String::new());
                 }
                 self.last_kind = Kind::Text;
-                self.partial.push_str(&text);
+                self.partial.push_str(text);
                 while let Some(end) = self.partial.find('\n') {
                     let line: String = self.partial.drain(..=end).collect();
-                    let styled = self.markdown.line(line.trim_end_matches('\n'));
+                    let line = line.trim_end_matches('\n');
+                    if line.trim().is_empty() {
+                        self.held_blank = true;
+                        continue;
+                    }
+                    if std::mem::take(&mut self.held_blank) {
+                        self.commit(String::new());
+                    }
+                    let styled = self.markdown.line(line);
                     self.commit(styled);
                 }
             }
@@ -782,11 +802,13 @@ impl App {
     }
 
     fn flush_partial(&mut self) {
-        if !self.partial.is_empty() {
+        self.held_blank = false;
+        if !self.partial.trim().is_empty() {
             let line = std::mem::take(&mut self.partial);
             let styled = self.markdown.line(&line);
             self.commit(styled);
         }
+        self.partial.clear();
     }
 
     /// Ends a thought: one dim line when it took a while, with the full text behind Ctrl+O.
@@ -892,7 +914,13 @@ impl App {
 
     // ---------- drawing ----------
 
+    /// Queues a line for the scrollback, never two blank lines in a row.
     fn commit(&mut self, line: String) {
+        let blank = line.is_empty();
+        if blank && self.last_blank {
+            return;
+        }
+        self.last_blank = blank;
         self.pending.push(line);
     }
 
@@ -904,9 +932,13 @@ impl App {
         self.commit(format!("{RED}Error:{RESET} {text}"));
     }
 
-    fn resize(&mut self, columns: u16) {
+    fn resize(&mut self, columns: u16, rows: u16) {
         self.width = usize::from(columns).max(20);
-        let _ = queue!(self.out, MoveUp(self.cursor_row as u16), MoveToColumn(0), Clear(ClearType::FromCursorDown));
+        self.height = usize::from(rows).max(5);
+        if self.cursor_row > 0 {
+            let _ = queue!(self.out, MoveUp(self.cursor_row as u16));
+        }
+        let _ = queue!(self.out, MoveToColumn(0), Clear(ClearType::FromCursorDown));
         self.cursor_row = 0;
     }
 
@@ -971,8 +1003,14 @@ impl App {
         let first = cursor_row.saturating_sub(MAX_INPUT_ROWS - 1);
         let top = rows.len();
         rows.extend(input.into_iter().skip(first).take(MAX_INPUT_ROWS));
-        let cursor = (top + cursor_row - first, cursor_col);
+        let mut cursor = (top + cursor_row - first, cursor_col);
         rows.push(fit(&self.status_line(), width));
+        let excess = rows.len().saturating_sub(self.height - 1);
+        if excess > 0 {
+            let cut = excess.min(top);
+            rows.drain(..cut);
+            cursor.0 -= cut;
+        }
         (rows, cursor.0, cursor.1)
     }
 
