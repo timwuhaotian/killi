@@ -16,6 +16,32 @@ pub struct Config {
     pub models: BTreeMap<String, Model>,
     #[serde(default)]
     pub thinking: ThinkingConfig,
+    #[serde(default)]
+    pub agent: AgentConfig,
+    #[serde(default)]
+    pub skills: SkillsConfig,
+    #[serde(default)]
+    pub hooks: crate::hooks::HooksConfig,
+}
+
+/// `[agent]`: how the agent behaves.
+#[derive(Debug, Default, Deserialize)]
+pub struct AgentConfig {
+    /// Compact the conversation once a request's input passes this many tokens (default 256000).
+    pub compact_at: Option<u64>,
+    /// Extra command prefixes bash may run in plan mode, such as "make -n".
+    #[serde(default)]
+    pub plan_allow: Vec<String>,
+    /// Seconds a turn must take before a desktop notification (default 10).
+    pub notify_after: Option<u64>,
+}
+
+/// `[skills]`: where skills are found besides the project's own folders.
+#[derive(Debug, Default, Deserialize)]
+pub struct SkillsConfig {
+    /// Defaults to `~/.agents/skills`.
+    #[serde(default)]
+    pub dirs: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,7 +59,10 @@ pub struct Provider {
 pub struct Model {
     pub provider: String,
     pub model: String,
+    pub max_context_size: Option<u64>,
     pub max_output_size: Option<u64>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     pub protocol: Option<String>,
     pub default_effort: Option<String>,
     #[serde(default)]
@@ -56,6 +85,8 @@ pub struct ResolvedModel {
     pub api_key: String,
     pub headers: BTreeMap<String, String>,
     pub max_output: Option<u64>,
+    pub context_window: Option<u64>,
+    pub images: bool,
     pub thinking: Thinking,
 }
 
@@ -132,6 +163,8 @@ impl Config {
             api_key,
             headers: provider.custom_headers.clone(),
             max_output: model.max_output_size,
+            context_window: model.max_context_size,
+            images: model.capabilities.iter().any(|c| c == "image_in"),
             thinking: self.thinking_for(model),
         })
     }

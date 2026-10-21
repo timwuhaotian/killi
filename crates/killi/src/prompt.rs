@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::home;
+use crate::skills::Skills;
 
 const BASE: &str = include_str!("prompt/system.md");
 
@@ -14,7 +15,7 @@ pub struct SystemPrompt {
     pub instruction_tokens: usize,
 }
 
-pub fn build(cwd: &Path) -> SystemPrompt {
+pub fn build(cwd: &Path, skills: &Skills) -> SystemPrompt {
     let mut text = BASE.replace("{cwd}", &cwd.display().to_string()).replace("{date}", &today());
     let files = instruction_files(cwd);
     let mut instructions = String::new();
@@ -27,6 +28,7 @@ pub fn build(cwd: &Path) -> SystemPrompt {
         );
         text.push_str(&instructions);
     }
+    text.push_str(&skills.prompt_section());
     SystemPrompt {
         text,
         instruction_files: files.into_iter().map(|(path, _)| path).collect(),

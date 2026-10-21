@@ -1,26 +1,83 @@
 //! The agent loop. History is append-only and holds messages exactly as sent; the system
 //! prompt and tool list are fixed for the session, so every request reuses the cached prefix.
+//! Notes from killi to the model are appended as user messages, never edited into old ones.
 
-use std::collections::{HashMap, HashSet};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::rc::Rc;
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
+use futures_util::future::join_all;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 
-use crate::llm::{Client, Delta, Reply, Usage, truncate};
-use crate::prompt::SystemPrompt;
+use crate::llm::{Client, Delta, Reply, ToolCall, Usage, truncate};
 use crate::session::Session;
-use crate::tools;
+use crate::hooks::{HooksConfig, tool_payload};
+use crate::skills::Skills;
+use crate::{plan, tools};
 
 const MAX_CONTINUATIONS: u32 = 3;
 const REPEAT_WARNINGS: [u32; 3] = [3, 5, 8];
 const REPEAT_STOP: u32 = 12;
 const MAX_RESULT_CHARS: usize = 50_000;
+const MAX_PARALLEL_AGENTS: usize = 4;
+/// User prompts kept word for word through a compaction, in characters (about 20k tokens).
+const KEPT_PROMPTS_CHARS: usize = 80_000;
 
-pub enum Event<'a> {
-    Llm(Delta<'a>),
-    ToolStart(String),
-    ToolEnd { is_error: bool },
+/// Receives everything the agent does, for a terminal to show.
+pub type Sink = Rc<dyn Fn(Event)>;
+
+pub enum Event {
+    Text(String),
+    Reasoning(String),
+    Retry { attempt: u32, wait: Duration, reason: String },
+    ToolStart { id: String, summary: String },
+    ToolEnd { id: String, is_error: bool, brief: String, display: Option<String>, output: String },
+    /// After each request: that request's usage, and the context it used.
+    Usage(Usage),
+    Todos(Vec<Todo>),
+    Ask(Question),
+    Notice(String),
+    /// Something a subagent did, labeled with its description.
+    Sub { label: String, event: Box<Event> },
+}
+
+/// A question for the user. `plan` marks a plan waiting for approval.
+pub struct Question {
+    pub text: String,
+    pub options: Vec<String>,
+    pub plan: bool,
+    pub reply: oneshot::Sender<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Todo {
+    pub content: String,
+    pub status: String,
+}
+
+/// What the user can change while the agent works.
+#[derive(Clone, Default)]
+pub struct Controls {
+    /// Messages typed during a turn, sent at the next step.
+    pub steer: Rc<RefCell<VecDeque<String>>>,
+    pub plan: Rc<Cell<bool>>,
+    /// Whether someone can answer questions; headless runs and subagents can't.
+    pub interactive: bool,
+}
+
+#[derive(Clone, Default)]
+pub struct Settings {
+    /// Compact once a request's input passes this many tokens.
+    pub compact_at: u64,
+    /// Extra command prefixes bash may run in plan mode.
+    pub plan_allow: Vec<String>,
+    pub skills: Skills,
+    pub hooks: Rc<HooksConfig>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -38,51 +95,189 @@ pub struct Stats {
     pub usage: Usage,
     /// Prompt tokens of the first request: the system prompt, tools and first message.
     pub first_prompt: Option<u64>,
+    /// Input tokens of the latest request: how full the context is.
+    pub context: u64,
 }
 
 pub struct Agent {
-    client: Client,
-    tools: Vec<Value>,
+    client: Rc<Client>,
+    tools: Rc<Vec<Value>>,
     messages: Vec<Value>,
-    ctx: tools::Context,
+    ctx: Rc<tools::Context>,
     pub session: Session,
     pub stats: Stats,
+    pub controls: Controls,
+    settings: Rc<Settings>,
+    sink: Sink,
     ids: HashSet<String>,
     repeats: HashMap<String, u32>,
+    todos: Vec<Todo>,
+    plan_announced: bool,
+    interrupted: bool,
+    depth: u8,
+    children: usize,
+    /// Index of the assistant message whose tool calls are running.
+    current_reply: usize,
+    session_started: bool,
 }
 
 impl Agent {
-    pub fn new(client: Client, cwd: &Path, prompt: &SystemPrompt) -> Result<Self> {
-        let mut session = Session::create(cwd)?;
-        let tools = tools::definitions();
-        session.record(&json!({
+    pub fn new(
+        client: Client,
+        cwd: &Path,
+        system: &str,
+        tools: Vec<Value>,
+        settings: Settings,
+        controls: Controls,
+        sink: Sink,
+    ) -> Result<Self> {
+        let session = Session::create(cwd)?;
+        let mut agent = Self::assemble(client, cwd, tools, settings, controls, sink, session);
+        agent.session.record(&json!({
             "type": "session",
-            "id": session.id,
+            "id": agent.session.id,
             "cwd": cwd,
-            "model": client.model.alias,
-            "tools": tools,
+            "model": agent.client.model.alias,
+            "tools": *agent.tools,
         }))?;
-        let ctx = tools::Context { cwd: cwd.to_path_buf(), spill_dir: session.dir.clone() };
-        let mut agent = Self {
-            client,
-            tools,
-            messages: Vec::new(),
-            ctx,
-            session,
-            stats: Stats::default(),
-            ids: HashSet::new(),
-            repeats: HashMap::new(),
-        };
-        agent.push(json!({"role": "system", "content": prompt.text}))?;
+        agent.push(json!({"role": "system", "content": system}))?;
         Ok(agent)
     }
 
+    /// Continues a logged session with its original system prompt, so its cached prefix hits.
+    pub fn resume(
+        client: Client,
+        cwd: &Path,
+        log: &Path,
+        tools: Vec<Value>,
+        settings: Settings,
+        controls: Controls,
+        sink: Sink,
+    ) -> Result<Self> {
+        let loaded = crate::session::load(log)?;
+        let session = Session::open(log)?;
+        let mut agent = Self::assemble(client, cwd, tools, settings, controls, sink, session);
+        for message in &loaded.messages {
+            for call in message["tool_calls"].as_array().into_iter().flatten() {
+                if let Some(id) = call["id"].as_str() {
+                    agent.ids.insert(id.to_string());
+                }
+            }
+        }
+        agent.messages = loaded.messages;
+        agent.recover()?;
+        Ok(agent)
+    }
+
+    fn assemble(
+        client: Client,
+        cwd: &Path,
+        tools: Vec<Value>,
+        settings: Settings,
+        controls: Controls,
+        sink: Sink,
+        session: Session,
+    ) -> Self {
+        let mut ctx = tools::Context::new(cwd.to_path_buf(), session.dir.clone());
+        ctx.images = client.model.images;
+        Self {
+            client: Rc::new(client),
+            tools: Rc::new(tools),
+            messages: Vec::new(),
+            ctx: Rc::new(ctx),
+            session,
+            stats: Stats::default(),
+            controls,
+            settings: Rc::new(settings),
+            sink,
+            ids: HashSet::new(),
+            repeats: HashMap::new(),
+            todos: Vec::new(),
+            plan_announced: false,
+            interrupted: false,
+            depth: 0,
+            children: 0,
+            current_reply: 0,
+            session_started: false,
+        }
+    }
+
+    pub fn sink(&self) -> Sink {
+        self.sink.clone()
+    }
+
+    /// Continues on another model; the next request starts the cache over.
+    pub fn switch_model(&mut self, client: Client) {
+        self.ctx_images(client.model.images);
+        self.client = Rc::new(client);
+        self.stats.context = 0;
+    }
+
+    fn ctx_images(&mut self, images: bool) {
+        if let Some(ctx) = Rc::get_mut(&mut self.ctx) {
+            ctx.images = images;
+        }
+    }
+
+    /// Replaces the system prompt on purpose, for /reload; the next request is uncached.
+    pub fn reload_system(&mut self, system: &str) -> Result<()> {
+        self.messages[0] = json!({"role": "system", "content": system});
+        self.session.record(&json!({"type": "compaction", "messages": self.messages}))
+    }
+
+    pub fn model_alias(&self) -> &str {
+        &self.client.model.alias
+    }
+
+    pub fn context_window(&self) -> Option<u64> {
+        self.client.model.context_window
+    }
+
+    /// The user prompts of this session, oldest first, for history and pickers.
+    pub fn user_prompts(&self) -> Vec<String> {
+        self.messages
+            .iter()
+            .filter(|m| m["role"] == "user")
+            .filter_map(|m| m["content"].as_str())
+            .filter(|text| !text.starts_with("<system-reminder>"))
+            .map(String::from)
+            .collect()
+    }
+
     /// Runs one user turn to completion and returns the final reply text.
-    pub async fn run(&mut self, user: &str, on_event: &mut dyn FnMut(Event)) -> Result<(String, Stop)> {
-        self.push(json!({"role": "user", "content": user}))?;
+    pub async fn run(&mut self, user: &str) -> Result<(String, Stop)> {
+        let mut notes = Vec::new();
+        if std::mem::take(&mut self.interrupted) {
+            notes.push("The user interrupted your previous turn.".to_string());
+        }
+        if !std::mem::replace(&mut self.session_started, true) {
+            notes.extend(self.hook("SessionStart", None, json!({"source": "startup"})).await.context);
+        }
+        let submitted = self.hook("UserPromptSubmit", None, json!({"prompt": user})).await;
+        if let Some(reason) = submitted.block {
+            return Err(anyhow!("a hook blocked this prompt: {reason}"));
+        }
+        notes.extend(submitted.context);
+        let content = if notes.is_empty() {
+            user.to_string()
+        } else {
+            format!("<system-reminder>{}</system-reminder>\n\n{user}", notes.join("\n"))
+        };
+        self.push(json!({"role": "user", "content": content}))?;
         let mut continuations = 0;
+        let mut overflow_compacted = false;
+        let mut stop_blocks = 0;
         loop {
-            let reply = self.request(on_event).await?;
+            self.before_request().await?;
+            let reply = match self.request().await {
+                Ok(reply) => reply,
+                Err(error) if !overflow_compacted && is_overflow(&error) => {
+                    overflow_compacted = true;
+                    self.compact(None).await?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let truncated = reply.finish_reason.as_deref() == Some("length");
             let calls = self.record_reply(&reply)?;
             if calls.is_empty() {
@@ -91,20 +286,61 @@ impl Agent {
                     self.push(json!({"role": "user", "content": "<system-reminder>Your reply was cut off at the output token limit. Continue exactly where it stopped.</system-reminder>"}))?;
                     continue;
                 }
+                let event = if self.depth == 0 { "Stop" } else { "SubagentStop" };
+                let stop = self.hook(event, None, json!({"stop_hook_active": stop_blocks > 0})).await;
+                if let Some(reason) = stop.block.filter(|_| stop_blocks < 3) {
+                    stop_blocks += 1;
+                    self.push(json!({"role": "user", "content": format!("<system-reminder>A hook asked you to keep going: {reason}</system-reminder>")}))?;
+                    continue;
+                }
                 return Ok((reply.text, if truncated { Stop::MaxTokens } else { Stop::Completed }));
             }
-            let mut stop = false;
-            for (id, call) in calls {
-                stop |= self.execute(&id, &call, truncated, on_event).await?;
-            }
-            if stop {
+            if self.execute_calls(calls, truncated).await? {
                 return Ok((String::new(), Stop::RepeatBreaker));
             }
         }
     }
 
-    async fn request(&mut self, on_event: &mut dyn FnMut(Event)) -> Result<Reply> {
-        let mut on_delta = |delta: Delta| on_event(Event::Llm(delta));
+    /// Everything that goes into the conversation between steps: messages typed meanwhile,
+    /// a plan-mode change, finished background tasks, and compaction when it's due.
+    async fn before_request(&mut self) -> Result<()> {
+        let steered: Vec<String> = self.controls.steer.borrow_mut().drain(..).collect();
+        for text in steered {
+            self.push(json!({"role": "user", "content": text}))?;
+        }
+        let plan = self.controls.plan.get();
+        if plan != self.plan_announced && self.depth == 0 {
+            self.plan_announced = plan;
+            self.push(json!({"role": "user", "content": if plan { plan::ON } else { plan::OFF }}))?;
+        }
+        let finished = self.ctx.tasks.borrow_mut().newly_finished();
+        if !finished.is_empty() && self.depth == 0 {
+            let text = format!("<system-reminder>{} Read the output with task_output.</system-reminder>", finished.join(" "));
+            self.push(json!({"role": "user", "content": text}))?;
+        }
+        if self.compaction_due() {
+            self.compact(None).await?;
+        }
+        Ok(())
+    }
+
+    fn compaction_due(&self) -> bool {
+        let mut limit = self.settings.compact_at;
+        if let Some(window) = self.client.model.context_window {
+            limit = limit.min(window * 85 / 100);
+        }
+        limit > 0 && self.stats.context > limit
+    }
+
+    async fn request(&mut self) -> Result<Reply> {
+        let sink = self.sink.clone();
+        let mut on_delta = |delta: Delta| {
+            sink(match delta {
+                Delta::Text(text) => Event::Text(text.to_string()),
+                Delta::Reasoning(text) => Event::Reasoning(text.to_string()),
+                Delta::Retry { attempt, wait, reason } => Event::Retry { attempt, wait, reason: reason.to_string() },
+            })
+        };
         let reply = self.client.complete(&self.messages, &self.tools, &self.session.id, &mut on_delta).await;
         self.stats.requests += 1;
         let reply = match reply {
@@ -114,26 +350,31 @@ impl Agent {
                 return Err(error);
             }
         };
-        let usage = &reply.usage;
+        self.account(&reply.usage, Some(&reply.finish_reason))?;
+        Ok(reply)
+    }
+
+    fn account(&mut self, usage: &Usage, finish_reason: Option<&Option<String>>) -> Result<()> {
         self.stats.first_prompt.get_or_insert(usage.prompt);
+        self.stats.context = usage.prompt;
         let total = &mut self.stats.usage;
         total.prompt += usage.prompt;
         total.cached += usage.cached;
         total.completion += usage.completion;
         total.reasoning += usage.reasoning;
+        (self.sink)(Event::Usage(usage.clone()));
         self.session.record(&json!({
             "type": "usage",
             "prompt": usage.prompt,
             "cached": usage.cached,
             "completion": usage.completion,
             "reasoning": usage.reasoning,
-            "finish_reason": reply.finish_reason,
-        }))?;
-        Ok(reply)
+            "finish_reason": finish_reason.cloned().flatten(),
+        }))
     }
 
     /// Appends the assistant message and returns its tool calls under their final IDs.
-    fn record_reply(&mut self, reply: &Reply) -> Result<Vec<(String, crate::llm::ToolCall)>> {
+    fn record_reply(&mut self, reply: &Reply) -> Result<Vec<(String, ToolCall)>> {
         let calls: Vec<_> = reply.tool_calls.iter().map(|call| (self.unique_id(&call.id), call.clone())).collect();
         let mut message = json!({"role": "assistant"});
         if !reply.text.is_empty() || calls.is_empty() {
@@ -153,48 +394,113 @@ impl Agent {
                 })
                 .collect();
         }
+        self.current_reply = self.messages.len();
         self.push(message)?;
         Ok(calls)
     }
 
-    /// Runs one tool call and appends its result. Returns true when the repeat breaker trips.
-    async fn execute(
-        &mut self,
-        id: &str,
-        call: &crate::llm::ToolCall,
-        truncated: bool,
-        on_event: &mut dyn FnMut(Event),
-    ) -> Result<bool> {
-        self.stats.tool_calls += 1;
-        let parsed = match call.arguments.trim() {
-            "" => Ok(json!({})),
-            raw => serde_json::from_str::<Value>(raw),
-        };
-        let mut output = match parsed {
-            Ok(args) if args.is_object() => {
-                on_event(Event::ToolStart(tools::summary(&call.name, &args)));
-                tools::run(&self.ctx, &call.name, args).await
+    /// Runs a reply's tool calls in order; consecutive `agent` calls run in parallel. Returns
+    /// true when the repeat breaker trips.
+    async fn execute_calls(&mut self, calls: Vec<(String, ToolCall)>, truncated: bool) -> Result<bool> {
+        let mut stop = false;
+        let mut images = Vec::new();
+        let mut i = 0;
+        while i < calls.len() {
+            if calls[i].1.name == "agent" && self.depth == 0 {
+                let end = calls[i..].iter().position(|(_, c)| c.name != "agent").map_or(calls.len(), |n| i + n);
+                for group in calls[i..end].chunks(MAX_PARALLEL_AGENTS) {
+                    let outputs = self.run_subagents(group).await?;
+                    for ((id, call), output) in group.iter().zip(outputs) {
+                        stop |= self.finish_call(id, call, output)?;
+                    }
+                }
+                i = end;
+                continue;
             }
-            other => {
-                on_event(Event::ToolStart(format!("{} (invalid arguments)", call.name)));
-                let why = match other {
-                    Err(e) => e.to_string(),
-                    Ok(_) => "arguments must be a JSON object".into(),
-                };
-                let cut = if truncated {
-                    " Your reply hit the output token limit, which cut the arguments off; send smaller pieces."
-                } else {
-                    ""
-                };
-                tools::Output::error(format!(
-                    "Invalid arguments for {}: {why}.{cut} You sent: {}",
-                    call.name,
-                    truncate(&call.arguments, 2000)
-                ))
+            let (id, call) = &calls[i];
+            let output = self.execute(id, call, truncated).await;
+            if let Some(image) = &output.image {
+                images.push((tools::summary(&call.name, &parse_args(call).unwrap_or_default()), image.clone()));
             }
-        };
-        on_event(Event::ToolEnd { is_error: output.is_error });
+            stop |= self.finish_call(id, call, output)?;
+            i += 1;
+        }
+        if !images.is_empty() {
+            let mut parts = Vec::new();
+            for (label, url) in images {
+                parts.push(json!({"type": "text", "text": format!("Image from {label}:")}));
+                parts.push(json!({"type": "image_url", "image_url": {"url": url}}));
+            }
+            self.push(json!({"role": "user", "content": parts}))?;
+        }
+        Ok(stop)
+    }
 
+    async fn execute(&mut self, id: &str, call: &ToolCall, truncated: bool) -> tools::Output {
+        self.stats.tool_calls += 1;
+        let args = match parse_args(call) {
+            Ok(args) => args,
+            Err(why) => {
+                let output = invalid_arguments(call, &why, truncated);
+                self.tool_start(id, &format!("{} (invalid arguments)", call.name));
+                return output;
+            }
+        };
+        self.tool_start(id, &tools::summary(&call.name, &args));
+        let before = self.hook("PreToolUse", Some(&call.name), tool_payload(&call.name, &args, None)).await;
+        if let Some(reason) = before.block {
+            return tools::Output::error(format!("A hook blocked this call: {reason}"));
+        }
+        let mut output = self.dispatch(call, &args).await;
+        let after = self.hook("PostToolUse", Some(&call.name), tool_payload(&call.name, &args, Some(&output.text))).await;
+        if let Some(note) = after.block.or_else(|| (!after.context.is_empty()).then(|| after.context.join("\n"))) {
+            output.text.push_str(&format!("\n\n<system-reminder>A hook says: {note}</system-reminder>"));
+        }
+        output
+    }
+
+    async fn dispatch(&mut self, call: &ToolCall, args: &Value) -> tools::Output {
+        let plan = self.controls.plan.get();
+        let args = args.clone();
+        match call.name.as_str() {
+            "skill" => self.settings.skills.run(&args),
+            "todo_write" => self.todo_write(&args),
+            "ask_user_question" => self.ask(&args).await,
+            "exit_plan_mode" => self.exit_plan(&args).await,
+            "agent" => tools::Output::error("Subagents can't start other subagents."),
+            "write" | "edit" if plan => tools::Output::error(format!(
+                "Plan mode is on, so {} is blocked. Finish the plan and call exit_plan_mode.",
+                call.name
+            )),
+            "bash" if plan
+                && !plan::bash_allowed(args["command"].as_str().unwrap_or_default(), &self.settings.plan_allow) =>
+            {
+                tools::Output::error("Plan mode is on: bash runs only read-only commands (ls, rg, git log, cargo check, …), without redirects. Finish the plan and call exit_plan_mode.")
+            }
+            _ => tools::run(&self.ctx, &call.name, args).await,
+        }
+    }
+
+    async fn hook(&self, event: &str, tool: Option<&str>, payload: Value) -> crate::hooks::Outcome {
+        if self.settings.hooks.is_empty() {
+            return crate::hooks::Outcome::default();
+        }
+        self.settings.hooks.run(event, tool, &self.ctx.cwd, &self.session.id, payload).await
+    }
+
+    fn tool_start(&self, id: &str, summary: &str) {
+        (self.sink)(Event::ToolStart { id: id.into(), summary: summary.into() });
+    }
+
+    /// Reports and records a call's result. Returns true when the repeat breaker trips.
+    fn finish_call(&mut self, id: &str, call: &ToolCall, mut output: tools::Output) -> Result<bool> {
+        (self.sink)(Event::ToolEnd {
+            id: id.into(),
+            is_error: output.is_error,
+            brief: output.brief.clone(),
+            display: output.display.take(),
+            output: output.text.clone(),
+        });
         if output.text.len() > MAX_RESULT_CHARS {
             output.text = self.shorten(&output.text);
         }
@@ -211,6 +517,232 @@ impl Agent {
         Ok(stop)
     }
 
+    fn todo_write(&mut self, args: &Value) -> tools::Output {
+        let Ok(todos) = serde_json::from_value::<Vec<Todo>>(args["todos"].clone()) else {
+            return tools::Output::error("todo_write needs `todos`: a list of {content, status}.");
+        };
+        if let Some(bad) = todos.iter().find(|t| !matches!(t.status.as_str(), "pending" | "in_progress" | "completed")) {
+            return tools::Output::error(format!("Unknown status `{}`; use pending, in_progress or completed.", bad.status));
+        }
+        self.todos = todos.clone();
+        let open = todos.iter().filter(|t| t.status != "completed").count();
+        (self.sink)(Event::Todos(todos));
+        tools::Output::ok(format!("Task list updated: {open} open, {} done.", self.todos.len() - open))
+            .brief(format!("{open} open"))
+    }
+
+    async fn ask(&mut self, args: &Value) -> tools::Output {
+        if !self.controls.interactive {
+            return tools::Output::error(
+                "No one can answer questions in this session. Decide yourself, and say in your final message what you assumed.",
+            );
+        }
+        let text = args["question"].as_str().unwrap_or_default().to_string();
+        let options: Vec<String> =
+            args["options"].as_array().into_iter().flatten().filter_map(|o| o.as_str().map(String::from)).collect();
+        match self.wait_for_answer(text, options, false).await {
+            Some(answer) => tools::Output::ok(format!("The user answered: {answer}")).brief(answer),
+            None => tools::Output::error("The question was dismissed without an answer."),
+        }
+    }
+
+    async fn exit_plan(&mut self, args: &Value) -> tools::Output {
+        if !self.controls.plan.get() {
+            return tools::Output::error("Plan mode is off; go ahead without exit_plan_mode.");
+        }
+        if self.depth > 0 {
+            return tools::Output::error("Only the main agent can leave plan mode; report your plan instead.");
+        }
+        let plan = args["plan"].as_str().unwrap_or_default().to_string();
+        if !self.controls.interactive {
+            self.controls.plan.set(false);
+            self.plan_announced = false;
+            return tools::Output::ok("No one is here to approve, so plan mode is off. Carry out the plan.");
+        }
+        let options = vec!["Approve and start".to_string(), "Keep planning".to_string()];
+        match self.wait_for_answer(plan, options, true).await.as_deref() {
+            Some("Approve and start") => {
+                self.controls.plan.set(false);
+                self.plan_announced = false;
+                tools::Output::ok("The user approved the plan. Plan mode is off; carry it out now.").brief("approved")
+            }
+            Some(feedback) if feedback != "Keep planning" => {
+                tools::Output::ok(format!("The user wants changes to the plan: {feedback}\nStay in plan mode and revise it."))
+                    .brief("changes requested")
+            }
+            _ => tools::Output::ok("The user isn't ready to approve. Stay in plan mode, refine the plan, and ask again.")
+                .brief("not yet"),
+        }
+    }
+
+    async fn wait_for_answer(&self, text: String, options: Vec<String>, plan: bool) -> Option<String> {
+        let (reply, answer) = oneshot::channel();
+        (self.sink)(Event::Ask(Question { text, options, plan, reply }));
+        answer.await.ok().filter(|a| !a.trim().is_empty())
+    }
+
+    /// Runs subagents in parallel and returns each one's result as a tool output.
+    async fn run_subagents(&mut self, group: &[(String, ToolCall)]) -> Result<Vec<tools::Output>> {
+        let mut children = Vec::new();
+        let mut prompts = Vec::new();
+        for (id, call) in group {
+            self.stats.tool_calls += 1;
+            let args = match parse_args(call) {
+                Ok(args) => args,
+                Err(why) => {
+                    self.tool_start(id, "agent (invalid arguments)");
+                    children.push(Err(invalid_arguments(call, &why, false)));
+                    prompts.push(String::new());
+                    continue;
+                }
+            };
+            let label = args["description"].as_str().unwrap_or("subagent").to_string();
+            self.tool_start(id, &tools::summary("agent", &args));
+            let prompt = args["prompt"].as_str().unwrap_or_default().to_string();
+            if prompt.trim().is_empty() {
+                children.push(Err(tools::Output::error("agent needs a `prompt`.")));
+            } else {
+                children.push(self.child(&label, args["fork"].as_bool().unwrap_or(false)).map_err(|e| {
+                    tools::Output::error(format!("Could not start the subagent: {e:#}"))
+                }));
+            }
+            prompts.push(prompt);
+        }
+        let runs = children.iter_mut().zip(&prompts).map(|(child, prompt)| async move {
+            match child {
+                Ok(agent) => match agent.run(prompt).await {
+                    Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => tools::Output::ok(text),
+                    Ok((_, stop)) => tools::Output::error(format!("The subagent stopped without a final report ({stop:?}).")),
+                    Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
+                },
+                Err(output) => std::mem::replace(output, tools::Output::ok("")),
+            }
+        });
+        let outputs = join_all(runs).await;
+        for agent in children.iter().flatten() {
+            let usage = &agent.stats.usage;
+            let total = &mut self.stats.usage;
+            total.prompt += usage.prompt;
+            total.cached += usage.cached;
+            total.completion += usage.completion;
+            total.reasoning += usage.reasoning;
+            self.stats.requests += agent.stats.requests;
+            self.stats.tool_calls += agent.stats.tool_calls;
+        }
+        Ok(outputs
+            .into_iter()
+            .zip(&children)
+            .map(|(output, child)| match child {
+                Ok(agent) if !output.is_error => {
+                    let brief = format!("{} requests, {} tool calls", agent.stats.requests, agent.stats.tool_calls);
+                    output.brief(brief)
+                }
+                _ => output,
+            })
+            .collect())
+    }
+
+    /// A subagent with the same model, system prompt and tools, so its requests hit the same
+    /// cached prefix. A fork also starts with this conversation so far.
+    fn child(&mut self, label: &str, fork: bool) -> Result<Agent> {
+        self.children += 1;
+        let mut session = self.session.child(self.children)?;
+        let history: Vec<Value> =
+            if fork { self.messages[..self.current_reply].to_vec() } else { vec![self.messages[0].clone()] };
+        session.record(&json!({"type": "session", "id": session.id, "model": self.client.model.alias, "tools": *self.tools}))?;
+        session.record(&json!({"type": "compaction", "messages": history}))?;
+        let parent = self.sink.clone();
+        let label = label.to_string();
+        let sink: Sink = Rc::new(move |event| parent(Event::Sub { label: label.clone(), event: Box::new(event) }));
+        Ok(Agent {
+            client: self.client.clone(),
+            tools: self.tools.clone(),
+            messages: history,
+            ctx: self.ctx.clone(),
+            session,
+            stats: Stats::default(),
+            controls: Controls { steer: Rc::default(), plan: self.controls.plan.clone(), interactive: false },
+            settings: self.settings.clone(),
+            sink,
+            ids: self.ids.clone(),
+            repeats: HashMap::new(),
+            todos: Vec::new(),
+            plan_announced: self.plan_announced,
+            interrupted: false,
+            depth: self.depth + 1,
+            children: 0,
+            current_reply: 0,
+            session_started: true,
+        })
+    }
+
+    /// Replaces the conversation with the user's prompts, word for word, and a summary of
+    /// the work. The only time earlier messages change.
+    pub async fn compact(&mut self, focus: Option<&str>) -> Result<()> {
+        (self.sink)(Event::Notice("Compacting the conversation…".into()));
+        let mut request = self.messages.clone();
+        let mut instruction = COMPACT_INSTRUCTION.to_string();
+        if let Some(focus) = focus.filter(|f| !f.trim().is_empty()) {
+            instruction.push_str(&format!("\nThe user asked the summary to focus on: {focus}"));
+        }
+        request.push(json!({"role": "user", "content": instruction}));
+        let reply = self.client.complete(&request, &self.tools, &self.session.id, &mut |_| {}).await?;
+        self.stats.requests += 1;
+        self.account(&reply.usage, None)?;
+        if reply.text.trim().is_empty() {
+            bail!("the model returned an empty summary, so the conversation was left as it was");
+        }
+        let mut kept = Vec::new();
+        let mut size = 0;
+        for prompt in self.user_prompts().into_iter().rev() {
+            size += prompt.len();
+            if size > KEPT_PROMPTS_CHARS && !kept.is_empty() {
+                break;
+            }
+            kept.push(prompt);
+        }
+        kept.reverse();
+        let requests: String = kept.iter().map(|p| format!("<request>\n{p}\n</request>\n")).collect();
+        let summary = format!(
+            "<system-reminder>This conversation was compacted to save space. Below are the user's requests so far, word for word, and a summary of the work. Continue from where it left off; don't redo finished work.</system-reminder>\n\n<user-requests>\n{requests}</user-requests>\n\n<summary>\n{}\n</summary>",
+            reply.text.trim()
+        );
+        self.messages = vec![self.messages[0].clone(), json!({"role": "user", "content": summary})];
+        self.session.record(&json!({"type": "compaction", "messages": self.messages}))?;
+        self.stats.context = 0;
+        (self.sink)(Event::Notice("Compacted.".into()));
+        Ok(())
+    }
+
+    /// After an interrupted turn, answers every tool call left without a result so the
+    /// history stays valid, and notes the interruption for the next prompt.
+    pub fn recover(&mut self) -> Result<()> {
+        let Some(index) = self.messages.iter().rposition(|m| m["role"] == "assistant") else { return Ok(()) };
+        let answered: HashSet<String> = self.messages[index + 1..]
+            .iter()
+            .filter_map(|m| m["tool_call_id"].as_str().map(String::from))
+            .collect();
+        let missing: Vec<String> = self.messages[index]["tool_calls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c["id"].as_str().map(String::from))
+            .filter(|id| !answered.contains(id))
+            .collect();
+        for id in &missing {
+            self.push(json!({"role": "tool", "tool_call_id": id, "content": "Interrupted by the user before this finished."}))?;
+        }
+        if !missing.is_empty() || self.messages.last().is_some_and(|m| m["role"] == "user") {
+            self.interrupted = true;
+        }
+        Ok(())
+    }
+
+    /// Marks the next prompt as following an interruption.
+    pub fn mark_interrupted(&mut self) {
+        self.interrupted = true;
+    }
+
     /// Keeps the first 4096 and last 1024 characters and saves the whole result to a file.
     fn shorten(&self, text: &str) -> String {
         let head = truncate(text, 4096);
@@ -222,7 +754,7 @@ impl Agent {
             Some(path) => format!("The full result is saved at {}; read it with offset and limit.", path.display()),
             None => "The full result could not be saved.".into(),
         };
-        format!("{head}\n\n[… {} characters omitted. {saved}]\n\n{}", text.len() - head.len() - (text.len() - tail_start), &text[tail_start..])
+        format!("{head}\n\n[… {} characters omitted. {saved}]\n\n{}", tail_start - head.len(), &text[tail_start..])
     }
 
     /// Tool-call IDs limited to `[A-Za-z0-9_-]` and 64 characters, unique in the session.
@@ -245,5 +777,84 @@ impl Agent {
         self.session.record(&json!({"type": "message", "message": message}))?;
         self.messages.push(message);
         Ok(())
+    }
+}
+
+fn parse_args(call: &ToolCall) -> Result<Value, String> {
+    match call.arguments.trim() {
+        "" => Ok(json!({})),
+        raw => match serde_json::from_str::<Value>(raw) {
+            Ok(args) if args.is_object() => Ok(args),
+            Ok(_) => Err("arguments must be a JSON object".into()),
+            Err(e) => match repair_json(raw).and_then(|fixed| serde_json::from_str::<Value>(&fixed).ok()) {
+                Some(args) if args.is_object() => Ok(args),
+                _ => Err(e.to_string()),
+            },
+        },
+    }
+}
+
+/// Fixes common slips in tool-call JSON: a code fence around it, or trailing commas.
+fn repair_json(raw: &str) -> Option<String> {
+    let mut text = raw.trim();
+    if let Some(inner) = text.strip_prefix("```json").or_else(|| text.strip_prefix("```")) {
+        text = inner.strip_suffix("```").unwrap_or(inner).trim();
+    }
+    let fixed = regex::Regex::new(r",\s*([}\]])").ok()?.replace_all(text, "$1").into_owned();
+    (fixed != raw).then_some(fixed)
+}
+
+fn invalid_arguments(call: &ToolCall, why: &str, truncated: bool) -> tools::Output {
+    let cut = if truncated {
+        " Your reply hit the output token limit, which cut the arguments off; send smaller pieces."
+    } else {
+        ""
+    };
+    tools::Output::error(format!("Invalid arguments for {}: {why}.{cut} You sent: {}", call.name, truncate(&call.arguments, 2000)))
+}
+
+/// Whether a provider error says the conversation no longer fits the context window.
+fn is_overflow(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_ascii_lowercase();
+    ["context length", "context_length", "maximum context", "context window", "prompt is too long", "too many tokens", "input is too long"]
+        .iter()
+        .any(|needle| text.contains(needle))
+}
+
+const COMPACT_INSTRUCTION: &str = "<system-reminder>The conversation is about to be compacted to save space. Write a summary that lets you continue the work without the earlier messages. Don't call tools. Use these sections:
+## Goal
+What the user wants, with their constraints and preferences.
+## Progress
+What is done and what is in progress.
+## Decisions
+Choices made and why.
+## Files
+Files read or changed, and what changed in each.
+## Next steps
+Exactly what to do next.
+Be specific: names, paths, commands, error messages. Write in the user's language.</system-reminder>";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(arguments: &str) -> ToolCall {
+        ToolCall { id: "c".into(), name: "read".into(), arguments: arguments.into() }
+    }
+
+    #[test]
+    fn arguments_with_common_slips_are_repaired() {
+        assert_eq!(parse_args(&call("{\"path\": \"a\",}")).unwrap(), json!({"path": "a"}));
+        assert_eq!(parse_args(&call("```json\n{\"path\": \"a\"}\n```")).unwrap(), json!({"path": "a"}));
+        assert_eq!(parse_args(&call("")).unwrap(), json!({}));
+        assert!(parse_args(&call("{\"path\": ")).is_err());
+        assert!(parse_args(&call("[1]")).is_err());
+    }
+
+    #[test]
+    fn overflow_errors_are_recognized() {
+        assert!(is_overflow(&anyhow::anyhow!("HTTP 400: This model's maximum context length is 128000 tokens")));
+        assert!(is_overflow(&anyhow::anyhow!("prompt is too long: 210000 tokens > 200000 maximum")));
+        assert!(!is_overflow(&anyhow::anyhow!("HTTP 401: invalid key")));
     }
 }

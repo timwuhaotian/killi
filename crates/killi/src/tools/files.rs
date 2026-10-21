@@ -1,4 +1,6 @@
 use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 use serde_json::Value;
 
@@ -14,6 +16,9 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
     let full = resolve(ctx, path);
     if full.is_dir() {
         return Output::error(format!("{path} is a directory; use glob to list it."));
+    }
+    if let Some(media_type) = image_type(&full) {
+        return read_image(ctx, path, &full, media_type);
     }
     let bytes = match fs::read(&full) {
         Ok(bytes) => bytes,
@@ -56,6 +61,72 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
         out.push_str(&format!("[Showing lines {offset}-{last} of {total}{why}. Use offset={} to continue.]", last + 1));
     }
     Output::ok(out)
+}
+
+fn image_type(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Large images are shrunk with macOS's `sips` to at most 1568 pixels on the long side.
+const SHRINK_ABOVE: u64 = 500 * 1024;
+
+fn read_image(ctx: &Context, path: &str, full: &Path, media_type: &str) -> Output {
+    if !ctx.images {
+        return Output::error(format!("{path} is an image, and this model can't see images."));
+    }
+    let size = match fs::metadata(full) {
+        Ok(meta) => meta.len(),
+        Err(e) => return Output::error(format!("Could not read {path}: {e}")),
+    };
+    let (bytes, media_type) = if size > SHRINK_ABOVE {
+        let out = std::env::temp_dir().join(format!("killi-image-{}.jpg", std::process::id()));
+        let shrunk = Command::new("/usr/bin/sips")
+            .args(["-Z", "1568", "-s", "format", "jpeg", "-s", "formatOptions", "80"])
+            .arg(full)
+            .arg("--out")
+            .arg(&out)
+            .output()
+            .is_ok_and(|o| o.status.success());
+        let bytes = if shrunk { fs::read(&out).ok() } else { None };
+        let _ = fs::remove_file(&out);
+        match bytes {
+            Some(bytes) => (bytes, "image/jpeg"),
+            None => return Output::error(format!("Could not shrink {path} ({} KB) to send it.", size / 1024)),
+        }
+    } else {
+        match fs::read(full) {
+            Ok(bytes) => (bytes, media_type),
+            Err(e) => return Output::error(format!("Could not read {path}: {e}")),
+        }
+    };
+    let mut output = Output::ok(format!("{path} is an image ({} KB); it is attached below.", bytes.len() / 1024))
+        .brief(format!("image, {} KB", bytes.len() / 1024));
+    output.image = Some(format!("data:{media_type};base64,{}", base64(&bytes)));
+    output
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(TABLE[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 pub fn write(ctx: &Context, args: &Value) -> Output {
@@ -111,7 +182,16 @@ mod tests {
     use serde_json::json;
 
     fn ctx(dir: &std::path::Path) -> Context {
-        Context { cwd: dir.to_path_buf(), spill_dir: dir.join("spill") }
+        Context::new(dir.to_path_buf(), dir.join("spill"))
+    }
+
+    #[test]
+    fn base64_matches_the_standard() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
     }
 
     #[test]

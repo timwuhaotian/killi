@@ -125,7 +125,8 @@ def claude_metrics(stdout, _workdir, _started):
 def tool_commands():
     return {
         "killi": (lambda p: [binary("KILLI_BIN", "killi"), "--json", "-m", MODEL, "-p", p], killi_metrics),
-        "kimi": (lambda p: [binary("KIMI_BIN", "kimi"), "--auto", "-m", MODEL, "-p", p], kimi_metrics),
+        # Prompt mode uses the configured default permission mode; ours is "auto" (never asks).
+        "kimi": (lambda p: [binary("KIMI_BIN", "kimi"), "-m", MODEL, "-p", p], kimi_metrics),
         "claude": (
             lambda p: [binary("CLAUDE_BIN", "claude"), "-p", p, "--output-format", "json", "--dangerously-skip-permissions"],
             claude_metrics,
