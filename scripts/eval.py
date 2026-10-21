@@ -73,8 +73,11 @@ def check(task_dir, spec, workdir):
 def verify(names):
     ok = True
     for task_dir, spec in tasks(names):
-        start_passes, _ = check(task_dir, spec, prepare(task_dir))
-        solved, log = check(task_dir, spec, prepare(task_dir, ["solution"]))
+        start, solution = prepare(task_dir), prepare(task_dir, ["solution"])
+        start_passes, _ = check(task_dir, spec, start)
+        solved, log = check(task_dir, spec, solution)
+        shutil.rmtree(start, ignore_errors=True)
+        shutil.rmtree(solution, ignore_errors=True)
         status = "ok" if not start_passes and solved else "BROKEN"
         ok &= status == "ok"
         print(f"{status:7} {task_dir.name}: starts {'passing' if start_passes else 'failing'}, solution {'passes' if solved else 'fails'}")
