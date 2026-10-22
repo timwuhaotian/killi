@@ -435,6 +435,7 @@ impl Agent {
         let mut overflow_compacted = false;
         let mut stop_blocks = 0;
         let mut told_left_running = false;
+        let mut told_open_tasks = false;
         loop {
             self.before_request().await?;
             let reply = match self.request().await {
@@ -467,6 +468,17 @@ impl Agent {
                         self.push(json!({"role": "user", "content": format!("<system-reminder>Still running: {left}. {LEFT_RUNNING}</system-reminder>")}))?;
                         continue;
                     }
+                }
+                if self.depth == 0
+                    && self.controls.interactive
+                    && !truncated
+                    && !told_open_tasks
+                    && let Some(note) = open_tasks_note(&self.todos)
+                {
+                    told_open_tasks = true;
+                    (self.sink)(Event::Notice("The task list still has open items. Asked the agent to update it.".into()));
+                    self.push(json!({"role": "user", "content": note}))?;
+                    continue;
                 }
                 let event = if self.depth == 0 { "Stop" } else { "SubagentStop" };
                 let stop = self.hook(event, None, json!({"stop_hook_active": stop_blocks > 0})).await;
@@ -792,9 +804,10 @@ impl Agent {
                 "No one can answer questions in this session. Decide yourself, and say in your final message what you assumed.",
             );
         }
-        let text = args["question"].as_str().unwrap_or_default().to_string();
-        let options: Vec<String> =
-            args["options"].as_array().into_iter().flatten().filter_map(|o| o.as_str().map(String::from)).collect();
+        let (text, options) = match question_args(args) {
+            Ok(parsed) => parsed,
+            Err(why) => return tools::Output::error(why),
+        };
         match self.wait_for_answer(text, options, false).await {
             Some(answer) => tools::Output::ok(format!("The user answered: {answer}")).brief(answer),
             None => tools::Output::error("The question was dismissed without an answer."),
@@ -1128,6 +1141,38 @@ fn repair_json(raw: &str) -> Option<String> {
     (fixed != raw).then_some(fixed)
 }
 
+/// The question and choices of an `ask_user_question` call. Malformed arguments are an error
+/// for the model to fix, as asking the user a blank question or one with its choices dropped
+/// leaves them nothing to answer.
+fn question_args(args: &Value) -> Result<(String, Vec<String>), String> {
+    const SHAPE: &str = "ask_user_question takes `question`, a string, and `options`, an array of 2 to 4 strings. Nothing was shown to the user; call it again.";
+    let text = args["question"].as_str().map(str::trim).unwrap_or_default();
+    if text.is_empty() {
+        return Err(format!("`question` is missing or empty. {SHAPE}"));
+    }
+    let items = args["options"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let options: Vec<String> = items.iter().filter_map(|o| o.as_str().map(String::from)).collect();
+    if options.len() < items.len() {
+        return Err(format!("Every option must be a plain string, not an object. {SHAPE}"));
+    }
+    Ok((text.to_string(), options))
+}
+
+/// Told to the agent when it ends a turn with its task list unfinished, which shows on the
+/// user's screen as work still going: finished items are marked done, or the rest is carried on.
+fn open_tasks_note(todos: &[Todo]) -> Option<String> {
+    let open: Vec<&str> = todos.iter().filter(|t| t.status != "completed").map(|t| t.content.as_str()).collect();
+    if open.is_empty() {
+        return None;
+    }
+    let list = open.join("; ");
+    Some(format!(
+        "<system-reminder>Your task list still has {} open: {}. Call todo_write now with what is finished marked completed (and dropped items removed). If work is left, do it. Don't repeat your last reply.</system-reminder>",
+        open.len(),
+        truncate(&list, 400)
+    ))
+}
+
 fn invalid_arguments(call: &ToolCall, why: &str, truncated: bool) -> tools::Output {
     let cut = if truncated {
         " Your reply hit the output token limit, which cut the arguments off; send smaller pieces."
@@ -1200,6 +1245,26 @@ mod tests {
         assert_eq!(parse_args(&call("")).unwrap(), json!({}));
         assert!(parse_args(&call("{\"path\": ")).is_err());
         assert!(parse_args(&call("[1]")).is_err());
+    }
+
+    #[test]
+    fn a_question_without_text_or_with_object_options_is_not_asked() {
+        let (text, options) = question_args(&json!({"question": " Which? ", "options": ["a", "b"]})).unwrap();
+        assert_eq!((text.as_str(), options), ("Which?", vec!["a".to_string(), "b".to_string()]));
+        assert!(question_args(&json!({"question": "Which?"})).unwrap().1.is_empty());
+        assert!(question_args(&json!({"options": ["a", "b"]})).is_err());
+        assert!(question_args(&json!({"question": "  ", "options": ["a"]})).is_err());
+        let objects = json!({"question": "Which?", "options": [{"description": "a", "question": "b"}]});
+        assert!(question_args(&objects).unwrap_err().contains("plain string"));
+    }
+
+    #[test]
+    fn a_finished_task_list_is_not_mentioned_but_an_open_one_is() {
+        let todo = |content: &str, status: &str| Todo { content: content.into(), status: status.into() };
+        assert!(open_tasks_note(&[]).is_none());
+        assert!(open_tasks_note(&[todo("a", "completed")]).is_none());
+        let note = open_tasks_note(&[todo("a", "completed"), todo("b", "in_progress"), todo("c", "pending")]).unwrap();
+        assert!(note.contains("2 open: b; c") && note.starts_with("<system-reminder>"));
     }
 
     #[test]

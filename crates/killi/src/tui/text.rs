@@ -354,6 +354,13 @@ pub fn hanging_indent(line: &str) -> usize {
     lead + marker.unwrap_or(0)
 }
 
+/// What a line of Markdown adds: a styled row, or a finished table, left as its source rows so
+/// it can be laid out for any width.
+pub enum Part {
+    Row(String),
+    Table(Vec<String>),
+}
+
 /// Styles complete lines of Markdown as they arrive. It remembers whether a code block is
 /// open, and holds back table rows until the table ends, so the columns can line up.
 #[derive(Default, Clone)]
@@ -370,24 +377,46 @@ impl Markdown {
         Self { width, ..Self::default() }
     }
 
-    /// The rows `line` adds. A table row adds none until a line that isn't one follows.
-    pub fn line(&mut self, line: &str) -> Vec<String> {
+    /// What `line` adds. A table row adds nothing until a line that isn't one follows.
+    pub fn parts(&mut self, line: &str) -> Vec<Part> {
         let trimmed = line.trim_start();
         if !self.in_code && is_table_row(trimmed) {
             self.table.push(trimmed.to_string());
             return Vec::new();
         }
-        let mut rows = self.finish();
-        rows.push(self.block(line, trimmed));
-        rows
+        let mut parts = self.finish_parts();
+        parts.push(Part::Row(self.block(line, trimmed)));
+        parts
     }
 
-    /// The rows of a table still being held, at the end of the text or a blank line.
-    pub fn finish(&mut self) -> Vec<String> {
+    /// The table still being held, at the end of the text or a blank line.
+    pub fn finish_parts(&mut self) -> Vec<Part> {
         if self.table.is_empty() {
             return Vec::new();
         }
-        render_table(&std::mem::take(&mut self.table), self.width)
+        vec![Part::Table(std::mem::take(&mut self.table))]
+    }
+
+    /// The rows `line` adds, a table laid out for `width`.
+    pub fn line(&mut self, line: &str) -> Vec<String> {
+        let parts = self.parts(line);
+        self.rows(parts)
+    }
+
+    /// The rows of the table still being held, laid out for `width`.
+    pub fn finish(&mut self) -> Vec<String> {
+        let parts = self.finish_parts();
+        self.rows(parts)
+    }
+
+    fn rows(&self, parts: Vec<Part>) -> Vec<String> {
+        parts
+            .into_iter()
+            .flat_map(|part| match part {
+                Part::Row(row) => vec![row],
+                Part::Table(rows) => render_table(&rows, self.width),
+            })
+            .collect()
     }
 
     fn block(&mut self, line: &str, trimmed: &str) -> String {
@@ -539,7 +568,7 @@ fn cut(text: &str, max: usize) -> String {
 }
 
 /// A table as aligned rows: a bold header over a rule, columns shrunk to fit `max_width`.
-fn render_table(rows: &[String], max_width: usize) -> Vec<String> {
+pub fn render_table(rows: &[String], max_width: usize) -> Vec<String> {
     let mut parsed: Vec<Vec<String>> = rows.iter().map(|r| cells(r)).collect();
     let header = parsed.len() > 1 && is_separator(&parsed[1]);
     let aligns: Vec<char> = if header {

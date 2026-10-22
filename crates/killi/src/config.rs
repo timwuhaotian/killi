@@ -48,6 +48,11 @@ pub struct UiConfig {
     /// "dark" or "light", for the terminal's background. Without it killi reads `COLORFGBG`
     /// and assumes dark when that isn't set.
     pub theme: Option<String>,
+    /// Take the whole screen: the prompt and status line stay on the bottom rows, only the
+    /// conversation scrolls (wheel, PageUp, PageDown) and it is laid out again when the window
+    /// changes size. Without it that is so in Kil only; other terminals keep the conversation
+    /// in their own scrollback.
+    pub fullscreen: Option<bool>,
 }
 
 /// `[prompt]`: the system prompt's guidance, kept in the config so it can be read and edited.

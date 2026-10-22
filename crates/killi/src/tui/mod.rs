@@ -1,9 +1,15 @@
-//! The interactive terminal UI. The conversation is printed into the terminal's own
+//! The interactive terminal UI. By default the conversation is printed into the terminal's own
 //! scrollback, so scrolling, selecting and copying work as usual; only a live area at the
 //! bottom is redrawn: what is happening now, the task list, the prompt and a status line.
+//!
+//! In fullscreen mode (`[ui] fullscreen`, on by default in Kil) killi takes the alternate
+//! screen instead: the live area stays on the bottom rows, the conversation scrolls above it
+//! (wheel, PageUp and PageDown) and is laid out again whenever the window changes size. It is
+//! kept in `history`, and printed to the terminal once more when killi quits.
 
 mod banner;
 mod editor;
+mod history;
 mod menu;
 mod paste;
 mod text;
@@ -17,12 +23,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::cursor::{Hide, MoveDown, MoveToColumn, MoveUp, Show};
+use crossterm::cursor::{Hide, MoveDown, MoveTo, MoveToColumn, MoveUp, Show};
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use crossterm::terminal::{self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate};
+use crossterm::terminal::{
+    self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use crossterm::{execute, queue};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
@@ -35,8 +43,9 @@ use crate::mcp::Mcp;
 use crate::session::{Choice, Replayed};
 use crate::snapshot::Snapshots;
 use editor::Editor;
+use history::{Entry as Line, History};
 use menu::{Entry, Item, Suggestions};
-use text::{BOLD, BRANCH, DANGER, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, RESET, TINT, TOKENS, WARN, wrap, wrap_words};
+use text::{BOLD, BRANCH, DANGER, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, TINT, TOKENS, WARN, wrap, wrap_words};
 
 const MAX_INPUT_ROWS: usize = 10;
 const MENU_ROWS: usize = 8;
@@ -77,6 +86,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         let _ = tx.send(event);
     });
     let controls = Controls { interactive: true, ..Controls::default() };
+    let fullscreen = wants_fullscreen(config.ui.fullscreen, &std::env::var("TERM_PROGRAM").unwrap_or_default());
     let background = if config.ui.theme.is_none() { query_background() } else { None };
     text::init_theme(config.ui.theme.as_deref(), background);
     let mut session = Setup::new(config, &cwd, start.model.as_deref()).await?;
@@ -89,7 +99,11 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     app.entries = entries(&session);
     app.refresh_choices(session.config());
     app.notify_after = Duration::from_secs(session.config().agent.notify_after.unwrap_or(10));
-    let terminal = TerminalGuard::enter()?;
+    let terminal = TerminalGuard::enter(fullscreen)?;
+    app.fullscreen = fullscreen;
+    if !fullscreen {
+        app.locate();
+    }
     app.banner(&agent, &session, &snapshots, start.resume.is_some());
     if let Some(log) = &start.resume {
         app.replay_log(log);
@@ -198,6 +212,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         println!("{DIM}To continue this session: {}{RESET}", resume_command(&agent.session.log_path));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Whether to take the whole screen: `[ui] fullscreen` when set, else in Kil, which sends the
+/// wheel to the program and leaves selecting text to itself.
+fn wants_fullscreen(setting: Option<bool>, terminal: &str) -> bool {
+    setting.unwrap_or(terminal == "kil")
 }
 
 /// Asks the terminal for its background color (OSC 11) and waits up to 200 ms for the answer,
@@ -616,7 +636,7 @@ struct App {
     /// The /btw question being answered and since when, for the live area.
     aside: Option<(String, Instant)>,
     /// Answered /btw blocks waiting for the model's paragraph to end before they are printed.
-    held_asides: Vec<Vec<String>>,
+    held_asides: Vec<Line>,
     last_end: Option<LastEnd>,
     cwd: PathBuf,
     notify_after: Duration,
@@ -624,6 +644,17 @@ struct App {
     sees_images: bool,
     /// The banner and what was printed after it, while its top row is on screen.
     since_banner: Option<SinceBanner>,
+    /// Screen rows above the live area that hold content, the shell's lines above killi's start
+    /// included. While the conversation is shorter than the screen, the live area is padded
+    /// above so it ends on the bottom row. A full screen when unknown, as after a resize.
+    content_rows: usize,
+    /// Fullscreen mode: the conversation is kept in `history`, not in the terminal's scrollback.
+    fullscreen: bool,
+    history: History,
+    /// The rows the conversation had on screen at the last paint, for PageUp and PageDown.
+    view_rows: usize,
+    /// Whether the banner says it is a resumed session, for drawing it again.
+    banner_resumed: bool,
 }
 
 /// The lines printed from the banner on, so it can be drawn again in place.
@@ -699,38 +730,54 @@ impl App {
             notify_after: Duration::from_secs(10),
             sees_images: agent.sees_images(),
             since_banner: None,
+            content_rows: usize::from(rows).max(5),
+            fullscreen: false,
+            history: History::new(usize::from(columns).max(20)),
+            view_rows: usize::from(rows).max(5),
+            banner_resumed: false,
         };
         app.refresh_branch();
         app
     }
 
+    /// Asks the terminal which row the cursor is on, to know how much of the screen is free.
+    fn locate(&mut self) {
+        if let Ok((_, row)) = crossterm::cursor::position() {
+            self.content_rows = usize::from(row).min(self.height);
+        }
+    }
+
     fn banner(&mut self, agent: &Agent, session: &Setup, snapshots: &Snapshots, resumed: bool) {
+        self.banner_resumed = resumed;
         let cwd = tilde(&self.cwd);
-        let room = self.width.saturating_sub(41).max(20);
-        let cwd = if text::width(&cwd) > room {
-            let tail: String = cwd.chars().rev().take(room - 1).collect::<Vec<_>>().into_iter().rev().collect();
-            format!("…{tail}")
-        } else {
-            cwd
-        };
         let thinking = match thinking_parts(agent.thinking().label()) {
             Some((word, value)) => format!(" {DIM}· {word}{RESET} {EFFORT}{value}{RESET}"),
             None => String::new(),
         };
         let overview = session.overview();
-        let mut side = vec![
-            format!("{BOLD}killi{RESET} {DIM}{}{RESET}", env!("CARGO_PKG_VERSION")),
-            format!("{DIM}a coding agent for the terminal{RESET}"),
-            String::new(),
-            format!("{}{BOLD}{}{RESET}{thinking}", label("model"), agent.model_alias()),
-            format!("{}{cwd}", label("folder")),
-        ];
-        side.extend(overview_rows(&overview));
+        let model = format!("{}{BOLD}{}{RESET}{thinking}", label("model"), agent.model_alias());
+        let setup = overview_rows(&overview);
         self.since_banner = self.pending.is_empty().then(|| SinceBanner { resumed, ..SinceBanner::default() });
+        self.history.banner_starts();
         self.commit(String::new());
-        for row in banner::render(self.width, &side) {
-            self.commit(row);
-        }
+        self.emit(Line::block(move |width| {
+            let room = width.saturating_sub(41).max(20);
+            let cwd = if text::width(&cwd) > room {
+                let tail: String = cwd.chars().rev().take(room - 1).collect::<Vec<_>>().into_iter().rev().collect();
+                format!("…{tail}")
+            } else {
+                cwd.clone()
+            };
+            let mut side = vec![
+                format!("{BOLD}killi{RESET} {DIM}{}{RESET}", env!("CARGO_PKG_VERSION")),
+                format!("{DIM}a coding agent for the terminal{RESET}"),
+                String::new(),
+                model.clone(),
+                format!("{}{cwd}", label("folder")),
+            ];
+            side.extend(setup.iter().cloned());
+            banner::render(width, &side)
+        }));
         self.commit(String::new());
         for problem in &overview.problems {
             self.commit(format!("{WARN}!{RESET} {problem}"));
@@ -745,6 +792,7 @@ impl App {
         self.commit(keys_hint());
         self.commit(String::new());
         self.last_kind = Kind::None;
+        self.history.banner_ends();
         if let Some(since) = &mut self.since_banner {
             since.banner = self.pending.len();
         }
@@ -753,6 +801,15 @@ impl App {
     /// Draws the banner again with the model, effort and setup now in use, when its top row is
     /// still on screen; everything printed below it is printed again as it was.
     fn redraw_banner(&mut self, agent: &Agent, session: &Setup, snapshots: &Snapshots) {
+        if self.fullscreen {
+            let Some(rest) = self.history.cut_banner() else { return };
+            let (last_kind, last_blank) = (self.last_kind, self.last_blank);
+            self.last_blank = false;
+            self.banner(agent, session, snapshots, self.banner_resumed);
+            self.history.restore(rest);
+            (self.last_kind, self.last_blank) = (last_kind, last_blank);
+            return;
+        }
         let Some(since) = self.since_banner.take() else { return };
         if since.rows + self.shown.len() > self.height {
             return;
@@ -760,6 +817,7 @@ impl App {
         let _ = queue!(self.out, MoveUp((self.cursor_row + since.rows) as u16), MoveToColumn(0), Clear(ClearType::FromCursorDown));
         self.cursor_row = 0;
         self.shown.clear();
+        self.content_rows = self.content_rows.saturating_sub(since.rows);
         let waiting = std::mem::take(&mut self.pending);
         let (last_kind, last_blank) = (self.last_kind, self.last_blank);
         self.last_blank = false;
@@ -801,7 +859,16 @@ impl App {
                 self.resize(columns, rows);
                 return Idle::Continue;
             }
-            TermEvent::Key(key) if key.kind != KeyEventKind::Release => key,
+            TermEvent::Mouse(mouse) => {
+                self.on_wheel(mouse.kind);
+                return Idle::Continue;
+            }
+            TermEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                if !self.page_key(&key) {
+                    self.history.follow();
+                }
+                key
+            }
             _ => return Idle::Continue,
         };
         if self.picker.is_some() {
@@ -836,6 +903,27 @@ impl App {
             _ => self.edit_key(key),
         }
         Idle::Continue
+    }
+
+    /// The wheel scrolls the conversation, three rows a notch; fullscreen mode only.
+    fn on_wheel(&mut self, kind: MouseEventKind) {
+        match kind {
+            MouseEventKind::ScrollUp => self.scroll(-3),
+            MouseEventKind::ScrollDown => self.scroll(3),
+            _ => {}
+        }
+    }
+
+    /// PageUp and PageDown scroll the conversation by a page, fullscreen mode only. False for
+    /// every other key, which goes back to following the conversation.
+    fn page_key(&mut self, key: &KeyEvent) -> bool {
+        let page = self.view_rows.saturating_sub(2).max(1) as isize;
+        match key.code {
+            KeyCode::PageUp => self.scroll(-page),
+            KeyCode::PageDown => self.scroll(page),
+            _ => return false,
+        }
+        true
     }
 
     /// Sends the prompt: a command when it starts with `/`, else a message to the model.
@@ -997,7 +1085,16 @@ impl App {
                 self.resize(columns, rows);
                 return false;
             }
-            TermEvent::Key(key) if key.kind != KeyEventKind::Release => key,
+            TermEvent::Mouse(mouse) => {
+                self.on_wheel(mouse.kind);
+                return false;
+            }
+            TermEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                if !self.page_key(&key) {
+                    self.history.follow();
+                }
+                key
+            }
             _ => return false,
         };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1100,8 +1197,12 @@ impl App {
             KeyCode::Char('f') if alt => e.word_right(),
             KeyCode::Char('o') if ctrl => self.show_detail(),
             KeyCode::Char('v') if ctrl => self.paste_clipboard_image(),
+            KeyCode::Char('l') if ctrl && self.fullscreen => {
+                self.history.follow();
+                self.shown.clear();
+            }
             KeyCode::Char('l') if ctrl => {
-                let _ = execute!(self.out, Clear(ClearType::All), crossterm::cursor::MoveTo(0, 0));
+                let _ = execute!(self.out, Clear(ClearType::All), MoveTo(0, 0));
                 self.cursor_row = 0;
                 self.shown.clear();
                 self.since_banner = None;
@@ -1185,14 +1286,8 @@ impl App {
     /// Prints what the user typed as their message block.
     fn commit_prompt(&mut self, prompt: &str) {
         self.commit(String::new());
-        let mut first = true;
-        for line in prompt.lines() {
-            for row in text::wrap_words(line, self.width.saturating_sub(3), 0) {
-                let lead = if std::mem::take(&mut first) { format!("{FIN}❯{RESET}{TINT}{BOLD}") } else { format!(" {BOLD}") };
-                let pad = " ".repeat(self.width.saturating_sub(3 + text::width(&row)));
-                self.commit(format!("{TINT} {lead} {row}{pad}{RESET}"));
-            }
-        }
+        let prompt = prompt.to_string();
+        self.emit(Line::block(move |width| prompt_rows(&prompt, width)));
         self.commit(String::new());
         self.last_kind = Kind::None;
     }
@@ -1311,8 +1406,8 @@ impl App {
                     let line: String = self.partial.drain(..=end).collect();
                     let line = line.trim_end_matches('\n');
                     if line.trim().is_empty() {
-                        let table = self.markdown.finish();
-                        self.commit_markdown(table);
+                        let table = self.markdown.finish_parts();
+                        self.commit_parts(table);
                         self.held_blank = true;
                         self.release_asides(false);
                         continue;
@@ -1320,8 +1415,8 @@ impl App {
                     if std::mem::take(&mut self.held_blank) {
                         self.commit(String::new());
                     }
-                    let styled = self.markdown.line(line);
-                    self.commit_markdown(styled);
+                    let styled = self.markdown.parts(line);
+                    self.commit_parts(styled);
                 }
             }
             Event::Reasoning(text) => match &mut self.thinking {
@@ -1331,7 +1426,7 @@ impl App {
             Event::Retry { attempt, wait, reason } => {
                 let line = format!("{WARN}⚠ retry {attempt} in {}:{RESET}{DIM} {}{RESET}", clock(wait), gist(&reason));
                 self.begin(Kind::Tool);
-                self.commit(fit(&line, self.width));
+                self.emit(Line::Fit(line));
             }
             Event::ToolStart { id, summary, .. } => {
                 if summary == "later" || summary.starts_with("later ") {
@@ -1353,7 +1448,7 @@ impl App {
                 if let Some(display) = display {
                     let lines: Vec<&str> = display.lines().collect();
                     for line in lines.iter().take(DIFF_ROWS) {
-                        self.commit(fit(&diff_line(line), self.width));
+                        self.emit(Line::Fit(diff_line(line)));
                     }
                     if lines.len() > DIFF_ROWS {
                         let more = lines.len() - DIFF_ROWS;
@@ -1372,17 +1467,21 @@ impl App {
                 self.begin(Kind::Note);
                 if question.plan {
                     self.commit(format!("{BOLD}{FIN}? Plan{RESET}"));
-                    let mut markdown = Markdown::new(self.width.saturating_sub(2));
-                    let mut rows: Vec<String> = question.text.lines().flat_map(|line| markdown.line(line)).collect();
-                    rows.extend(markdown.finish());
-                    for row in rows {
-                        self.commit_wrapped(format!("  {row}"));
-                    }
+                    let plan = question.text.clone();
+                    self.emit(Line::block(move |width| {
+                        let mut markdown = Markdown::new(width.saturating_sub(2));
+                        let mut rows: Vec<String> = plan.lines().flat_map(|line| markdown.line(line)).collect();
+                        rows.extend(markdown.finish());
+                        rows.into_iter()
+                            .flat_map(|row| {
+                                let row = format!("  {row}");
+                                wrap_words(&row, width, text::hanging_indent(&row))
+                            })
+                            .collect()
+                    }));
                     self.commit(String::new());
                 } else {
-                    for row in text::wrap_words(&format!("{BOLD}{FIN}?{RESET} {BOLD}{}{RESET}", question.text), self.width, 2) {
-                        self.commit(row);
-                    }
+                    self.emit(Line::Words(format!("{BOLD}{FIN}?{RESET} {BOLD}{}{RESET}", question.text), 2));
                 }
                 self.asking = Some(Asking { question, selected: 0 });
                 notify("Waiting for your answer");
@@ -1427,14 +1526,17 @@ impl App {
         };
         let took = elapsed.filter(|e| e.as_secs() >= 1).map(|e| format!(" {DIM}· {}{RESET}", precise_clock(e)));
         let note = format!("{note}{}", took.unwrap_or_default());
-        let lead = label.map_or(0, |l| text::width(l) + 5);
-        let summary = clip(summary, self.width.saturating_sub(lead + 2 + text::width(&note)).max(20));
-        let line = match label {
-            Some(label) => format!("  {DIM}↳ {label}:{RESET} {glyph} {DIM}{summary}{RESET}{note}"),
-            None => format!("{glyph} {}{note}", tool_summary(&summary)),
-        };
+        let (label, summary) = (label.map(str::to_string), summary.to_string());
         self.begin(Kind::Tool);
-        self.commit(fit(&line, self.width));
+        self.emit(Line::block(move |width| {
+            let lead = label.as_ref().map_or(0, |l| text::width(l) + 5);
+            let summary = clip(&summary, width.saturating_sub(lead + 2 + text::width(&note)).max(20));
+            let line = match &label {
+                Some(label) => format!("  {DIM}↳ {label}:{RESET} {glyph} {DIM}{summary}{RESET}{note}"),
+                None => format!("{glyph} {}{note}", tool_summary(&summary)),
+            };
+            vec![fit(&line, width)]
+        }));
     }
 
     /// The first lines of a bash command's output under its line, or the last when it failed.
@@ -1450,7 +1552,7 @@ impl App {
         let skipped = lines.len().saturating_sub(PREVIEW_ROWS);
         let shown = if is_error { &lines[skipped..] } else { &lines[..lines.len() - skipped] };
         for line in shown {
-            self.commit(fit(&format!("  {FAINT}│{RESET} {DIM}{line}{RESET}"), self.width));
+            self.emit(Line::Fit(format!("  {FAINT}│{RESET} {DIM}{line}{RESET}")));
         }
         if skipped > 0 {
             let which = if is_error { "earlier" } else { "more" };
@@ -1486,12 +1588,12 @@ impl App {
         self.held_blank = false;
         if !self.partial.trim().is_empty() {
             let line = std::mem::take(&mut self.partial);
-            let styled = self.markdown.line(&line);
-            self.commit_markdown(styled);
+            let styled = self.markdown.parts(&line);
+            self.commit_parts(styled);
         }
         self.partial.clear();
-        let table = self.markdown.finish();
-        self.commit_markdown(table);
+        let table = self.markdown.finish_parts();
+        self.commit_parts(table);
         self.release_asides(true);
     }
 
@@ -1506,9 +1608,9 @@ impl App {
             }
             let first = first_sentence(&text);
             let gist = if first.is_empty() { String::new() } else { format!(": {first}") };
-            let line = fit(&format!("{DIM}∴ Thought for {took}{gist}{RESET}"), self.width);
+            let line = format!("{DIM}∴ Thought for {took}{gist}{RESET}");
             self.begin(Kind::Tool);
-            self.commit(line);
+            self.emit(Line::Fit(line));
         }
     }
 
@@ -1595,7 +1697,8 @@ impl App {
         };
         let cached = usage.cached * 100 / usage.prompt.max(1);
         let note = format!("Not kept in the conversation · {} in, {cached}% cached", short(usage.prompt));
-        self.held_asides.push(aside_rows(question, &text, &note, self.width));
+        let question = question.to_string();
+        self.held_asides.push(Line::block(move |width| aside_rows(&question, &text, &note, width)));
         self.release_asides(false);
     }
 
@@ -1608,11 +1711,9 @@ impl App {
         // The block ends with its own blank row and the prose goes on as if it weren't there, so
         // the next chunk of text keeps its leading spaces.
         let before = self.last_kind;
-        for rows in std::mem::take(&mut self.held_asides) {
+        for aside in std::mem::take(&mut self.held_asides) {
             self.begin(Kind::Note);
-            for row in rows {
-                self.commit(row);
-            }
+            self.emit(aside);
             self.commit(String::new());
         }
         self.last_kind = before;
@@ -1755,25 +1856,50 @@ impl App {
     /// Commits a line of the model's text, wrapped between words, list items under their text.
     fn commit_wrapped(&mut self, line: String) {
         let indent = text::hanging_indent(&line);
-        for row in text::wrap_words(&line, self.width, indent) {
-            self.commit(row);
+        self.emit(Line::Words(line, indent));
+    }
+
+    /// Prints what Markdown made of a line: its rows wrapped at word breaks, a table laid out
+    /// for the width.
+    fn commit_parts(&mut self, parts: Vec<Part>) {
+        for part in parts {
+            match part {
+                Part::Row(row) => self.commit_wrapped(row),
+                Part::Table(rows) => self.emit(Line::block(move |width| {
+                    text::render_table(&rows, width)
+                        .into_iter()
+                        .flat_map(|row| wrap_words(&row, width, text::hanging_indent(&row)))
+                        .collect()
+                })),
+            }
         }
     }
 
-    fn commit_markdown(&mut self, rows: Vec<String>) {
-        for row in rows {
-            self.commit_wrapped(row);
-        }
-    }
-
-    /// Queues a line for the scrollback, never two blank lines in a row.
+    /// Prints a line, never two blank lines in a row.
     fn commit(&mut self, line: String) {
         let blank = line.is_empty();
         if blank && self.last_blank {
             return;
         }
         self.last_blank = blank;
-        self.pending.push(line);
+        if self.fullscreen {
+            self.history.push(Line::Row(line));
+        } else {
+            self.pending.push(line);
+        }
+    }
+
+    /// Prints something laid out for the window's width: queued for the scrollback as rows at
+    /// the width now, or in fullscreen mode kept to be laid out again at any other.
+    fn emit(&mut self, entry: Line) {
+        if self.fullscreen {
+            self.last_blank = false;
+            self.history.push(entry);
+            return;
+        }
+        for row in entry.render(self.width) {
+            self.commit(row);
+        }
     }
 
     /// Clears the screen and its scrollback, dropping lines not yet shown.
@@ -1781,10 +1907,16 @@ impl App {
         self.pending.clear();
         self.last_blank = false;
         self.last_kind = Kind::None;
-        let _ = execute!(self.out, Clear(ClearType::All), Clear(ClearType::Purge), crossterm::cursor::MoveTo(0, 0));
+        if self.fullscreen {
+            self.history.clear();
+            self.shown.clear();
+            return;
+        }
+        let _ = execute!(self.out, Clear(ClearType::All), Clear(ClearType::Purge), MoveTo(0, 0));
         self.cursor_row = 0;
         self.shown.clear();
         self.since_banner = None;
+        self.content_rows = 0;
     }
 
     /// Starts a block of the conversation: a blank row first, unless it continues the block
@@ -1813,6 +1945,11 @@ impl App {
         self.width = usize::from(columns).max(20);
         self.markdown.width = self.width;
         self.height = usize::from(rows).max(5);
+        if self.fullscreen {
+            self.history.set_width(self.width);
+            self.shown.clear();
+            return;
+        }
         if self.cursor_row > 0 {
             let _ = queue!(self.out, MoveUp(self.cursor_row as u16));
         }
@@ -1820,9 +1957,16 @@ impl App {
         self.cursor_row = 0;
         self.shown.clear();
         self.since_banner = None;
+        self.content_rows = self.height;
     }
 
-    /// The live area's rows and where the cursor goes in them.
+    /// The screen rows the lines waiting to be printed take.
+    fn pending_rows(&self) -> usize {
+        self.pending.iter().map(|line| screen_rows(line, self.width)).sum()
+    }
+
+    /// The live area's rows and where the cursor goes in them, padded above with blank rows so
+    /// it ends on the bottom row of a screen the conversation doesn't fill yet.
     fn live(&self) -> (Vec<String>, usize, usize) {
         let width = self.width;
         let mut rows: Vec<String> = Vec::new();
@@ -1945,7 +2089,9 @@ impl App {
             rows.drain(..cut);
             cursor.0 -= cut;
         }
-        (rows, cursor.0, cursor.1)
+        let pad = if self.fullscreen { 0 } else { padding(self.height, self.content_rows + self.pending_rows(), rows.len()) };
+        rows.splice(0..0, std::iter::repeat_n(String::new(), pad));
+        (rows, cursor.0 + pad, cursor.1)
     }
 
     fn placeholder(&self) -> Option<&'static str> {
@@ -1991,6 +2137,10 @@ impl App {
     /// is ever shown. When only rows changed, as on a spinner tick, just those are rewritten;
     /// a committed line scrolls the area, so then it is painted whole.
     fn draw(&mut self) -> Result<()> {
+        if self.fullscreen {
+            return self.draw_screen();
+        }
+        let committed = self.pending_rows();
         let (rows, cursor_row, cursor_col) = self.live();
         let rows: Vec<String> = rows.iter().map(|row| text::plain(row).into_owned()).collect();
         let changed = self.pending.is_empty().then(|| changed_rows(&self.shown, &rows)).flatten();
@@ -2032,14 +2182,76 @@ impl App {
         queue!(frame, MoveToColumn(cursor_col as u16), Show, EndSynchronizedUpdate)?;
         self.out.write_all(&frame)?;
         self.out.flush()?;
+        self.content_rows = (self.content_rows + committed).min(self.height.saturating_sub(rows.len()));
         self.shown = rows;
         self.shown_col = cursor_col;
         self.cursor_row = cursor_row;
         Ok(())
     }
 
+    /// Paints the whole screen in fullscreen mode: the conversation's view above, the live area
+    /// on the bottom rows. Only the rows that changed are written, in one synchronized update.
+    fn draw_screen(&mut self) -> Result<()> {
+        let (live, cursor_row, cursor_col) = self.live();
+        let cut = live.len().saturating_sub(self.height);
+        let (live, cursor_row) = (&live[cut..], cursor_row.saturating_sub(cut));
+        let area = self.height - live.len();
+        let scrolled = self.history.below(area) > 0 && area > 1;
+        let view = area - usize::from(scrolled);
+        let mut rows: Vec<String> = self.history.view(view).iter().map(|row| text::plain(row).into_owned()).collect();
+        rows.resize(view, String::new());
+        if scrolled {
+            let below = self.history.below(view);
+            let plural = if below == 1 { "" } else { "s" };
+            rows.push(fit(&format!("  {FAINT}↓ {below} row{plural} below · PageDown scrolls, typing returns{RESET}"), self.width));
+        }
+        self.view_rows = view;
+        let cursor_row = rows.len() + cursor_row;
+        rows.extend(live.iter().map(|row| text::plain(row).into_owned()));
+        let whole = self.shown.len() != rows.len();
+        if !whole && self.shown == rows && cursor_row == self.cursor_row && cursor_col == self.shown_col {
+            return Ok(());
+        }
+        let mut frame: Vec<u8> = Vec::new();
+        queue!(frame, BeginSynchronizedUpdate, Hide)?;
+        if whole {
+            queue!(frame, Clear(ClearType::All))?;
+        }
+        for (i, row) in rows.iter().enumerate() {
+            if whole && row.is_empty() || !whole && self.shown[i] == *row {
+                continue;
+            }
+            queue!(frame, MoveTo(0, i as u16), Clear(ClearType::CurrentLine))?;
+            write!(frame, "{row}{RESET}")?;
+        }
+        queue!(frame, MoveTo(cursor_col as u16, cursor_row as u16), Show, EndSynchronizedUpdate)?;
+        self.out.write_all(&frame)?;
+        self.out.flush()?;
+        self.shown = rows;
+        self.shown_col = cursor_col;
+        self.cursor_row = cursor_row;
+        Ok(())
+    }
+
+    /// Scrolls the conversation by `rows`, up when negative; fullscreen mode only.
+    fn scroll(&mut self, rows: isize) {
+        if rows < 0 {
+            self.history.scroll_up(rows.unsigned_abs(), self.view_rows);
+        } else {
+            self.history.scroll_down(rows.unsigned_abs());
+        }
+    }
+
     /// Leaves the conversation on screen and puts the shell prompt below it.
     fn finish_screen(&mut self) -> Result<()> {
+        if self.fullscreen {
+            leave_fullscreen(&mut self.out);
+            for row in self.history.all_rows() {
+                write!(self.out, "{}{RESET}\r\n", text::plain(row))?;
+            }
+            self.out.flush()?;
+            return Ok(());
+        }
         if self.cursor_row > 0 {
             queue!(self.out, MoveUp(self.cursor_row as u16))?;
         }
@@ -2085,6 +2297,20 @@ fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width:
             }
         })
         .collect()
+}
+
+/// What the user typed as their message block: tinted rows the width of the window.
+fn prompt_rows(prompt: &str, width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut first = true;
+    for line in prompt.lines() {
+        for row in text::wrap_words(line, width.saturating_sub(3), 0) {
+            let lead = if std::mem::take(&mut first) { format!("{FIN}❯{RESET}{TINT}{BOLD}") } else { format!(" {BOLD}") };
+            let pad = " ".repeat(width.saturating_sub(3 + text::width(&row)));
+            rows.push(format!("{TINT} {lead} {row}{pad}{RESET}"));
+        }
+    }
+    rows
 }
 
 /// A /btw question and its answer as one block: the question, the answer hung off the output
@@ -2244,6 +2470,12 @@ fn fit(line: &str, width: usize) -> String {
 /// and has to be painted whole.
 fn changed_rows(shown: &[String], rows: &[String]) -> Option<Vec<usize>> {
     (shown.len() == rows.len()).then(|| (0..rows.len()).filter(|&i| shown[i] != rows[i]).collect())
+}
+
+/// Blank rows that put a live area of `live` rows on the screen's last row, when `content`
+/// rows above it leave room.
+fn padding(height: usize, content: usize, live: usize) -> usize {
+    height.saturating_sub(content + live)
 }
 
 /// Moves the cursor from one row of the live area to another.
@@ -2613,17 +2845,23 @@ const KEYS: &[(&str, &str)] = &[
     ("Ctrl+O", "show the last tool output or thought in full"),
     ("Ctrl+V", "paste an image (Cmd+V too in Kil)"),
     ("↑ ↓", "history"),
+    ("PageUp PageDown", "scroll the conversation (fullscreen mode, with the wheel)"),
     ("Ctrl+C", "clear the prompt; twice to quit"),
 ];
 
-/// Raw mode and bracketed paste while the UI runs, restored when it ends.
+/// Raw mode and bracketed paste while the UI runs, and the alternate screen with the mouse in
+/// fullscreen mode, restored when it ends.
 struct TerminalGuard;
 
 /// Whether the UI pushed keyboard enhancement flags, which `restore_terminal` pops.
 static ENHANCED: AtomicBool = AtomicBool::new(false);
 
+/// Whether the UI is on the alternate screen with mouse reports on, which `restore_terminal`
+/// ends.
+static FULLSCREEN: AtomicBool = AtomicBool::new(false);
+
 impl TerminalGuard {
-    fn enter() -> Result<Self> {
+    fn enter(fullscreen: bool) -> Result<Self> {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
         execute!(out, EnableBracketedPaste)?;
@@ -2631,7 +2869,30 @@ impl TerminalGuard {
             execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
             ENHANCED.store(true, Ordering::Relaxed);
         }
+        if fullscreen {
+            // Button and wheel reports (1000) in the SGR form (1006). crossterm's own
+            // `EnableMouseCapture` also asks for 1003, a report of every pointer move.
+            execute!(out, EnterAlternateScreen, Clear(ClearType::All), MoveTo(0, 0))?;
+            write!(out, "\x1b[?1000h\x1b[?1006h")?;
+            out.flush()?;
+            FULLSCREEN.store(true, Ordering::Relaxed);
+        }
+        // With `panic = "abort"` no destructor runs, so a panic would leave the shell on the
+        // alternate screen with the mouse reporting.
+        let report = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            restore_terminal();
+            report(info);
+        }));
         Ok(Self)
+    }
+}
+
+/// Ends mouse reports and leaves the alternate screen, if the UI is on it.
+fn leave_fullscreen(out: &mut impl Write) {
+    if FULLSCREEN.swap(false, Ordering::Relaxed) {
+        let _ = write!(out, "\x1b[?1006l\x1b[?1000l");
+        let _ = execute!(out, LeaveAlternateScreen);
     }
 }
 
@@ -2648,6 +2909,7 @@ pub fn restore_terminal() {
         return;
     }
     let mut out = stdout();
+    leave_fullscreen(&mut out);
     if ENHANCED.swap(false, Ordering::Relaxed) {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
@@ -2680,6 +2942,21 @@ mod tests {
         let later = Some((PathBuf::from("/h/.killi/sessions/x/later.md"), 2));
         let text = handoff("1", log, "~/code/slug", "m", "high", &prompts, &stats, later);
         assert_eq!(text.lines().nth(3).unwrap(), "later: /h/.killi/sessions/x/later.md (2 open: what the agent noted to do later)");
+    }
+
+    #[test]
+    fn fullscreen_is_the_setting_or_kil() {
+        assert!(wants_fullscreen(None, "kil"));
+        assert!(!wants_fullscreen(None, "iTerm.app"));
+        assert!(wants_fullscreen(Some(true), "iTerm.app"));
+        assert!(!wants_fullscreen(Some(false), "kil"));
+    }
+
+    #[test]
+    fn the_live_area_is_padded_down_to_the_bottom_row_until_the_conversation_fills_the_screen() {
+        assert_eq!(padding(30, 16, 4), 10);
+        assert_eq!(padding(30, 16, 14), 0);
+        assert_eq!(padding(30, 40, 4), 0);
     }
 
     #[test]

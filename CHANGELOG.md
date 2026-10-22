@@ -5,6 +5,30 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.25 — 2026-10-23
+
+- **Fullscreen mode** (`[ui] fullscreen = true`; on by default in Kil, off elsewhere). killi
+  takes the alternate screen: the prompt and status line stay on the bottom rows and only
+  the conversation scrolls above them, with the wheel, PageUp and PageDown (typing returns to
+  the newest row). The conversation is laid out again whenever the pane or tab changes
+  width, so tool lines, prose, your messages, tables and the banner follow it; before, only
+  the prompt did and the rest kept the old width. Quitting prints the whole conversation to
+  the terminal again; a signal or a panic restores the terminal but can't print it (the
+  session log has it). Outside Kil, mouse reports mean selecting text takes Shift (Option in
+  some terminals).
+- **The prompt and status bar stay on the bottom row** also in the default mode while the
+  conversation is shorter than the screen, with the banner above and blank space between;
+  opening the slash menu or a question fills that space instead of moving the screen. Once
+  the conversation is longer, nothing changes. killi asks the terminal where the cursor is
+  at start (`CSI 6n`), so a terminal that doesn't answer it waits 2 s and keeps the old
+  layout.
+- **A finished turn no longer leaves a stale task list.** When the agent ends its reply with
+  `todo_write` items still open, killi asks it once to mark what is done (or carry on), as it
+  already does for background tasks left running; `-p` runs and subagents are left alone.
+- **`ask_user_question` with the wrong arguments** (no `question`, or options that are objects
+  instead of strings) is sent back to the model as an error. Before, the user was shown a
+  blank question with no choices.
+
 ## 0.2.24 — 2026-10-22
 
 - **Sessions clean up after themselves.** A command that leaves something running, such as
