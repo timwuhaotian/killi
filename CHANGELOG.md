@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.6 — 2026-10-22
+
+- **Quitting says how to come back.** When an interactive session with prompts ends, killi
+  prints `killi -r <log>` to continue it.
+- **`/clear` clears the screen.** `/clear` (and `/new`) now clear the screen and scrollback and
+  show the banner again; the last session stays saved and `/resume` reopens it.
+
 ## 0.2.5 — 2026-10-22
 
 - **Pickers filter as you type.** In `/model`, `/effort` and `/resume`, typing narrows the
