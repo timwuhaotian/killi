@@ -5,6 +5,19 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.18 — 2026-10-22
+
+- **The design system's own colors.** On a terminal that announces 24-bit color
+  (`COLORTERM=truecolor`, as iTerm2, Ghostty, WezTerm and kitty do), lagoon, fin, warn,
+  danger, the faint marks, the status line's effort, tokens and branch, and the tint behind your messages and the selected row are now the
+  exact tokens of `docs/killi-design-system.html`, so the band behind your message is the
+  teal slab the design shows instead of a grey one. Other terminals keep the nearest
+  256-color shades.
+- **The empty prompt says what it takes.** A faint `ask, or / for commands and skills` sits
+  after the caret until you type, and while the agent works it reads `a message for the next
+  step · /btw asks on the side`, so the keys the banner showed stay discoverable after it has
+  scrolled away.
+
 ## 0.2.17 — 2026-10-22
 
 - **The status line no longer flashes while the agent works.** The live area is painted in one

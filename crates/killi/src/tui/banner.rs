@@ -1,7 +1,7 @@
 //! The start-up banner: killi in block letters with a sky-to-violet gradient, and a few lines
 //! about the session beside it.
 
-use super::text::{DIM, RESET, width};
+use super::text::{DIM, RESET, truecolor, width};
 
 const LOGO: [&str; 6] = [
     "██╗  ██╗██╗██╗     ██╗     ██╗",
@@ -25,7 +25,7 @@ const SWEEP: usize = 28;
 /// one after another, then the logo's gradient drifts through them while a bright spot sweeps
 /// from left to right. Always `WORD.len()` columns wide.
 pub fn working(frame: usize) -> String {
-    let truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
+    let truecolor = truecolor();
     let letters = WORD.len();
     let spot = (frame % SWEEP) as f32 / SWEEP as f32 * (letters + 3) as f32 - 1.5;
     let drift = frame as f32 * 0.03;
@@ -58,7 +58,7 @@ pub fn render(columns: usize, side: &[String]) -> Vec<String> {
     if columns < LOGO_WIDTH {
         return side.to_vec();
     }
-    let truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
+    let truecolor = truecolor();
     let logo: Vec<String> = LOGO.iter().enumerate().map(|(y, row)| paint(row, y, truecolor)).collect();
     let room = columns.saturating_sub(LOGO_WIDTH + GAP.len());
     if room < 24 || side.iter().any(|line| width(line) > room) && room < 40 {

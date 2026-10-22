@@ -245,7 +245,8 @@ mod tests {
 
         assert!(setup.prompt.text.contains("first, second"), "{}", setup.prompt.text);
         assert!(setup.prompt.text.contains("Always say hello."));
-        assert_eq!(setup.settings.instruction_files.len(), 1);
+        let under_root = |f: &&PathBuf| f.components().any(|c| Some(c.as_os_str()) == root.file_name());
+        assert_eq!(setup.settings.instruction_files.iter().filter(under_root).count(), 1, "a global ~/.agents/AGENTS.md may add one");
         assert!(setup.settings.skills.run(&serde_json::json!({"name": "second"})).text.contains("Body of second."));
         assert!(setup.skill_prompt("second", "").is_some());
         assert!(!setup.skills_need_restart());

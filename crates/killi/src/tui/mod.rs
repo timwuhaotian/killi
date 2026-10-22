@@ -1624,7 +1624,10 @@ impl App {
         space(&mut rows);
         rows.push(rule(mode, width));
         let known = |name: &str| self.entries.iter().any(|e| e.name == name || e.aliases.iter().any(|a| a == name));
-        let (input, cursor_row, cursor_col) = self.editor.render(&format!("{LAGOON}❯{RESET} "), width, &known);
+        let (mut input, cursor_row, cursor_col) = self.editor.render(&format!("{LAGOON}❯{RESET} "), width, &known);
+        if let Some(hint) = self.placeholder() {
+            input[0] = fit(&format!("{LAGOON}❯{RESET} {FAINT}{hint}{RESET}"), width);
+        }
         let first = cursor_row.saturating_sub(MAX_INPUT_ROWS - 1);
         let top = rows.len();
         rows.extend(input.into_iter().skip(first).take(MAX_INPUT_ROWS));
@@ -1676,6 +1679,10 @@ impl App {
             cursor.0 -= cut;
         }
         (rows, cursor.0, cursor.1)
+    }
+
+    fn placeholder(&self) -> Option<&'static str> {
+        placeholder(self.editor.is_empty(), self.busy.is_some(), self.picker.is_some() || self.asking.is_some())
     }
 
     /// The slash menu, `visible` items at a time around the selection, and a line of keys.
@@ -1831,6 +1838,15 @@ fn aside_rows(question: &str, answer: &str, note: &str, width: usize) -> Vec<Str
     rows.push(gutter.clone());
     rows.push(format!("{gutter} {DIM}{note}{RESET}"));
     rows
+}
+
+/// What the empty prompt says it takes, in fg-faint: nothing once something is typed or while
+/// a picker or a question `waits`, since those say it themselves.
+fn placeholder(empty: bool, busy: bool, waits: bool) -> Option<&'static str> {
+    if !empty || waits {
+        return None;
+    }
+    Some(if busy { "a message for the next step · /btw asks on the side" } else { "ask, or / for commands and skills" })
 }
 
 /// A full-width line around the prompt, in lagoon with `label` on it in plan mode.
@@ -2243,6 +2259,14 @@ mod tests {
         assert_eq!(unstyled(&diff_line("+12\tlet x = 1;")), "  │   12 + let x = 1;");
         assert!(diff_line("-3\told").contains(&format!("{DANGER}- old")));
         assert_eq!(unstyled(&diff_line("@@ hunk")), "  │ @@ hunk");
+    }
+
+    #[test]
+    fn the_empty_prompt_hints_at_commands_and_steering_unless_something_else_waits() {
+        assert_eq!(placeholder(true, false, false), Some("ask, or / for commands and skills"));
+        assert!(placeholder(true, true, false).unwrap().contains("/btw"));
+        assert_eq!(placeholder(false, false, false), None);
+        assert_eq!(placeholder(true, false, true), None);
     }
 
     #[test]

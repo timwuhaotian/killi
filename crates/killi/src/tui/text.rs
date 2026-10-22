@@ -42,48 +42,65 @@ fn detect_theme() -> Theme {
     }
 }
 
-/// A color escape that comes out in the shade for the current theme when it is printed.
+/// Whether the terminal takes 24-bit colors, as `COLORTERM` announces.
+pub fn truecolor() -> bool {
+    static TRUECOLOR: OnceLock<bool> = OnceLock::new();
+    *TRUECOLOR.get_or_init(|| std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit"))
+}
+
+/// A color escape that comes out in the shade for the current theme when it is printed: the
+/// design token itself on a truecolor terminal, else its nearest 256-color shade.
 #[derive(Clone, Copy)]
 pub struct Sgr {
     dark: &'static str,
     light: &'static str,
+    dark_true: &'static str,
+    light_true: &'static str,
+}
+
+impl Sgr {
+    fn shade(&self, theme: Theme, truecolor: bool) -> &'static str {
+        match (theme, truecolor) {
+            (Theme::Dark, true) => self.dark_true,
+            (Theme::Dark, false) => self.dark,
+            (Theme::Light, true) => self.light_true,
+            (Theme::Light, false) => self.light,
+        }
+    }
 }
 
 impl fmt::Display for Sgr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match *THEME.get_or_init(detect_theme) {
-            Theme::Dark => self.dark,
-            Theme::Light => self.light,
-        })
+        f.write_str(self.shade(*THEME.get_or_init(detect_theme), truecolor()))
     }
 }
 
-// The roles of the design system (`docs/killi-design-system.html`), each the nearest
-// 256-color shade of its token so they read the same in every terminal.
+// The roles of the design system (`docs/killi-design-system.html`): each token's exact color
+// where the terminal shows 24-bit color, else its nearest 256-color shade.
 
 /// Killi: the prompt caret, running and finished work, the active mode, commands and links.
-pub const LAGOON: Sgr = Sgr { dark: "\x1b[38;5;80m", light: "\x1b[38;5;30m" };
+pub const LAGOON: Sgr = Sgr { dark: "\x1b[38;5;80m", light: "\x1b[38;5;30m", dark_true: "\x1b[38;2;79;209;197m", light_true: "\x1b[38;2;10;110;101m" };
 /// The human: your messages, questions and anything else waiting on you.
-pub const FIN: Sgr = Sgr { dark: "\x1b[38;5;209m", light: "\x1b[38;5;130m" };
+pub const FIN: Sgr = Sgr { dark: "\x1b[38;5;209m", light: "\x1b[38;5;130m", dark_true: "\x1b[38;2;255;140;90m", light_true: "\x1b[38;2;173;63;20m" };
 /// Retries, a context window nearly full, an interrupted turn.
-pub const WARN: Sgr = Sgr { dark: "\x1b[38;5;221m", light: "\x1b[38;5;136m" };
+pub const WARN: Sgr = Sgr { dark: "\x1b[38;5;221m", light: "\x1b[38;5;136m", dark_true: "\x1b[38;2;242;193;78m", light_true: "\x1b[38;2;138;90;0m" };
 /// Failed tool calls, errors and removed lines.
-pub const DANGER: Sgr = Sgr { dark: "\x1b[38;5;204m", light: "\x1b[38;5;124m" };
+pub const DANGER: Sgr = Sgr { dark: "\x1b[38;5;204m", light: "\x1b[38;5;124m", dark_true: "\x1b[38;2;255;111;125m", light_true: "\x1b[38;2;179;38;30m" };
 /// Marks the eye may skip: gutters, rules, the empty part of a meter.
-pub const FAINT: Sgr = Sgr { dark: "\x1b[38;5;242m", light: "\x1b[38;5;245m" };
+pub const FAINT: Sgr = Sgr { dark: "\x1b[38;5;242m", light: "\x1b[38;5;245m", dark_true: "\x1b[38;2;92;107;122m", light_true: "\x1b[38;2;117;131;138m" };
 /// The thinking effort in the status line and the banner.
-pub const EFFORT: Sgr = Sgr { dark: "\x1b[38;5;105m", light: "\x1b[38;5;61m" };
+pub const EFFORT: Sgr = Sgr { dark: "\x1b[38;5;105m", light: "\x1b[38;5;61m", dark_true: "\x1b[38;2;135;135;255m", light_true: "\x1b[38;2;95;95;175m" };
 /// Token counts and the cache hit rate in the status line.
-pub const TOKENS: Sgr = Sgr { dark: "\x1b[38;5;75m", light: "\x1b[38;5;25m" };
+pub const TOKENS: Sgr = Sgr { dark: "\x1b[38;5;75m", light: "\x1b[38;5;25m", dark_true: "\x1b[38;2;95;175;255m", light_true: "\x1b[38;2;0;95;175m" };
 /// The git branch in the status line.
-pub const BRANCH: Sgr = Sgr { dark: "\x1b[38;5;176m", light: "\x1b[38;5;127m" };
+pub const BRANCH: Sgr = Sgr { dark: "\x1b[38;5;176m", light: "\x1b[38;5;127m", dark_true: "\x1b[38;2;215;135;215m", light_true: "\x1b[38;2;175;0;175m" };
 /// A background a step off the terminal's own, for the selected row and your messages.
-pub const TINT: Sgr = Sgr { dark: "\x1b[48;5;237m", light: "\x1b[48;5;254m" };
+pub const TINT: Sgr = Sgr { dark: "\x1b[48;5;237m", light: "\x1b[48;5;254m", dark_true: "\x1b[48;2;23;49;61m", light_true: "\x1b[48;2;214;233;238m" };
 
 // Syntax colors for code blocks only; they carry no meaning in the rest of the UI.
-const STRING: Sgr = Sgr { dark: "\x1b[32m", light: "\x1b[38;5;28m" };
-const NUMBER: Sgr = Sgr { dark: "\x1b[33m", light: "\x1b[38;5;130m" };
-const KEYWORD: Sgr = Sgr { dark: "\x1b[35m", light: "\x1b[38;5;90m" };
+const STRING: Sgr = Sgr { dark: "\x1b[32m", light: "\x1b[38;5;28m", dark_true: "\x1b[32m", light_true: "\x1b[38;5;28m" };
+const NUMBER: Sgr = Sgr { dark: "\x1b[33m", light: "\x1b[38;5;130m", dark_true: "\x1b[33m", light_true: "\x1b[38;5;130m" };
+const KEYWORD: Sgr = Sgr { dark: "\x1b[35m", light: "\x1b[38;5;90m", dark_true: "\x1b[35m", light_true: "\x1b[38;5;90m" };
 
 /// Whether `NO_COLOR` asks for no colors.
 fn no_color() -> bool {
@@ -794,6 +811,18 @@ mod tests {
         narrow.line("| aaaaaaaaaa | bbbbbbbbbb |");
         let rows = narrow.finish();
         assert!(rows.iter().all(|r| width(r) <= 14), "{rows:?}");
+    }
+
+    #[test]
+    fn roles_print_their_tokens_exactly_on_truecolor_terminals() {
+        assert_eq!(LAGOON.shade(Theme::Dark, true), "\x1b[38;2;79;209;197m");
+        assert_eq!(LAGOON.shade(Theme::Dark, false), "\x1b[38;5;80m");
+        assert_eq!(TINT.shade(Theme::Light, true), "\x1b[48;2;214;233;238m");
+        assert_eq!(TINT.shade(Theme::Light, false), "\x1b[48;5;254m");
+        for role in [LAGOON, FIN, WARN, DANGER, FAINT, TINT] {
+            assert!(role.dark_true.contains(";2;") && role.light_true.contains(";2;"));
+            assert!(role.dark.contains(";5;") && role.light.contains(";5;"));
+        }
     }
 
     #[test]
