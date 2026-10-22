@@ -151,6 +151,16 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 }
                 Err(e) => app.error(&format!("{e:#}")),
             },
+            Input::Prune(keep) => match crate::session::prune(keep, &agent.session.log_path) {
+                Ok(pruned) if pruned.sessions == 0 => app.notice("Nothing to prune."),
+                Ok(pruned) => app.notice(&format!(
+                    "Removed {} session{} ({}). Kept the newest {keep} and this one.",
+                    pruned.sessions,
+                    if pruned.sessions == 1 { "" } else { "s" },
+                    megabytes(pruned.bytes)
+                )),
+                Err(e) => app.error(&format!("Can't prune: {e:#}")),
+            },
             Input::Effort(effort) => {
                 let efforts = session.config().efforts(agent.model_alias());
                 if efforts.contains(&effort) {
@@ -366,6 +376,11 @@ async fn handle_command(
             Err(e) => app.error(&format!("{e:#}")),
         },
         "resume" => app.open_session_picker(cwd),
+        "prune" if arg.is_empty() => app.open_prune_picker(&agent.session.log_path),
+        "prune" => match arg.parse::<usize>() {
+            Ok(keep) => app.next_input = Some(Input::Prune(keep)),
+            Err(_) => app.error("Say how many of the newest sessions to keep: /prune 20."),
+        },
         "mcp" if arg.is_empty() => app.open_mcp_picker(session.mcp(), None),
         "mcp" => app.next_input = Some(Input::Mcp(arg.to_string(), false)),
         "model" if arg.is_empty() => app.open_model_picker(session.config()),
@@ -385,6 +400,7 @@ async fn handle_command(
             Err(e) => app.error(&format!("Can't reload: {e:#}")),
         },
         "usage" | "cost" => app.usage_report(agent),
+        "session" | "share" => app.share_session(agent),
         other => match session.skill_prompt(other.strip_prefix("skill:").unwrap_or(other), arg) {
             Some(prompt) => prompt_turn(app, agent, snapshots, keys, rx, format!("/{other} {arg}").trim_end(), &prompt).await?,
             None => app.error(&format!("Unknown command /{other}. Type /help for the list.")),
@@ -458,6 +474,8 @@ enum Input {
     Effort(String),
     /// Turns an MCP server on or off; true when picked from the /mcp list, which then reopens.
     Mcp(String, bool),
+    /// Deletes every session but the newest this many and the current one.
+    Prune(usize),
 }
 
 enum LastEnd {
@@ -514,6 +532,7 @@ enum PickerChoice {
     Model(String),
     Effort(String),
     Mcp(String),
+    Prune(usize),
 }
 
 #[derive(Default)]
@@ -652,11 +671,7 @@ impl App {
     }
 
     fn banner(&mut self, agent: &Agent, session: &Setup, snapshots: &Snapshots, resumed: bool) {
-        let home = crate::config::home();
-        let cwd = match self.cwd.strip_prefix(&home) {
-            Ok(rest) => format!("~/{}", rest.display()),
-            Err(_) => self.cwd.display().to_string(),
-        };
+        let cwd = tilde(&self.cwd);
         let room = self.width.saturating_sub(41).max(20);
         let cwd = if text::width(&cwd) > room {
             let tail: String = cwd.chars().rev().take(room - 1).collect::<Vec<_>>().into_iter().rev().collect();
@@ -801,6 +816,7 @@ impl App {
                         PickerChoice::Model(alias) => Input::Model(alias),
                         PickerChoice::Effort(effort) => Input::Effort(effort),
                         PickerChoice::Mcp(name) => Input::Mcp(name, true),
+                        PickerChoice::Prune(keep) => Input::Prune(keep),
                     });
                 }
             }
@@ -1472,6 +1488,20 @@ impl App {
         ));
     }
 
+    /// Prints and copies what another agent needs to find this session: its id, the log's
+    /// path, a summary and the prompts so far.
+    fn share_session(&mut self, agent: &Agent) {
+        let log = &agent.session.log_path;
+        let id = log.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let text = handoff(&id, log, &tilde(&self.cwd), agent.model_alias(), agent.thinking().label(), &agent.user_prompts(), &agent.stats);
+        copy_to_clipboard(&text);
+        self.begin(Kind::Note);
+        for line in text.lines() {
+            self.commit_wrapped(format!("{DIM}{line}{RESET}"));
+        }
+        self.notice("Copied to the clipboard. Paste it into another agent and it can read the whole session from the log.");
+    }
+
     fn open_session_picker(&mut self, cwd: &Path) {
         let sessions = crate::session::list(cwd);
         if sessions.is_empty() {
@@ -1488,6 +1518,19 @@ impl App {
             })
             .collect();
         self.picker = Some(Picker::new("Resume a session".into(), options, 0));
+    }
+
+    /// Offers how many of the newest sessions to keep, each choice saying how many it removes.
+    fn open_prune_picker(&mut self, current: &Path) {
+        let others = crate::session::list_all().iter().filter(|(path, _)| path != current).count();
+        let options: Vec<_> = prune_choices(others)
+            .into_iter()
+            .map(|keep| (format!("keep the newest {keep}"), format!("removes {} of {others}", others - keep), PickerChoice::Prune(keep)))
+            .collect();
+        if options.is_empty() {
+            return self.notice(&format!("Only {others} other session(s) on this machine; nothing worth pruning."));
+        }
+        self.picker = Some(Picker::new("Prune sessions · this one stays".into(), options, 0));
     }
 
     fn open_model_picker(&mut self, config: &Config) {
@@ -2150,6 +2193,91 @@ fn ago(elapsed: Duration) -> String {
     }
 }
 
+/// The counts `/prune` offers to keep, from fewest to most, each removing something.
+fn prune_choices(others: usize) -> Vec<usize> {
+    [5, 10, 20, 50, 100, 200].into_iter().filter(|&keep| keep < others).collect()
+}
+
+/// Bytes for the eye: `312 KB`, `4.2 MB`.
+fn megabytes(bytes: u64) -> String {
+    match bytes {
+        0..1_000_000 => format!("{} KB", bytes / 1_000),
+        _ => format!("{:.1} MB", bytes as f64 / 1e6),
+    }
+}
+
+/// `path` with the home folder as `~`.
+fn tilde(path: &Path) -> String {
+    match path.strip_prefix(crate::config::home()) {
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
+    }
+}
+
+/// The text `/session` copies: enough for another agent to find the log and know how to
+/// read it, with the session's numbers and prompts so the reader knows what it is looking at.
+fn handoff(id: &str, log: &Path, cwd: &str, model: &str, effort: &str, prompts: &[String], stats: &crate::agent::Stats) -> String {
+    let usage = &stats.usage;
+    let cached = usage.cached * 100 / usage.prompt.max(1);
+    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    let mut out = vec![
+        format!("killi session {id} · {cwd}"),
+        format!("log: {}", log.display()),
+        format!(
+            "{model} · effort {effort} · {} · {} · {} · {} in, {cached}% cached · {} out",
+            plural(prompts.len(), "prompt"),
+            plural(stats.requests as usize, "request"),
+            plural(stats.tool_calls as usize, "tool call"),
+            short(usage.prompt),
+            short(usage.completion)
+        ),
+    ];
+    for (i, prompt) in prompts.iter().enumerate() {
+        out.push(format!("{}. {}", i + 1, crate::llm::truncate(&prompt.split_whitespace().collect::<Vec<_>>().join(" "), 160)));
+    }
+    out.push(
+        "The log is JSON lines, one record per `type`: `session` (cwd, model, effort, tools), every `message` exactly as sent \
+         (user, assistant with tool_calls, tool results; a tool result's `tool` has is_error, brief and ms), `usage` after each \
+         request (prompt, cached, completion and reasoning tokens, finish_reason, ms), `model` when the model or effort \
+         changed, and `compaction`. Every record has a `ts` in ms. `scripts/sessions.py` in the killi repo summarizes logs and flags what to fix."
+            .to_string(),
+    );
+    out.join("\n")
+}
+
+/// Puts `text` on the clipboard, through the terminal (OSC 52, which reaches the local
+/// clipboard over SSH too) and through pbcopy.
+fn copy_to_clipboard(text: &str) {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let mut out = stdout();
+    let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
+    let _ = out.flush();
+    if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+/// Standard base64 with padding, as OSC 52 wants it.
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(TABLE[(n >> (18 - 6 * i)) as usize & 63] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 /// A desktop notification: the terminal's own when it supports OSC 9, otherwise macOS's,
 /// posted in the name of the app the terminal runs in, so clicking it brings that app to the
 /// front rather than Script Editor. An app that can't be told falls back to a plain one.
@@ -2217,6 +2345,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "plan", aliases: &[], args: "", about: "Toggle plan mode (also Shift+Tab)" },
     Command { name: "swarm", aliases: &[], args: "[task|on|off]", about: "Swarm mode: split work across many subagents" },
     Command { name: "usage", aliases: &["cost"], args: "", about: "Tokens and requests this session" },
+    Command { name: "session", aliases: &["share"], args: "", about: "Copy this session's id, log path and summary, to paste into another agent" },
+    Command { name: "prune", aliases: &[], args: "[keep]", about: "Delete every session on this machine but the newest few" },
     Command { name: "reload", aliases: &[], args: "", about: "Re-read [prompt], AGENTS.md files and skills" },
     Command { name: "help", aliases: &[], args: "", about: "Commands and keys" },
     Command { name: "exit", aliases: &["quit"], args: "", about: "Quit killi (also Ctrl+D)" },
@@ -2265,6 +2395,42 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_handoff_names_the_log_and_sums_the_session_up() {
+        let stats = crate::agent::Stats {
+            requests: 6,
+            tool_calls: 7,
+            usage: Usage { prompt: 22_400, cached: 18_600, completion: 1_200, reasoning: 0 },
+            ..crate::agent::Stats::default()
+        };
+        let prompts = vec!["The slugify test fails.\nFix it.".to_string()];
+        let text = handoff("1792673250-71085", Path::new("/h/.killi/sessions/x/1792673250-71085.jsonl"), "~/code/slug", "mimo/mimo-v2.6-pro", "high", &prompts, &stats);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "killi session 1792673250-71085 · ~/code/slug");
+        assert_eq!(lines[1], "log: /h/.killi/sessions/x/1792673250-71085.jsonl");
+        assert_eq!(lines[2], "mimo/mimo-v2.6-pro · effort high · 1 prompt · 6 requests · 7 tool calls · 22.4k in, 83% cached · 1.2k out");
+        assert_eq!(lines[3], "1. The slugify test fails. Fix it.");
+        assert!(lines[4].contains("`usage`") && lines[4].contains("sessions.py"));
+    }
+
+    #[test]
+    fn prune_offers_only_counts_that_remove_something() {
+        assert_eq!(prune_choices(3), Vec::<usize>::new());
+        assert_eq!(prune_choices(12), [5, 10]);
+        assert_eq!(prune_choices(500), [5, 10, 20, 50, 100, 200]);
+        assert_eq!(megabytes(312_000), "312 KB");
+        assert_eq!(megabytes(4_200_000), "4.2 MB");
+    }
+
+    #[test]
+    fn base64_pads_like_the_standard() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"killi session"), "a2lsbGkgc2Vzc2lvbg==");
+    }
 
     #[test]
     fn the_terminals_background_answer_is_read_at_any_depth() {

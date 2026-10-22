@@ -296,8 +296,105 @@ pub fn list(cwd: &Path) -> Vec<Listed> {
     sessions
 }
 
+/// Every session's log on this machine, newest first, with the folder beside it that holds
+/// its saved outputs and subagent logs.
+pub fn list_all() -> Vec<(PathBuf, SystemTime)> {
+    list_all_in(&killi_home().join("sessions"))
+}
+
+fn list_all_in(root: &Path) -> Vec<(PathBuf, SystemTime)> {
+    let Ok(projects) = fs::read_dir(root) else { return Vec::new() };
+    let mut logs: Vec<(PathBuf, SystemTime)> = projects
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .flat_map(|project| fs::read_dir(project.path()).into_iter().flatten().flatten())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "jsonl"))
+        .filter_map(|path| {
+            let modified = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+            Some((path, modified))
+        })
+        .collect();
+    logs.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
+    logs
+}
+
+/// What `prune` removed: how many sessions, and how many bytes they took.
+#[derive(Debug, Default, PartialEq)]
+pub struct Pruned {
+    pub sessions: usize,
+    pub bytes: u64,
+}
+
+/// Deletes every session but the `keep` newest and `current`, each with its side folder, and
+/// the project folders left empty.
+pub fn prune(keep: usize, current: &Path) -> Result<Pruned> {
+    prune_in(&killi_home().join("sessions"), keep, current)
+}
+
+fn prune_in(root: &Path, keep: usize, current: &Path) -> Result<Pruned> {
+    let mut pruned = Pruned::default();
+    let old: Vec<PathBuf> = list_all_in(root).into_iter().map(|(path, _)| path).filter(|path| path != current).skip(keep).collect();
+    for log in old {
+        let dir = log.with_extension("");
+        if dir.is_dir() {
+            pruned.bytes += dir_size(&dir);
+            fs::remove_dir_all(&dir).with_context(|| format!("could not remove {}", dir.display()))?;
+        }
+        pruned.bytes += fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
+        fs::remove_file(&log).with_context(|| format!("could not remove {}", log.display()))?;
+        pruned.sessions += 1;
+        if let Some(project) = log.parent()
+            && fs::read_dir(project).is_ok_and(|mut entries| entries.next().is_none())
+        {
+            let _ = fs::remove_dir(project);
+        }
+    }
+    Ok(pruned)
+}
+
+fn dir_size(dir: &Path) -> u64 {
+    fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() { dir_size(&path) } else { fs::metadata(&path).map(|m| m.len()).unwrap_or(0) }
+        })
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prune_keeps_the_newest_and_the_current_session_and_removes_the_rest_with_their_folders() {
+        let root = std::env::temp_dir().join(format!("killi-prune-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (a, b) = (root.join("-p-one"), root.join("-p-two"));
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        let logs = [a.join("1-1.jsonl"), a.join("2-2.jsonl"), b.join("3-3.jsonl"), b.join("4-4.jsonl")];
+        for (i, log) in logs.iter().enumerate() {
+            fs::write(log, "x".repeat(100)).unwrap();
+            let when = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000 + i as u64 * 60);
+            File::options().write(true).open(log).unwrap().set_modified(when).unwrap();
+        }
+        fs::create_dir_all(a.join("1-1")).unwrap();
+        fs::write(a.join("1-1/agent-1.jsonl"), "y".repeat(50)).unwrap();
+        let newest: Vec<PathBuf> = list_all_in(&root).into_iter().map(|(p, _)| p).collect();
+        assert_eq!(newest, [logs[3].clone(), logs[2].clone(), logs[1].clone(), logs[0].clone()]);
+
+        let pruned = prune_in(&root, 1, &logs[1]).unwrap();
+        assert_eq!(pruned, Pruned { sessions: 2, bytes: 250 });
+        assert!(logs[3].exists() && logs[1].exists(), "the newest and the current stay");
+        assert!(!logs[0].exists() && !logs[2].exists() && !a.join("1-1").exists());
+        assert!(a.exists() && b.exists());
+        assert_eq!(prune_in(&root, 0, &logs[1]).unwrap().sessions, 1);
+        assert!(!b.exists(), "a project folder left empty goes too");
+        fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
     use serde_json::json;
 

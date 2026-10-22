@@ -171,7 +171,9 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 </p>
 
 Commands: `/model [alias]`, `/effort [level]` (thinking effort), `/new` (or `/clear`),
-`/resume`, `/compact [focus]`, `/undo`, `/plan`, `/swarm [task|on|off]`, `/usage`, `/reload`,
+`/resume`, `/compact [focus]`, `/undo`, `/plan`, `/swarm [task|on|off]`, `/usage`, `/session`
+(copies the session's id, log path and summary for another agent to read), `/prune [keep]`
+(deletes every session on the machine but the newest few), `/reload`,
 `/help`, `/exit`, and
 `/<skill-name> [request]` for any skill. The menu matches loosely, the way Kimi Code's does:
 `/cr` finds `code-review`.

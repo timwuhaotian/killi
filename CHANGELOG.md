@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.20 — 2026-10-22
+
+- **`/session` hands a session to another agent.** It copies the session's id, the path of
+  its log, the model, effort, prompts, requests, tool calls and tokens, the prompts so far,
+  and a line on how the log is laid out. Paste that into another agent and it can read every
+  message, tool call, result and usage record of this session from the log, to debug or
+  tune killi. The copy goes through the terminal (OSC 52) and `pbcopy`.
+- **`/prune` clears old sessions.** It offers how many of the newest sessions to keep (5 to
+  200, each saying how many it removes), or `/prune 20` keeps that many at once. Every other
+  session on the machine goes, with its saved outputs and subagent logs; the running session
+  always stays, and the notice says how many went and how much space they took.
+
 ## 0.2.19 — 2026-10-22
 
 - **A light terminal gets the light palette on its own.** At start killi asks the terminal
