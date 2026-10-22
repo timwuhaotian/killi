@@ -1,5 +1,6 @@
 //! The prompt editor: multi-line text with a cursor, readline-style keys and history.
 
+use super::text::{ACCENT, RESET};
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Default)]
@@ -186,10 +187,31 @@ impl Editor {
         self.text[at..].chars().next().map(|c| at + c.len_utf8())
     }
 
+    /// Byte ranges of the words `/name` where `known` accepts `name`.
+    fn marked(&self, known: &dyn Fn(&str) -> bool) -> Vec<(usize, usize)> {
+        let mut ranges = Vec::new();
+        let mut start = None;
+        for (i, c) in self.text.char_indices().chain([(self.text.len(), ' ')]) {
+            match (start, c.is_whitespace()) {
+                (None, false) => start = Some(i),
+                (Some(s), true) => {
+                    if self.text[s..i].strip_prefix('/').is_some_and(known) {
+                        ranges.push((s, i));
+                    }
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        ranges
+    }
+
     /// The text as rows no wider than `width` after `prompt`, and the cursor's row and column.
-    pub fn render(&self, prompt: &str, width: usize) -> (Vec<String>, usize, usize) {
+    /// Words `/name` that `known` accepts are drawn in the accent color.
+    pub fn render(&self, prompt: &str, width: usize, known: &dyn Fn(&str) -> bool) -> (Vec<String>, usize, usize) {
         let prompt_width = super::text::width(prompt);
         let room = width.saturating_sub(prompt_width).max(1);
+        let marked = self.marked(known);
         let mut rows = Vec::new();
         let mut cursor = (0, prompt_width);
         let mut offset = 0;
@@ -198,9 +220,14 @@ impl Editor {
             let mut row = String::new();
             let mut row_width = 0;
             let mut first = true;
+            let mut lit = false;
             for (i, c) in line.char_indices() {
                 let w = c.width().unwrap_or(0);
                 if row_width + w > room {
+                    if lit {
+                        row.push_str(RESET);
+                        lit = false;
+                    }
                     rows.push(format!("{}{row}", if first { lead.clone() } else { " ".repeat(prompt_width) }));
                     row.clear();
                     row_width = 0;
@@ -209,8 +236,16 @@ impl Editor {
                 if offset + i == self.cursor {
                     cursor = (rows.len(), prompt_width + row_width);
                 }
+                let on = marked.iter().any(|&(s, e)| (s..e).contains(&(offset + i)));
+                if on != lit {
+                    row.push_str(&if on { ACCENT.to_string() } else { RESET.to_string() });
+                    lit = on;
+                }
                 row.push(c);
                 row_width += w;
+            }
+            if lit {
+                row.push_str(RESET);
             }
             if offset + line.len() == self.cursor {
                 cursor = if row_width >= room { (rows.len() + 1, prompt_width) } else { (rows.len(), prompt_width + row_width) };
@@ -261,11 +296,22 @@ mod tests {
     fn render_wraps_and_places_the_cursor() {
         let mut e = Editor::default();
         e.insert("abcdef\n中文");
-        let (rows, row, col) = e.render("› ", 6);
+        let (rows, row, col) = e.render("› ", 6, &|_| false);
         assert_eq!(rows, vec!["› abcd", "  ef", "  中文", "  "], "a full row moves the cursor to the next one");
         assert_eq!((row, col), (3, 2));
         e.home();
-        assert_eq!(e.render("› ", 6).1, 2);
-        assert_eq!(e.render("› ", 6).2, 2);
+        assert_eq!(e.render("› ", 6, &|_| false).1, 2);
+        assert_eq!(e.render("› ", 6, &|_| false).2, 2);
+    }
+
+    #[test]
+    fn known_slash_words_are_colored() {
+        let mut e = Editor::default();
+        e.insert("a /pdf /nope b/pdf\n/pdf");
+        let (rows, ..) = e.render("", 40, &|name| name == "pdf");
+        assert_eq!(rows[0], format!("a {ACCENT}/pdf{RESET} /nope b/pdf"));
+        assert_eq!(rows[1], format!("{ACCENT}/pdf{RESET}"));
+        let (rows, ..) = e.render("", 7, &|name| name == "pdf");
+        assert_eq!(rows[0], format!("a {ACCENT}/pdf{RESET} "));
     }
 }

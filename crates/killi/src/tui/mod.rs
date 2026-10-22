@@ -86,8 +86,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         let Some(input) = app.read_input(&mut keys).await? else { break };
         match input {
             Input::Prompt(prompt) => {
-                snapshots.take();
                 app.begin_turn(&prompt);
+                app.draw()?;
+                snapshots.take();
                 let before = Totals::of(&agent);
                 let ended = run_turn(&mut app, &mut keys, &mut rx, agent.run(&prompt)).await?;
                 app.finish_turn(ended, before, Totals::of(&agent));
@@ -269,8 +270,9 @@ async fn prompt_turn(
     shown: &str,
     prompt: &str,
 ) -> Result<()> {
-    snapshots.take();
     app.begin_turn(shown);
+    app.draw()?;
+    snapshots.take();
     let before = Totals::of(agent);
     let ended = run_turn(app, keys, rx, agent.run(prompt)).await?;
     app.finish_turn(ended, before, Totals::of(agent));
@@ -645,7 +647,8 @@ impl App {
     }
 
     /// Keys for the slash menu: ↑↓ choose, Tab completes, Enter runs a command or fills in an
-    /// argument, Esc closes it. None lets the key through, as Enter is after a command.
+    /// argument, Esc closes it (the `/` is then plain text). None lets the key through, as
+    /// Enter is after a command at the start of the prompt; a later `/` only completes.
     fn on_key_menu(&mut self, key: KeyEvent, menu: &Suggestions) -> Option<Idle> {
         let count = menu.items.len();
         let selected = self.menu_selected.min(count - 1);
@@ -656,7 +659,7 @@ impl App {
             KeyCode::Tab => self.choose(menu, selected),
             KeyCode::Enter if !newline_key(&key) => {
                 self.choose(menu, selected);
-                return if menu.command { None } else { Some(Idle::Continue) };
+                return if menu.command && menu.start == 0 { None } else { Some(Idle::Continue) };
             }
             _ => return None,
         }
@@ -1349,7 +1352,8 @@ impl App {
         }
         let mode = self.controls.plan.get().then_some("plan mode · Shift+Tab leaves it");
         rows.push(rule(mode, width));
-        let (input, cursor_row, cursor_col) = self.editor.render(&format!("{ACCENT}›{RESET} "), width);
+        let known = |name: &str| self.entries.iter().any(|e| e.name == name || e.aliases.iter().any(|a| a == name));
+        let (input, cursor_row, cursor_col) = self.editor.render(&format!("{ACCENT}›{RESET} "), width, &known);
         let first = cursor_row.saturating_sub(MAX_INPUT_ROWS - 1);
         let top = rows.len();
         rows.extend(input.into_iter().skip(first).take(MAX_INPUT_ROWS));

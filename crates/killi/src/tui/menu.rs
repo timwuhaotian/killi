@@ -1,4 +1,4 @@
-//! The slash menu: what `/` offers as you type. Commands and skills are ranked with pi-tui's
+//! The slash menu: what `/` offers as you type, at the start of a word anywhere in the prompt. Commands and skills are ranked with pi-tui's
 //! fuzzy matcher, as in Kimi Code, then entries whose description mentions what you typed
 //! follow; after `/model ` or `/effort ` it offers that command's choices.
 
@@ -29,12 +29,17 @@ pub struct Suggestions {
 
 /// The menu for `before`, the text before the cursor, or None when there is nothing to offer.
 /// `arguments` gives a command's choices by its name.
+///
+/// A `/` that starts a word anywhere in the text offers commands and skills; only the one at
+/// the very start can be followed by that command's choices.
 pub fn suggest(before: &str, entries: &[Entry], arguments: impl Fn(&str) -> Vec<Item>) -> Option<Suggestions> {
-    let typed = before.strip_prefix('/')?;
-    let Some(space) = typed.find(char::is_whitespace) else {
+    let word = before.char_indices().rev().find(|(_, c)| c.is_whitespace()).map_or(0, |(i, c)| i + c.len_utf8());
+    if let Some(typed) = before[word..].strip_prefix('/') {
         let items = commands(entries, typed);
-        return (!items.is_empty()).then_some(Suggestions { items, start: 0, command: true });
-    };
+        return (!items.is_empty()).then_some(Suggestions { items, start: word, command: true });
+    }
+    let typed = before.strip_prefix('/')?;
+    let space = typed.find(char::is_whitespace)?;
     let (name, argument) = (&typed[..space], &typed[space + 1..]);
     if argument.contains(char::is_whitespace) {
         return None;
@@ -223,6 +228,19 @@ mod tests {
         assert!(suggest("/effort high", &entries(), efforts).is_none());
         assert!(suggest("/model x", &entries(), efforts).is_none());
         assert!(suggest("/effort high now", &entries(), efforts).is_none());
+    }
+
+    #[test]
+    fn a_later_slash_offers_commands_where_it_stands() {
+        let none = |_: &str| Vec::new();
+        let s = suggest("use /pdf and /rev", &entries(), none).unwrap();
+        assert_eq!(values(&s), ["code-review"]);
+        assert_eq!((s.start, s.command), (13, true));
+        assert_eq!(suggest("/pdf then /", &entries(), none).unwrap().start, 10);
+        assert_eq!(suggest("héllo /pd", &entries(), none).unwrap().start, 7);
+        assert!(suggest("see src/pdf", &entries(), none).is_none());
+        assert!(suggest("hello /zzz", &entries(), none).is_none());
+        assert!(suggest("hello ", &entries(), none).is_none());
     }
 
     #[test]

@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.8 — 2026-10-22
+
+- **Your message shows at once.** Pressing Enter puts the message in the transcript before the
+  undo snapshot is taken, so it no longer vanishes for a moment in large repositories.
+- **Slash menu anywhere.** A `/` that starts a word, not only the first one, offers commands
+  and skills, and known `/commands` in the prompt are drawn in the accent color.
+
 ## 0.2.7 — 2026-10-22
 
 - **Richer Markdown.** Tables line up and shrink to the window, links show their address,
