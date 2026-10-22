@@ -328,8 +328,11 @@ impl Agent {
         }
     }
 
-    /// Replaces the system prompt on purpose, for /reload; the next request is uncached.
-    pub fn reload_system(&mut self, system: &str) -> Result<()> {
+    /// Replaces the system prompt and settings on purpose, for /reload; the next request is
+    /// uncached.
+    pub fn reload_system(&mut self, system: &str, settings: Settings) -> Result<()> {
+        self.instructions = crate::prompt::Instructions::new(&self.ctx.cwd, &settings.instruction_files);
+        self.settings = Rc::new(settings);
         Rc::make_mut(&mut self.messages)[0] = json!({"role": "system", "content": system});
         self.share();
         self.session.record(&json!({"type": "compaction", "messages": *self.messages}))

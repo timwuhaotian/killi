@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.14 — 2026-10-22
+
+- **`/reload` takes effect without a restart.** Skills added or edited since the session
+  started can now be loaded by the model and run as `/<skill>`, and they show in the slash
+  menu. AGENTS.md changes and `[prompt]` reach `/new` sessions too. A broken `config.toml`
+  now shows an error instead of being ignored. A session that started with no skills still
+  needs a restart before the model can load one; `/<skill>` runs it meanwhile.
+
 ## 0.2.13 — 2026-10-22
 
 - **Sessions share MCP servers.** Stdio servers now run in one shared `killi mcp-serve`

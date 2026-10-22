@@ -69,7 +69,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     });
     let controls = Controls { interactive: true, ..Controls::default() };
     text::init_theme(config.ui.theme.as_deref());
-    let session = Setup::new(config, &cwd, start.model.as_deref()).await?;
+    let mut session = Setup::new(config, &cwd, start.model.as_deref()).await?;
     let mut agent = match &start.resume {
         Some(log) => session.resume(log, controls.clone(), sink.clone())?,
         None => session.start(controls.clone(), sink.clone())?,
@@ -102,7 +102,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 }
             }
             Input::Command(command, arg) => {
-                if !handle_command(&mut app, &mut agent, &session, &mut snapshots, &mut keys, &mut rx, &cwd, &command, &arg).await? {
+                if !handle_command(&mut app, &mut agent, &mut session, &mut snapshots, &mut keys, &mut rx, &cwd, &command, &arg).await? {
                     break;
                 }
             }
@@ -228,7 +228,7 @@ where
 async fn handle_command(
     app: &mut App,
     agent: &mut Agent,
-    session: &Setup,
+    session: &mut Setup,
     snapshots: &mut Snapshots,
     keys: &mut EventStream,
     rx: &mut mpsc::UnboundedReceiver<Event>,
@@ -298,10 +298,18 @@ async fn handle_command(
         "model" => app.next_input = Some(Input::Model(arg.to_string())),
         "effort" | "thinking" if arg.is_empty() => app.open_effort_picker(session.config()),
         "effort" | "thinking" => app.next_input = Some(Input::Effort(arg.to_lowercase())),
-        "reload" => {
-            agent.reload_system(&session.system_prompt())?;
-            app.notice("Reloaded the system prompt ([prompt] in config.toml), AGENTS.md files and skills. The next request starts the cache over.");
-        }
+        "reload" => match session.reload() {
+            Ok(()) => {
+                session.reload_agent(agent)?;
+                app.entries = entries(session);
+                app.refresh_choices(session.config());
+                app.notice("Reloaded the system prompt ([prompt] in config.toml), AGENTS.md files and skills. The next request starts the cache over.");
+                if session.skills_need_restart() {
+                    app.notice("This session started without skills, so the model can't load them until killi restarts; /name runs one now.");
+                }
+            }
+            Err(e) => app.error(&format!("Can't reload: {e:#}")),
+        },
         "usage" | "cost" => app.usage_report(agent),
         other => match session.skill_prompt(other.strip_prefix("skill:").unwrap_or(other), arg) {
             Some(prompt) => prompt_turn(app, agent, snapshots, keys, rx, format!("/{other} {arg}").trim_end(), &prompt).await?,

@@ -1,5 +1,6 @@
-//! Everything a session is built from, decided once when killi starts: the model, the system
-//! prompt and the tool list. Both the one-shot mode and the TUI start agents from here.
+//! Everything a session is built from, decided when killi starts: the model, the system prompt
+//! and the tool list. `/reload` re-reads the prompt and skills; the tools stay as they started.
+//! Both the one-shot mode and the TUI start agents from here.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -108,12 +109,37 @@ impl Setup {
         Client::new(model)
     }
 
-    /// The system prompt rebuilt from the files as they are now, `[prompt]` in the config
-    /// included, for /reload.
-    pub fn system_prompt(&self) -> String {
-        let fresh = Config::load().ok();
-        let config = fresh.as_ref().unwrap_or(&self.config);
-        prompt::build(&self.cwd, &Skills::discover(&self.cwd, &config.skills.dirs), config.guidance()).text
+    /// Re-reads the config, skills and instruction files for /reload, so the system prompt,
+    /// the skill tool, `/name` skill commands and later sessions all see them as they are now.
+    /// Models, MCP servers and the tool list stay as they started.
+    pub fn reload(&mut self) -> Result<()> {
+        self.refresh(Config::load()?);
+        Ok(())
+    }
+
+    fn refresh(&mut self, config: Config) {
+        self.skills = Skills::discover(&self.cwd, &config.skills.dirs);
+        // Without the skill tool the model can't load skills, so the prompt doesn't name them.
+        let listed = if self.has_skill_tool() { self.skills.clone() } else { Skills::default() };
+        self.prompt = prompt::build(&self.cwd, &listed, config.guidance());
+        self.settings.skills = self.skills.clone();
+        self.settings.instruction_files = self.prompt.instruction_files.clone();
+        self.config = config;
+    }
+
+    /// Gives `agent` the reloaded system prompt and skills.
+    pub fn reload_agent(&self, agent: &mut Agent) -> Result<()> {
+        agent.reload_system(&self.prompt.text, self.settings.clone())
+    }
+
+    /// Whether skills found by /reload need a restart before the model can load them: the
+    /// session started with none, so it has no skill tool.
+    pub fn skills_need_restart(&self) -> bool {
+        !self.skills.is_empty() && !self.has_skill_tool()
+    }
+
+    fn has_skill_tool(&self) -> bool {
+        self.tools.iter().any(|tool| tool["function"]["name"] == "skill")
     }
 
     /// What the system prompt includes, in one line.
@@ -179,4 +205,66 @@ fn project_eager(cwd: &Path) -> Vec<String> {
         .and_then(toml::Value::as_array)
         .map(|names| names.iter().filter_map(|n| n.as_str().map(String::from)).collect())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_skill(root: &Path, name: &str) {
+        let dir = root.join(".agents/skills").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), format!("---\nname: {name}\ndescription: Does {name}\n---\nBody of {name}.")).unwrap();
+    }
+
+    fn setup(root: &Path, tools: Vec<Value>) -> Setup {
+        let config = fresh_config();
+        let skills = Skills::discover(root, &config.skills.dirs);
+        let prompt = prompt::build(root, &skills, config.guidance());
+        let settings = Settings { skills: skills.clone(), instruction_files: prompt.instruction_files.clone(), ..Settings::default() };
+        Setup { config, cwd: root.to_path_buf(), model: None, last: Choice::default(), prompt, tools, settings, skills, notes: Vec::new() }
+    }
+
+    fn fresh_config() -> Config {
+        let mut config = Config::default();
+        config.skills.dirs = vec!["/nonexistent".to_string()];
+        config
+    }
+
+    #[test]
+    fn reload_picks_up_skills_and_instructions_added_mid_session() {
+        let root = std::env::temp_dir().join(format!("killi-setup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        write_skill(&root, "first");
+        let mut setup = setup(&root, vec![crate::skills::definition()]);
+
+        write_skill(&root, "second");
+        std::fs::write(root.join("AGENTS.md"), "Always say hello.").unwrap();
+        setup.refresh(fresh_config());
+
+        assert!(setup.prompt.text.contains("first, second"), "{}", setup.prompt.text);
+        assert!(setup.prompt.text.contains("Always say hello."));
+        assert_eq!(setup.settings.instruction_files.len(), 1);
+        assert!(setup.settings.skills.run(&serde_json::json!({"name": "second"})).text.contains("Body of second."));
+        assert!(setup.skill_prompt("second", "").is_some());
+        assert!(!setup.skills_need_restart());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reload_without_the_skill_tool_keeps_skills_out_of_the_prompt() {
+        let root = std::env::temp_dir().join(format!("killi-setup-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let mut setup = setup(&root, Vec::new());
+
+        write_skill(&root, "late");
+        setup.refresh(fresh_config());
+
+        assert!(!setup.prompt.text.contains("# Skills"));
+        assert!(setup.skill_prompt("late", "").is_some());
+        assert!(setup.skills_need_restart());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
