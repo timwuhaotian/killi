@@ -33,7 +33,6 @@ use editor::Editor;
 use menu::{Entry, Item, Suggestions};
 use text::{ACCENT, BOLD, DIM, GREEN, ITALIC, MAGENTA, Markdown, RED, RESET, TINT, YELLOW, wrap};
 
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const MAX_INPUT_ROWS: usize = 10;
 const MENU_ROWS: usize = 8;
 const DIFF_ROWS: usize = 16;
@@ -878,6 +877,7 @@ impl App {
 
     fn begin_busy(&mut self) {
         self.busy = Some(Instant::now());
+        self.spinner = 0;
         self.last_end = None;
     }
 
@@ -1320,17 +1320,17 @@ impl App {
             rows.extend(preview.into_iter().rev().take(6).rev());
         }
         if let Some(started) = self.busy {
-            let spin = SPINNER[self.spinner % SPINNER.len()];
+            let spin = banner::working(self.spinner);
             if let Some((since, text)) = &self.thinking {
                 let first = first_sentence(text);
-                rows.push(fit(&format!("{MAGENTA}{spin}{RESET} {DIM}thinking {} {first}{RESET}", clock(since.elapsed())), width));
+                rows.push(fit(&format!("{spin} {DIM}thinking {} {first}{RESET}", clock(since.elapsed())), width));
             }
             for running in self.running.iter().take(5) {
                 let label = running.label.as_ref().map(|l| format!("{DIM}↳ {l}:{RESET} ")).unwrap_or_default();
-                rows.push(fit(&format!("{ACCENT}{spin}{RESET} {label}{} {DIM}{}{RESET}", running.summary, clock(running.started.elapsed())), width));
+                rows.push(fit(&format!("{spin} {label}{} {DIM}{}{RESET}", running.summary, clock(running.started.elapsed())), width));
             }
             if self.thinking.is_none() && self.running.is_empty() && self.asking.is_none() {
-                rows.push(fit(&format!("{ACCENT}{spin}{RESET} {DIM}working {} · Esc to interrupt{RESET}", clock(started.elapsed())), width));
+                rows.push(fit(&format!("{spin} {DIM}working {} · Esc to interrupt{RESET}", clock(started.elapsed())), width));
             }
             for queued in &self.queued {
                 rows.push(fit(&format!("{DIM}› {} (sent at the next step){RESET}", queued.replace('\n', " ")), width));

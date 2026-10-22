@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.11 — 2026-10-22
+
+- **The logo as the spinner.** While the agent thinks, runs a tool or works, a `killi`
+  wordmark replaces the braille dots: the letters fade in one by one, then the banner's
+  gradient drifts through them as a bright spot sweeps across.
+
 ## 0.2.10 — 2026-10-22
 
 - **Responsive status line.** In a narrow terminal the status line drops cache and token
