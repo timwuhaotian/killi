@@ -70,7 +70,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     app.entries = entries(&session);
     app.refresh_choices(session.config());
     app.notify_after = Duration::from_secs(session.config().agent.notify_after.unwrap_or(10));
-    let _terminal = TerminalGuard::enter()?;
+    let terminal = TerminalGuard::enter()?;
     app.banner(&agent, &session, &snapshots, start.resume.is_some());
     if start.pick_session {
         app.open_session_picker(&cwd);
@@ -131,7 +131,18 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         app.draw()?;
     }
     app.finish_screen()?;
+    drop(terminal);
+    if !agent.user_prompts().is_empty() {
+        println!("{DIM}To continue this session: {}{RESET}", resume_command(&agent.session.log_path));
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The command that reopens the session logged at `log`, quoted for the shell when needed.
+fn resume_command(log: &Path) -> String {
+    let path = log.to_string_lossy();
+    let plain = path.chars().all(|c| c.is_ascii_alphanumeric() || "/._-@+:,=".contains(c));
+    if plain { format!("killi -r {path}") } else { format!("killi -r '{}'", path.replace('\'', r"'\''")) }
 }
 
 /// Runs one future that drives the agent, showing its events and handling keys meanwhile.
@@ -216,10 +227,13 @@ async fn handle_command(
         }
         "clear" | "new" => match session.start(agent.controls.clone(), agent_sink(agent)) {
             Ok(fresh) => {
+                let saved = !agent.user_prompts().is_empty();
                 *agent = fresh;
                 app.todos.clear();
                 app.reset_usage();
-                app.notice("Started a new session.");
+                app.wipe_screen();
+                app.banner(agent, session, snapshots, false);
+                app.notice(if saved { "Started a new session. The last one is saved; /resume picks it up again." } else { "Started a new session." });
             }
             Err(e) => app.error(&format!("{e:#}")),
         },
@@ -1192,6 +1206,14 @@ impl App {
         self.pending.push(line);
     }
 
+    /// Clears the screen and its scrollback, dropping lines not yet shown.
+    fn wipe_screen(&mut self) {
+        self.pending.clear();
+        self.last_blank = false;
+        let _ = execute!(self.out, Clear(ClearType::All), Clear(ClearType::Purge), crossterm::cursor::MoveTo(0, 0));
+        self.cursor_row = 0;
+    }
+
     fn notice(&mut self, text: &str) {
         self.commit(format!("{DIM}{text}{RESET}"));
     }
@@ -1583,6 +1605,12 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_command_quotes_only_when_needed() {
+        assert_eq!(resume_command(Path::new("/home/a@b.c/.killi/sessions/-src-app/1-2.jsonl")), "killi -r /home/a@b.c/.killi/sessions/-src-app/1-2.jsonl");
+        assert_eq!(resume_command(Path::new("/s/-My Code-it's/1-2.jsonl")), r"killi -r '/s/-My Code-it'\''s/1-2.jsonl'");
+    }
 
     #[test]
     fn retry_reasons_keep_the_status_and_message() {
