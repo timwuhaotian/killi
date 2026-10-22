@@ -657,6 +657,7 @@ impl Agent {
             "mcp" => self.settings.mcp.run(&args, self.ctx.images).await,
             name if self.settings.mcp.is_native(name) => self.settings.mcp.call_native(name, args, self.ctx.images).await,
             "todo_write" => self.todo_write(&args),
+            "later" => self.later(&args),
             "ask_user_question" => self.ask(&args).await,
             "exit_plan_mode" => self.exit_plan(&args).await,
             "agent" | "agent_swarm" => tools::Output::error("Subagents can't start other subagents."),
@@ -708,6 +709,23 @@ impl Agent {
         let meta = json!({"is_error": output.is_error, "brief": output.brief, "ms": millis(took)});
         self.push_meta(json!({"role": "tool", "tool_call_id": id, "content": output.text}), Some(meta))?;
         Ok(count >= REPEAT_STOP)
+    }
+
+    /// Notes something for later, or crosses an item off, in the project's `later.md`.
+    fn later(&mut self, args: &Value) -> tools::Output {
+        if let Some(number) = args["done"].as_u64() {
+            return match crate::later::done(&self.ctx.cwd, number as usize) {
+                Ok(item) => tools::Output::ok(format!("Crossed off: {item}")).brief("done"),
+                Err(e) => tools::Output::error(format!("{e:#}")),
+            };
+        }
+        let Some(note) = args["note"].as_str().map(str::trim).filter(|note| !note.is_empty()) else {
+            return tools::Output::error("later needs `note` (what, and where) or `done` (an item's number).");
+        };
+        match crate::later::add(&self.ctx.cwd, note) {
+            Ok(open) => tools::Output::ok(format!("Noted for later; {open} open. The user sees the list with /later.")).brief(format!("{open} open")),
+            Err(e) => tools::Output::error(format!("{e:#}")),
+        }
     }
 
     fn todo_write(&mut self, args: &Value) -> tools::Output {

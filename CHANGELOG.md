@@ -5,6 +5,21 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.21 — 2026-10-22
+
+- **`later`: what the agent won't do now is written down the moment it sees it.** A new
+  tool notes a blocker, a bug in passing or an improvement, with where, into one list per
+  folder (`~/.killi/sessions/<folder>/later.md`, open items only), and the prompt tells the
+  agent to use it right then rather than in the final message. `/later` shows the list
+  numbered, `/later done 3` (or the tool's `done`) crosses one off, and the banner says how
+  many are open.
+- **Diffs show whole.** An edit's diff is shown up to 40 rows (was 16), so a typical change
+  no longer ends in `… 5 more lines`; a longer one says `· Ctrl+O`, and Ctrl+O now shows the
+  diff itself rather than the tool's text.
+- **Kil shows killi's notifications itself** from Kil 0.0.11, which takes OSC 9 and goes to
+  the pane when the notification is clicked. On an older Kil the notification is still
+  posted in Kil's name, so clicking it brings Kil forward.
+
 ## 0.2.20 — 2026-10-22
 
 - **`/session` hands a session to another agent.** It copies the session's id, the path of

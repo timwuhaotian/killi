@@ -180,6 +180,12 @@ Commands: `/model [alias]`, `/effort [level]` (thinking effort), `/new` (or `/cl
 
 killi runs commands and edits files without asking; `/undo` is the safety net.
 
+**Things for later.** When the agent notices a blocker, a bug in passing or an improvement
+it won't do now, it notes it with its `later` tool right then, instead of holding it for the
+final message, one list per folder in `~/.killi/sessions/<folder>/later.md` with open items
+only. `/later` shows the list, `/later done 3` crosses one off, and the banner says how many
+are open.
+
 ### System prompt, instructions, skills, MCP and hooks
 
 - **System prompt:** its guidance (how the agent works, and the safety rules) sits in

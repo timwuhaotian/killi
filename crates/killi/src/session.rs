@@ -53,7 +53,7 @@ pub struct Listed {
     pub prompts: usize,
 }
 
-fn project_dir(cwd: &Path) -> PathBuf {
+pub(crate) fn project_dir(cwd: &Path) -> PathBuf {
     killi_home().join("sessions").join(cwd.to_string_lossy().replace('/', "-"))
 }
 

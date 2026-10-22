@@ -2,6 +2,7 @@ mod agent;
 mod broker;
 mod config;
 mod hooks;
+mod later;
 mod llm;
 mod mcp;
 mod plan;

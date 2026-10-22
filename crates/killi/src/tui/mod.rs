@@ -38,7 +38,8 @@ use text::{BOLD, BRANCH, DANGER, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, RESE
 
 const MAX_INPUT_ROWS: usize = 10;
 const MENU_ROWS: usize = 8;
-const DIFF_ROWS: usize = 16;
+/// Rows of an edit's diff shown under its line; the whole diff stays behind Ctrl+O.
+const DIFF_ROWS: usize = 40;
 /// Lines of a bash command's output shown under its line.
 const PREVIEW_ROWS: usize = 3;
 /// Tool outputs and thoughts Ctrl+O can step back through.
@@ -376,6 +377,14 @@ async fn handle_command(
             Err(e) => app.error(&format!("{e:#}")),
         },
         "resume" => app.open_session_picker(cwd),
+        "later" if arg.is_empty() => app.show_later(cwd),
+        "later" => match arg.strip_prefix("done").and_then(|rest| rest.trim().parse::<usize>().ok()) {
+            Some(number) => match crate::later::done(cwd, number) {
+                Ok(item) => app.notice(&format!("Crossed off: {item}")),
+                Err(e) => app.error(&format!("{e:#}")),
+            },
+            None => app.error("Use /later to see the list, or /later done 3 to cross one off."),
+        },
         "prune" if arg.is_empty() => app.open_prune_picker(&agent.session.log_path),
         "prune" => match arg.parse::<usize>() {
             Ok(keep) => app.next_input = Some(Input::Prune(keep)),
@@ -1237,10 +1246,12 @@ impl App {
                     }
                     if lines.len() > DIFF_ROWS {
                         let more = lines.len() - DIFF_ROWS;
-                        self.commit(format!("  {FAINT}│{RESET} {DIM}… {more} more line{}{RESET}", if more == 1 { "" } else { "s" }));
+                        self.commit(format!("  {FAINT}│{RESET} {DIM}… {more} more line{} · Ctrl+O{RESET}", if more == 1 { "" } else { "s" }));
                     }
+                    self.push_detail(summary, display);
+                } else {
+                    self.push_detail(summary, output);
                 }
-                self.push_detail(summary, output);
             }
             Event::Usage(usage) => self.add_usage(&usage, true),
             Event::Todos(todos) => self.todos = todos,
@@ -1518,6 +1529,20 @@ impl App {
             })
             .collect();
         self.picker = Some(Picker::new("Resume a session".into(), options, 0));
+    }
+
+    /// Lists what was noted for later in this folder, numbered as `/later done N` counts them.
+    fn show_later(&mut self, cwd: &Path) {
+        let items = crate::later::list(cwd);
+        self.begin(Kind::Note);
+        if items.is_empty() {
+            return self.notice("Nothing noted for later in this folder. The agent adds to the list with its `later` tool.");
+        }
+        self.commit(format!("{BOLD}Noted for later{RESET} {DIM}({}) · {}{RESET}", items.len(), tilde(&crate::later::path(cwd))));
+        for (i, item) in items.iter().enumerate() {
+            self.commit_wrapped(format!("  {DIM}{}.{RESET} {item}", i + 1));
+        }
+        self.notice("/later done N crosses one off.");
     }
 
     /// Offers how many of the newest sessions to keep, each choice saying how many it removes.
@@ -2283,7 +2308,8 @@ fn base64(bytes: &[u8]) -> String {
 /// front rather than Script Editor. An app that can't be told falls back to a plain one.
 fn notify(body: &str) {
     let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    if ["iTerm.app", "WezTerm", "ghostty"].contains(&program.as_str()) || std::env::var_os("KITTY_WINDOW_ID").is_some() {
+    let kil = program == "kil" && kil_takes_osc9(&std::env::var("TERM_PROGRAM_VERSION").unwrap_or_default());
+    if kil || ["iTerm.app", "WezTerm", "ghostty"].contains(&program.as_str()) || std::env::var_os("KITTY_WINDOW_ID").is_some() {
         let mut out = stdout();
         let _ = write!(out, "\x1b]9;killi: {body}\x07");
         let _ = out.flush();
@@ -2296,6 +2322,14 @@ fn notify(body: &str) {
         None => command.args(["-e", &plain]),
     };
     let _ = command.spawn();
+}
+
+/// Whether this Kil shows OSC 9 notifications itself and goes to the pane when one is
+/// clicked: from 0.0.11. Older ones get the notification posted in Kil's name instead.
+fn kil_takes_osc9(version: &str) -> bool {
+    let mut parts = version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    let v = (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+    v >= (0, 0, 11)
 }
 
 /// The bundle id of the app the terminal runs in: what macOS puts in the environment of
@@ -2346,6 +2380,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "swarm", aliases: &[], args: "[task|on|off]", about: "Swarm mode: split work across many subagents" },
     Command { name: "usage", aliases: &["cost"], args: "", about: "Tokens and requests this session" },
     Command { name: "session", aliases: &["share"], args: "", about: "Copy this session's id, log path and summary, to paste into another agent" },
+    Command { name: "later", aliases: &[], args: "[done N]", about: "What the agent noted for later in this folder; done N crosses one off" },
     Command { name: "prune", aliases: &[], args: "[keep]", about: "Delete every session on this machine but the newest few" },
     Command { name: "reload", aliases: &[], args: "", about: "Re-read [prompt], AGENTS.md files and skills" },
     Command { name: "help", aliases: &[], args: "", about: "Commands and keys" },
@@ -2430,6 +2465,15 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"killi session"), "a2lsbGkgc2Vzc2lvbg==");
+    }
+
+    #[test]
+    fn kil_gets_osc9_notifications_from_the_version_that_shows_them() {
+        assert!(!kil_takes_osc9("0.0.10"));
+        assert!(!kil_takes_osc9(""));
+        assert!(kil_takes_osc9("0.0.11"));
+        assert!(kil_takes_osc9("0.1.0"));
+        assert!(kil_takes_osc9("1.0"));
     }
 
     #[test]

@@ -163,6 +163,10 @@ impl Setup {
         if !self.settings.mcp.is_empty() {
             parts.push(format!("MCP: {}", self.settings.mcp.names().join(", ")));
         }
+        let later = crate::later::list(&self.cwd).len();
+        if later > 0 {
+            parts.push(format!("{later} noted for later · /later"));
+        }
         parts.extend(self.notes.iter().cloned());
         parts.join(" · ")
     }

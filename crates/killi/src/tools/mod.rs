@@ -231,6 +231,14 @@ pub fn definitions() -> Vec<Value> {
             }, "required": ["content", "status"]}}}, "required": ["todos"]}),
         ),
         tool(
+            "later",
+            "Note something you won't do now: a blocker, a bug seen in passing, an improvement. Call it the moment it comes up, saying where; never keep it for the final message. `done` with an item's number crosses it off.",
+            json!({"type": "object", "properties": {
+                "note": {"type": "string"},
+                "done": {"type": "integer", "description": "An item's number, to remove it"}
+            }}),
+        ),
+        tool(
             "ask_user_question",
             "Ask the user a multiple-choice question and wait for the answer. Only when you can't decide from the code or the request.",
             json!({"type": "object", "properties": {
