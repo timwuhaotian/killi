@@ -1,10 +1,12 @@
 //! `bash`, plus the background tasks it can leave running: a command that outlives its
-//! timeout keeps going in the background instead of being killed.
+//! timeout keeps going in the background instead of being killed, and so does what a finished
+//! command left running in its process group, such as `nohup server &`. A `Process` kills its
+//! group when dropped, so an interrupted turn or a closed session leaves nothing behind.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -36,6 +38,8 @@ struct Task {
     /// How much of the output the model has already been shown.
     read_to: usize,
     reported: bool,
+    /// The model was told at the end of a turn that this still runs, or stopped it.
+    reminded: bool,
 }
 
 /// A running command: its process group, its output so far, and its exit once known.
@@ -56,6 +60,35 @@ struct Captured {
 enum Exit {
     Code(i32),
     Signal,
+}
+
+/// The process group of every live `Process`, with its leader's exit, so `kill_all` can end
+/// them when killi is told to quit and nothing gets dropped.
+static GROUPS: Mutex<BTreeMap<u32, watch::Receiver<Option<Exit>>>> = Mutex::new(BTreeMap::new());
+
+fn groups() -> MutexGuard<'static, BTreeMap<u32, watch::Receiver<Option<Exit>>>> {
+    GROUPS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Whether process group `pgid` still has a process in it. Once its leader is reaped the
+/// leader's pid is free again, so a live process with that pid means the id was reused and the
+/// group is gone.
+fn group_running(pgid: u32, leader_reaped: bool) -> bool {
+    let pgid = pgid as libc::pid_t;
+    // SAFETY: signal 0 sends nothing; it only checks that the group or process exists.
+    let group = pgid > 0 && unsafe { libc::killpg(pgid, 0) } == 0;
+    group && !(leader_reaped && unsafe { libc::kill(pgid, 0) } == 0)
+}
+
+/// Ends every process group killi started that still runs. For quitting on a signal, when
+/// no `Process` gets dropped.
+pub fn kill_all() {
+    for (&pgid, exit) in groups().iter() {
+        if group_running(pgid, exit.borrow().is_some()) {
+            // SAFETY: killpg only sends a signal to a process group we started.
+            unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
 }
 
 impl Exit {
@@ -109,11 +142,18 @@ impl Process {
                 None => Exit::Signal,
             }));
         });
+        groups().insert(pgid, exit.clone());
         Ok(Self { pgid, output, exit })
     }
 
     fn exit(&self) -> Option<Exit> {
         *self.exit.borrow()
+    }
+
+    /// Whether anything of the command still runs: its shell, or what it started and left
+    /// running, such as `nohup server &`.
+    fn running(&self) -> bool {
+        group_running(self.pgid, self.exit().is_some())
     }
 
     async fn wait(&mut self, limit: Duration) -> Option<Exit> {
@@ -122,35 +162,17 @@ impl Process {
     }
 
     fn kill(&self) {
-        if self.pgid > 0 {
+        if self.running() {
             // SAFETY: killpg only sends a signal to the process group we started.
             unsafe { libc::killpg(self.pgid as libc::pid_t, libc::SIGKILL) };
         }
     }
 }
 
-/// Kills the process group while armed, so an interrupted turn leaves nothing running.
-struct KillOnDrop {
-    pgid: u32,
-    armed: bool,
-}
-
-impl Drop for KillOnDrop {
+impl Drop for Process {
     fn drop(&mut self) {
-        if self.armed && self.pgid > 0 {
-            // SAFETY: killpg only sends a signal to the process group we started.
-            unsafe { libc::killpg(self.pgid as libc::pid_t, libc::SIGKILL) };
-        }
-    }
-}
-
-impl Drop for Tasks {
-    fn drop(&mut self) {
-        for task in self.list.values() {
-            if task.process.exit().is_none() {
-                task.process.kill();
-            }
-        }
+        self.kill();
+        groups().remove(&self.pgid);
     }
 }
 
@@ -185,10 +207,7 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
             .brief(format!("task {id}"));
     }
 
-    let mut guard = KillOnDrop { pgid: process.pgid, armed: true };
-    let exit = process.wait(Duration::from_secs(timeout)).await;
-    guard.armed = false;
-    let exit = match exit {
+    let exit = match process.wait(Duration::from_secs(timeout)).await {
         Some(exit) => exit,
         None => {
             let (text, shown) = take_output(ctx, &process, 0);
@@ -199,13 +218,14 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
             .brief(format!("still running → task {id}"));
         }
     };
-    let (mut text, _) = take_output(ctx, &process, 0);
+    let (mut text, shown) = take_output(ctx, &process, 0);
     let lines = match text.lines().count() {
         _ if text == NO_OUTPUT => "no output".to_string(),
         1 => "1 line".to_string(),
         n => format!("{n} lines"),
     };
-    match exit {
+    let left = if process.running() { Some(ctx.tasks.borrow_mut().add(command, process, shown)) } else { None };
+    let mut output = match exit {
         Exit::Code(0) => {
             if text == NO_OUTPUT {
                 text = NO_OUTPUT_OK.into();
@@ -216,7 +236,12 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
             text.push_str(&format!("\n[Command {}]", other.describe()));
             Output::error(text).brief(other.describe())
         }
+    };
+    if let Some(id) = left {
+        output.text.push_str(&format!("\n[What it started is still running, as background task {id}; task_stop ends it.]"));
+        output.brief.push_str(&format!(" · left task {id}"));
     }
+    output
 }
 
 /// The output after `from`, cut to its last 2000 lines within 50KB, and the new read offset.
@@ -229,12 +254,39 @@ fn take_output(ctx: &Context, process: &Process, from: usize) -> (String, usize)
 }
 
 impl Tasks {
-    /// Registers a running command; `read_to` is how much of its output was already shown.
+    /// Registers a running command; `read_to` is how much of its output was already shown. A
+    /// command whose shell already exited was reported as it ended.
     fn add(&mut self, command: &str, process: Process, read_to: usize) -> u32 {
         self.next += 1;
-        let task = Task { command: command.to_string(), process, started: Instant::now(), read_to, reported: false };
+        let reported = process.exit().is_some();
+        let task = Task { command: command.to_string(), process, started: Instant::now(), read_to, reported, reminded: false };
         self.list.insert(self.next, task);
         self.next
+    }
+
+    /// Tasks still running that the model wasn't told about yet at the end of a turn, as
+    /// `task N \`command\` (Ns)`. Each comes up once, so one kept on purpose isn't raised again.
+    pub fn left_running(&mut self) -> Vec<String> {
+        let mut left = Vec::new();
+        for (id, task) in &mut self.list {
+            if !task.reminded && task.process.running() {
+                task.reminded = true;
+                left.push(format!("task {id} `{}` ({}s)", first_line(&task.command), task.started.elapsed().as_secs()));
+            }
+        }
+        left
+    }
+
+    /// Kills every task still running and gives their commands' first lines.
+    pub fn stop_all(&mut self) -> Vec<String> {
+        let mut stopped = Vec::new();
+        for task in self.list.values() {
+            if task.process.running() {
+                task.process.kill();
+                stopped.push(first_line(&task.command).to_string());
+            }
+        }
+        stopped
     }
 
     /// Background tasks that finished since the last call, as reminder lines.
@@ -272,7 +324,8 @@ pub async fn task_output(ctx: &Context, args: &Value) -> Output {
     let status = match task.process.exit() {
         Some(exit) => {
             task.reported = true;
-            format!("Task {id} {}.", exit.describe())
+            let left = if task.process.running() { "; what it started is still running" } else { "" };
+            format!("Task {id} {}{left}.", exit.describe())
         }
         None => format!("Task {id} is still running ({}s).", started.elapsed().as_secs()),
     };
@@ -284,10 +337,11 @@ pub fn task_stop(ctx: &Context, args: &Value) -> Output {
     let Some(id) = args.get("id").and_then(Value::as_u64).map(|id| id as u32) else {
         return Output::error("task_stop needs `id`.");
     };
-    let tasks = ctx.tasks.borrow();
-    match tasks.list.get(&id) {
-        Some(task) if task.process.exit().is_none() => {
+    let mut tasks = ctx.tasks.borrow_mut();
+    match tasks.list.get_mut(&id) {
+        Some(task) if task.process.running() => {
             task.process.kill();
+            task.reminded = true;
             Output::ok(format!("Stopped task {id}."))
         }
         Some(_) => Output::ok(format!("Task {id} had already finished.")),
@@ -407,6 +461,55 @@ mod tests {
         assert_eq!(task_stop(&ctx, &json!({"id": 1})).text, "Stopped task 1.");
         let out = task_output(&ctx, &json!({"id": 1, "wait": 5})).await;
         assert!(out.text.starts_with("Task 1 was killed by a signal."), "{}", out.text);
+    }
+
+    async fn until_stopped(ctx: &Context, id: u32) -> bool {
+        for _ in 0..100 {
+            if !ctx.tasks.borrow().list[&id].process.running() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn what_a_finished_command_leaves_running_becomes_a_task_raised_once() {
+        let ctx = ctx();
+        let out = bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"})).await;
+        assert_eq!(out.text, "(no output, exit code 0)\n[What it started is still running, as background task 1; task_stop ends it.]");
+        assert_eq!(out.brief, "no output · left task 1");
+        assert!(ctx.tasks.borrow_mut().newly_finished().is_empty());
+        let out = task_output(&ctx, &json!({"id": 1})).await;
+        assert!(out.text.starts_with("Task 1 exited with code 0; what it started is still running."), "{}", out.text);
+        let left = ctx.tasks.borrow_mut().left_running();
+        assert_eq!(left.len(), 1);
+        assert!(left[0].starts_with("task 1 `nohup sleep 30 >/dev/null 2>&1 &` ("), "{left:?}");
+        assert!(ctx.tasks.borrow_mut().left_running().is_empty());
+        assert_eq!(task_stop(&ctx, &json!({"id": 1})).text, "Stopped task 1.");
+        assert!(until_stopped(&ctx, 1).await);
+        assert_eq!(task_stop(&ctx, &json!({"id": 1})).text, "Task 1 had already finished.");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_command_that_leaves_nothing_running_is_not_kept() {
+        let ctx = ctx();
+        let out = bash(&ctx, &json!({"command": "(sleep 0.1 &) ; echo hi"})).await;
+        assert_eq!(out.text, "hi");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(ctx.tasks.borrow_mut().left_running().is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn closing_the_session_kills_what_still_runs() {
+        let ctx = ctx();
+        bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"})).await;
+        bash(&ctx, &json!({"command": "sleep 30", "run_in_background": true})).await;
+        let pgids: Vec<u32> = ctx.tasks.borrow().list.values().map(|task| task.process.pgid).collect();
+        assert_eq!(ctx.tasks.borrow_mut().stop_all(), vec!["nohup sleep 30 >/dev/null 2>&1 &".to_string(), "sleep 30".to_string()]);
+        assert!(until_stopped(&ctx, 1).await && until_stopped(&ctx, 2).await);
+        drop(ctx);
+        assert!(pgids.iter().all(|pgid| !groups().contains_key(pgid)));
     }
 
     #[test]

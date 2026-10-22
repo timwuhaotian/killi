@@ -143,7 +143,7 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
       - On interruption, every unanswered tool call gets a placeholder result.
       - Repeated identical tool calls: reminders at 3, 5 and 8 repeats, stop at 12.
       - Read and edit share one text view (`N\t` line prefixes, exact continuation hints, CRLF handling).
-      - Bash: 60 s default timeout (300 s max); on timeout the command moves to the background instead of being killed.
+      - Bash: 60 s default timeout (300 s max); on timeout the command moves to the background instead of being killed. So does what a finished command leaves running in its process group (see 33).
       - Reminders go at the end of the conversation, never into the system prompt.
     - **Avoid Kimi Code's cache breaks:**
       - The tool list is built once per session in a fixed order (Kimi sorts it with a locale-dependent comparison on every request).
@@ -200,6 +200,13 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
     - Cmd+V belongs to the terminal, and a terminal pastes nothing for an image. Kil 0.0.13 sends an empty bracketed paste instead, and killi takes an empty paste to mean "read the clipboard's image". In other terminals Ctrl+V is the way.
     - An image stands in the prompt as `[Image #N]`, numbered across the session so a recalled prompt can't point at a newer image. Deleting the placeholder drops the image. The prompt goes to the model as the usual string message, then a user message with `[Image #N]:` and the image, the same shape tool images already used, so history, `/resume`, compaction and the Anthropic adapter's merging needed no change.
     - The banner is drawn again after `/model`, `/effort` or `/reload` while its top row is still on screen. killi keeps the lines printed since the banner until it scrolls off (counting wrapped rows), moves up to it and prints it all again. A resize or Ctrl+L stops this, since the terminal reflows what it shows.
+
+33. **Sessions clean up after themselves; commands while the agent works (2026-10-22).**
+    - killi remembers the process group of every `bash` command, not only of background tasks. A finished command whose group still has processes, such as `nohup server > log &`, becomes a background task at once and its result says so; before, killi forgot it and it outlived the session. The check is `killpg(pgid, 0)`; once the shell is reaped, a live process holding the group's id means the id was reused, and the group counts as gone.
+    - A completed turn in the TUI (not an interrupted one, not a subagent's) that leaves tasks running gets one more step: a reminder lists them and asks the model to stop what nothing needs or say why it stays. Each task comes up once. Code finds them, so a turn that leaves nothing costs no tokens; asking the model at the end of every turn would cost a request each time and have it guess with `ps` and `pkill`.
+    - Ending a session (`/exit`, `/new`, `/resume`, the end of a `-p` run) kills what still runs and names it; `-p` skips the reminder, since asking the model to keep a server would be a promise its exit breaks. `--json` lists them as `stopped`. SIGHUP (the terminal window closed), SIGTERM and SIGINT (Ctrl+C under `-p`) used to end killi without running destructors, leaving the groups behind; now they kill them and restore the terminal first.
+    - What leaves the process group (`docker compose up -d`, `docker run -d`, `brew services`, daemons that call `setsid`) can't be tracked this way, so the prompt asks the model to stop those. Tagging processes with an environment variable didn't work: `KERN_PROCARGS2` gave no environment for another process on macOS 27.
+    - The slash menu shows while the agent works, offering only what runs then: `/btw`, `/plan`, `/swarm` on or off, `/later` and `/help`. The other commands need the agent, which the running turn holds. Choosing `/btw` from the menu leaves it in the prompt for the question instead of running it empty.
 
 ## Build phases
 

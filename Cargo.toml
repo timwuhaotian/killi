@@ -4,7 +4,7 @@ members = ["crates/killi"]
 exclude = ["evals"]
 
 [workspace.package]
-version = "0.2.23"
+version = "0.2.24"
 edition = "2024"
 rust-version = "1.94"
 license = "MIT"
@@ -19,7 +19,7 @@ regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "macros", "process", "time", "io-util", "sync", "net"] }
+tokio = { version = "1", features = ["rt", "macros", "process", "time", "io-util", "sync", "net", "signal"] }
 toml = "1"
 
 [profile.release]

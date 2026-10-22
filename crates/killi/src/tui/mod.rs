@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::ExitCode;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -120,11 +121,15 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             }
             Input::Resume(path) => match session.resume(&path, controls.clone(), sink.clone()) {
                 Ok(resumed) => {
+                    let stopped = agent.stop_tasks();
                     agent.discard_if_unused();
                     agent = resumed;
                     app.show_model(&agent, session.config());
                     app.status.context = agent.stats.context;
                     app.notice(&format!("Resumed the session started with “{}”.", agent.user_prompts().first().map_or("", |s| s.as_str())));
+                    if let Some(note) = stopped_note(&stopped) {
+                        app.notice(&note);
+                    }
                     app.replay_log(&path);
                     app.editor = Editor::with_history(agent.user_prompts());
                 }
@@ -183,7 +188,11 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         app.draw()?;
     }
     app.finish_screen()?;
+    let stopped = agent.stop_tasks();
     drop(terminal);
+    if let Some(note) = stopped_note(&stopped) {
+        println!("{DIM}{note}{RESET}");
+    }
     agent.discard_if_unused();
     if !agent.user_prompts().is_empty() {
         println!("{DIM}To continue this session: {}{RESET}", resume_command(&agent.session.log_path));
@@ -323,28 +332,23 @@ async fn handle_command(
     command: &str,
     arg: &str,
 ) -> Result<bool> {
+    if app.run_local(command, arg) {
+        return Ok(true);
+    }
     match command {
         "exit" | "quit" | "q" => return Ok(false),
-        "help" | "h" | "?" => app.help(),
-        "btw" if arg.is_empty() => app.error("Ask with /btw <question>."),
         "btw" => {
             app.aside_asked = Some(arg.to_string());
             app.begin_busy();
             run_turn(app, keys, rx, std::future::ready(Ok((String::new(), Stop::Completed)))).await?;
             app.end_busy();
         }
-        "plan" => app.toggle_plan(),
-        "swarm" => match arg {
-            "" => app.set_swarm(!app.controls.swarm.get()),
-            "on" => app.set_swarm(true),
-            "off" => app.set_swarm(false),
-            task => {
-                let was_on = app.controls.swarm.replace(true);
-                let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {task}"), task).await;
-                app.controls.swarm.set(was_on);
-                result?;
-            }
-        },
+        "swarm" => {
+            let was_on = app.controls.swarm.replace(true);
+            let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {arg}"), arg).await;
+            app.controls.swarm.set(was_on);
+            result?;
+        }
         "undo" => match snapshots.undo() {
             Ok(changes) if changes.is_empty() => app.notice("Undone. No files had changed in the last turn."),
             Ok(changes) => {
@@ -368,6 +372,7 @@ async fn handle_command(
         "clear" | "new" => match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
             Ok(fresh) => {
                 let saved = !agent.user_prompts().is_empty();
+                let stopped = agent.stop_tasks();
                 agent.discard_if_unused();
                 *agent = fresh;
                 app.show_model(agent, session.config());
@@ -376,18 +381,13 @@ async fn handle_command(
                 app.wipe_screen();
                 app.banner(agent, session, snapshots, false);
                 app.notice(if saved { "Started a new session. The last one is saved; /resume picks it up again." } else { "Started a new session." });
+                if let Some(note) = stopped_note(&stopped) {
+                    app.notice(&note);
+                }
             }
             Err(e) => app.error(&format!("{e:#}")),
         },
         "resume" => app.open_session_picker(cwd),
-        "later" if arg.is_empty() => app.show_later(cwd),
-        "later" => match arg.strip_prefix("done").and_then(|rest| rest.trim().parse::<usize>().ok()) {
-            Some(number) => match crate::later::done(cwd, number) {
-                Ok(item) => app.notice(&format!("Crossed off: {item}")),
-                Err(e) => app.error(&format!("{e:#}")),
-            },
-            None => app.error("Use /later to see the list, or /later done 3 to cross one off."),
-        },
         "prune" if arg.is_empty() => app.open_prune_picker(&agent.session.log_path),
         "prune" => match arg.parse::<usize>() {
             Ok(keep) => app.next_input = Some(Input::Prune(keep)),
@@ -912,13 +912,18 @@ impl App {
         self.editor.replace_before(menu.start, &with);
     }
 
-    /// The slash menu for the prompt as typed, while killi is idle.
+    /// The slash menu for the prompt as typed. While the agent works it offers only the commands
+    /// that run then, typed at the start of the prompt.
     fn suggestions(&self) -> Option<Suggestions> {
-        if self.busy.is_some() || self.picker.is_some() || self.asking.is_some() || self.editor.browsing() {
+        if self.picker.is_some() || self.asking.is_some() || self.editor.browsing() {
             return None;
         }
         if self.menu_closed.as_deref() == Some(self.editor.text()) {
             return None;
+        }
+        if self.busy.is_some() {
+            let entries: Vec<Entry> = self.entries.iter().filter(|e| BUSY_COMMANDS.contains(&e.name.as_str())).cloned().collect();
+            return menu::suggest(self.editor.before_cursor(), &entries, |_| Vec::new()).filter(|menu| menu.command && menu.start == 0);
         }
         menu::suggest(self.editor.before_cursor(), &self.entries, |command| match command {
             "model" => self.model_choices.clone(),
@@ -999,6 +1004,14 @@ impl App {
         if self.asking.is_some() {
             return self.on_key_asking(key);
         }
+        if let Some(menu) = self.suggestions()
+            && let Some(idle) = self.on_key_menu(key, &menu)
+        {
+            if let Idle::Input(Input::Command(name, arg)) = idle {
+                self.command_while_busy(&name, &arg);
+            }
+            return false;
+        }
         match key.code {
             KeyCode::Esc => return true,
             KeyCode::Char('c') if ctrl => return true,
@@ -1008,8 +1021,12 @@ impl App {
                     self.editor.take();
                     return false;
                 }
-                if self.editor.text().trim_start().starts_with('/') {
-                    self.notice("Commands run when the agent is idle, except /btw: wait for this turn to finish, or press Esc.");
+                if let Some(command) = self.editor.text().trim().strip_prefix('/') {
+                    let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
+                    let (name, arg) = (name.to_string(), arg.trim().to_string());
+                    if self.command_while_busy(&name, &arg) {
+                        self.editor.take();
+                    }
                     return false;
                 }
                 let (text, images) = self.editor.take_with_images();
@@ -1021,6 +1038,16 @@ impl App {
             _ => self.edit_key(key),
         }
         false
+    }
+
+    /// A command sent while the agent works: one in `BUSY_COMMANDS` runs now, the others wait
+    /// for the turn to end. False when it didn't run.
+    fn command_while_busy(&mut self, name: &str, arg: &str) -> bool {
+        let ran = self.run_local(name, arg);
+        if !ran {
+            self.notice(&format!("/{name} runs when the agent is idle: wait for this turn to finish, or press Esc. / lists what runs now."));
+        }
+        ran
     }
 
     fn on_key_asking(&mut self, key: KeyEvent) -> bool {
@@ -1508,6 +1535,29 @@ impl App {
 
     // ---------- commands ----------
 
+    /// Runs a command that needs only the screen and this folder, so it also works while the
+    /// agent does (see `BUSY_COMMANDS`). False when `name` with `arg` isn't one of those.
+    fn run_local(&mut self, name: &str, arg: &str) -> bool {
+        match (name, arg) {
+            ("help" | "h" | "?", _) => self.help(),
+            ("btw", "") => self.error("Ask with /btw <question>."),
+            ("plan", _) => self.toggle_plan(),
+            ("swarm", "") => self.set_swarm(!self.controls.swarm.get()),
+            ("swarm", "on") => self.set_swarm(true),
+            ("swarm", "off") => self.set_swarm(false),
+            ("later", "") => self.show_later(),
+            ("later", arg) => match arg.strip_prefix("done").and_then(|rest| rest.trim().parse::<usize>().ok()) {
+                Some(number) => match crate::later::done(&self.cwd, number) {
+                    Ok(item) => self.notice(&format!("Crossed off: {item}")),
+                    Err(e) => self.error(&format!("{e:#}")),
+                },
+                None => self.error("Use /later to see the list, or /later done 3 to cross one off."),
+            },
+            _ => return false,
+        }
+        true
+    }
+
     fn help(&mut self) {
         self.begin(Kind::Note);
         self.commit(format!("{BOLD}Commands{RESET} {DIM}type / to search them and your skills{RESET}"));
@@ -1618,13 +1668,14 @@ impl App {
     }
 
     /// Lists what was noted for later in this folder, numbered as `/later done N` counts them.
-    fn show_later(&mut self, cwd: &Path) {
-        let items = crate::later::list(cwd);
+    fn show_later(&mut self) {
+        let cwd = self.cwd.clone();
+        let items = crate::later::list(&cwd);
         self.begin(Kind::Note);
         if items.is_empty() {
             return self.notice("Nothing noted for later in this folder. The agent adds to the list with its `later` tool.");
         }
-        self.commit(format!("{BOLD}Noted for later{RESET} {DIM}({}) · {}{RESET}", items.len(), tilde(&crate::later::path(cwd))));
+        self.commit(format!("{BOLD}Noted for later{RESET} {DIM}({}) · {}{RESET}", items.len(), tilde(&crate::later::path(&cwd))));
         for (i, item) in items.iter().enumerate() {
             self.commit_wrapped(format!("  {DIM}{}.{RESET} {item}", i + 1));
         }
@@ -2516,9 +2567,21 @@ fn is_command(name: &str) -> bool {
 }
 
 /// Whether choosing the menu's item at `index` sends the prompt: a built-in command at the start
-/// does, a skill stays in the prompt so a request can follow it.
+/// does, unless it needs an argument (`/btw <question>`); a skill stays in the prompt so a request
+/// can follow it.
 fn runs_at_once(menu: &Suggestions, index: usize) -> bool {
-    menu.command && menu.start == 0 && is_command(&menu.items[index].value)
+    let name = menu.items[index].value.as_str();
+    let needs_argument = COMMANDS.iter().any(|c| (c.name == name || c.aliases.contains(&name)) && c.args.starts_with('<'));
+    menu.command && menu.start == 0 && is_command(name) && !needs_argument
+}
+
+/// The commands that also run while the agent works: they need nothing the running turn holds.
+const BUSY_COMMANDS: &[&str] = &["btw", "plan", "swarm", "later", "help"];
+
+/// Says which background commands were stopped as a session ended, if any.
+pub fn stopped_note(stopped: &[String]) -> Option<String> {
+    let list: Vec<String> = stopped.iter().map(|command| format!("`{command}`")).collect();
+    (!list.is_empty()).then(|| format!("Stopped what was still running: {}.", list.join(", ")))
 }
 
 /// The built-in commands, in the order the menu lists them.
@@ -2554,33 +2617,43 @@ const KEYS: &[(&str, &str)] = &[
 ];
 
 /// Raw mode and bracketed paste while the UI runs, restored when it ends.
-struct TerminalGuard {
-    enhanced: bool,
-}
+struct TerminalGuard;
+
+/// Whether the UI pushed keyboard enhancement flags, which `restore_terminal` pops.
+static ENHANCED: AtomicBool = AtomicBool::new(false);
 
 impl TerminalGuard {
     fn enter() -> Result<Self> {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
         execute!(out, EnableBracketedPaste)?;
-        let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
-        if enhanced {
+        if terminal::supports_keyboard_enhancement().unwrap_or(false) {
             execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
+            ENHANCED.store(true, Ordering::Relaxed);
         }
-        Ok(Self { enhanced })
+        Ok(Self)
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let mut out = stdout();
-        if self.enhanced {
-            let _ = execute!(out, PopKeyboardEnhancementFlags);
-        }
-        let _ = execute!(out, DisableBracketedPaste, Show);
-        let _ = terminal::disable_raw_mode();
-        let _ = writeln!(out);
+        restore_terminal();
     }
+}
+
+/// Gives the terminal back as it was before the UI took it; also on quitting from a signal,
+/// when the guard is never dropped.
+pub fn restore_terminal() {
+    if !terminal::is_raw_mode_enabled().unwrap_or(false) {
+        return;
+    }
+    let mut out = stdout();
+    if ENHANCED.swap(false, Ordering::Relaxed) {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
+    let _ = execute!(out, DisableBracketedPaste, Show);
+    let _ = terminal::disable_raw_mode();
+    let _ = writeln!(out);
 }
 
 #[cfg(test)]
@@ -2695,6 +2768,23 @@ mod tests {
         assert!(runs_at_once(&menu, 1));
         assert!(!runs_at_once(&menu, 2));
         assert!(!runs_at_once(&Suggestions { start: 4, ..menu }, 0));
+    }
+
+    #[test]
+    fn a_command_that_needs_an_argument_waits_for_it() {
+        let menu = Suggestions { items: vec![Item { value: "btw".into(), description: String::new() }], start: 0, command: true };
+        assert!(!runs_at_once(&menu, 0));
+    }
+
+    #[test]
+    fn the_commands_offered_while_busy_exist() {
+        assert!(BUSY_COMMANDS.iter().all(|name| is_command(name)));
+    }
+
+    #[test]
+    fn a_closed_session_names_what_it_stopped() {
+        assert_eq!(stopped_note(&[]), None);
+        assert_eq!(stopped_note(&["npm run dev".into(), "./server".into()]).unwrap(), "Stopped what was still running: `npm run dev`, `./server`.");
     }
 
     #[test]

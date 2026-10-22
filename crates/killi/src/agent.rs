@@ -392,6 +392,11 @@ impl Agent {
         }
     }
 
+    /// Kills the background tasks still running, giving their commands' first lines.
+    pub fn stop_tasks(&self) -> Vec<String> {
+        self.ctx.tasks.borrow_mut().stop_all()
+    }
+
     /// The user prompts of this session, oldest first, for history and pickers.
     pub fn user_prompts(&self) -> Vec<String> {
         crate::session::user_prompts(&self.messages)
@@ -429,6 +434,7 @@ impl Agent {
         let mut continuations = 0;
         let mut overflow_compacted = false;
         let mut stop_blocks = 0;
+        let mut told_left_running = false;
         loop {
             self.before_request().await?;
             let reply = match self.request().await {
@@ -450,6 +456,17 @@ impl Agent {
                 }
                 if !self.controls.steer.borrow().is_empty() {
                     continue;
+                }
+                // `-p` stops everything as it exits, so only a session that goes on asks.
+                if self.depth == 0 && self.controls.interactive && !truncated && !told_left_running {
+                    let left = self.ctx.tasks.borrow_mut().left_running();
+                    if !left.is_empty() {
+                        told_left_running = true;
+                        let left = left.join(", ");
+                        (self.sink)(Event::Notice(format!("Still running: {left}. Asked the agent to stop what nothing needs.")));
+                        self.push(json!({"role": "user", "content": format!("<system-reminder>Still running: {left}. {LEFT_RUNNING}</system-reminder>")}))?;
+                        continue;
+                    }
                 }
                 let event = if self.depth == 0 { "Stop" } else { "SubagentStop" };
                 let stop = self.hook(event, None, json!({"stop_hook_active": stop_blocks > 0})).await;
@@ -1127,6 +1144,9 @@ fn is_overflow(error: &anyhow::Error) -> bool {
         .iter()
         .any(|needle| text.contains(needle))
 }
+
+/// Told at the end of a turn that leaves commands running, after the list of them.
+const LEFT_RUNNING: &str = "Stop with task_stop what nothing needs anymore, such as a server or watcher started for a test or a check. If one should keep running, say so in your reply.";
 
 const BTW_NOTE: &str = "<system-reminder>A side question from the user. Answer it briefly from what this conversation already shows. Don't call tools. The question and your answer won't be kept in the conversation.</system-reminder>";
 

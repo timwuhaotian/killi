@@ -11,6 +11,7 @@ pub struct Item {
 }
 
 /// A command or skill the menu can offer, with the other names it answers to.
+#[derive(Clone)]
 pub struct Entry {
     pub name: String,
     pub aliases: Vec<String>,

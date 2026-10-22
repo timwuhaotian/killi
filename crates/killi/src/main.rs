@@ -84,6 +84,7 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
             if options.prompt.is_none() && !config::set_up_if_missing()? {
                 return Ok(ExitCode::SUCCESS);
             }
+            quit_on_signals();
             let config = config::Config::load()?;
             let cwd = std::env::current_dir()?;
             let last = || session::list(&cwd).into_iter().next().map(|s| s.path);
@@ -101,6 +102,27 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
             }
         }
     }
+}
+
+/// Quitting on a signal runs no destructors, so this first ends what killi started and gives
+/// the terminal back: closing the window sends SIGHUP, `kill` SIGTERM, Ctrl+C under `-p` SIGINT.
+fn quit_on_signals() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let (Ok(mut hangup), Ok(mut terminate), Ok(mut interrupt)) =
+        (signal(SignalKind::hangup()), signal(SignalKind::terminate()), signal(SignalKind::interrupt()))
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        let code = tokio::select! {
+            _ = hangup.recv() => 129,
+            _ = terminate.recv() => 143,
+            _ = interrupt.recv() => 130,
+        };
+        tools::kill_all();
+        tui::restore_terminal();
+        std::process::exit(code);
+    });
 }
 
 fn parse(args: Vec<String>) -> Result<Options> {
@@ -146,6 +168,7 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
 
     let started = Instant::now();
     let result = agent.run(&prompt, &[]).await;
+    let stopped = agent.stop_tasks();
     let stats = &agent.stats;
     let elapsed = started.elapsed();
 
@@ -176,6 +199,7 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
             "instruction_tokens": setup.instruction_tokens(),
             "instruction_files": setup.instruction_files(),
             "duration_ms": elapsed.as_millis() as u64,
+            "stopped": stopped,
             "final_text": text,
         });
         println!("{summary}");
@@ -184,6 +208,9 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
         p.finish();
         if let Some(error) = &error {
             eprintln!("{}killi: {error}{}", p.red, p.reset);
+        }
+        if let Some(note) = tui::stopped_note(&stopped) {
+            eprintln!("{}{note}{}", p.dim, p.reset);
         }
         let usage = &stats.usage;
         let cached = (usage.cached * 100).checked_div(usage.prompt).unwrap_or(0);

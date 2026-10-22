@@ -5,6 +5,17 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.24 — 2026-10-22
+
+- **Sessions clean up after themselves.** A command that leaves something running, such as
+  `nohup server &`, becomes a background task instead of being forgotten. When a turn ends
+  with tasks still running, killi asks the agent once to stop what nothing needs or say why
+  it stays. Ending the session or a `-p` run stops the rest and names them (`--json`:
+  `stopped`), now also when the terminal window is closed, on SIGTERM, and on Ctrl+C under
+  `-p`.
+- **The slash menu while the agent works** offers what runs then: `/btw`, `/plan`,
+  `/swarm`, `/later` and `/help`. Before, `/` showed nothing until the turn ended.
+
 ## 0.2.23 — 2026-10-22
 
 - **Images in the prompt.** Ctrl+V pastes the clipboard's image (a screenshot, or an image

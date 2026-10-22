@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-pub use bash::Tasks;
+pub use bash::{Tasks, kill_all};
 pub use files::{image_type, image_url};
 
 pub const MAX_LINES: usize = 2000;
