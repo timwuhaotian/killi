@@ -2,6 +2,7 @@
 //! timeout keeps going in the background instead of being killed.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -17,6 +18,10 @@ const DEFAULT_TIMEOUT: u64 = 60;
 const MAX_TIMEOUT: u64 = 300;
 /// Output beyond this is dropped from memory, oldest first; the model only ever sees the tail.
 const MAX_CAPTURE: usize = 16 * 1024 * 1024;
+/// What a command that printed nothing returns.
+const NO_OUTPUT: &str = "(no output)";
+/// The same for a foreground command that exited 0, so an empty result isn't mistaken for a failure to run.
+const NO_OUTPUT_OK: &str = "(no output, exit code 0)";
 
 #[derive(Default)]
 pub struct Tasks {
@@ -63,11 +68,11 @@ impl Exit {
 }
 
 impl Process {
-    fn spawn(ctx: &Context, command: &str) -> std::io::Result<Self> {
+    fn spawn(dir: &Path, command: &str) -> std::io::Result<Self> {
         let mut child = Command::new("/bin/bash")
             .arg("-c")
             .arg(format!("exec 2>&1\n{command}"))
-            .current_dir(&ctx.cwd)
+            .current_dir(dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -149,13 +154,28 @@ impl Drop for Tasks {
     }
 }
 
+/// Where a command runs: the working directory, or `cwd` when given (absolute, `~/…`, or
+/// relative to the working directory), which must exist.
+fn run_dir(ctx: &Context, cwd: Option<&str>) -> Result<PathBuf, String> {
+    let Some(cwd) = cwd.filter(|c| !c.is_empty()) else { return Ok(ctx.cwd.clone()) };
+    let dir = match cwd.strip_prefix("~/") {
+        Some(rest) => crate::config::home().join(rest),
+        None => ctx.cwd.join(cwd),
+    };
+    if dir.is_dir() { Ok(dir) } else { Err(format!("cwd {cwd} is not a directory.")) }
+}
+
 pub async fn bash(ctx: &Context, args: &Value) -> Output {
     let Some(command) = args.get("command").and_then(Value::as_str) else {
         return Output::error("bash needs `command`.");
     };
     let timeout = args.get("timeout").and_then(Value::as_u64).unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT);
     let background = args.get("run_in_background").and_then(Value::as_bool).unwrap_or(false);
-    let mut process = match Process::spawn(ctx, command) {
+    let dir = match run_dir(ctx, args.get("cwd").and_then(Value::as_str)) {
+        Ok(dir) => dir,
+        Err(e) => return Output::error(e),
+    };
+    let mut process = match Process::spawn(&dir, command) {
         Ok(process) => process,
         Err(e) => return Output::error(format!("Could not start bash: {e}")),
     };
@@ -181,12 +201,17 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
     };
     let (mut text, _) = take_output(ctx, &process, 0);
     let lines = match text.lines().count() {
-        _ if text == "(no output)" => "no output".to_string(),
+        _ if text == NO_OUTPUT => "no output".to_string(),
         1 => "1 line".to_string(),
         n => format!("{n} lines"),
     };
     match exit {
-        Exit::Code(0) => Output::ok(text).brief(lines),
+        Exit::Code(0) => {
+            if text == NO_OUTPUT {
+                text = NO_OUTPUT_OK.into();
+            }
+            Output::ok(text).brief(lines)
+        }
         other => {
             text.push_str(&format!("\n[Command {}]", other.describe()));
             Output::error(text).brief(other.describe())
@@ -251,7 +276,7 @@ pub async fn task_output(ctx: &Context, args: &Value) -> Output {
         }
         None => format!("Task {id} is still running ({}s).", started.elapsed().as_secs()),
     };
-    let body = if text == "(no output)" { "(no new output)".to_string() } else { text };
+    let body = if text == NO_OUTPUT { "(no new output)".to_string() } else { text };
     Output::ok(format!("{status}\n{body}")).brief(status)
 }
 
@@ -278,7 +303,7 @@ fn first_line(text: &str) -> &str {
 fn tail(ctx: &Context, output: &str, dropped: usize) -> String {
     let output = output.trim_end_matches('\n');
     if output.is_empty() {
-        return "(no output)".into();
+        return NO_OUTPUT.into();
     }
     let lines: Vec<&str> = output.split('\n').collect();
     let total = lines.len();
@@ -317,6 +342,7 @@ fn floor_boundary(s: &str, max: usize) -> usize {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs;
 
     fn ctx() -> Context {
         let dir = std::env::temp_dir();
@@ -328,6 +354,30 @@ mod tests {
         let out = bash(&ctx(), &json!({"command": "echo out; echo err >&2; exit 3"})).await;
         assert!(out.is_error);
         assert_eq!(out.text, "out\nerr\n[Command exited with code 3]");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cwd_picks_the_directory_and_must_exist() {
+        let ctx = ctx();
+        let sub = ctx.cwd.join(format!("killi-cwd-{}", std::process::id()));
+        fs::create_dir_all(&sub).unwrap();
+        let name = sub.file_name().unwrap().to_str().unwrap();
+        for cwd in [sub.to_str().unwrap(), name] {
+            let out = bash(&ctx, &json!({"command": "pwd", "cwd": cwd})).await;
+            assert_eq!(out.text.trim(), sub.canonicalize().unwrap().to_str().unwrap());
+        }
+        let out = bash(&ctx, &json!({"command": "pwd", "cwd": "no-such-dir"})).await;
+        assert!(out.is_error);
+        assert_eq!(out.text, "cwd no-such-dir is not a directory.");
+        fs::remove_dir_all(sub).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_silent_success_says_so_with_its_exit_code() {
+        let out = bash(&ctx(), &json!({"command": "true"})).await;
+        assert!(!out.is_error);
+        assert_eq!(out.text, "(no output, exit code 0)");
+        assert_eq!(out.brief, "no output");
     }
 
     #[tokio::test(flavor = "current_thread")]

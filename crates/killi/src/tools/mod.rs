@@ -101,7 +101,10 @@ pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
                 .iter()
                 .find_map(|prefix| command.strip_prefix(prefix.as_str()))
                 .unwrap_or(command);
-            command.to_string()
+            match field("cwd") {
+                "" => command.to_string(),
+                dir => format!("[{dir}] {command}"),
+            }
         }
         "grep" => format!("{:?} {}", field("pattern"), field("path")),
         "glob" => format!("{} {}", field("pattern"), field("path")),
@@ -161,6 +164,7 @@ pub fn definitions() -> Vec<Value> {
             "Run a bash command in the working directory; each call is a fresh shell, stdin closed, stderr merged into stdout. Long output keeps its tail and saves the rest to a file. A command still running at the timeout moves to the background.",
             json!({"type": "object", "properties": {
                 "command": {"type": "string"},
+                "cwd": {"type": "string", "description": "Directory to run in, absolute or relative to the working directory"},
                 "timeout": {"type": "integer", "description": "Seconds, default 60, max 300"},
                 "run_in_background": {"type": "boolean", "description": "For servers and watchers: return at once with a task id"}
             }, "required": ["command"]}),
@@ -279,4 +283,16 @@ pub fn spill(ctx: &Context, stem: &str, text: &str) -> Option<PathBuf> {
     let path = ctx.spill_dir.join(format!("{stem}-{nanos}.txt"));
     std::fs::write(&path, text).ok()?;
     Some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bash_summary_shows_where_it_ran_and_drops_a_leading_cd() {
+        let cwd = Path::new("/w/app");
+        assert_eq!(summary("bash", &json!({"command": "cd /w/app && cargo test"}), cwd), "bash cargo test");
+        assert_eq!(summary("bash", &json!({"command": "git status", "cwd": "../other"}), cwd), "bash [../other] git status");
+    }
 }

@@ -183,6 +183,14 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
     - Interactive browsing (clicks, logins) stays outside the built-in tools: use a Playwright MCP server through `mcp`.
     - No LSP: it needs a resident server per language, costs memory (killi peaks at 5 MB) and tool tokens. A `PostToolUse` hook that runs `cargo check` or `tsc --noEmit` after edits gives the model the same diagnostics. Revisit if `killi eval` shows failures an LSP would fix.
 
+31. **Findings from reading 31 real session logs (2026-10-22).**
+    - A usage-limit 429 (`Usage limit reached for 5 hour … reset at …`) is not a rate limit: retrying ten times with backoff waited about two minutes for a limit that resets in hours. It fails at once with the provider's message, as does any retryable status whose `Retry-After` is over a minute.
+    - Muse (Meta) models streamed `reasoning_tokens` but no reasoning on chat/completions, so the thinking was lost between steps and one session repeated the same call 13 times. On the Responses API the same endpoint returns encrypted `reasoning` items, which killi already keeps and replays; setting the provider's `type = "openai_responses"` fixed it (cached 2,804 of 3,080 tokens on the second request). The log now says once when reasoning is billed but never arrives.
+    - Claude on a company gateway (OpenAI-format, in front of Bedrock) never cached: with no `cache_control` there are no cache tokens, and with `cache_control` the first request writes the cache (about 25% dearer) but the next ones, with the same prefix 3 s later, bill in full. No `cache_control` option was added; use the `anthropic` provider for Claude until the gateway's cache reads work.
+    - The repeat breaker stops at 8 identical calls, not 12: the warnings at 3, 5 and 7 were ignored by the model that looped. It counts by call and now notes when the result was also the same.
+    - Logs gained `ts` and durations because nothing in them could tell a slow model from a slow tool. They sit beside each record's data, so a message is still stored exactly as sent.
+    - A resumed session prints its conversation from the log: the model always had it, the screen didn't, which read as if nothing was loaded. Tool results kept how they ended, so a replay shows ✗ for what failed.
+
 ## Build phases
 
 0. **Scaffold:** a Cargo workspace following `kil`'s conventions (edition 2024, Rust 1.94, its release profile plus `strip`); TOML config; `killi import-kimi`.

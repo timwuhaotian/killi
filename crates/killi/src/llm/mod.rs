@@ -153,11 +153,7 @@ impl Client {
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .map(Duration::from_secs);
             let text = response.text().await.unwrap_or_default();
-            return Err(Failure {
-                retryable: retryable_status(status),
-                retry_after,
-                message: format!("HTTP {status}: {}", truncate(&text, 2000)),
-            });
+            return Err(classify(status, retry_after, &text));
         }
 
         let mut parser: Box<dyn StreamParser> = match self.model.protocol {
@@ -197,6 +193,25 @@ impl Client {
 
 fn retryable_status(status: StatusCode) -> bool {
     matches!(status.as_u16(), 408 | 409 | 425 | 429 | 500..=599)
+}
+
+/// A server asking for a longer wait than this isn't worth sitting through.
+const LONGEST_WAIT: Duration = Duration::from_secs(60);
+
+/// Words in a 429 body that say a usage quota ran out, not that requests came too fast.
+const QUOTA_WORDS: [&str; 4] = ["usage limit", "quota", "reset at", "exceeded your current"];
+
+/// What a failed HTTP response means: retried, unless waiting won't help. A spent quota
+/// (a 5-hour or monthly limit) resets in hours, so it fails at once with the server's message.
+fn classify(status: StatusCode, retry_after: Option<Duration>, body: &str) -> Failure {
+    let lower = body.to_lowercase();
+    let quota = status == StatusCode::TOO_MANY_REQUESTS && QUOTA_WORDS.iter().any(|w| lower.contains(w));
+    let too_long = retry_after.is_some_and(|wait| wait > LONGEST_WAIT);
+    Failure {
+        retryable: retryable_status(status) && !quota && !too_long,
+        retry_after,
+        message: format!("HTTP {status}: {}", truncate(body, 2000)),
+    }
 }
 
 /// 500 ms doubling to a 32 s cap, plus up to 25% jitter.
@@ -246,6 +261,27 @@ fn arguments_object(arguments: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_spent_quota_is_not_retried() {
+        let body = r#"{"error":{"code":"1308","message":"Usage limit reached for 5 hour. Your limit will reset at 2026-10-22 16:06:02"}}"#;
+        let failure = classify(StatusCode::TOO_MANY_REQUESTS, None, body);
+        assert!(!failure.retryable);
+        assert!(failure.message.contains("reset at 2026-10-22 16:06:02"));
+    }
+
+    #[test]
+    fn rate_limits_and_server_errors_are_retried() {
+        assert!(classify(StatusCode::TOO_MANY_REQUESTS, Some(Duration::from_secs(5)), "slow down").retryable);
+        assert!(classify(StatusCode::BAD_GATEWAY, None, "bad gateway").retryable);
+        assert!(!classify(StatusCode::BAD_REQUEST, None, "bad request").retryable);
+    }
+
+    #[test]
+    fn a_long_retry_after_is_not_waited_out() {
+        assert!(!classify(StatusCode::SERVICE_UNAVAILABLE, Some(Duration::from_secs(3600)), "down").retryable);
+        assert!(classify(StatusCode::SERVICE_UNAVAILABLE, Some(Duration::from_secs(60)), "down").retryable);
+    }
 
     #[test]
     fn backoff_doubles_to_a_cap() {

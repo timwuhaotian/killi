@@ -5,6 +5,24 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.16 — 2026-10-22
+
+- **A resumed session shows its conversation again.** `killi -r`, `-c` and `/resume` print the
+  last 8 prompts with the model's replies and each tool call with its result, a long prompt
+  folded after 6 lines. The context meter starts at the size the session had.
+- **A spent usage limit fails at once.** A 429 that says the quota or usage limit is used up
+  (or a `Retry-After` over a minute) is no longer retried ten times; the error shows the
+  provider's reset time and points to `/model`.
+- **The repeat breaker stops sooner and says why.** It stops at 8 identical tool calls (was
+  12), warns that the result was the same, and the notice says what to do next. A command
+  that printed nothing now reports `(no output, exit code 0)`.
+- **`bash` takes a `cwd`.** Run a command in another folder, such as a worktree, without
+  `cd … &&` on every call.
+- **Logs keep time.** Every log record has a `ts` (milliseconds); a request's usage record
+  has its `ms`, and a tool result keeps how it ended and how long it took. The log notes once
+  when a provider bills reasoning tokens but sends no reasoning. Sessions that never got a
+  prompt no longer leave a log behind.
+
 ## 0.2.15 — 2026-10-22
 
 - **A polished conversation, following the new design system** (`docs/killi-design-system.html`).

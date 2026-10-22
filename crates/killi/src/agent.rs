@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::future::Future;
 use std::rc::{Rc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use futures_util::StreamExt;
@@ -23,8 +23,8 @@ use crate::skills::Skills;
 use crate::{plan, swarm, tools};
 
 const MAX_CONTINUATIONS: u32 = 3;
-const REPEAT_WARNINGS: [u32; 3] = [3, 5, 8];
-const REPEAT_STOP: u32 = 12;
+const REPEAT_WARNINGS: [u32; 3] = [3, 5, 7];
+const REPEAT_STOP: u32 = 8;
 const MAX_RESULT_CHARS: usize = 50_000;
 const MAX_PARALLEL_AGENTS: usize = 4;
 /// User prompts kept word for word through a compaction, in characters (about 20k tokens).
@@ -153,6 +153,24 @@ pub enum Stop {
     RepeatBreaker,
 }
 
+/// How often one exact tool call was made, and a hash of what its latest result said.
+#[derive(Default)]
+struct Repeat {
+    count: u32,
+    result: u64,
+}
+
+impl Repeat {
+    /// Counts another identical call. Returns how many there have been, and whether this one
+    /// got the same result as the one before it.
+    fn note(&mut self, result: u64) -> (u32, bool) {
+        let same = self.count > 0 && self.result == result;
+        self.count += 1;
+        self.result = result;
+        (self.count, same)
+    }
+}
+
 #[derive(Default)]
 pub struct Stats {
     pub requests: u32,
@@ -175,7 +193,9 @@ pub struct Agent {
     settings: Rc<Settings>,
     sink: Sink,
     ids: HashSet<String>,
-    repeats: HashMap<String, u32>,
+    repeats: HashMap<String, Repeat>,
+    /// The log already says that the provider hides its reasoning.
+    reasoning_noted: bool,
     todos: Vec<Todo>,
     plan_announced: bool,
     swarm_announced: bool,
@@ -233,6 +253,7 @@ impl Agent {
             }
         }
         agent.messages = Rc::new(loaded.messages);
+        agent.stats.context = loaded.context;
         agent.recover()?;
         agent.share();
         Ok(agent)
@@ -263,6 +284,7 @@ impl Agent {
             sink,
             ids: HashSet::new(),
             repeats: HashMap::new(),
+            reasoning_noted: false,
             todos: Vec::new(),
             plan_announced: false,
             swarm_announced: false,
@@ -344,6 +366,14 @@ impl Agent {
 
     pub fn context_window(&self) -> Option<u64> {
         self.client.model.context_window
+    }
+
+    /// Deletes this session's log if nothing was ever said in it, so opening killi and leaving
+    /// doesn't leave a file behind.
+    pub fn discard_if_unused(&self) {
+        if self.messages.len() <= 1 {
+            self.session.discard();
+        }
     }
 
     /// The user prompts of this session, oldest first, for history and pickers.
@@ -469,20 +499,39 @@ impl Agent {
                 Delta::Retry { attempt, wait, reason } => Event::Retry { attempt, wait, reason: reason.to_string() },
             })
         };
+        let started = Instant::now();
         let reply = self.client.complete(&self.messages, &self.tools, &self.session.id, &mut on_delta).await;
+        let took = started.elapsed();
         self.stats.requests += 1;
         let reply = match reply {
             Ok(reply) => reply,
             Err(error) => {
-                self.session.record(&json!({"type": "error", "message": format!("{error:#}")}))?;
+                self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(took)}))?;
                 return Err(error);
             }
         };
-        self.account(&reply.usage, Some(&reply.finish_reason))?;
+        self.account(&reply.usage, Some(&reply.finish_reason), Some(took))?;
+        self.note_hidden_reasoning(&reply)?;
         Ok(reply)
     }
 
-    fn account(&mut self, usage: &Usage, finish_reason: Option<&Option<String>>) -> Result<()> {
+    /// Some providers count reasoning tokens but don't send the reasoning on their chat API, so
+    /// it can't be kept or replayed and the model starts each step without its own thinking.
+    /// The log says so once, to explain a model that forgets what it just did.
+    fn note_hidden_reasoning(&mut self, reply: &Reply) -> Result<()> {
+        if hides_reasoning(reply) && !std::mem::replace(&mut self.reasoning_noted, true) {
+            self.session.record(&json!({
+                "type": "warn",
+                "message": format!(
+                    "The provider counted {} reasoning tokens but sent no reasoning, so it can't be kept. If it offers the Responses API, set `type = \"openai_responses\"` on its provider in config.toml.",
+                    reply.usage.reasoning
+                ),
+            }))?;
+        }
+        Ok(())
+    }
+
+    fn account(&mut self, usage: &Usage, finish_reason: Option<&Option<String>>, took: Option<Duration>) -> Result<()> {
         self.stats.first_prompt.get_or_insert(usage.prompt);
         self.stats.context = usage.prompt;
         let total = &mut self.stats.usage;
@@ -498,6 +547,7 @@ impl Agent {
             "completion": usage.completion,
             "reasoning": usage.reasoning,
             "finish_reason": finish_reason.cloned().flatten(),
+            "ms": took.map(millis),
         }))
     }
 
@@ -536,25 +586,30 @@ impl Agent {
         while i < calls.len() {
             if calls[i].1.name == "agent" && self.depth == 0 {
                 let end = calls[i..].iter().position(|(_, c)| c.name != "agent").map_or(calls.len(), |n| i + n);
+                let started = Instant::now();
                 let outputs = self.run_subagents(&calls[i..end]).await;
+                let took = started.elapsed();
                 for ((id, call), output) in calls[i..end].iter().zip(outputs) {
-                    stop |= self.finish_call(id, call, output)?;
+                    stop |= self.finish_call(id, call, output, took)?;
                 }
                 i = end;
                 continue;
             }
             let (id, call) = &calls[i];
             if call.name == "agent_swarm" && self.depth == 0 {
+                let started = Instant::now();
                 let output = self.run_swarm(id, call).await;
-                stop |= self.finish_call(id, call, output)?;
+                stop |= self.finish_call(id, call, output, started.elapsed())?;
                 i += 1;
                 continue;
             }
+            let started = Instant::now();
             let output = self.execute(id, call, truncated).await;
+            let took = started.elapsed();
             if let Some(image) = &output.image {
                 images.push((tools::summary(&call.name, &parse_args(call).unwrap_or_default(), &self.ctx.cwd), image.clone()));
             }
-            stop |= self.finish_call(id, call, output)?;
+            stop |= self.finish_call(id, call, output, took)?;
             i += 1;
         }
         if !images.is_empty() {
@@ -630,7 +685,7 @@ impl Agent {
     }
 
     /// Reports and records a call's result. Returns true when the repeat breaker trips.
-    fn finish_call(&mut self, id: &str, call: &ToolCall, mut output: tools::Output) -> Result<bool> {
+    fn finish_call(&mut self, id: &str, call: &ToolCall, mut output: tools::Output, took: Duration) -> Result<bool> {
         (self.sink)(Event::ToolEnd {
             id: id.into(),
             is_error: output.is_error,
@@ -641,17 +696,18 @@ impl Agent {
         if output.text.len() > MAX_RESULT_CHARS {
             output.text = self.shorten(&output.text);
         }
-        let count = self.repeats.entry(format!("{}\0{}", call.name, call.arguments)).or_insert(0);
-        *count += 1;
-        if REPEAT_WARNINGS.contains(count) {
+        let result = hash_text(&output.text);
+        let (count, same) = self.repeats.entry(format!("{}\0{}", call.name, call.arguments)).or_default().note(result);
+        if REPEAT_WARNINGS.contains(&count) {
+            let same = if same { " and got the same result" } else { "" };
             output.text.push_str(&format!(
-                "\n\n<system-reminder>You have made this exact {} call {count} times. Repeating it won't change the result; try a different approach.</system-reminder>",
+                "\n\n<system-reminder>You have made this exact {} call {count} times{same}. Repeating it won't change the result; try a different approach.</system-reminder>",
                 call.name
             ));
         }
-        let stop = *count >= REPEAT_STOP;
-        self.push(json!({"role": "tool", "tool_call_id": id, "content": output.text}))?;
-        Ok(stop)
+        let meta = json!({"is_error": output.is_error, "brief": output.brief, "ms": millis(took)});
+        self.push_meta(json!({"role": "tool", "tool_call_id": id, "content": output.text}), Some(meta))?;
+        Ok(count >= REPEAT_STOP)
     }
 
     fn todo_write(&mut self, args: &Value) -> tools::Output {
@@ -846,6 +902,7 @@ impl Agent {
             sink,
             ids: self.ids.clone(),
             repeats: HashMap::new(),
+            reasoning_noted: false,
             todos: Vec::new(),
             plan_announced: self.plan_announced,
             swarm_announced: false,
@@ -870,7 +927,7 @@ impl Agent {
         request.push(json!({"role": "user", "content": instruction}));
         let reply = self.client.complete(&request, &self.tools, &self.session.id, &mut |_| {}).await?;
         self.stats.requests += 1;
-        self.account(&reply.usage, None)?;
+        self.account(&reply.usage, None, None)?;
         if reply.text.trim().is_empty() {
             bail!("the model returned an empty summary, so the conversation was left as it was");
         }
@@ -947,11 +1004,37 @@ impl Agent {
     }
 
     fn push(&mut self, message: Value) -> Result<()> {
-        self.session.record(&json!({"type": "message", "message": message}))?;
+        self.push_meta(message, None)
+    }
+
+    /// Appends a message. The log keeps `meta` beside a tool result, outside the message itself:
+    /// how it ended and how long it took, which a resumed session shows again.
+    fn push_meta(&mut self, message: Value, meta: Option<Value>) -> Result<()> {
+        let mut entry = json!({"type": "message", "message": message});
+        if let Some(meta) = meta {
+            entry["tool"] = meta;
+        }
+        self.session.record(&entry)?;
         Rc::make_mut(&mut self.messages).push(message);
         self.share();
         Ok(())
     }
+}
+
+/// Whether a reply was billed for reasoning that never came back.
+fn hides_reasoning(reply: &Reply) -> bool {
+    reply.usage.reasoning > 0 && reply.reasoning.is_empty() && reply.reasoning_items.is_empty()
+}
+
+fn millis(took: Duration) -> u64 {
+    took.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn hash_text(text: &str) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn parse_args(call: &ToolCall) -> Result<Value, String> {
@@ -1016,6 +1099,28 @@ mod tests {
 
     fn call(arguments: &str) -> ToolCall {
         ToolCall { id: "c".into(), name: "read".into(), arguments: arguments.into() }
+    }
+
+    #[test]
+    fn reasoning_that_was_billed_but_never_sent_is_noticed() {
+        let mut reply = Reply::default();
+        assert!(!hides_reasoning(&reply));
+        reply.usage.reasoning = 40;
+        assert!(hides_reasoning(&reply));
+        reply.reasoning = "thinking".into();
+        assert!(!hides_reasoning(&reply));
+        reply.reasoning.clear();
+        reply.reasoning_items.push(json!({"type": "reasoning"}));
+        assert!(!hides_reasoning(&reply));
+    }
+
+    #[test]
+    fn repeats_count_and_notice_an_unchanged_result() {
+        let mut repeat = Repeat::default();
+        assert_eq!(repeat.note(1), (1, false));
+        assert_eq!(repeat.note(1), (2, true));
+        assert_eq!(repeat.note(2), (3, false));
+        assert!(REPEAT_WARNINGS.iter().all(|&n| n < REPEAT_STOP));
     }
 
     #[test]

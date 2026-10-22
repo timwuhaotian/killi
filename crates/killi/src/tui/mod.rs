@@ -30,7 +30,7 @@ use crate::config::{Config, Thinking};
 use crate::setup::Setup;
 use crate::llm::{Client, Usage};
 use crate::mcp::Mcp;
-use crate::session::Choice;
+use crate::session::{Choice, Replayed};
 use crate::snapshot::Snapshots;
 use editor::Editor;
 use menu::{Entry, Item, Suggestions};
@@ -43,6 +43,10 @@ const DIFF_ROWS: usize = 16;
 const PREVIEW_ROWS: usize = 3;
 /// Tool outputs and thoughts Ctrl+O can step back through.
 const DETAIL_KEPT: usize = 10;
+/// How many of a resumed session's last prompts are shown again, with what followed each.
+const REPLAY_PROMPTS: usize = 8;
+/// Lines of a replayed prompt shown before the rest folds away: a skill's text can run to thousands.
+const REPLAY_PROMPT_ROWS: usize = 6;
 /// The frames of a running tool call's glyph, a step each tick.
 const QUARTER: [char; 4] = ['◐', '◓', '◑', '◒'];
 
@@ -83,6 +87,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     app.notify_after = Duration::from_secs(session.config().agent.notify_after.unwrap_or(10));
     let terminal = TerminalGuard::enter()?;
     app.banner(&agent, &session, &snapshots, start.resume.is_some());
+    if let Some(log) = &start.resume {
+        app.replay_log(log);
+    }
     if start.pick_session {
         app.open_session_picker(&cwd);
     }
@@ -110,9 +117,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             }
             Input::Resume(path) => match session.resume(&path, controls.clone(), sink.clone()) {
                 Ok(resumed) => {
+                    agent.discard_if_unused();
                     agent = resumed;
                     app.show_model(&agent, session.config());
+                    app.status.context = agent.stats.context;
                     app.notice(&format!("Resumed the session started with “{}”.", agent.user_prompts().first().map_or("", |s| s.as_str())));
+                    app.replay_log(&path);
                     app.editor = Editor::with_history(agent.user_prompts());
                 }
                 Err(e) => app.error(&format!("{e:#}")),
@@ -159,6 +169,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     }
     app.finish_screen()?;
     drop(terminal);
+    agent.discard_if_unused();
     if !agent.user_prompts().is_empty() {
         println!("{DIM}To continue this session: {}{RESET}", resume_command(&agent.session.log_path));
     }
@@ -283,6 +294,7 @@ async fn handle_command(
         "clear" | "new" => match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
             Ok(fresh) => {
                 let saved = !agent.user_prompts().is_empty();
+                agent.discard_if_unused();
                 *agent = fresh;
                 app.show_model(agent, session.config());
                 app.todos.clear();
@@ -548,6 +560,7 @@ impl App {
                 model: agent.model_alias().to_string(),
                 thinking: agent.thinking().label().to_string(),
                 window: agent.context_window(),
+                context: agent.stats.context,
                 ..Status::default()
             },
             controls,
@@ -957,6 +970,12 @@ impl App {
     // ---------- agent events ----------
 
     fn begin_turn(&mut self, prompt: &str) {
+        self.commit_prompt(prompt);
+        self.begin_busy();
+    }
+
+    /// Prints what the user typed as their message block.
+    fn commit_prompt(&mut self, prompt: &str) {
         self.commit(String::new());
         let mut first = true;
         for line in prompt.lines() {
@@ -968,7 +987,37 @@ impl App {
         }
         self.commit(String::new());
         self.last_kind = Kind::None;
-        self.begin_busy();
+    }
+
+    /// Prints a resumed session's conversation into the scrollback, as it read when it ran.
+    fn replay_log(&mut self, log: &Path) {
+        let loaded = match crate::session::load(log) {
+            Ok(loaded) => loaded,
+            Err(e) => return self.error(&format!("{e:#}")),
+        };
+        for shown in crate::session::replay(&loaded, &self.cwd, REPLAY_PROMPTS) {
+            match shown {
+                Replayed::Note(text) => self.notice(&text),
+                Replayed::Prompt(prompt) => {
+                    let shown: Vec<&str> = prompt.lines().take(REPLAY_PROMPT_ROWS).collect();
+                    self.commit_prompt(&shown.join("\n"));
+                    let more = prompt.lines().count().saturating_sub(shown.len());
+                    if more > 0 {
+                        self.notice(&format!("… {more} more line{}", if more == 1 { "" } else { "s" }));
+                    }
+                }
+                Replayed::Text(text) => {
+                    self.on_agent(Event::Text(text));
+                    self.flush_partial();
+                }
+                Replayed::Tool { summary, output, is_error, brief } => {
+                    self.on_agent(Event::ToolStart { id: "replay".into(), summary });
+                    self.on_agent(Event::ToolEnd { id: "replay".into(), is_error, brief, display: None, output });
+                }
+            }
+        }
+        self.commit(String::new());
+        self.last_kind = Kind::None;
     }
 
     fn begin_busy(&mut self) {
@@ -1005,7 +1054,7 @@ impl App {
                 self.last_end = Some(LastEnd::Done);
                 match stop {
                     Stop::MaxTokens => self.notice("The reply hit the output token limit."),
-                    Stop::RepeatBreaker => self.notice("Stopped: the agent kept repeating the same tool call."),
+                    Stop::RepeatBreaker => self.notice("Stopped: the agent kept repeating the same tool call. Tell it what to read or run instead, or pick another model with /model."),
                     Stop::Completed => {}
                 }
             }
@@ -1174,7 +1223,7 @@ impl App {
             .filter(|l| !l.trim().is_empty() && !l.starts_with("[Command "))
             .map(|l| l.chars().filter(|c| !c.is_control() || *c == '\t').collect::<String>().replace('\t', "    "))
             .collect();
-        if lines.is_empty() || (lines.len() == 1 && lines[0] == "(no output)") {
+        if lines.is_empty() || (lines.len() == 1 && lines[0].starts_with("(no output")) {
             return;
         }
         let skipped = lines.len().saturating_sub(PREVIEW_ROWS);
@@ -1743,7 +1792,9 @@ fn error_hint(error: &str) -> Option<&'static str> {
         Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml.")
     } else if has(&["context length", "context_length", "too long", "maximum context", "prompt is too long"]) {
         Some("The conversation no longer fits the model: /compact summarizes it, /new starts over.")
-    } else if has(&["429", "rate limit", "quota"]) {
+    } else if has(&["usage limit", "quota", "reset at", "exceeded your current"]) {
+        Some("This provider's usage limit is spent: pick another model with /model, or wait until the reset time above.")
+    } else if has(&["429", "rate limit"]) {
         Some("The provider is limiting requests: wait a moment, or pick another model with /model.")
     } else if has(&["404", "model not found", "unknown model", "does not exist"]) {
         Some("The provider doesn't know this model or URL: check model and base_url in ~/.killi/config.toml.")
@@ -1953,6 +2004,14 @@ mod tests {
         let reason = r#"HTTP 529 <unknown status code>: {"type":"error","error":{"type":"overloaded_error","message":"busy (2064)"}}"#;
         assert_eq!(gist(reason), "HTTP 529: busy (2064)");
         assert_eq!(gist("connection reset"), "connection reset");
+    }
+
+    #[test]
+    fn a_spent_quota_points_to_another_model_not_to_waiting_a_moment() {
+        let spent = error_hint("HTTP 429 Too Many Requests: Usage limit reached for 5 hour. Your limit will reset at 16:06").unwrap();
+        assert!(spent.contains("usage limit is spent"));
+        let limited = error_hint("HTTP 429 Too Many Requests: slow down").unwrap();
+        assert!(limited.contains("wait a moment"));
     }
 
     /// `line` without escape codes, whatever colors the theme picked.
