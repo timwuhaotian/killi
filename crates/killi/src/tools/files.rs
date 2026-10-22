@@ -68,7 +68,8 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
     Output::ok(out).brief(brief)
 }
 
-fn image_type(path: &Path) -> Option<&'static str> {
+/// The media type of an image file the model can be shown, by its extension.
+pub fn image_type(path: &Path) -> Option<&'static str> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
@@ -85,10 +86,21 @@ pub(super) fn read_image(ctx: &Context, path: &str, full: &Path, media_type: &st
     if !ctx.images {
         return Output::error(format!("{path} is an image, and this model can't see images."));
     }
-    let size = match fs::metadata(full) {
-        Ok(meta) => meta.len(),
-        Err(e) => return Output::error(format!("Could not read {path}: {e}")),
-    };
+    match image_url(path, full, media_type) {
+        Ok((url, bytes)) => {
+            let mut output = Output::ok(format!("{path} is an image ({} KB); it is attached below.", bytes / 1024))
+                .brief(format!("image, {} KB", bytes / 1024));
+            output.image = Some(url);
+            output
+        }
+        Err(why) => Output::error(why),
+    }
+}
+
+/// An image file as a data URL for the model, and how many bytes it holds; a large one is
+/// sent as a JPEG that `sips` made. `name` is how errors refer to it.
+pub fn image_url(name: &str, full: &Path, media_type: &str) -> Result<(String, usize), String> {
+    let size = fs::metadata(full).map_err(|e| format!("Could not read {name}: {e}"))?.len();
     let (bytes, media_type) = if size > SHRINK_ABOVE {
         let out = std::env::temp_dir().join(format!("killi-image-{}.jpg", std::process::id()));
         let shrunk = Command::new("/usr/bin/sips")
@@ -102,18 +114,12 @@ pub(super) fn read_image(ctx: &Context, path: &str, full: &Path, media_type: &st
         let _ = fs::remove_file(&out);
         match bytes {
             Some(bytes) => (bytes, "image/jpeg"),
-            None => return Output::error(format!("Could not shrink {path} ({} KB) to send it.", size / 1024)),
+            None => return Err(format!("Could not shrink {name} ({} KB) to send it.", size / 1024)),
         }
     } else {
-        match fs::read(full) {
-            Ok(bytes) => (bytes, media_type),
-            Err(e) => return Output::error(format!("Could not read {path}: {e}")),
-        }
+        (fs::read(full).map_err(|e| format!("Could not read {name}: {e}"))?, media_type)
     };
-    let mut output = Output::ok(format!("{path} is an image ({} KB); it is attached below.", bytes.len() / 1024))
-        .brief(format!("image, {} KB", bytes.len() / 1024));
-    output.image = Some(format!("data:{media_type};base64,{}", base64(&bytes)));
-    output
+    Ok((format!("data:{media_type};base64,{}", base64(&bytes)), bytes.len()))
 }
 
 fn base64(bytes: &[u8]) -> String {

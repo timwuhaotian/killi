@@ -195,6 +195,12 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
     - Logs gained `ts` and durations because nothing in them could tell a slow model from a slow tool. They sit beside each record's data, so a message is still stored exactly as sent.
     - A resumed session prints its conversation from the log: the model always had it, the screen didn't, which read as if nothing was loaded. Tool results kept how they ended, so a replay shows ✗ for what failed.
 
+32. **Images in the prompt, and a banner that keeps up (2026-10-22).**
+    - Ctrl+V reads the clipboard with `osascript`: a file copied in Finder first (or its icon would be taken), then the image as PNG, which macOS offers for TIFF too. Large images are shrunk the same way the `read` tool shrinks them. About 0.5 s.
+    - Cmd+V belongs to the terminal, and a terminal pastes nothing for an image. Kil 0.0.13 sends an empty bracketed paste instead, and killi takes an empty paste to mean "read the clipboard's image". In other terminals Ctrl+V is the way.
+    - An image stands in the prompt as `[Image #N]`, numbered across the session so a recalled prompt can't point at a newer image. Deleting the placeholder drops the image. The prompt goes to the model as the usual string message, then a user message with `[Image #N]:` and the image, the same shape tool images already used, so history, `/resume`, compaction and the Anthropic adapter's merging needed no change.
+    - The banner is drawn again after `/model`, `/effort` or `/reload` while its top row is still on screen. killi keeps the lines printed since the banner until it scrolls off (counting wrapped rows), moves up to it and prints it all again. A resize or Ctrl+L stops this, since the terminal reflows what it shows.
+
 ## Build phases
 
 0. **Scaffold:** a Cargo workspace following `kil`'s conventions (edition 2024, Rust 1.94, its release profile plus `strip`); TOML config; `killi import-kimi`.

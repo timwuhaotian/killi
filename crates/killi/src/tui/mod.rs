@@ -5,6 +5,7 @@
 mod banner;
 mod editor;
 mod menu;
+mod paste;
 mod text;
 
 use std::io::{Stdout, Write, stdout};
@@ -25,9 +26,9 @@ use crossterm::{execute, queue};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
-use crate::agent::{Agent, Controls, Event, Question, Sink, Stop, Todo};
+use crate::agent::{Agent, Controls, Event, Image, Question, Sink, Stop, Todo};
 use crate::config::{Config, Thinking};
-use crate::setup::Setup;
+use crate::setup::{Overview, Setup};
 use crate::llm::{Client, Usage};
 use crate::mcp::Mcp;
 use crate::session::{Choice, Replayed};
@@ -101,12 +102,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     loop {
         let Some(input) = app.read_input(&mut keys).await? else { break };
         match input {
-            Input::Prompt(prompt) => {
+            Input::Prompt(prompt, images) => {
                 app.begin_turn(&prompt);
                 app.draw()?;
                 snapshots.take();
                 let before = Totals::of(&agent);
-                let ended = run_turn(&mut app, &mut keys, &mut rx, agent.run(&prompt)).await?;
+                let ended = run_turn(&mut app, &mut keys, &mut rx, agent.run(&prompt, &images)).await?;
                 app.finish_turn(ended, before, Totals::of(&agent));
                 if matches!(app.last_end, Some(LastEnd::Interrupted)) {
                     agent.recover()?;
@@ -135,6 +136,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                         app.error(&format!("{e:#}"));
                     }
                     app.show_model(&agent, session.config());
+                    app.redraw_banner(&agent, &session, &snapshots);
                     app.save_choice(&agent);
                     app.notice(&format!("Switched to {alias}, keeping the conversation so far. The cache starts over with the new model."));
                 }
@@ -169,6 +171,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                         app.error(&format!("{e:#}"));
                     }
                     app.show_model(&agent, session.config());
+                    app.redraw_banner(&agent, &session, &snapshots);
                     app.save_choice(&agent);
                     app.notice(&format!("Thinking effort {effort}. New sessions start on it too."));
                 } else {
@@ -401,6 +404,7 @@ async fn handle_command(
                 session.reload_agent(agent)?;
                 app.entries = entries(session);
                 app.refresh_choices(session.config());
+                app.redraw_banner(agent, session, snapshots);
                 app.notice("Reloaded the system prompt ([prompt] in config.toml), AGENTS.md files and skills. The next request starts the cache over.");
                 if session.skills_need_restart() {
                     app.notice("This session started without skills, so the model can't load them until killi restarts; /name runs one now.");
@@ -432,7 +436,7 @@ async fn prompt_turn(
     app.draw()?;
     snapshots.take();
     let before = Totals::of(agent);
-    let ended = run_turn(app, keys, rx, agent.run(prompt)).await?;
+    let ended = run_turn(app, keys, rx, agent.run(prompt, &[])).await?;
     app.finish_turn(ended, before, Totals::of(agent));
     if matches!(app.last_end, Some(LastEnd::Interrupted)) {
         agent.recover()?;
@@ -476,7 +480,8 @@ impl Totals {
 }
 
 enum Input {
-    Prompt(String),
+    /// A message to the model, with the images pasted into it.
+    Prompt(String, Vec<Image>),
     Command(String, String),
     Resume(PathBuf),
     Model(String),
@@ -615,6 +620,21 @@ struct App {
     last_end: Option<LastEnd>,
     cwd: PathBuf,
     notify_after: Duration,
+    /// Whether the model takes images, so a pasted one is attached or turned away.
+    sees_images: bool,
+    /// The banner and what was printed after it, while its top row is on screen.
+    since_banner: Option<SinceBanner>,
+}
+
+/// The lines printed from the banner on, so it can be drawn again in place.
+#[derive(Default)]
+struct SinceBanner {
+    /// How many of `lines` the banner itself is.
+    banner: usize,
+    lines: Vec<String>,
+    /// The screen rows `lines` take.
+    rows: usize,
+    resumed: bool,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -677,6 +697,8 @@ impl App {
             last_end: None,
             cwd: cwd.to_path_buf(),
             notify_after: Duration::from_secs(10),
+            sees_images: agent.sees_images(),
+            since_banner: None,
         };
         app.refresh_branch();
         app
@@ -695,21 +717,23 @@ impl App {
             Some((word, value)) => format!(" {DIM}· {word}{RESET} {EFFORT}{value}{RESET}"),
             None => String::new(),
         };
-        let side = [
+        let overview = session.overview();
+        let mut side = vec![
             format!("{BOLD}killi{RESET} {DIM}{}{RESET}", env!("CARGO_PKG_VERSION")),
             format!("{DIM}a coding agent for the terminal{RESET}"),
             String::new(),
-            format!("{DIM}model {RESET} {}{thinking}", agent.model_alias()),
-            format!("{DIM}folder{RESET} {cwd}"),
+            format!("{}{BOLD}{}{RESET}{thinking}", label("model"), agent.model_alias()),
+            format!("{}{cwd}", label("folder")),
         ];
+        side.extend(overview_rows(&overview));
+        self.since_banner = self.pending.is_empty().then(|| SinceBanner { resumed, ..SinceBanner::default() });
         self.commit(String::new());
         for row in banner::render(self.width, &side) {
             self.commit(row);
         }
         self.commit(String::new());
-        let info = session.describe();
-        if !info.is_empty() {
-            self.commit(format!("{DIM}{info}{RESET}"));
+        for problem in &overview.problems {
+            self.commit(format!("{WARN}!{RESET} {problem}"));
         }
         if let Some(why) = &snapshots.disabled {
             self.commit(format!("{DIM}{why}{RESET}"));
@@ -718,9 +742,33 @@ impl App {
             let prompts = agent.user_prompts();
             self.commit(format!("{DIM}Resumed a session with {} prompt(s); the last was “{}”.{RESET}", prompts.len(), prompts.last().map_or("", |s| s.lines().next().unwrap_or(""))));
         }
-        self.commit(format!("{DIM}/ commands and skills · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts{RESET}"));
+        self.commit(keys_hint());
         self.commit(String::new());
         self.last_kind = Kind::None;
+        if let Some(since) = &mut self.since_banner {
+            since.banner = self.pending.len();
+        }
+    }
+
+    /// Draws the banner again with the model, effort and setup now in use, when its top row is
+    /// still on screen; everything printed below it is printed again as it was.
+    fn redraw_banner(&mut self, agent: &Agent, session: &Setup, snapshots: &Snapshots) {
+        let Some(since) = self.since_banner.take() else { return };
+        if since.rows + self.shown.len() > self.height {
+            return;
+        }
+        let _ = queue!(self.out, MoveUp((self.cursor_row + since.rows) as u16), MoveToColumn(0), Clear(ClearType::FromCursorDown));
+        self.cursor_row = 0;
+        self.shown.clear();
+        let waiting = std::mem::take(&mut self.pending);
+        let (last_kind, last_blank) = (self.last_kind, self.last_blank);
+        self.last_blank = false;
+        self.banner(agent, session, snapshots, since.resumed);
+        if since.lines.len() > since.banner || !waiting.is_empty() {
+            self.pending.extend(since.lines.into_iter().skip(since.banner));
+            self.pending.extend(waiting);
+            (self.last_kind, self.last_blank) = (last_kind, last_blank);
+        }
     }
 
     // ---------- input ----------
@@ -746,7 +794,7 @@ impl App {
     fn on_key_idle(&mut self, event: TermEvent) -> Idle {
         let key = match event {
             TermEvent::Paste(text) => {
-                self.editor.insert(&text);
+                self.paste(&text);
                 return Idle::Continue;
             }
             TermEvent::Resize(columns, rows) => {
@@ -792,7 +840,7 @@ impl App {
 
     /// Sends the prompt: a command when it starts with `/`, else a message to the model.
     fn submit(&mut self) -> Idle {
-        let text = self.editor.take();
+        let (text, images) = self.editor.take_with_images();
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Idle::Continue;
@@ -801,7 +849,7 @@ impl App {
             let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
             return Idle::Input(Input::Command(name.to_string(), arg.trim().to_string()));
         }
-        Idle::Input(Input::Prompt(text))
+        Idle::Input(Input::Prompt(text, images))
     }
 
     fn on_key_picker(&mut self, key: KeyEvent) -> Idle {
@@ -892,6 +940,7 @@ impl App {
 
     /// Shows the model and effort the agent runs on in the status line and the slash menu.
     fn show_model(&mut self, agent: &Agent, config: &Config) {
+        self.sees_images = agent.sees_images();
         self.status.model = agent.model_alias().to_string();
         self.status.thinking = agent.thinking().label().to_string();
         self.status.window = agent.context_window();
@@ -936,7 +985,7 @@ impl App {
     fn on_key_busy(&mut self, event: TermEvent) -> bool {
         let key = match event {
             TermEvent::Paste(text) => {
-                self.editor.insert(&text);
+                self.paste(&text);
                 return false;
             }
             TermEvent::Resize(columns, rows) => {
@@ -963,9 +1012,9 @@ impl App {
                     self.notice("Commands run when the agent is idle, except /btw: wait for this turn to finish, or press Esc.");
                     return false;
                 }
-                let text = self.editor.take();
+                let (text, images) = self.editor.take_with_images();
                 if !text.trim().is_empty() {
-                    self.controls.steer.borrow_mut().push_back(text.clone());
+                    self.controls.steer.borrow_mut().push_back((text.clone(), images));
                     self.queued.push(text);
                 }
             }
@@ -1023,10 +1072,12 @@ impl App {
             KeyCode::Char('b') if alt => e.word_left(),
             KeyCode::Char('f') if alt => e.word_right(),
             KeyCode::Char('o') if ctrl => self.show_detail(),
+            KeyCode::Char('v') if ctrl => self.paste_clipboard_image(),
             KeyCode::Char('l') if ctrl => {
                 let _ = execute!(self.out, Clear(ClearType::All), crossterm::cursor::MoveTo(0, 0));
                 self.cursor_row = 0;
                 self.shown.clear();
+                self.since_banner = None;
             }
             KeyCode::Char(c) if !ctrl => e.insert(c.encode_utf8(&mut [0; 4])),
             KeyCode::Backspace if alt => e.delete_word(),
@@ -1043,6 +1094,29 @@ impl App {
             KeyCode::BackTab => self.toggle_plan(),
             KeyCode::Tab => self.complete_command(),
             _ => {}
+        }
+    }
+
+    /// A paste goes in as text, except an empty one, which Kil sends for Cmd+V when the
+    /// clipboard holds only an image: that attaches the image.
+    fn paste(&mut self, text: &str) {
+        if text.is_empty() {
+            return self.paste_clipboard_image();
+        }
+        self.editor.insert(text);
+    }
+
+    /// Ctrl+V: attaches the clipboard's image to the prompt as an `[Image #N]` placeholder.
+    fn paste_clipboard_image(&mut self) {
+        if !self.sees_images {
+            return self.notice(&format!("{} can't see images; /model switches to one that can.", self.status.model));
+        }
+        if self.asking.is_some() {
+            return self.notice("An answer is text only; send the image with your next message.");
+        }
+        match paste::clipboard_image() {
+            Ok(url) => self.editor.attach(url),
+            Err(why) => self.notice(&why),
         }
     }
 
@@ -1659,6 +1733,7 @@ impl App {
         let _ = execute!(self.out, Clear(ClearType::All), Clear(ClearType::Purge), crossterm::cursor::MoveTo(0, 0));
         self.cursor_row = 0;
         self.shown.clear();
+        self.since_banner = None;
     }
 
     /// Starts a block of the conversation: a blank row first, unless it continues the block
@@ -1693,6 +1768,7 @@ impl App {
         let _ = queue!(self.out, MoveToColumn(0), Clear(ClearType::FromCursorDown));
         self.cursor_row = 0;
         self.shown.clear();
+        self.since_banner = None;
     }
 
     /// The live area's rows and where the cursor goes in them.
@@ -1890,10 +1966,17 @@ impl App {
                 queue!(frame, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
                 for line in self.pending.drain(..) {
                     write!(frame, "{}{RESET}\r\n", text::plain(&line))?;
+                    if let Some(since) = &mut self.since_banner {
+                        since.rows += screen_rows(&line, self.width);
+                        since.lines.push(line);
+                    }
                 }
                 write!(frame, "{}", rows.join("\r\n"))?;
                 move_rows(&mut frame, rows.len().saturating_sub(1), cursor_row)?;
             }
+        }
+        if self.since_banner.as_ref().is_some_and(|since| since.rows + rows.len() > self.height) {
+            self.since_banner = None;
         }
         queue!(frame, MoveToColumn(cursor_col as u16), Show, EndSynchronizedUpdate)?;
         self.out.write_all(&frame)?;
@@ -2251,6 +2334,45 @@ fn leaves_something_for_later(text: &str) -> bool {
         .any(|phrase| text.contains(phrase))
 }
 
+/// A banner label, dimmed and padded so the values beside it line up.
+fn label(name: &str) -> String {
+    format!("{DIM}{name:<6}{RESET} ")
+}
+
+/// The banner's rows under the model and folder, in the same column: the instruction files and
+/// what they cost, skills, MCP servers, a custom prompt and what is noted for later.
+fn overview_rows(overview: &Overview) -> Vec<String> {
+    let mut rows = Vec::new();
+    if !overview.instructions.is_empty() {
+        let names: Vec<String> = overview.instructions.iter().map(|path| tilde(path)).collect();
+        rows.push(format!("{}{} {DIM}·{RESET} {TOKENS}~{}{RESET} {DIM}tokens{RESET}", label("rules"), names.join(", "), short(overview.instruction_tokens as u64)));
+    }
+    if overview.skills > 0 {
+        rows.push(format!("{}{}", label("skills"), overview.skills));
+    }
+    if !overview.mcp.is_empty() {
+        rows.push(format!("{}{}", label("mcp"), overview.mcp.join(", ")));
+    }
+    if overview.custom_prompt {
+        rows.push(format!("{}custom {DIM}· [prompt] in config.toml{RESET}", label("prompt")));
+    }
+    if overview.later > 0 {
+        rows.push(format!("{}{} noted {DIM}·{RESET} {LAGOON}/later{RESET}", label("later"), overview.later));
+    }
+    rows
+}
+
+/// The keys worth knowing, each in lagoon with what it does dimmed beside it.
+fn keys_hint() -> String {
+    let keys = [("/", "commands and skills"), ("Shift+Enter", "new line"), ("Shift+Tab", "plan mode"), ("Esc", "interrupts")];
+    keys.iter().map(|(key, what)| format!("{LAGOON}{key}{RESET} {DIM}{what}{RESET}")).collect::<Vec<_>>().join(&format!(" {DIM}·{RESET} "))
+}
+
+/// The rows a printed line takes on a screen `width` columns wide, wrapping included.
+fn screen_rows(line: &str, width: usize) -> usize {
+    line.split('\n').map(|part| text::width(part).max(1).div_ceil(width.max(1))).sum()
+}
+
 /// `path` with the home folder as `~`.
 fn tilde(path: &Path) -> String {
     match path.strip_prefix(crate::config::home()) {
@@ -2426,6 +2548,7 @@ const KEYS: &[(&str, &str)] = &[
     ("Esc", "interrupt the agent"),
     ("Shift+Tab", "plan mode"),
     ("Ctrl+O", "show the last tool output or thought in full"),
+    ("Ctrl+V", "paste an image (Cmd+V too in Kil)"),
     ("↑ ↓", "history"),
     ("Ctrl+C", "clear the prompt; twice to quit"),
 ];
@@ -2484,6 +2607,35 @@ mod tests {
         let later = Some((PathBuf::from("/h/.killi/sessions/x/later.md"), 2));
         let text = handoff("1", log, "~/code/slug", "m", "high", &prompts, &stats, later);
         assert_eq!(text.lines().nth(3).unwrap(), "later: /h/.killi/sessions/x/later.md (2 open: what the agent noted to do later)");
+    }
+
+    #[test]
+    fn the_banner_lists_the_setup_in_its_column() {
+        let overview = Overview {
+            custom_prompt: true,
+            instructions: vec![crate::config::home().join(".agents/AGENTS.md"), PathBuf::from("AGENTS.md")],
+            instruction_tokens: 4551,
+            skills: 204,
+            later: 2,
+            ..Overview::default()
+        };
+        let rows: Vec<String> = overview_rows(&overview).iter().map(|row| unstyled(row)).collect();
+        assert_eq!(rows, [
+            "rules  ~/.agents/AGENTS.md, AGENTS.md · ~4.6k tokens",
+            "skills 204",
+            "prompt custom · [prompt] in config.toml",
+            "later  2 noted · /later",
+        ]);
+        assert!(overview_rows(&Overview::default()).is_empty());
+        assert_eq!(unstyled(&keys_hint()), "/ commands and skills · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts");
+    }
+
+    #[test]
+    fn a_long_line_takes_the_rows_it_wraps_to() {
+        assert_eq!(screen_rows("", 80), 1);
+        assert_eq!(screen_rows(&format!("{DIM}{}{RESET}", "x".repeat(80)), 80), 1);
+        assert_eq!(screen_rows(&"x".repeat(81), 80), 2);
+        assert_eq!(screen_rows("a\nb", 80), 2);
     }
 
     #[test]

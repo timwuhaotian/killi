@@ -1,6 +1,7 @@
 //! The prompt editor: multi-line text with a cursor, readline-style keys and history.
 
 use super::text::{LAGOON, RESET};
+use crate::agent::Image;
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Default)]
@@ -11,6 +12,10 @@ pub struct Editor {
     history: Vec<String>,
     /// Position while browsing history, and the unsent text to come back to.
     browsing: Option<(usize, String)>,
+    /// Images pasted into the text, each standing there as its placeholder.
+    images: Vec<Image>,
+    /// Images pasted this session, so a placeholder's number is never used twice.
+    pasted: usize,
 }
 
 impl Editor {
@@ -49,11 +54,29 @@ impl Editor {
         self.browsing = None;
     }
 
-    /// Takes the text out, adding it to history.
+    /// Puts an image in at the cursor as an `[Image #N]` placeholder, set off by spaces.
+    pub fn attach(&mut self, url: String) {
+        self.pasted += 1;
+        let label = format!("[Image #{}]", self.pasted);
+        let lead = if self.before_cursor().ends_with(|c: char| !c.is_whitespace()) { " " } else { "" };
+        self.insert(&format!("{lead}{label} "));
+        self.images.push(Image { label, url });
+    }
+
+    /// Takes the text out like `take`, with the images whose placeholders are still in it.
+    pub fn take_with_images(&mut self) -> (String, Vec<Image>) {
+        let images = std::mem::take(&mut self.images);
+        let text = self.take();
+        let images = images.into_iter().filter(|image| text.contains(&image.label)).collect();
+        (text, images)
+    }
+
+    /// Takes the text out, adding it to history; pasted images are dropped.
     pub fn take(&mut self) -> String {
         let text = std::mem::take(&mut self.text);
         self.cursor = 0;
         self.browsing = None;
+        self.images.clear();
         if !text.trim().is_empty() && self.history.last() != Some(&text) {
             self.history.push(text.clone());
         }
@@ -64,6 +87,7 @@ impl Editor {
         self.text.clear();
         self.cursor = 0;
         self.browsing = None;
+        self.images.clear();
     }
 
     pub fn backspace(&mut self) {
@@ -290,6 +314,25 @@ mod tests {
         e.down();
         e.down();
         assert_eq!(e.text(), "draft");
+    }
+
+    #[test]
+    fn pasted_images_go_with_the_placeholders_left_in() {
+        let mut e = Editor::default();
+        e.insert("what is");
+        e.attach("data:image/png;base64,AA".into());
+        e.attach("data:image/png;base64,BB".into());
+        assert_eq!(e.text(), "what is [Image #1] [Image #2] ");
+        e.backspace();
+        e.delete_word();
+        let (text, images) = e.take_with_images();
+        assert_eq!(text, "what is [Image #1] [Image #");
+        assert_eq!(images, vec![Image { label: "[Image #1]".into(), url: "data:image/png;base64,AA".into() }]);
+        e.attach("data:image/png;base64,CC".into());
+        assert_eq!(e.text(), "[Image #3] ", "numbers aren't used twice");
+        e.clear();
+        e.insert("[Image #3]");
+        assert!(e.take_with_images().1.is_empty(), "clearing drops the image");
     }
 
     #[test]

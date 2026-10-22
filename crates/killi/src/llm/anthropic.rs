@@ -414,6 +414,21 @@ mod tests {
     }
 
     #[test]
+    fn a_prompt_and_its_pasted_images_are_one_user_turn() {
+        let history = vec![
+            json!({"role": "user", "content": "what is [Image #1]"}),
+            json!({"role": "user", "content": [
+                {"type": "text", "text": "[Image #1]:"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]}),
+        ];
+        let out = convert_messages(&history, true);
+        assert_eq!(out.len(), 1);
+        let blocks = out[0]["content"].as_array().unwrap();
+        assert_eq!(blocks[1], json!({"type": "text", "text": "[Image #1]:"}));
+        assert_eq!(blocks[2]["source"], json!({"type": "base64", "media_type": "image/png", "data": "AAAA"}));
+    }
+
+    #[test]
     fn unsigned_thinking_is_dropped_only_for_claude() {
         let message = json!({"role": "assistant", "reasoning_content": "plan", "content": "ok"});
         assert_eq!(assistant_blocks(&message, false)[0], json!({"type": "thinking", "thinking": "plan"}));

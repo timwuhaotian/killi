@@ -65,11 +65,22 @@ pub struct Todo {
     pub status: String,
 }
 
+/// An image pasted into a prompt: the `[Image #N]` placeholder that stands for it in the
+/// text, and the image as a data URL.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Image {
+    pub label: String,
+    pub url: String,
+}
+
+/// A message typed during a turn, with the images pasted into it.
+pub type Steered = (String, Vec<Image>);
+
 /// What the user can change while the agent works, and the conversation they can ask about.
 #[derive(Clone, Default)]
 pub struct Controls {
     /// Messages typed during a turn, sent at the next step.
-    pub steer: Rc<RefCell<VecDeque<String>>>,
+    pub steer: Rc<RefCell<VecDeque<Steered>>>,
     pub plan: Rc<Cell<bool>>,
     /// Swarm mode: the agent is told to split its work across `agent_swarm` subagents.
     pub swarm: Rc<Cell<bool>>,
@@ -364,6 +375,11 @@ impl Agent {
         &self.client.model.alias
     }
 
+    /// Whether the model takes images (`image_in` in its capabilities).
+    pub fn sees_images(&self) -> bool {
+        self.client.model.images
+    }
+
     pub fn context_window(&self) -> Option<u64> {
         self.client.model.context_window
     }
@@ -382,7 +398,7 @@ impl Agent {
     }
 
     /// Runs one user turn to completion and returns the final reply text.
-    pub async fn run(&mut self, user: &str) -> Result<(String, Stop)> {
+    pub async fn run(&mut self, user: &str, images: &[Image]) -> Result<(String, Stop)> {
         let mut notes = Vec::new();
         if std::mem::take(&mut self.interrupted) {
             notes.push("The user interrupted your previous turn.".to_string());
@@ -409,6 +425,7 @@ impl Agent {
             format!("<system-reminder>{}</system-reminder>\n\n{user}", notes.join("\n"))
         };
         self.push(json!({"role": "user", "content": content}))?;
+        self.push_images(images)?;
         let mut continuations = 0;
         let mut overflow_compacted = false;
         let mut stop_blocks = 0;
@@ -452,9 +469,10 @@ impl Agent {
     /// Everything that goes into the conversation between steps: messages typed meanwhile,
     /// a plan- or swarm-mode change, finished background tasks, and compaction when it's due.
     async fn before_request(&mut self) -> Result<()> {
-        let steered: Vec<String> = self.controls.steer.borrow_mut().drain(..).collect();
-        for text in steered {
+        let steered: Vec<_> = self.controls.steer.borrow_mut().drain(..).collect();
+        for (text, images) in steered {
             self.push(json!({"role": "user", "content": text}))?;
+            self.push_images(&images)?;
         }
         let plan = self.controls.plan.get();
         if plan != self.plan_announced && self.depth == 0 {
@@ -615,12 +633,21 @@ impl Agent {
         if !images.is_empty() {
             let mut parts = Vec::new();
             for (label, url) in images {
-                parts.push(json!({"type": "text", "text": format!("Image from {label}:")}));
-                parts.push(json!({"type": "image_url", "image_url": {"url": url}}));
+                parts.extend(image_parts(&format!("Image from {label}:"), &url));
             }
             self.push(json!({"role": "user", "content": parts}))?;
         }
         Ok(stop)
+    }
+
+    /// The images pasted into a prompt, as a user message right after it with each image
+    /// behind its placeholder, so the prompt itself stays a plain text message.
+    fn push_images(&mut self, images: &[Image]) -> Result<()> {
+        if images.is_empty() {
+            return Ok(());
+        }
+        let parts: Vec<Value> = images.iter().flat_map(|image| image_parts(&format!("{}:", image.label), &image.url)).collect();
+        self.push(json!({"role": "user", "content": parts}))
     }
 
     async fn execute(&mut self, id: &str, call: &ToolCall, truncated: bool) -> tools::Output {
@@ -851,7 +878,7 @@ impl Agent {
                 Ok(job) => job,
                 Err(output) => return (index, output, None),
             };
-            let output = match agent.run(&prompt).await {
+            let output = match agent.run(&prompt, &[]).await {
                 Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => tools::Output::ok(text),
                 Ok((_, stop)) => tools::Output::error(format!("The subagent stopped without a final report ({stop:?}).")),
                 Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
@@ -1053,6 +1080,11 @@ fn hash_text(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+/// An image in a user message: a line of text that says what it is, then the image.
+fn image_parts(label: &str, url: &str) -> [Value; 2] {
+    [json!({"type": "text", "text": label}), json!({"type": "image_url", "image_url": {"url": url}})]
 }
 
 fn parse_args(call: &ToolCall) -> Result<Value, String> {

@@ -5,6 +5,22 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.23 — 2026-10-22
+
+- **Images in the prompt.** Ctrl+V pastes the clipboard's image (a screenshot, or an image
+  file copied in Finder) as `[Image #1]`; Cmd+V does too in Kil 0.0.13, which tells killi
+  when the clipboard holds only an image. Large images are shrunk as `read` shrinks them,
+  deleting the placeholder drops the image, and a model without `image_in` says so. Images
+  pasted while the agent works go with your message at its next step.
+- **The banner keeps up.** After `/model`, `/effort` or `/reload` it is drawn again with
+  what is now in use, while it is still on screen; before, it kept the model the session
+  started with.
+- **The banner lists the setup in its column**, one row each: `rules` (the AGENTS.md files
+  and their tokens), `skills`, `mcp`, a custom `prompt` and what is noted for `later`, with
+  the model in bold and effort and tokens in the status line's colors. It used to be one dim
+  line that ran off narrow screens. The keys under it are in lagoon, and an MCP server that
+  didn't start is a warning of its own.
+
 ## 0.2.22 — 2026-10-22
 
 - **A reply that leaves something for later without noting it gets a nudge.** When the

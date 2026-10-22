@@ -20,6 +20,23 @@ use crate::tools;
 const DEFAULT_COMPACT_AT: u64 = 256_000;
 const DEFAULT_SWARM_PARALLEL: usize = 8;
 
+/// What a session starts with besides its model and folder, for the banner.
+#[derive(Debug, Default)]
+pub struct Overview {
+    /// The prompt's guidance is `[prompt] system` from the config, not the built-in text.
+    pub custom_prompt: bool,
+    /// Instruction files (AGENTS.md), relative to the folder when they are in it.
+    pub instructions: Vec<PathBuf>,
+    pub instruction_tokens: usize,
+    pub skills: usize,
+    /// MCP servers that are on.
+    pub mcp: Vec<String>,
+    /// Open entries noted for later in this folder.
+    pub later: usize,
+    /// What went wrong starting up, such as an MCP server that didn't start.
+    pub problems: Vec<String>,
+}
+
 pub struct Setup {
     config: Config,
     cwd: PathBuf,
@@ -143,31 +160,40 @@ impl Setup {
     }
 
     /// What the system prompt includes, in one line.
+    /// What the session starts with besides its model and folder.
+    pub fn overview(&self) -> Overview {
+        Overview {
+            custom_prompt: self.config.guidance() != prompt::DEFAULT,
+            instructions: self.prompt.instruction_files.iter().map(|p| p.strip_prefix(&self.cwd).unwrap_or(p).to_path_buf()).collect(),
+            instruction_tokens: self.prompt.instruction_tokens,
+            skills: self.skills.len(),
+            mcp: self.settings.mcp.names().iter().map(|name| name.to_string()).collect(),
+            later: crate::later::list(&self.cwd).len(),
+            problems: self.notes.clone(),
+        }
+    }
+
+    /// The overview on one line, for headless runs.
     pub fn describe(&self) -> String {
+        let overview = self.overview();
         let mut parts = Vec::new();
-        if self.config.guidance() != prompt::DEFAULT {
+        if overview.custom_prompt {
             parts.push("custom prompt from [prompt]".to_string());
         }
-        if !self.prompt.instruction_files.is_empty() {
-            let names: Vec<String> = self
-                .prompt
-                .instruction_files
-                .iter()
-                .map(|p| p.strip_prefix(&self.cwd).unwrap_or(p).display().to_string())
-                .collect();
-            parts.push(format!("instructions ~{} tokens from {}", self.prompt.instruction_tokens, names.join(", ")));
+        if !overview.instructions.is_empty() {
+            let names: Vec<String> = overview.instructions.iter().map(|p| p.display().to_string()).collect();
+            parts.push(format!("instructions ~{} tokens from {}", overview.instruction_tokens, names.join(", ")));
         }
-        if !self.skills.is_empty() {
-            parts.push(format!("{} skills", self.skills.len()));
+        if overview.skills > 0 {
+            parts.push(format!("{} skills", overview.skills));
         }
-        if !self.settings.mcp.is_empty() {
-            parts.push(format!("MCP: {}", self.settings.mcp.names().join(", ")));
+        if !overview.mcp.is_empty() {
+            parts.push(format!("MCP: {}", overview.mcp.join(", ")));
         }
-        let later = crate::later::list(&self.cwd).len();
-        if later > 0 {
-            parts.push(format!("{later} noted for later · /later"));
+        if overview.later > 0 {
+            parts.push(format!("{} noted for later · /later", overview.later));
         }
-        parts.extend(self.notes.iter().cloned());
+        parts.extend(overview.problems);
         parts.join(" · ")
     }
 

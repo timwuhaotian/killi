@@ -145,7 +145,7 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
     }
 
     let started = Instant::now();
-    let result = agent.run(&prompt).await;
+    let result = agent.run(&prompt, &[]).await;
     let stats = &agent.stats;
     let elapsed = started.elapsed();
 
