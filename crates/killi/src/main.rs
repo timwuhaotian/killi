@@ -78,6 +78,9 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
         }
         _ => {
             let options = parse(args)?;
+            if options.prompt.is_none() && !config::set_up_if_missing()? {
+                return Ok(ExitCode::SUCCESS);
+            }
             let config = config::Config::load()?;
             let cwd = std::env::current_dir()?;
             let last = || session::list(&cwd).into_iter().next().map(|s| s.path);

@@ -102,8 +102,9 @@ Rust 1.94 or later.
 
 ### Models
 
-killi reads `~/.killi/config.toml`. If you use Kimi Code, copy its providers, models and MCP
-servers:
+killi reads `~/.killi/config.toml`. Run without one, `killi` offers to make it: by importing
+Kimi Code's, or from a starting config to edit. To do that yourself: if you use Kimi Code, copy
+its providers, models and MCP servers:
 
 ```sh
 killi import-kimi

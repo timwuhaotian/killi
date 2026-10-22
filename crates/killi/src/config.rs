@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::PathBuf;
 
@@ -307,6 +307,38 @@ pub fn init() -> Result<()> {
     file.write_all(prompt_section().as_bytes())?;
     println!("Wrote {}. Set your providers' keys and models there, then run `killi`.", path.display());
     Ok(())
+}
+
+/// When killi starts in a terminal without a config, offers to make one: by importing Kimi
+/// Code's if there is one, or from the starting template. Returns false when the user has to
+/// edit the new config before killi can start; a declined offer leaves `load` to explain.
+pub fn set_up_if_missing() -> Result<bool> {
+    let path = killi_home().join("config.toml");
+    if path.exists() || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Ok(true);
+    }
+    eprintln!("killi has no config yet at {}.", path.display());
+    let kimi = home().join(".kimi-code/config.toml");
+    if kimi.exists() {
+        if confirm(&format!("Import providers, models and MCP servers from Kimi Code ({})?", kimi.display()))? {
+            import_kimi(false)?;
+        }
+        return Ok(true);
+    }
+    if !confirm("Write a starting config to edit?")? {
+        return Ok(true);
+    }
+    init()?;
+    Ok(false)
+}
+
+/// Asks a yes/no question on the terminal; Enter means yes.
+fn confirm(question: &str) -> Result<bool> {
+    eprint!("{question} [Y/n] ");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(answer.trim().to_ascii_lowercase().as_str(), "" | "y" | "yes"))
 }
 
 /// Copies providers, models, `default_model` and `[thinking]` from Kimi Code's config.

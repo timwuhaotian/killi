@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.4 — 2026-10-22
+
+- **First run sets you up.** Started in a terminal without a config, `killi` offers to import
+  Kimi Code's providers, models and MCP servers and then starts; without Kimi Code it offers
+  to write the starting config to edit. `killi -p` and piped runs still just say what to run.
+
 ## 0.2.3 — 2026-10-22
 
 - **Swarms.** The `agent_swarm` tool runs one subagent per item of a prompt template (up to

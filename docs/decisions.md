@@ -46,7 +46,7 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
 
 14. **Config: killi's own `~/.killi/config.toml`, in the same layout as Kimi Code's.** killi replaces Kimi Code rather than running alongside it.
     - Same `[providers.<name>]` and `[models."<provider>/<model>"]` layout and keys, plus `default_model` and `[thinking]`.
-    - `killi import-kimi` copies providers and models once from `~/.kimi-code/config.toml`. It skips providers that sign in through Kimi's account login (`type = "kimi"`) and reports them.
+    - `killi import-kimi` copies providers and models once from `~/.kimi-code/config.toml`. It skips providers that sign in through Kimi's account login (`type = "kimi"`) and reports them. Started in a terminal without a config, `killi` offers this import, or `killi init`'s template when there's no Kimi Code config.
     - API keys: `api_key = "..."` or `api_key_env = "NAME"`.
     - Adapters kept: OpenAI chat (`openai`), OpenAI Responses (`openai_responses`), Anthropic (`anthropic`). Models can pick one with `protocol = ...`.
     - The user's default model is `minimax/MiniMax-M3.1-Flash`, which uses the Anthropic API. That API only caches where the request marks it, so cache breakpoints are needed from day one. Run the same cache probe on MiniMax when building that adapter.
