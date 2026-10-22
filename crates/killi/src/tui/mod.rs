@@ -74,7 +74,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         let _ = tx.send(event);
     });
     let controls = Controls { interactive: true, ..Controls::default() };
-    text::init_theme(config.ui.theme.as_deref());
+    let background = if config.ui.theme.is_none() { query_background() } else { None };
+    text::init_theme(config.ui.theme.as_deref(), background);
     let mut session = Setup::new(config, &cwd, start.model.as_deref()).await?;
     let mut agent = match &start.resume {
         Some(log) => session.resume(log, controls.clone(), sink.clone())?,
@@ -174,6 +175,65 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         println!("{DIM}To continue this session: {}{RESET}", resume_command(&agent.session.log_path));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Asks the terminal for its background color (OSC 11) and waits up to 200 ms for the answer,
+/// so a light terminal gets the light palette without `COLORFGBG` or `[ui] theme`. Nothing
+/// when stdin isn't a terminal or it doesn't answer; `[ui] theme` skips the question.
+fn query_background() -> Option<(u8, u8, u8)> {
+    use std::io::{IsTerminal, Read};
+    if !std::io::stdin().is_terminal() || !stdout().is_terminal() {
+        return None;
+    }
+    terminal::enable_raw_mode().ok()?;
+    let answer = (|| {
+        let mut out = stdout();
+        write!(out, "\x1b]11;?\x1b\\").ok()?;
+        out.flush().ok()?;
+        let mut reply = Vec::new();
+        let deadline = Instant::now() + Duration::from_millis(200);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            let mut poll = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
+            // SAFETY: `poll` points at one pollfd that lives for the whole call.
+            if unsafe { libc::poll(&mut poll, 1, left.as_millis() as i32) } <= 0 {
+                break;
+            }
+            let mut bytes = [0u8; 64];
+            let n = std::io::stdin().lock().read(&mut bytes).ok()?;
+            if n == 0 {
+                break;
+            }
+            reply.extend_from_slice(&bytes[..n]);
+            if reply.ends_with(b"\x07") || reply.ends_with(b"\x1b\\") {
+                break;
+            }
+        }
+        parse_background(&String::from_utf8_lossy(&reply))
+    })();
+    let _ = terminal::disable_raw_mode();
+    answer
+}
+
+/// The color in a terminal's OSC 11 answer, `rgb:rrrr/gggg/bbbb` with 1 to 4 hex digits
+/// per channel, scaled to 8 bits.
+fn parse_background(reply: &str) -> Option<(u8, u8, u8)> {
+    let start = reply.find("rgb:")? + 4;
+    let end = reply[start..].find(['\x07', '\x1b']).map_or(reply.len(), |i| start + i);
+    let channel = |hex: &str| {
+        let value = u32::from_str_radix(hex, 16).ok()?;
+        Some(match hex.len() {
+            1 => (value * 17) as u8,
+            n @ 2..=4 => (value >> (4 * (n - 2))) as u8,
+            _ => return None,
+        })
+    };
+    let mut channels = reply[start..end].split('/').map(channel);
+    let (r, g, b) = (channels.next()??, channels.next()??, channels.next()??);
+    Some((r, g, b))
 }
 
 /// The command that reopens the session logged at `log`, quoted for the shell when needed.
@@ -2090,17 +2150,39 @@ fn ago(elapsed: Duration) -> String {
     }
 }
 
-/// A desktop notification: the terminal's own when it supports OSC 9, otherwise macOS's.
+/// A desktop notification: the terminal's own when it supports OSC 9, otherwise macOS's,
+/// posted in the name of the app the terminal runs in, so clicking it brings that app to the
+/// front rather than Script Editor. An app that can't be told falls back to a plain one.
 fn notify(body: &str) {
     let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
     if ["iTerm.app", "WezTerm", "ghostty"].contains(&program.as_str()) || std::env::var_os("KITTY_WINDOW_ID").is_some() {
         let mut out = stdout();
         let _ = write!(out, "\x1b]9;killi: {body}\x07");
         let _ = out.flush();
-    } else {
-        let script = format!("display notification \"{}\" with title \"killi\"", body.replace('"', "'"));
-        let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
+        return;
     }
+    let plain = format!("display notification \"{}\" with title \"killi\"", body.replace('"', "'"));
+    let mut command = std::process::Command::new("/usr/bin/osascript");
+    match host_app(&program) {
+        Some(id) => command.args(["-e", "try", "-e", &format!("tell application id \"{id}\" to {plain}"), "-e", "on error", "-e", &plain, "-e", "end try"]),
+        None => command.args(["-e", &plain]),
+    };
+    let _ = command.spawn();
+}
+
+/// The bundle id of the app the terminal runs in: what macOS puts in the environment of
+/// anything an app starts, or the id that goes with `TERM_PROGRAM` for terminals that strip it.
+fn host_app(program: &str) -> Option<String> {
+    let known = match program {
+        "Apple_Terminal" => Some("com.apple.Terminal"),
+        "kil" => Some("dev.kil.terminal"),
+        "vscode" => Some("com.microsoft.VSCode"),
+        _ => None,
+    };
+    std::env::var("__CFBundleIdentifier")
+        .ok()
+        .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)))
+        .or_else(|| known.map(str::to_string))
 }
 
 struct Command {
@@ -2183,6 +2265,15 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_terminals_background_answer_is_read_at_any_depth() {
+        assert_eq!(parse_background("\x1b]11;rgb:0b0b/0f0f/1414\x1b\\"), Some((11, 15, 20)));
+        assert_eq!(parse_background("\x1b]11;rgb:f5/f7/f4\x07"), Some((245, 247, 244)));
+        assert_eq!(parse_background("\x1b]11;rgb:f/f/f\x07"), Some((255, 255, 255)));
+        assert_eq!(parse_background("\x1b]11;rgb:ffff/ffff\x07"), None);
+        assert_eq!(parse_background(""), None);
+    }
 
     #[test]
     fn resume_command_quotes_only_when_needed() {

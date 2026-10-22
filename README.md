@@ -16,7 +16,7 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 [Kiled](https://github.com/timwuhaotian/kiled) editor.
 
 <p align="center">
-  <img src="docs/screenshot.png" width="960" alt="killi's banner, then killi fixing a failing Rust test: it reads the project, runs the tests, edits src/lib.rs with a numbered line diff, reruns the tests and explains the fix; the status line shows the model, thinking effort, a context gauge and tokens with 78% cached">
+  <img src="docs/screenshot.svg" width="960" alt="killi's banner, then killi fixing a failing Rust test: it reads the project, runs the tests, thinks, edits src/lib.rs with a numbered line diff, reruns the tests and explains the fix; the status line shows the model, thinking effort, a context gauge, tokens with 83% cached and the git branch">
 </p>
 
 > **Status: early.** Apple silicon Macs only. Used daily by its author; expect rough edges.
@@ -167,7 +167,7 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | ↑ ↓ | history |
 
 <p align="center">
-  <img src="docs/menu.png" width="960" alt="The slash menu after typing /re: resume, reload, then the refactor, release, code-review and write-tests skills, each with its description">
+  <img src="docs/menu.svg" width="960" alt="The slash menu after typing /re: resume, reload and the refactor skill first, then the other commands and skills whose descriptions match, each with its description">
 </p>
 
 Commands: `/model [alias]`, `/effort [level]` (thinking effort), `/new` (or `/clear`),

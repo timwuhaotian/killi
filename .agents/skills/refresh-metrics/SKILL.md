@@ -70,8 +70,19 @@ Update by hand, from `docs/bench.json` and `docs/eval.json`:
 - "Size and memory": which models and versions each tool ran.
 - The image alt texts if the headline changed.
 
-`docs/screenshot.png` and `docs/menu.png` are screenshots of the UI, not outputs of these
-scripts; retake them when the UI changes.
+`docs/screenshot.svg` and `docs/menu.svg` are drawn by `scripts/screenshot.py`, which runs
+killi in a pseudo-terminal (it needs `pyte` and `cargo build --release`). Redraw them when
+the UI changes, with a clean `--home` holding only a `.killi/config.toml` and a few skills:
+
+```sh
+scripts/screenshot.py --project ~/code/slug --home /tmp/home --model minimax/MiniMax-M3.1-Flash \
+    --prompt "The slugify test fails. Fix it and run the tests." docs/screenshot.svg
+scripts/screenshot.py --project ~/code/slug --home /tmp/home --model minimax/MiniMax-M3.1-Flash \
+    --type /re docs/menu.svg
+```
+
+The project is a one-file crate whose `slugify` only replaces spaces, with a test that
+expects punctuation dropped and runs of spaces collapsed.
 
 ## Another number people ask for
 

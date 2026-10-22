@@ -10,7 +10,8 @@ behind it are in `docs/decisions.md`.
   its solution); `run` and `report` compare tools and need models configured.
 - Release: see `RELEASING.md`. `scripts/release.sh` builds `releases/killi-arm64`.
 - Re-measure size, memory and tokens and redraw the charts and README numbers: the
-  `refresh-metrics` skill. Find bugs and optimizations from real use: the `review-sessions`
+  `refresh-metrics` skill; it also says how `scripts/screenshot.py` redraws the README's
+  screenshots from a real run. Find bugs and optimizations from real use: the `review-sessions`
   skill, with `scripts/sessions.py` (reads `~/.killi/sessions`) and `scripts/probe.py` (asks a
   provider how it behaves). Both live in `.agents/skills/`.
 

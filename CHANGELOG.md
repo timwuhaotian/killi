@@ -5,6 +5,21 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.19 — 2026-10-22
+
+- **A light terminal gets the light palette on its own.** At start killi asks the terminal
+  for its background color (OSC 11) and picks the theme by its brightness, so iTerm2,
+  Ghostty, WezTerm, kitty and Terminal.app on a light background no longer need
+  `COLORFGBG` or `[ui] theme`. A terminal that doesn't answer within 200 ms keeps the old
+  detection; `[ui] theme` skips the question.
+- **Clicking a notification comes back to the terminal.** On a terminal without its own
+  notifications (Kil, Terminal.app, VS Code), the "Done" notification is posted in the name
+  of the app the terminal runs in, so clicking it brings that app to the front instead of
+  opening Script Editor. iTerm2, Ghostty, WezTerm and kitty keep their own (OSC 9).
+- **The README's screenshots show the current design**, drawn from a real run by
+  `scripts/screenshot.py`: it runs killi in a pseudo-terminal and draws the screen as an
+  SVG, cell for cell, so a screenshot is one command instead of a cropped window grab.
+
 ## 0.2.18 — 2026-10-22
 
 - **The design system's own colors.** On a terminal that announces 24-bit color

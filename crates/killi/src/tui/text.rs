@@ -23,15 +23,22 @@ enum Theme {
 
 static THEME: OnceLock<Theme> = OnceLock::new();
 
-/// Fixes the theme for the session: `"dark"` or `"light"`, anything else detects it from
-/// `COLORFGBG`, which most terminals that have a light background set.
-pub fn init_theme(setting: Option<&str>) {
+/// Fixes the theme for the session: `"dark"` or `"light"`, anything else goes by the
+/// terminal's `background` when it answered the color query, else by `COLORFGBG`, which
+/// most terminals that have a light background set.
+pub fn init_theme(setting: Option<&str>, background: Option<(u8, u8, u8)>) {
     let theme = match setting {
         Some("dark") => Theme::Dark,
         Some("light") => Theme::Light,
-        _ => detect_theme(),
+        _ => background.map_or_else(detect_theme, theme_for),
     };
     let _ = THEME.set(theme);
+}
+
+/// The theme for a background color: light when it reflects more than half the light.
+fn theme_for((r, g, b): (u8, u8, u8)) -> Theme {
+    let luminance = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b);
+    if luminance > 127.5 { Theme::Light } else { Theme::Dark }
 }
 
 fn detect_theme() -> Theme {
@@ -811,6 +818,14 @@ mod tests {
         narrow.line("| aaaaaaaaaa | bbbbbbbbbb |");
         let rows = narrow.finish();
         assert!(rows.iter().all(|r| width(r) <= 14), "{rows:?}");
+    }
+
+    #[test]
+    fn a_background_picks_the_theme_by_its_brightness() {
+        assert!(matches!(theme_for((11, 15, 20)), Theme::Dark));
+        assert!(matches!(theme_for((245, 247, 244)), Theme::Light));
+        assert!(matches!(theme_for((0, 43, 54)), Theme::Dark));
+        assert!(matches!(theme_for((253, 246, 227)), Theme::Light));
     }
 
     #[test]
