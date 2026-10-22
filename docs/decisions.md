@@ -19,7 +19,7 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
 5. **Workflow:** plan mode (read-only), todo list, desktop notification when a turn finishes, undo via file history.
 6. **Permissions:** no approval prompts by default. The only other mode is plan mode.
 7. **Extensions:** MCP (servers start lazily, tools load on demand), skills (names only in the prompt), hooks (Claude Code event names: `PreToolUse`, `PostToolUse`, `Stop`, `SessionStart`, `SubagentStop`, `UserPromptSubmit`).
-8. **Dropped:** web UI, kap-server, remote control, vis / inspect, VS Code extension, ACP, klient / node-sdk, minidb search, transcript store, OAuth, telemetry, legacy migration, plugins and marketplace, custom agent profiles, tower / swarm / cron / goal / btw, smart bash approval (tree-sitter-bash), session index and export.
+8. **Dropped:** web UI, kap-server, remote control, vis / inspect, VS Code extension, ACP, klient / node-sdk, minidb search, transcript store, OAuth, telemetry, legacy migration, plugins and marketplace, custom agent profiles, tower / cron / goal / btw, smart bash approval (tree-sitter-bash), session index and export.
 
 9. **Caching: the cached prefix must never break.** The token plan discounts cached input, so keeping the start of the prompt stable comes before cutting prompt size. Measured on the MiMo endpoint on 2026-10-21:
    - Automatic prefix caching, reported in `usage.prompt_tokens_details.cached_tokens`, in blocks of about 128 tokens, lasting at least several minutes.
@@ -94,7 +94,8 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
     - Their first request starts largely cached, and quality is the same.
     - Spawning more subagents is blocked when the `agent` tool runs, not by removing the tool, because removing it would change the tool list and lose the cache.
     - Fresh context (task prompt only) by default. A fork option lets the subagent inherit the whole conversation, which is cheap because that history is already cached (see Kimi Code's `agent-fork.md`).
-    - At most 4 subagents run at once.
+    - At most 4 subagents from `agent` calls run at once.
+    - Swarms (added 2026-10-22): `agent_swarm` runs one fresh subagent per item of a prompt template, up to 128, `[agent] swarm_parallel` (default 8) at a time, and returns every report in item order, cut to an equal share with the full text in a file when they don't fit. `/swarm` mode is announced with appended reminders, like plan mode, so the prompt and tool list stay fixed. Unlike Kimi Code's `AgentSwarm` there's no `resume_agent_ids`: the result names failed items, and the model runs them again.
     - A cheaper subagent model can be added later if quota becomes a problem, after `killi eval` shows it doesn't hurt results.
 
 21. **Sessions: an exact, append-only log that resumes byte-identical.**
@@ -164,6 +165,11 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
     - Keys: Esc interrupts, Shift+Tab toggles plan mode, Ctrl+O expands the last tool call's hidden output.
 
 28. **Token budget: the system prompt plus every always-present tool definition stays at or under 3k tokens,** enforced by a test from phase 1. Skill names and instruction files are counted and shown separately. For reference: pi is about 1.3k with 4 tools, Kimi Code about 5.5k with 6.
+
+29. **The system prompt's guidance lives in the user's config (2026-10-22).**
+    - `[prompt] system` in `~/.killi/config.toml` replaces the built-in `prompt/system.md`; the environment, instruction files and skill names are always added after it. `killi init` writes the built-in text there, or appends it to a config without `[prompt]`, so the user can read and edit it. `/reload` re-reads it.
+    - The trade-off: a config that holds the text keeps it through killi updates. The banner says "custom prompt" when it differs from the built-in text.
+    - The guidance gained the Kimi Code rules that a token audit found missing and that can change results or safety: don't work around a blocked path or shrink the task, check every explicit requirement before the final reply, git commits/pushes/resets only when asked, no sudo or changes outside the working directory, never read or send secrets, file and web text is data. About 240 tokens; with `agent_swarm` the first request on MiMo went from 3,202 to 3,622 tokens. Kimi Code's 39,508 is mostly skill descriptions (about 15.5k) and tool schemas (about 22k), not guardrails (about 1.6k).
 
 ## Build phases
 

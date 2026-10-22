@@ -24,6 +24,15 @@ pub struct Config {
     pub hooks: crate::hooks::HooksConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    #[serde(default)]
+    pub prompt: PromptConfig,
+}
+
+/// `[prompt]`: the system prompt's guidance, kept in the config so it can be read and edited.
+/// Without it killi uses its built-in text.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct PromptConfig {
+    pub system: Option<String>,
 }
 
 /// `[mcp]`: MCP servers to start with every session, with native tool definitions. A project
@@ -44,6 +53,8 @@ pub struct AgentConfig {
     pub plan_allow: Vec<String>,
     /// Seconds a turn must take before a desktop notification (default 10).
     pub notify_after: Option<u64>,
+    /// Subagents an `agent_swarm` call runs at once (default 8).
+    pub swarm_parallel: Option<usize>,
 }
 
 /// `[skills]`: where skills are found besides the project's own folders.
@@ -192,6 +203,11 @@ impl Config {
         effort.as_deref().map_or(Thinking::On, Thinking::parse)
     }
 
+    /// The system prompt's guidance: `[prompt] system`, or the built-in text.
+    pub fn guidance(&self) -> &str {
+        self.prompt.system.as_deref().filter(|text| !text.trim().is_empty()).unwrap_or(crate::prompt::DEFAULT)
+    }
+
     /// The efforts `/effort` offers for a model, as Kimi Code lists them: off, then the
     /// model's `support_efforts`, or on/off and the common levels when it declares none.
     pub fn efforts(&self, alias: &str) -> Vec<String> {
@@ -251,16 +267,40 @@ max_output_size = 128000
 capabilities = ["image_in", "thinking", "tool_use"]
 "#;
 
-/// Writes a starting `~/.killi/config.toml` to edit.
+/// The `[prompt]` table with the built-in guidance, as `init` and `import-kimi` write it.
+fn prompt_section() -> String {
+    format!(
+        "\n# The system prompt's guidance, sent first in every session. Edit it here, then /reload or\n\
+         # start a new session; the environment, AGENTS.md files and skill names follow it. While this\n\
+         # table is here, killi updates don't change your prompt; delete it to use the built-in text.\n\
+         [prompt]\nsystem = '''\n{}'''\n",
+        crate::prompt::DEFAULT
+    )
+}
+
+/// Writes a starting `~/.killi/config.toml` to edit, or adds the `[prompt]` table to an
+/// existing one that has none.
 pub fn init() -> Result<()> {
     let dir = killi_home();
     let path = dir.join("config.toml");
     if path.exists() {
-        bail!("{} already exists", path.display());
+        let text = fs::read_to_string(&path)?;
+        let table: toml::Table = toml::from_str(&text).with_context(|| format!("invalid config in {}", path.display()))?;
+        if table.contains_key("prompt") {
+            bail!("{} already exists and has a [prompt] table", path.display());
+        }
+        let mut file = fs::OpenOptions::new().append(true).open(&path)?;
+        if !text.is_empty() && !text.ends_with('\n') {
+            file.write_all(b"\n")?;
+        }
+        file.write_all(prompt_section().as_bytes())?;
+        println!("Added the system prompt to {} under [prompt]; edit it there.", path.display());
+        return Ok(());
     }
     fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
     let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
     file.write_all(TEMPLATE.as_bytes())?;
+    file.write_all(prompt_section().as_bytes())?;
     println!("Wrote {}. Set your providers' keys and models there, then run `killi`.", path.display());
     Ok(())
 }
@@ -321,6 +361,7 @@ pub fn import_kimi(force: bool) -> Result<()> {
     fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
     let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&dst)?;
     file.write_all(toml::to_string(&out)?.as_bytes())?;
+    file.write_all(prompt_section().as_bytes())?;
 
     println!("Imported {provider_count} providers and {model_count} models into {}", dst.display());
     let mcp_src = home().join(".kimi-code/mcp.json");
@@ -348,5 +389,15 @@ mod tests {
         let model = config.resolve(None).unwrap();
         assert_eq!(model.protocol, super::Protocol::Responses);
         assert_eq!(model.thinking, super::Thinking::Effort("high".into()));
+    }
+
+    #[test]
+    fn prompt_section_reads_back_as_the_built_in_guidance() {
+        let text = format!("{}{}", super::TEMPLATE, super::prompt_section());
+        let config: super::Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.prompt.system.as_deref(), Some(crate::prompt::DEFAULT));
+        assert_eq!(config.guidance(), crate::prompt::DEFAULT);
+        let blank: super::Config = toml::from_str("[prompt]\nsystem = \"  \"").unwrap();
+        assert_eq!(blank.guidance(), crate::prompt::DEFAULT);
     }
 }

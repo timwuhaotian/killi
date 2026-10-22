@@ -5,6 +5,19 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- **Swarms.** The `agent_swarm` tool runs one subagent per item of a prompt template (up to
+  128, 8 at a time; `[agent] swarm_parallel` changes that) and returns every report in item
+  order. `/swarm` turns swarm mode on or off, telling the agent to split its work this way;
+  `/swarm <task>` runs one task in it.
+- **The system prompt in your config.** Its guidance is under `[prompt] system` in
+  `~/.killi/config.toml`, to read and edit; `/reload` applies changes. `killi init` adds it to an
+  existing config.
+- **Safety rules in the prompt:** git commits, pushes and resets only when asked, no secrets
+  read or sent, no quiet workarounds or shrinking the task when something is blocked, and a
+  check of every explicit requirement before the final reply.
+- In `killi -p`, a subagent's first line no longer runs onto the line of the call that
+  started it.
+
 ## 0.2.2 — 2026-10-22
 
 - **Slash menu.** Typing `/` opens a menu of commands and skills that narrows as you type,

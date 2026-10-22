@@ -25,7 +25,7 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 
 - **Small and quick.** One 6 MB binary with no runtime to install. It starts in 5 ms and uses
   about 16 MB of memory running a prompt, where Kimi Code uses 417 MB and Claude Code 323 MB.
-- **Few tokens.** The system prompt and every tool together come to about 2,200 tokens, plus
+- **Few tokens.** The system prompt and every tool together come to about 2,600 tokens, plus
   your `AGENTS.md` files and about 4 tokens per installed skill. In the
   [capability tests](#capability-tests) killi passed every task Kimi Code passed, on the same
   model, with 7.5× fewer input tokens.
@@ -42,9 +42,10 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 - **Tools that forgive small mistakes.** `edit` takes several changes in one call and still
   matches when only trailing spaces, smart quotes or dashes differ. Long output keeps its useful
   end and saves the rest to a file. Slightly broken tool-call JSON is repaired, not dropped.
-- **Subagents** run in parallel on the same model and cached prompt. **Background tasks** keep
-  servers and slow builds running. **Undo** puts your files back as they were before a turn,
-  including what commands changed.
+- **Subagents** run in parallel on the same model and cached prompt. **Swarms** run one subagent
+  per item of a prompt template, up to 128, several at a time; `/swarm` tells the agent to split
+  its work that way. **Background tasks** keep servers and slow builds running. **Undo** puts
+  your files back as they were before a turn, including what commands changed.
 - **Your setup, carried over.** Kimi Code's config layout (`killi import-kimi` copies it),
   skills from `~/.agents/skills`, MCP servers from `mcp.json`, Claude Code-style hooks, and
   `AGENTS.md` (or `CLAUDE.md`) files, including ones in subfolders.
@@ -165,14 +166,19 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 </p>
 
 Commands: `/model [alias]`, `/effort [level]` (thinking effort), `/new` (or `/clear`),
-`/resume`, `/compact [focus]`, `/undo`, `/plan`, `/usage`, `/reload`, `/help`, `/exit`, and
+`/resume`, `/compact [focus]`, `/undo`, `/plan`, `/swarm [task|on|off]`, `/usage`, `/reload`,
+`/help`, `/exit`, and
 `/<skill-name> [request]` for any skill. The menu matches loosely, the way Kimi Code's does:
 `/cr` finds `code-review`.
 
 killi runs commands and edits files without asking; `/undo` is the safety net.
 
-### Instructions, skills, MCP and hooks
+### System prompt, instructions, skills, MCP and hooks
 
+- **System prompt:** its guidance (how the agent works, and the safety rules) sits in
+  `config.toml` under `[prompt] system`, to read and edit; `/reload` applies a change.
+  `killi init` writes it there, or adds it to a config that has none. While it's there, killi
+  updates don't change your prompt; delete the table to go back to the built-in text.
 - **Instructions:** `~/.agents/AGENTS.md`, then every `AGENTS.md` from the git root down to
   the working directory (or `CLAUDE.md` where there is no `AGENTS.md`; `@file` lines are
   followed). When the agent works in a subfolder with its own `AGENTS.md`, it is pointed to it.
@@ -181,8 +187,9 @@ killi runs commands and edits files without asking; `/undo` is the safety net.
   when it applies, and `/<name>` runs one directly. Other folders: `[skills] dirs = [...]`.
 - **MCP:** servers from `~/.killi/mcp.json` and the project's `.mcp.json`, in the usual
   `{"mcpServers": {...}}` format (stdio or HTTP). The agent reaches them through one `mcp` tool,
-  and a server starts the first time it's used. To give a project's favorite server native
-  tools from the start, add `[mcp] eager = ["godot"]` to its `.killi/config.toml`.
+  and a server starts, and its tools load, the first time it's used. To give a project's
+  favorite server native tools from the start, add `[mcp] eager = ["godot"]` to its
+  `.killi/config.toml`.
 - **Hooks** use Claude Code's protocol (JSON on stdin; exit code 2 blocks and tells the model
   why):
 

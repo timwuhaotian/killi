@@ -183,6 +183,17 @@ async fn handle_command(
         "exit" | "quit" | "q" => return Ok(false),
         "help" | "h" | "?" => app.help(),
         "plan" => app.toggle_plan(),
+        "swarm" => match arg {
+            "" => app.set_swarm(!app.controls.swarm.get()),
+            "on" => app.set_swarm(true),
+            "off" => app.set_swarm(false),
+            task => {
+                let was_on = app.controls.swarm.replace(true);
+                let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {task}"), task).await;
+                app.controls.swarm.set(was_on);
+                result?;
+            }
+        },
         "undo" => match snapshots.undo() {
             Ok(changes) if changes.is_empty() => app.notice("Undone. No files had changed in the last turn."),
             Ok(changes) => {
@@ -219,24 +230,36 @@ async fn handle_command(
         "effort" | "thinking" => app.next_input = Some(Input::Effort(arg.to_lowercase())),
         "reload" => {
             agent.reload_system(&session.system_prompt())?;
-            app.notice("Reloaded the system prompt, AGENTS.md files and skills. The next request starts the cache over.");
+            app.notice("Reloaded the system prompt ([prompt] in config.toml), AGENTS.md files and skills. The next request starts the cache over.");
         }
         "usage" | "cost" => app.usage_report(agent),
         other => match session.skill_prompt(other.strip_prefix("skill:").unwrap_or(other), arg) {
-            Some(prompt) => {
-                snapshots.take();
-                app.begin_turn(format!("/{other} {arg}").trim_end());
-                let before = Totals::of(agent);
-                let ended = run_turn(app, keys, rx, agent.run(&prompt)).await?;
-                app.finish_turn(ended, before, Totals::of(agent));
-                if matches!(app.last_end, Some(LastEnd::Interrupted)) {
-                    agent.recover()?;
-                }
-            }
+            Some(prompt) => prompt_turn(app, agent, snapshots, keys, rx, format!("/{other} {arg}").trim_end(), &prompt).await?,
             None => app.error(&format!("Unknown command /{other}. Type /help for the list.")),
         },
     }
     Ok(true)
+}
+
+/// Runs one turn started by a command: `shown` goes in the transcript, `prompt` to the agent.
+async fn prompt_turn(
+    app: &mut App,
+    agent: &mut Agent,
+    snapshots: &mut Snapshots,
+    keys: &mut EventStream,
+    rx: &mut mpsc::UnboundedReceiver<Event>,
+    shown: &str,
+    prompt: &str,
+) -> Result<()> {
+    snapshots.take();
+    app.begin_turn(shown);
+    let before = Totals::of(agent);
+    let ended = run_turn(app, keys, rx, agent.run(prompt)).await?;
+    app.finish_turn(ended, before, Totals::of(agent));
+    if matches!(app.last_end, Some(LastEnd::Interrupted)) {
+        agent.recover()?;
+    }
+    Ok(())
 }
 
 fn agent_sink(agent: &Agent) -> Sink {
@@ -770,6 +793,15 @@ impl App {
         });
     }
 
+    fn set_swarm(&mut self, on: bool) {
+        self.controls.swarm.set(on);
+        self.notice(if on {
+            "Swarm mode on: the agent splits the work across many subagents with agent_swarm."
+        } else {
+            "Swarm mode off."
+        });
+    }
+
     // ---------- agent events ----------
 
     fn begin_turn(&mut self, prompt: &str) {
@@ -1246,6 +1278,9 @@ impl App {
         if self.controls.plan.get() {
             parts.push(format!("{YELLOW}plan mode{RESET}{DIM}"));
         }
+        if self.controls.swarm.get() {
+            parts.push(format!("{MAGENTA}swarm mode{RESET}{DIM}"));
+        }
         parts.push(match self.status.window {
             Some(window) => format!("ctx {} {}/{}", gauge(self.status.context, window), short(self.status.context), short(window)),
             None => format!("ctx {}", short(self.status.context)),
@@ -1460,8 +1495,9 @@ const COMMANDS: &[Command] = &[
     Command { name: "compact", aliases: &[], args: "[focus]", about: "Summarize the conversation to free context" },
     Command { name: "undo", aliases: &[], args: "", about: "Put files back as they were before the last turn" },
     Command { name: "plan", aliases: &[], args: "", about: "Toggle plan mode (also Shift+Tab)" },
+    Command { name: "swarm", aliases: &[], args: "[task|on|off]", about: "Swarm mode: split work across many subagents" },
     Command { name: "usage", aliases: &["cost"], args: "", about: "Tokens and requests this session" },
-    Command { name: "reload", aliases: &[], args: "", about: "Re-read AGENTS.md files and skills" },
+    Command { name: "reload", aliases: &[], args: "", about: "Re-read [prompt], AGENTS.md files and skills" },
     Command { name: "help", aliases: &[], args: "", about: "Commands and keys" },
     Command { name: "exit", aliases: &["quit"], args: "", about: "Quit killi (also Ctrl+D)" },
 ];

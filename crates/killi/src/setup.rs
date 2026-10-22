@@ -16,6 +16,7 @@ use crate::skills::Skills;
 use crate::tools;
 
 const DEFAULT_COMPACT_AT: u64 = 256_000;
+const DEFAULT_SWARM_PARALLEL: usize = 8;
 
 pub struct Setup {
     config: Config,
@@ -33,7 +34,7 @@ impl Setup {
     pub async fn new(config: Config, cwd: &Path, model: Option<&str>) -> Result<Self> {
         config.resolve(model)?;
         let skills = Skills::discover(cwd, &config.skills.dirs);
-        let prompt = prompt::build(cwd, &skills);
+        let prompt = prompt::build(cwd, &skills, config.guidance());
         let mut tools = tools::definitions();
         if !skills.is_empty() {
             tools.push(crate::skills::definition());
@@ -53,6 +54,7 @@ impl Setup {
         let settings = Settings {
             compact_at: config.agent.compact_at.unwrap_or(DEFAULT_COMPACT_AT),
             plan_allow: config.agent.plan_allow.clone(),
+            swarm_parallel: config.agent.swarm_parallel.unwrap_or(DEFAULT_SWARM_PARALLEL).max(1),
             skills: skills.clone(),
             hooks: Rc::new(config.hooks.clone()),
             mcp: Rc::new(mcp),
@@ -78,14 +80,20 @@ impl Setup {
         Agent::resume(client, &self.cwd, log, self.tools.clone(), self.settings.clone(), controls, sink)
     }
 
-    /// The system prompt rebuilt from the files as they are now, for /reload.
+    /// The system prompt rebuilt from the files as they are now, `[prompt]` in the config
+    /// included, for /reload.
     pub fn system_prompt(&self) -> String {
-        prompt::build(&self.cwd, &Skills::discover(&self.cwd, &self.config.skills.dirs)).text
+        let fresh = Config::load().ok();
+        let config = fresh.as_ref().unwrap_or(&self.config);
+        prompt::build(&self.cwd, &Skills::discover(&self.cwd, &config.skills.dirs), config.guidance()).text
     }
 
     /// What the system prompt includes, in one line.
     pub fn describe(&self) -> String {
         let mut parts = Vec::new();
+        if self.config.guidance() != prompt::DEFAULT {
+            parts.push("custom prompt from [prompt]".to_string());
+        }
         if !self.prompt.instruction_files.is_empty() {
             let names: Vec<String> = self
                 .prompt

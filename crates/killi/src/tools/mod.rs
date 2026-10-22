@@ -98,6 +98,7 @@ pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
         "task_output" | "task_stop" => format!("task {}", args.get("id").map(Value::to_string).unwrap_or_default()),
         "fetch_url" => field("url").to_string(),
         "agent" => field("description").to_string(),
+        "agent_swarm" => format!("{} ({} items)", field("description"), args["items"].as_array().map_or(0, Vec::len)),
         "skill" => field("name").to_string() + field("query"),
         "mcp" => format!("{} {}", field("server"), field("tool")),
         "ask_user_question" => field("question").to_string(),
@@ -214,6 +215,15 @@ pub fn definitions() -> Vec<Value> {
                 "prompt": {"type": "string"},
                 "fork": {"type": "boolean"}
             }, "required": ["description", "prompt"]}),
+        ),
+        tool(
+            "agent_swarm",
+            "Run many subagents on the same kind of task over different inputs: each item fills {{item}} in prompt_template, and each subagent sees only its own prompt, with your tools and model. Up to 128 items; they queue and several run at once. Returns every report in item order. For a few differently shaped tasks, make several agent calls instead.",
+            json!({"type": "object", "properties": {
+                "description": {"type": "string", "description": "3-5 words"},
+                "prompt_template": {"type": "string", "description": "Contains {{item}}"},
+                "items": {"type": "array", "items": {"type": "string"}, "description": "2 to 128, each giving a distinct prompt"}
+            }, "required": ["description", "prompt_template", "items"]}),
         ),
         tool(
             "exit_plan_mode",

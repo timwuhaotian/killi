@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use crate::config::home;
 use crate::skills::Skills;
 
-const BASE: &str = include_str!("prompt/system.md");
+/// The built-in guidance: who the agent is and how it works. `[prompt] system` in the config
+/// replaces it; the environment, instruction files and skills always follow it.
+pub const DEFAULT: &str = include_str!("prompt/system.md");
 
 pub struct SystemPrompt {
     pub text: String,
@@ -15,8 +17,13 @@ pub struct SystemPrompt {
     pub instruction_tokens: usize,
 }
 
-pub fn build(cwd: &Path, skills: &Skills) -> SystemPrompt {
-    let mut text = BASE.replace("{cwd}", &cwd.display().to_string()).replace("{date}", &today());
+pub fn build(cwd: &Path, skills: &Skills, guidance: &str) -> SystemPrompt {
+    let mut text = format!(
+        "{}\n\n# Environment\n- Working directory: {}\n- Date: {}\n- Each bash call starts a fresh shell in the working directory; `cd` doesn't carry over to the next call.\n",
+        guidance.trim_end(),
+        cwd.display(),
+        today()
+    );
     let listing = top_level(cwd);
     if !listing.is_empty() {
         text.push_str(&format!("- Top of the working directory: {listing}\n"));

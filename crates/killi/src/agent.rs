@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use futures_util::future::join_all;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -19,7 +19,7 @@ use crate::llm::{Client, Delta, Reply, ToolCall, Usage, truncate};
 use crate::session::Session;
 use crate::hooks::{HooksConfig, tool_payload};
 use crate::skills::Skills;
-use crate::{plan, tools};
+use crate::{plan, swarm, tools};
 
 const MAX_CONTINUATIONS: u32 = 3;
 const REPEAT_WARNINGS: [u32; 3] = [3, 5, 8];
@@ -28,6 +28,9 @@ const MAX_RESULT_CHARS: usize = 50_000;
 const MAX_PARALLEL_AGENTS: usize = 4;
 /// User prompts kept word for word through a compaction, in characters (about 20k tokens).
 const KEPT_PROMPTS_CHARS: usize = 80_000;
+
+/// A subagent with its prompt, or the result of a call that couldn't start one.
+type Job = std::result::Result<(Agent, String), tools::Output>;
 
 /// Receives everything the agent does, for a terminal to show.
 pub type Sink = Rc<dyn Fn(Event)>;
@@ -67,6 +70,8 @@ pub struct Controls {
     /// Messages typed during a turn, sent at the next step.
     pub steer: Rc<RefCell<VecDeque<String>>>,
     pub plan: Rc<Cell<bool>>,
+    /// Swarm mode: the agent is told to split its work across `agent_swarm` subagents.
+    pub swarm: Rc<Cell<bool>>,
     /// Whether someone can answer questions; headless runs and subagents can't.
     pub interactive: bool,
 }
@@ -77,6 +82,8 @@ pub struct Settings {
     pub compact_at: u64,
     /// Extra command prefixes bash may run in plan mode.
     pub plan_allow: Vec<String>,
+    /// Subagents an `agent_swarm` call runs at once.
+    pub swarm_parallel: usize,
     pub skills: Skills,
     pub hooks: Rc<HooksConfig>,
     pub mcp: Rc<crate::mcp::Mcp>,
@@ -117,6 +124,7 @@ pub struct Agent {
     repeats: HashMap<String, u32>,
     todos: Vec<Todo>,
     plan_announced: bool,
+    swarm_announced: bool,
     interrupted: bool,
     depth: u8,
     children: usize,
@@ -200,6 +208,7 @@ impl Agent {
             repeats: HashMap::new(),
             todos: Vec::new(),
             plan_announced: false,
+            swarm_announced: false,
             interrupted: false,
             depth: 0,
             children: 0,
@@ -324,7 +333,7 @@ impl Agent {
     }
 
     /// Everything that goes into the conversation between steps: messages typed meanwhile,
-    /// a plan-mode change, finished background tasks, and compaction when it's due.
+    /// a plan- or swarm-mode change, finished background tasks, and compaction when it's due.
     async fn before_request(&mut self) -> Result<()> {
         let steered: Vec<String> = self.controls.steer.borrow_mut().drain(..).collect();
         for text in steered {
@@ -334,6 +343,11 @@ impl Agent {
         if plan != self.plan_announced && self.depth == 0 {
             self.plan_announced = plan;
             self.push(json!({"role": "user", "content": if plan { plan::ON } else { plan::OFF }}))?;
+        }
+        let swarming = self.controls.swarm.get();
+        if swarming != self.swarm_announced && self.depth == 0 {
+            self.swarm_announced = swarming;
+            self.push(json!({"role": "user", "content": if swarming { swarm::ON } else { swarm::OFF }}))?;
         }
         let finished = self.ctx.tasks.borrow_mut().newly_finished();
         if !finished.is_empty() && self.depth == 0 {
@@ -426,8 +440,8 @@ impl Agent {
         Ok(calls)
     }
 
-    /// Runs a reply's tool calls in order; consecutive `agent` calls run in parallel. Returns
-    /// true when the repeat breaker trips.
+    /// Runs a reply's tool calls in order; consecutive `agent` calls run in parallel, and an
+    /// `agent_swarm` call runs its subagents in parallel. Returns true when the repeat breaker trips.
     async fn execute_calls(&mut self, calls: Vec<(String, ToolCall)>, truncated: bool) -> Result<bool> {
         let mut stop = false;
         let mut images = Vec::new();
@@ -435,16 +449,20 @@ impl Agent {
         while i < calls.len() {
             if calls[i].1.name == "agent" && self.depth == 0 {
                 let end = calls[i..].iter().position(|(_, c)| c.name != "agent").map_or(calls.len(), |n| i + n);
-                for group in calls[i..end].chunks(MAX_PARALLEL_AGENTS) {
-                    let outputs = self.run_subagents(group).await?;
-                    for ((id, call), output) in group.iter().zip(outputs) {
-                        stop |= self.finish_call(id, call, output)?;
-                    }
+                let outputs = self.run_subagents(&calls[i..end]).await;
+                for ((id, call), output) in calls[i..end].iter().zip(outputs) {
+                    stop |= self.finish_call(id, call, output)?;
                 }
                 i = end;
                 continue;
             }
             let (id, call) = &calls[i];
+            if call.name == "agent_swarm" && self.depth == 0 {
+                let output = self.run_swarm(id, call).await;
+                stop |= self.finish_call(id, call, output)?;
+                i += 1;
+                continue;
+            }
             let output = self.execute(id, call, truncated).await;
             if let Some(image) = &output.image {
                 images.push((tools::summary(&call.name, &parse_args(call).unwrap_or_default(), &self.ctx.cwd), image.clone()));
@@ -499,7 +517,7 @@ impl Agent {
             "todo_write" => self.todo_write(&args),
             "ask_user_question" => self.ask(&args).await,
             "exit_plan_mode" => self.exit_plan(&args).await,
-            "agent" => tools::Output::error("Subagents can't start other subagents."),
+            "agent" | "agent_swarm" => tools::Output::error("Subagents can't start other subagents."),
             "write" | "edit" if plan => tools::Output::error(format!(
                 "Plan mode is on, so {} is blocked. Finish the plan and call exit_plan_mode.",
                 call.name
@@ -613,18 +631,16 @@ impl Agent {
         answer.await.ok().filter(|a| !a.trim().is_empty())
     }
 
-    /// Runs subagents in parallel and returns each one's result as a tool output.
-    async fn run_subagents(&mut self, group: &[(String, ToolCall)]) -> Result<Vec<tools::Output>> {
-        let mut children = Vec::new();
-        let mut prompts = Vec::new();
+    /// Runs a group of `agent` calls in parallel and returns each one's result as a tool output.
+    async fn run_subagents(&mut self, group: &[(String, ToolCall)]) -> Vec<tools::Output> {
+        let mut jobs = Vec::new();
         for (id, call) in group {
             self.stats.tool_calls += 1;
             let args = match parse_args(call) {
                 Ok(args) => args,
                 Err(why) => {
                     self.tool_start(id, "agent (invalid arguments)");
-                    children.push(Err(invalid_arguments(call, &why, false)));
-                    prompts.push(String::new());
+                    jobs.push(Err(invalid_arguments(call, &why, false)));
                     continue;
                 }
             };
@@ -632,26 +648,63 @@ impl Agent {
             self.tool_start(id, &tools::summary("agent", &args, &self.ctx.cwd));
             let prompt = args["prompt"].as_str().unwrap_or_default().to_string();
             if prompt.trim().is_empty() {
-                children.push(Err(tools::Output::error("agent needs a `prompt`.")));
+                jobs.push(Err(tools::Output::error("agent needs a `prompt`.")));
             } else {
-                children.push(self.child(&label, args["fork"].as_bool().unwrap_or(false)).map_err(|e| {
-                    tools::Output::error(format!("Could not start the subagent: {e:#}"))
-                }));
+                jobs.push(self.child(&label, args["fork"].as_bool().unwrap_or(false), prompt));
             }
-            prompts.push(prompt);
         }
-        let runs = children.iter_mut().zip(&prompts).map(|(child, prompt)| async move {
-            match child {
-                Ok(agent) => match agent.run(prompt).await {
-                    Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => tools::Output::ok(text),
-                    Ok((_, stop)) => tools::Output::error(format!("The subagent stopped without a final report ({stop:?}).")),
-                    Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
-                },
-                Err(output) => std::mem::replace(output, tools::Output::ok("")),
+        self.run_children(jobs, MAX_PARALLEL_AGENTS).await
+    }
+
+    /// Runs an `agent_swarm` call: one fresh subagent per item, `swarm_parallel` at a time,
+    /// and one result with every report in item order.
+    async fn run_swarm(&mut self, id: &str, call: &ToolCall) -> tools::Output {
+        self.stats.tool_calls += 1;
+        let args = match parse_args(call) {
+            Ok(args) => args,
+            Err(why) => {
+                self.tool_start(id, "agent_swarm (invalid arguments)");
+                return invalid_arguments(call, &why, false);
             }
+        };
+        self.tool_start(id, &tools::summary("agent_swarm", &args, &self.ctx.cwd));
+        let prompts = match swarm::prompts(&args) {
+            Ok(prompts) => prompts,
+            Err(why) => return tools::Output::error(why),
+        };
+        let description = args["description"].as_str().map(str::trim).filter(|d| !d.is_empty()).unwrap_or("swarm");
+        let mut jobs = Vec::new();
+        for (n, (_, prompt)) in prompts.iter().enumerate() {
+            jobs.push(self.child(&format!("{description} #{}", n + 1), false, prompt.clone()));
+        }
+        let outputs = self.run_children(jobs, self.settings.swarm_parallel).await;
+        let items: Vec<String> = prompts.into_iter().map(|(item, _)| item).collect();
+        swarm::report(&self.ctx, &items, &outputs, MAX_RESULT_CHARS)
+    }
+
+    /// Runs subagents, at most `limit` at once, the next starting as soon as one finishes, and
+    /// returns each one's result as a tool output, in order. One that couldn't start reports why.
+    async fn run_children(&mut self, jobs: Vec<Job>, limit: usize) -> Vec<tools::Output> {
+        let runs = jobs.into_iter().enumerate().map(|(index, job)| async move {
+            let (mut agent, prompt) = match job {
+                Ok(job) => job,
+                Err(output) => return (index, output, None),
+            };
+            let output = match agent.run(&prompt).await {
+                Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => tools::Output::ok(text),
+                Ok((_, stop)) => tools::Output::error(format!("The subagent stopped without a final report ({stop:?}).")),
+                Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
+            };
+            (index, output, Some(agent))
         });
-        let outputs = join_all(runs).await;
-        for agent in children.iter().flatten() {
+        let mut finished: Vec<_> = futures_util::stream::iter(runs).buffer_unordered(limit.max(1)).collect().await;
+        finished.sort_by_key(|(index, ..)| *index);
+        let mut outputs = Vec::new();
+        for (_, output, agent) in finished {
+            let Some(agent) = agent else {
+                outputs.push(output);
+                continue;
+            };
             let usage = &agent.stats.usage;
             let total = &mut self.stats.usage;
             total.prompt += usage.prompt;
@@ -660,23 +713,25 @@ impl Agent {
             total.reasoning += usage.reasoning;
             self.stats.requests += agent.stats.requests;
             self.stats.tool_calls += agent.stats.tool_calls;
+            outputs.push(if output.is_error {
+                output
+            } else {
+                output.brief(format!("{} requests, {} tool calls", agent.stats.requests, agent.stats.tool_calls))
+            });
         }
-        Ok(outputs
-            .into_iter()
-            .zip(&children)
-            .map(|(output, child)| match child {
-                Ok(agent) if !output.is_error => {
-                    let brief = format!("{} requests, {} tool calls", agent.stats.requests, agent.stats.tool_calls);
-                    output.brief(brief)
-                }
-                _ => output,
-            })
-            .collect())
+        outputs
+    }
+
+    /// A subagent ready to run `prompt`, or why it couldn't start.
+    fn child(&mut self, label: &str, fork: bool, prompt: String) -> Job {
+        self.subagent(label, fork)
+            .map(|agent| (agent, prompt))
+            .map_err(|e| tools::Output::error(format!("Could not start the subagent: {e:#}")))
     }
 
     /// A subagent with the same model, system prompt and tools, so its requests hit the same
     /// cached prefix. A fork also starts with this conversation so far.
-    fn child(&mut self, label: &str, fork: bool) -> Result<Agent> {
+    fn subagent(&mut self, label: &str, fork: bool) -> Result<Agent> {
         self.children += 1;
         let mut session = self.session.child(self.children)?;
         let history: Vec<Value> =
@@ -693,13 +748,14 @@ impl Agent {
             ctx: self.ctx.clone(),
             session,
             stats: Stats::default(),
-            controls: Controls { steer: Rc::default(), plan: self.controls.plan.clone(), interactive: false },
+            controls: Controls { steer: Rc::default(), plan: self.controls.plan.clone(), swarm: Rc::default(), interactive: false },
             settings: self.settings.clone(),
             sink,
             ids: self.ids.clone(),
             repeats: HashMap::new(),
             todos: Vec::new(),
             plan_announced: self.plan_announced,
+            swarm_announced: false,
             interrupted: false,
             depth: self.depth + 1,
             children: 0,

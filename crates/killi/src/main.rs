@@ -9,6 +9,7 @@ mod session;
 mod setup;
 mod skills;
 mod snapshot;
+mod swarm;
 mod tools;
 mod tui;
 mod update;
@@ -34,7 +35,7 @@ Usage:
   killi -c | --continue                        Continue the latest session in this folder
   killi -r | --resume [<log>]                  Pick an earlier session (or open a log) and continue it
   killi -p <prompt> [-m <model>] [-c] [--json] Run one task, print the answer and exit
-  killi init                                   Write a starting ~/.killi/config.toml
+  killi init                                   Write a starting ~/.killi/config.toml, or add [prompt] to yours
   killi import-kimi [--force]                  Copy providers, models and MCP servers from Kimi Code
   killi update                                 Install the latest published version
   killi --version
@@ -210,6 +211,8 @@ struct Printer {
     line_open: bool,
     /// Newlines at the end of the text so far, printed only if more text follows.
     held_newlines: usize,
+    /// A tool line is waiting for its end mark on stderr.
+    tool_open: bool,
     dim: &'static str,
     accent: &'static str,
     red: &'static str,
@@ -226,6 +229,7 @@ impl Printer {
             last: Last::Nothing,
             line_open: false,
             held_newlines: 0,
+            tool_open: false,
             dim: pick("\x1b[2m"),
             accent: pick("\x1b[34m"),
             red: pick("\x1b[31m"),
@@ -264,21 +268,29 @@ impl Printer {
                 }
                 let summary = summary.replace(&format!("{}/", self.cwd), "").replace(&self.cwd, ".");
                 eprint!("{}●{} {summary}", self.accent, self.reset);
+                self.tool_open = true;
                 self.last = Last::Tool;
             }
             Event::ToolEnd { is_error, .. } => {
                 let mark = if is_error { format!(" {}✗{}", self.red, self.reset) } else { String::new() };
-                eprintln!("{mark}");
+                if std::mem::take(&mut self.tool_open) || !mark.is_empty() {
+                    eprintln!("{mark}");
+                }
             }
             Event::Notice(text) => {
                 self.end_text();
                 eprintln!("{}{text}{}", self.dim, self.reset);
             }
-            Event::Sub { label, event } => match *event {
-                Event::ToolStart { summary, .. } => eprintln!("  {}↳ {label}: {summary}{}", self.dim, self.reset),
-                Event::ToolEnd { is_error: true, brief, .. } => eprintln!("  {}↳ {label}: ✗ {brief}{}", self.red, self.reset),
-                _ => {}
-            },
+            Event::Sub { label, event } => {
+                if matches!(*event, Event::ToolStart { .. } | Event::ToolEnd { is_error: true, .. }) && std::mem::take(&mut self.tool_open) {
+                    eprintln!();
+                }
+                match *event {
+                    Event::ToolStart { summary, .. } => eprintln!("  {}↳ {label}: {summary}{}", self.dim, self.reset),
+                    Event::ToolEnd { is_error: true, brief, .. } => eprintln!("  {}↳ {label}: ✗ {brief}{}", self.red, self.reset),
+                    _ => {}
+                }
+            }
             Event::Reasoning(_) | Event::Usage(_) | Event::Todos(_) | Event::Ask(_) => {}
         }
     }
@@ -301,11 +313,12 @@ impl Printer {
 mod tests {
     #[test]
     fn system_prompt_and_tools_fit_the_token_budget() {
-        let base = include_str!("prompt/system.md");
+        let base = crate::prompt::DEFAULT;
         let mut tools = crate::tools::definitions();
         tools.push(crate::skills::definition());
         let tools = serde_json::to_string(&tools).unwrap();
         let chars = base.len() + tools.len();
+        println!("system prompt + tools = {chars} chars");
         assert!(chars <= 12_000, "system prompt + tools = {chars} chars, over the ~3k-token budget");
     }
 }

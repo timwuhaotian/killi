@@ -25,4 +25,6 @@ behind it are in `docs/decisions.md`.
   comments that narrate changes.
 - Keep tool descriptions short; `main.rs` has a test that keeps the system prompt and tools
   under about 3k tokens.
+- The prompt's guidance is `prompt/system.md`, and users can replace it with `[prompt] system`
+  in their config, so rules that must always hold belong in code, not only in that text.
 - Prefer adding tests to the module's existing `tests` block.
