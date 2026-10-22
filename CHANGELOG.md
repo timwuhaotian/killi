@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.22 — 2026-10-22
+
+- **A reply that leaves something for later without noting it gets a nudge.** When the
+  agent's final message says it left work out, deferred it or made it a follow-up, and it
+  didn't call `later` in that turn, a dim line under the reply says so.
+- **`/session` names the later list** when it has open items, so another agent reading the
+  handoff sees what was put off too.
+
 ## 0.2.21 — 2026-10-22
 
 - **`later`: what the agent won't do now is written down the moment it sees it.** A new

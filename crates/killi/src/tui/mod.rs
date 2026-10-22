@@ -606,6 +606,8 @@ struct App {
     queued: Vec<String>,
     /// A /btw question for the running turn to send.
     aside_asked: Option<String>,
+    /// The running turn called `later`, so a reply that leaves something for later noted it.
+    later_noted: bool,
     /// The /btw question being answered and since when, for the live area.
     aside: Option<(String, Instant)>,
     /// Answered /btw blocks waiting for the model's paragraph to end before they are printed.
@@ -669,6 +671,7 @@ impl App {
             exit_armed: None,
             queued: Vec::new(),
             aside_asked: None,
+            later_noted: false,
             aside: None,
             held_asides: Vec::new(),
             last_end: None,
@@ -1127,6 +1130,7 @@ impl App {
     fn begin_busy(&mut self) {
         self.busy = Some(Instant::now());
         self.spinner = 0;
+        self.later_noted = false;
         self.last_end = None;
     }
 
@@ -1156,12 +1160,15 @@ impl App {
                 self.last_end = Some(LastEnd::Interrupted);
                 self.error(&gist(&format!("{e:#}")));
             }
-            Ended::Done(Ok((_, stop))) => {
+            Ended::Done(Ok((text, stop))) => {
                 self.last_end = Some(LastEnd::Done);
                 match stop {
                     Stop::MaxTokens => self.notice("The reply hit the output token limit."),
                     Stop::RepeatBreaker => self.notice("Stopped: the agent kept repeating the same tool call. Tell it what to read or run instead, or pick another model with /model."),
                     Stop::Completed => {}
+                }
+                if !self.later_noted && leaves_something_for_later(&text) {
+                    self.notice("The reply leaves something for later that wasn't noted; ask killi to note it with `later`, or see /later.");
                 }
             }
         }
@@ -1226,6 +1233,9 @@ impl App {
                 self.commit(fit(&line, self.width));
             }
             Event::ToolStart { id, summary, .. } => {
+                if summary == "later" || summary.starts_with("later ") {
+                    self.later_noted = true;
+                }
                 self.flush_partial();
                 self.end_thinking();
                 self.begin(Kind::Tool);
@@ -1504,7 +1514,9 @@ impl App {
     fn share_session(&mut self, agent: &Agent) {
         let log = &agent.session.log_path;
         let id = log.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let text = handoff(&id, log, &tilde(&self.cwd), agent.model_alias(), agent.thinking().label(), &agent.user_prompts(), &agent.stats);
+        let later = crate::later::list(&self.cwd).len();
+        let later = (later > 0).then(|| (crate::later::path(&self.cwd), later));
+        let text = handoff(&id, log, &tilde(&self.cwd), agent.model_alias(), agent.thinking().label(), &agent.user_prompts(), &agent.stats, later);
         copy_to_clipboard(&text);
         self.begin(Kind::Note);
         for line in text.lines() {
@@ -2231,6 +2243,14 @@ fn megabytes(bytes: u64) -> String {
     }
 }
 
+/// Whether a reply says it left work undone, by the words replies use for that.
+fn leaves_something_for_later(text: &str) -> bool {
+    let text = text.to_lowercase();
+    ["for later", "follow-up", "follow up", "deferred", "left out", "not done", "out of scope", "didn't do", "后续", "待办", "留到", "之后再", "没有做", "未做"]
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
 /// `path` with the home folder as `~`.
 fn tilde(path: &Path) -> String {
     match path.strip_prefix(crate::config::home()) {
@@ -2241,7 +2261,17 @@ fn tilde(path: &Path) -> String {
 
 /// The text `/session` copies: enough for another agent to find the log and know how to
 /// read it, with the session's numbers and prompts so the reader knows what it is looking at.
-fn handoff(id: &str, log: &Path, cwd: &str, model: &str, effort: &str, prompts: &[String], stats: &crate::agent::Stats) -> String {
+#[allow(clippy::too_many_arguments)]
+fn handoff(
+    id: &str,
+    log: &Path,
+    cwd: &str,
+    model: &str,
+    effort: &str,
+    prompts: &[String],
+    stats: &crate::agent::Stats,
+    later: Option<(PathBuf, usize)>,
+) -> String {
     let usage = &stats.usage;
     let cached = usage.cached * 100 / usage.prompt.max(1);
     let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
@@ -2257,6 +2287,9 @@ fn handoff(id: &str, log: &Path, cwd: &str, model: &str, effort: &str, prompts: 
             short(usage.completion)
         ),
     ];
+    if let Some((path, open)) = later {
+        out.push(format!("later: {} ({open} open: what the agent noted to do later)", path.display()));
+    }
     for (i, prompt) in prompts.iter().enumerate() {
         out.push(format!("{}. {}", i + 1, crate::llm::truncate(&prompt.split_whitespace().collect::<Vec<_>>().join(" "), 160)));
     }
@@ -2440,13 +2473,17 @@ mod tests {
             ..crate::agent::Stats::default()
         };
         let prompts = vec!["The slugify test fails.\nFix it.".to_string()];
-        let text = handoff("1792673250-71085", Path::new("/h/.killi/sessions/x/1792673250-71085.jsonl"), "~/code/slug", "mimo/mimo-v2.6-pro", "high", &prompts, &stats);
+        let log = Path::new("/h/.killi/sessions/x/1792673250-71085.jsonl");
+        let text = handoff("1792673250-71085", log, "~/code/slug", "mimo/mimo-v2.6-pro", "high", &prompts, &stats, None);
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0], "killi session 1792673250-71085 · ~/code/slug");
         assert_eq!(lines[1], "log: /h/.killi/sessions/x/1792673250-71085.jsonl");
         assert_eq!(lines[2], "mimo/mimo-v2.6-pro · effort high · 1 prompt · 6 requests · 7 tool calls · 22.4k in, 83% cached · 1.2k out");
         assert_eq!(lines[3], "1. The slugify test fails. Fix it.");
         assert!(lines[4].contains("`usage`") && lines[4].contains("sessions.py"));
+        let later = Some((PathBuf::from("/h/.killi/sessions/x/later.md"), 2));
+        let text = handoff("1", log, "~/code/slug", "m", "high", &prompts, &stats, later);
+        assert_eq!(text.lines().nth(3).unwrap(), "later: /h/.killi/sessions/x/later.md (2 open: what the agent noted to do later)");
     }
 
     #[test]
@@ -2456,6 +2493,13 @@ mod tests {
         assert_eq!(prune_choices(500), [5, 10, 20, 50, 100, 200]);
         assert_eq!(megabytes(312_000), "312 KB");
         assert_eq!(megabytes(4_200_000), "4.2 MB");
+    }
+
+    #[test]
+    fn a_reply_that_leaves_work_for_later_is_recognised() {
+        assert!(leaves_something_for_later("Fixed the test. The flaky CI job is a follow-up."));
+        assert!(leaves_something_for_later("修好了；缓存的问题留到之后再做。"));
+        assert!(!leaves_something_for_later("Fixed the test; cargo test passes."));
     }
 
     #[test]
