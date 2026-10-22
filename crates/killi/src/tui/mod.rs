@@ -327,7 +327,31 @@ struct Picker {
     title: String,
     /// Each option's name, a note shown beside it, and what choosing it does.
     options: Vec<(String, String, PickerChoice)>,
+    /// What has been typed to narrow the options, matched against their names.
+    query: String,
+    /// Indexes into `options` of those matching `query`, best first.
+    shown: Vec<usize>,
+    /// Position in `shown`.
     selected: usize,
+}
+
+impl Picker {
+    fn new(title: String, options: Vec<(String, String, PickerChoice)>, selected: usize) -> Picker {
+        let shown = (0..options.len()).collect();
+        Picker { title, options, query: String::new(), shown, selected }
+    }
+
+    /// Narrows the options to those fuzzy-matching `query` and selects the best.
+    fn filter(&mut self, query: String) {
+        let all: Vec<usize> = (0..self.options.len()).collect();
+        self.shown = menu::fuzzy_filter(&all, &query, |&i| &self.options[i].0);
+        self.query = query;
+        self.selected = 0;
+    }
+
+    fn choice(&self) -> Option<&PickerChoice> {
+        self.shown.get(self.selected).map(|&i| &self.options[i].2)
+    }
 }
 
 #[derive(Clone)]
@@ -572,13 +596,22 @@ impl App {
         let picker = self.picker.as_mut().expect("picker is open");
         match key.code {
             KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
-            KeyCode::Down => picker.selected = (picker.selected + 1).min(picker.options.len().saturating_sub(1)),
+            KeyCode::Down => picker.selected = (picker.selected + 1).min(picker.shown.len().saturating_sub(1)),
             KeyCode::Esc => self.picker = None,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.picker = None,
+            KeyCode::Backspace => {
+                let mut query = picker.query.clone();
+                query.pop();
+                picker.filter(query);
+            }
+            KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                let query = format!("{}{c}", picker.query);
+                picker.filter(query);
+            }
             KeyCode::Enter => {
-                let picker = self.picker.take().expect("picker is open");
-                if let Some((_, _, choice)) = picker.options.get(picker.selected) {
-                    return Idle::Input(match choice.clone() {
+                if let Some(choice) = picker.choice().cloned() {
+                    self.picker = None;
+                    return Idle::Input(match choice {
                         PickerChoice::Session(path) => Input::Resume(path),
                         PickerChoice::Model(alias) => Input::Model(alias),
                         PickerChoice::Effort(effort) => Input::Effort(effort),
@@ -1094,7 +1127,7 @@ impl App {
                 (format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)), format!("{} prompts", s.prompts), PickerChoice::Session(s.path))
             })
             .collect();
-        self.picker = Some(Picker { title: "Resume a session".into(), options, selected: 0 });
+        self.picker = Some(Picker::new("Resume a session".into(), options, 0));
     }
 
     fn open_model_picker(&mut self, config: &Config) {
@@ -1107,7 +1140,7 @@ impl App {
             })
             .collect();
         let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) if *a == self.status.model)).unwrap_or(0);
-        self.picker = Some(Picker { title: "Switch model".into(), options, selected });
+        self.picker = Some(Picker::new("Switch model".into(), options, selected));
     }
 
     fn open_effort_picker(&mut self, config: &Config) {
@@ -1120,7 +1153,7 @@ impl App {
             })
             .collect();
         let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Effort(e) if *e == self.status.thinking)).unwrap_or(0);
-        self.picker = Some(Picker { title: format!("Thinking effort for {}", self.status.model), options, selected });
+        self.picker = Some(Picker::new(format!("Thinking effort for {}", self.status.model), options, selected));
     }
 
     fn refresh_branch(&mut self) {
@@ -1229,12 +1262,17 @@ impl App {
             }
         }
         if let Some(picker) = &self.picker {
-            let count = picker.options.len();
+            let count = picker.shown.len();
             let visible = count.min(room.max(1));
-            let options: Vec<(&str, &str)> = picker.options.iter().map(|(name, note, _)| (name.as_str(), note.as_str())).collect();
+            let options: Vec<(&str, &str)> = picker.shown.iter().map(|&i| (picker.options[i].0.as_str(), picker.options[i].1.as_str())).collect();
             rows.extend(choice_rows(&options, picker.selected, visible, width, width * 3 / 5));
             let position = if count > visible { format!("{}/{count} · ", picker.selected + 1) } else { String::new() };
-            rows.push(fit(&format!("  {DIM}{}{RESET} {DIM}· {position}↑↓ choose · Enter selects · Esc closes{RESET}", picker.title), width));
+            let filter = match (picker.query.is_empty(), count) {
+                (true, _) => "type to filter".to_string(),
+                (false, 0) => format!("{RESET}{}{DIM} matches nothing", picker.query),
+                (false, _) => format!("filter {RESET}{}{DIM}", picker.query),
+            };
+            rows.push(fit(&format!("  {DIM}{} · {filter} · {position}↑↓ choose · Enter selects · Esc closes{RESET}", picker.title), width));
         }
         if let Some(asking) = &self.asking {
             let names: Vec<String> = asking.question.options.iter().enumerate().map(|(i, o)| format!("{}. {o}", i + 1)).collect();
@@ -1558,6 +1596,22 @@ mod tests {
         assert_eq!(short(950), "950");
         assert_eq!(short(38_000), "38k");
         assert_eq!(short(1_250_000), "1.2M");
+    }
+
+    #[test]
+    fn typing_in_a_picker_fuzzy_filters_its_options() {
+        let models = ["minimax/MiniMax-M3.1-Flash", "qwen/qwen3.7-plus", "qwen/qwen3.8-max", "zai/glm-5.3"];
+        let options = models.iter().map(|m| (m.to_string(), String::new(), PickerChoice::Model(m.to_string()))).collect();
+        let mut picker = Picker::new("Switch model".into(), options, 3);
+        assert!(matches!(picker.choice(), Some(PickerChoice::Model(m)) if m == "zai/glm-5.3"));
+        picker.filter("q38".into());
+        assert!(matches!(picker.choice(), Some(PickerChoice::Model(m)) if m == "qwen/qwen3.8-max"));
+        picker.filter("glm".into());
+        assert_eq!(picker.shown, [3]);
+        picker.filter("xyz".into());
+        assert!(picker.choice().is_none());
+        picker.filter(String::new());
+        assert_eq!(picker.shown.len(), 4);
     }
 
     #[test]

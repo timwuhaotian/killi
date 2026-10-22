@@ -80,7 +80,7 @@ fn commands(entries: &[Entry], query: &str) -> Vec<Item> {
 }
 
 /// pi-tui's `fuzzyFilter`: tokens split on whitespace and `/` must all match; best first.
-fn fuzzy_filter<T: Clone>(items: &[T], query: &str, text: impl Fn(&T) -> &str) -> Vec<T> {
+pub fn fuzzy_filter<'a, T: Clone>(items: &'a [T], query: &str, text: impl Fn(&'a T) -> &'a str) -> Vec<T> {
     let tokens: Vec<&str> = query.split(|c: char| c.is_whitespace() || c == '/').filter(|t| !t.is_empty()).collect();
     if tokens.is_empty() {
         return items.to_vec();
