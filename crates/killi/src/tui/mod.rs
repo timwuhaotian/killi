@@ -15,12 +15,12 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::cursor::{MoveToColumn, MoveUp};
+use crossterm::cursor::{Hide, MoveDown, MoveToColumn, MoveUp, Show};
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use crossterm::terminal::{self, Clear, ClearType};
+use crossterm::terminal::{self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate};
 use crossterm::{execute, queue};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
@@ -34,7 +34,7 @@ use crate::session::{Choice, Replayed};
 use crate::snapshot::Snapshots;
 use editor::Editor;
 use menu::{Entry, Item, Suggestions};
-use text::{BOLD, DANGER, DIM, FAINT, FIN, LAGOON, Markdown, RESET, TINT, WARN, wrap};
+use text::{BOLD, BRANCH, DANGER, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, RESET, TINT, TOKENS, WARN, wrap, wrap_words};
 
 const MAX_INPUT_ROWS: usize = 10;
 const MENU_ROWS: usize = 8;
@@ -203,8 +203,8 @@ where
             if aside.is_some() {
                 app.notice("Still answering the last /btw question.");
             } else {
-                app.notice(&format!("Asking on the side: {question}"));
                 let ask = app.controls.aside.borrow().ask(&question);
+                app.aside = Some((question.clone(), Instant::now()));
                 aside = Some((question, Box::pin(ask)));
             }
         }
@@ -475,6 +475,10 @@ struct App {
     height: usize,
     /// Rows from the top of the live area to the cursor, to find the area again.
     cursor_row: usize,
+    /// The live area's rows and cursor column as last painted, so a tick repaints only what
+    /// changed and the rows that didn't, such as the status line, never blink.
+    shown: Vec<String>,
+    shown_col: usize,
     /// Lines waiting to be printed above the live area.
     pending: Vec<String>,
     editor: Editor,
@@ -514,6 +518,10 @@ struct App {
     queued: Vec<String>,
     /// A /btw question for the running turn to send.
     aside_asked: Option<String>,
+    /// The /btw question being answered and since when, for the live area.
+    aside: Option<(String, Instant)>,
+    /// Answered /btw blocks waiting for the model's paragraph to end before they are printed.
+    held_asides: Vec<Vec<String>>,
     last_end: Option<LastEnd>,
     cwd: PathBuf,
     notify_after: Duration,
@@ -523,7 +531,10 @@ struct App {
 enum Kind {
     None,
     Text,
+    /// Tool calls, thoughts and retries: the work between prose.
     Tool,
+    /// A notice, an error, a question or a block like /help: set apart from what is around it.
+    Note,
 }
 
 impl App {
@@ -534,6 +545,8 @@ impl App {
             width: usize::from(columns).max(20),
             height: usize::from(rows).max(5),
             cursor_row: 0,
+            shown: Vec::new(),
+            shown_col: 0,
             pending: Vec::new(),
             editor: Editor::with_history(agent.user_prompts()),
             markdown: Markdown::new(usize::from(columns).max(20)),
@@ -568,6 +581,8 @@ impl App {
             exit_armed: None,
             queued: Vec::new(),
             aside_asked: None,
+            aside: None,
+            held_asides: Vec::new(),
             last_end: None,
             cwd: cwd.to_path_buf(),
             notify_after: Duration::from_secs(10),
@@ -589,8 +604,10 @@ impl App {
         } else {
             cwd
         };
-        let thinking = thinking_note(agent.thinking().label());
-        let thinking = if thinking.is_empty() { String::new() } else { format!(" {DIM}· {thinking}{RESET}") };
+        let thinking = match thinking_parts(agent.thinking().label()) {
+            Some((word, value)) => format!(" {DIM}· {word}{RESET} {EFFORT}{value}{RESET}"),
+            None => String::new(),
+        };
         let side = [
             format!("{BOLD}killi{RESET} {DIM}{}{RESET}", env!("CARGO_PKG_VERSION")),
             format!("{DIM}a coding agent for the terminal{RESET}"),
@@ -616,6 +633,7 @@ impl App {
         }
         self.commit(format!("{DIM}/ commands and skills · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts{RESET}"));
         self.commit(String::new());
+        self.last_kind = Kind::None;
     }
 
     // ---------- input ----------
@@ -920,6 +938,7 @@ impl App {
             KeyCode::Char('l') if ctrl => {
                 let _ = execute!(self.out, Clear(ClearType::All), crossterm::cursor::MoveTo(0, 0));
                 self.cursor_row = 0;
+                self.shown.clear();
             }
             KeyCode::Char(c) if !ctrl => e.insert(c.encode_utf8(&mut [0; 4])),
             KeyCode::Backspace if alt => e.delete_word(),
@@ -1030,6 +1049,7 @@ impl App {
         self.flush_partial();
         self.end_thinking();
         self.running.clear();
+        self.aside = None;
         self.busy = None;
     }
 
@@ -1043,12 +1063,13 @@ impl App {
         match ended {
             Ended::Interrupted => {
                 self.last_end = Some(LastEnd::Interrupted);
+                self.begin(Kind::Note);
                 self.commit(format!("{WARN}Interrupted.{RESET} {DIM}Tell killi what to do instead.{RESET}"));
                 self.controls.steer.borrow_mut().clear();
             }
             Ended::Done(Err(e)) => {
                 self.last_end = Some(LastEnd::Interrupted);
-                self.error(&format!("{e:#}"));
+                self.error(&gist(&format!("{e:#}")));
             }
             Ended::Done(Ok((_, stop))) => {
                 self.last_end = Some(LastEnd::Done);
@@ -1064,7 +1085,8 @@ impl App {
         self.commit(String::new());
         let requests = after.requests - before.requests;
         let quick = matches!(self.last_end, Some(LastEnd::Done)) && elapsed < Duration::from_secs(3) && requests <= 1;
-        if !quick {
+        let spent = prompt > 0 || after.completion > before.completion;
+        if spent && !quick {
             self.commit(format!(
                 "{DIM}{} · {requests} request{} · {} in, {cached}% cached · {} out{RESET}",
                 clock(elapsed),
@@ -1073,6 +1095,7 @@ impl App {
                 short(after.completion - before.completion)
             ));
         }
+        self.last_kind = Kind::None;
         if elapsed >= self.notify_after {
             notify(match self.last_end {
                 Some(LastEnd::Done) => "Done",
@@ -1089,10 +1112,7 @@ impl App {
                     return;
                 }
                 self.end_thinking();
-                if self.last_kind == Kind::Tool {
-                    self.commit(String::new());
-                }
-                self.last_kind = Kind::Text;
+                self.begin(Kind::Text);
                 self.partial.push_str(text);
                 while let Some(end) = self.partial.find('\n') {
                     let line: String = self.partial.drain(..=end).collect();
@@ -1101,6 +1121,7 @@ impl App {
                         let table = self.markdown.finish();
                         self.commit_markdown(table);
                         self.held_blank = true;
+                        self.release_asides(false);
                         continue;
                     }
                     if std::mem::take(&mut self.held_blank) {
@@ -1116,15 +1137,13 @@ impl App {
             },
             Event::Retry { attempt, wait, reason } => {
                 let line = format!("{WARN}⚠ retry {attempt} in {}:{RESET}{DIM} {}{RESET}", clock(wait), gist(&reason));
+                self.begin(Kind::Tool);
                 self.commit(fit(&line, self.width));
             }
             Event::ToolStart { id, summary, .. } => {
                 self.flush_partial();
                 self.end_thinking();
-                if self.last_kind == Kind::Text {
-                    self.commit(String::new());
-                }
-                self.last_kind = Kind::Tool;
+                self.begin(Kind::Tool);
                 self.running.push(Running { id, summary, label: None, started: Instant::now() });
             }
             Event::ToolEnd { id, is_error, brief, display, output } => {
@@ -1152,6 +1171,7 @@ impl App {
             Event::Ask(question) => {
                 self.flush_partial();
                 self.end_thinking();
+                self.begin(Kind::Note);
                 if question.plan {
                     self.commit(format!("{BOLD}{FIN}? Plan{RESET}"));
                     let mut markdown = Markdown::new(self.width.saturating_sub(2));
@@ -1162,7 +1182,9 @@ impl App {
                     }
                     self.commit(String::new());
                 } else {
-                    self.commit(format!("{BOLD}{FIN}?{RESET} {BOLD}{}{RESET}", question.text));
+                    for row in text::wrap_words(&format!("{BOLD}{FIN}?{RESET} {BOLD}{}{RESET}", question.text), self.width, 2) {
+                        self.commit(row);
+                    }
                 }
                 self.asking = Some(Asking { question, selected: 0 });
                 notify("Waiting for your answer");
@@ -1213,6 +1235,7 @@ impl App {
             Some(label) => format!("  {DIM}↳ {label}:{RESET} {glyph} {DIM}{summary}{RESET}{note}"),
             None => format!("{glyph} {}{note}", tool_summary(&summary)),
         };
+        self.begin(Kind::Tool);
         self.commit(fit(&line, self.width));
     }
 
@@ -1271,6 +1294,7 @@ impl App {
         self.partial.clear();
         let table = self.markdown.finish();
         self.commit_markdown(table);
+        self.release_asides(true);
     }
 
     /// Ends a thought: one dim line when it took a while, with the full text behind Ctrl+O.
@@ -1285,6 +1309,7 @@ impl App {
             let first = first_sentence(&text);
             let gist = if first.is_empty() { String::new() } else { format!(": {first}") };
             let line = fit(&format!("{DIM}∴ Thought for {took}{gist}{RESET}"), self.width);
+            self.begin(Kind::Tool);
             self.commit(line);
         }
     }
@@ -1298,6 +1323,7 @@ impl App {
         let (title, body) = self.details[self.details.len() - 1 - back].clone();
         self.detail_back = back + 1;
         let place = if self.details.len() > 1 { format!(" ({}/{})", back + 1, self.details.len()) } else { String::new() };
+        self.begin(Kind::Note);
         self.commit(format!("{DIM}── {title}{place} ──{RESET}"));
         let lines: Vec<&str> = body.lines().collect();
         for line in lines.iter().take(400) {
@@ -1306,50 +1332,81 @@ impl App {
         if lines.len() > 400 {
             self.commit(format!("{DIM}… {} more lines{RESET}", lines.len() - 400));
         }
+        self.commit(String::new());
     }
 
     // ---------- commands ----------
 
     fn help(&mut self) {
+        self.begin(Kind::Note);
         self.commit(format!("{BOLD}Commands{RESET} {DIM}type / to search them and your skills{RESET}"));
-        for c in COMMANDS {
-            let aliases: String = c.aliases.iter().map(|a| format!(", /{a}")).collect();
-            let args = if c.args.is_empty() { String::new() } else { format!(" {}", c.args) };
-            self.commit(format!("  {LAGOON}/{}{RESET}{DIM}{aliases}{args}{RESET}  {}", c.name, c.about));
+        let rows: Vec<(String, String, &str)> = COMMANDS
+            .iter()
+            .map(|c| {
+                let aliases: String = c.aliases.iter().map(|a| format!(", /{a}")).collect();
+                let args = if c.args.is_empty() { String::new() } else { format!(" {}", c.args) };
+                (format!("/{}", c.name), format!("{aliases}{args}"), c.about)
+            })
+            .chain([("/<skill>".to_string(), " [request]".to_string(), "Run a skill")])
+            .collect();
+        let column = rows.iter().map(|(name, rest, _)| text::width(name) + text::width(rest)).max().unwrap_or(0);
+        for (name, rest, about) in rows {
+            let pad = " ".repeat(column - text::width(&name) - text::width(&rest));
+            self.commit(format!("  {LAGOON}{name}{RESET}{DIM}{rest}{RESET}{pad}  {about}"));
         }
-        self.commit(format!("  {LAGOON}/<skill>{RESET}{DIM} [request]{RESET}  Run a skill"));
+        self.commit(String::new());
         self.commit(format!("{BOLD}Keys{RESET}"));
+        let column = KEYS.iter().map(|(key, _)| text::width(key)).max().unwrap_or(0);
         for (key, about) in KEYS {
-            self.commit(format!("  {BOLD}{key}{RESET} {DIM}{about}{RESET}"));
+            self.commit(format!("  {BOLD}{key:<column$}{RESET}  {DIM}{about}{RESET}"));
         }
+        self.commit(String::new());
+        self.last_kind = Kind::None;
     }
 
-    /// A /btw answer, with the question it answers; it isn't part of the conversation.
+    /// A /btw answer, with the question it answers; it isn't part of the conversation. It is
+    /// printed as one block, at the end of the model's paragraph if one is streaming.
     fn show_aside(&mut self, question: &str, answer: Result<(String, Usage)>) {
+        self.aside = None;
         let (text, usage) = match answer {
             Ok(answer) => answer,
             Err(e) => return self.error(&format!("/btw: {e:#}")),
         };
-        self.commit(String::new());
-        self.commit_wrapped(format!("{BOLD}{FIN}btw{RESET} {BOLD}{question}{RESET}"));
-        let mut markdown = Markdown::new(self.width.saturating_sub(2));
-        let mut rows: Vec<String> = text.lines().flat_map(|line| markdown.line(line)).collect();
-        rows.extend(markdown.finish());
-        for row in rows {
-            self.commit_wrapped(format!("  {row}"));
-        }
         let cached = usage.cached * 100 / usage.prompt.max(1);
-        self.commit(format!("  {DIM}Not kept in the conversation · {} input tokens, {cached}% cached{RESET}", short(usage.prompt)));
-        self.commit(String::new());
+        let note = format!("Not kept in the conversation · {} in, {cached}% cached", short(usage.prompt));
+        self.held_asides.push(aside_rows(question, &text, &note, self.width));
+        self.release_asides(false);
+    }
+
+    /// Prints the answered /btw blocks, unless the model is in the middle of a paragraph and
+    /// `force` is off: the block would cut it in two.
+    fn release_asides(&mut self, force: bool) {
+        if self.held_asides.is_empty() || (!force && self.last_kind == Kind::Text && !self.held_blank) {
+            return;
+        }
+        // The block ends with its own blank row and the prose goes on as if it weren't there, so
+        // the next chunk of text keeps its leading spaces.
+        let before = self.last_kind;
+        for rows in std::mem::take(&mut self.held_asides) {
+            self.begin(Kind::Note);
+            for row in rows {
+                self.commit(row);
+            }
+            self.commit(String::new());
+        }
+        self.last_kind = before;
     }
 
     fn usage_report(&mut self, agent: &Agent) {
         let usage = &agent.stats.usage;
         let cached = usage.cached * 100 / usage.prompt.max(1);
+        self.begin(Kind::Note);
         self.commit(format!(
-            "{DIM}This session: {} requests, {} tool calls, {} input tokens ({cached}% cached), {} output tokens.{RESET}",
+            "{DIM}This session: {} request{}, {} tool call{}, {} input tokens ({cached}% cached), {} output tokens.{RESET}",
             agent.stats.requests,
+            if agent.stats.requests == 1 { "" } else { "s" },
             agent.stats.tool_calls,
+            if agent.stats.tool_calls == 1 { "" } else { "s" },
             short(usage.prompt),
             short(usage.completion)
         ));
@@ -1458,15 +1515,28 @@ impl App {
     fn wipe_screen(&mut self) {
         self.pending.clear();
         self.last_blank = false;
+        self.last_kind = Kind::None;
         let _ = execute!(self.out, Clear(ClearType::All), Clear(ClearType::Purge), crossterm::cursor::MoveTo(0, 0));
         self.cursor_row = 0;
+        self.shown.clear();
+    }
+
+    /// Starts a block of the conversation: a blank row first, unless it continues the block
+    /// above (prose after prose, a tool call after a tool call, a note after a note).
+    fn begin(&mut self, kind: Kind) {
+        if self.last_kind != kind {
+            self.commit(String::new());
+        }
+        self.last_kind = kind;
     }
 
     fn notice(&mut self, text: &str) {
+        self.begin(Kind::Note);
         self.commit(format!("{DIM}{text}{RESET}"));
     }
 
     fn error(&mut self, text: &str) {
+        self.begin(Kind::Note);
         self.commit(format!("{DANGER}✗ Error:{RESET} {text}"));
         if let Some(hint) = error_hint(text) {
             self.commit(format!("{DIM}{hint}{RESET}"));
@@ -1482,12 +1552,20 @@ impl App {
         }
         let _ = queue!(self.out, MoveToColumn(0), Clear(ClearType::FromCursorDown));
         self.cursor_row = 0;
+        self.shown.clear();
     }
 
     /// The live area's rows and where the cursor goes in them.
     fn live(&self) -> (Vec<String>, usize, usize) {
         let width = self.width;
         let mut rows: Vec<String> = Vec::new();
+        // A blank row, unless the row above is blank already: it keeps the parts of the live
+        // area, and the live area and the conversation, from touching.
+        let space = |rows: &mut Vec<String>| {
+            if rows.last().map_or(!self.last_blank, |row| !row.is_empty()) {
+                rows.push(String::new());
+            }
+        };
         if !self.partial.is_empty() {
             let mut markdown = self.markdown.clone();
             let mut styled = markdown.line(&self.partial);
@@ -1497,17 +1575,26 @@ impl App {
         }
         if let Some(started) = self.busy {
             let frame = QUARTER[self.spinner % QUARTER.len()];
+            // Work in flight continues the tool rows above it, but prose gets a blank row first.
+            if !rows.is_empty() || matches!(self.last_kind, Kind::Text | Kind::Note) {
+                space(&mut rows);
+            }
             if let Some((since, text)) = &self.thinking {
                 let first = first_sentence(text);
                 rows.push(fit(&format!("{DIM}∴ thinking {} {first}{RESET}", clock(since.elapsed())), width));
             }
-            for running in self.running.iter().take(5) {
+            let waiting_on_you = |running: &Running| self.asking.is_some() && running.summary.starts_with("ask_user_question");
+            for running in self.running.iter().filter(|r| !waiting_on_you(r)).take(5) {
                 let took = format!(" {DIM}· {}{RESET}", clock(running.started.elapsed()));
                 let line = match &running.label {
                     Some(label) => format!("  {DIM}↳ {label}:{RESET} {LAGOON}{frame}{RESET} {DIM}{}{RESET}{took}", running.summary),
                     None => format!("{LAGOON}{frame}{RESET} {}{took}", tool_summary(&running.summary)),
                 };
                 rows.push(fit(&line, width));
+            }
+            if let Some((question, since)) = &self.aside {
+                let question = clip(&question.split_whitespace().collect::<Vec<_>>().join(" "), width.saturating_sub(14));
+                rows.push(fit(&format!("{LAGOON}{frame}{RESET} {BOLD}{FIN}btw{RESET} {question}{DIM} · {}{RESET}", clock(since.elapsed())), width));
             }
             if self.asking.is_none() {
                 let spin = banner::working(self.spinner);
@@ -1518,6 +1605,7 @@ impl App {
             }
         }
         if self.todos.iter().any(|t| t.status != "completed") {
+            space(&mut rows);
             let done = self.todos.iter().filter(|t| t.status == "completed").count();
             rows.push(fit(&format!("  {DIM}tasks {done}/{}{RESET}", self.todos.len()), width));
             for todo in self.todos.iter().take(8) {
@@ -1533,6 +1621,7 @@ impl App {
             }
         }
         let mode = self.controls.plan.get().then_some("plan mode · Shift+Tab leaves it");
+        space(&mut rows);
         rows.push(rule(mode, width));
         let known = |name: &str| self.entries.iter().any(|e| e.name == name || e.aliases.iter().any(|a| a == name));
         let (input, cursor_row, cursor_col) = self.editor.render(&format!("{LAGOON}❯{RESET} "), width, &known);
@@ -1541,7 +1630,11 @@ impl App {
         rows.extend(input.into_iter().skip(first).take(MAX_INPUT_ROWS));
         let mut cursor = (top + cursor_row - first, cursor_col);
         rows.push(rule(mode.map(|_| ""), width));
-        let room = (self.height - 1).saturating_sub(rows.len() - top + 3).min(MENU_ROWS);
+        let modal = self.picker.is_some() || self.asking.is_some();
+        let room = (self.height - 1).saturating_sub(rows.len() - top + 3 + usize::from(modal)).min(MENU_ROWS);
+        if modal {
+            rows.push(String::new());
+        }
         if let Some(menu) = self.suggestions() {
             let visible = menu.items.len().min(room);
             if visible > 0 {
@@ -1608,9 +1701,8 @@ impl App {
     /// the context figure, so the model and mode stay on screen at any width.
     fn status_line(&self, width: usize) -> String {
         let mut head = vec![format!("{RESET}{}{DIM}", self.status.model)];
-        let thinking = thinking_note(&self.status.thinking);
-        if !thinking.is_empty() {
-            head.push(thinking);
+        if let Some((word, value)) = thinking_parts(&self.status.thinking) {
+            head.push(format!("{word} {}", tint(EFFORT, value)));
         }
         if self.controls.plan.get() {
             head.push(format!("{LAGOON}plan mode{RESET}{DIM}"));
@@ -1621,24 +1713,47 @@ impl App {
         status_layout(&head.join(" · "), &self.status, width)
     }
 
+    /// Paints the live area, in one write inside a synchronized update so no half-drawn frame
+    /// is ever shown. When only rows changed, as on a spinner tick, just those are rewritten;
+    /// a committed line scrolls the area, so then it is painted whole.
     fn draw(&mut self) -> Result<()> {
         let (rows, cursor_row, cursor_col) = self.live();
-        if self.cursor_row > 0 {
-            queue!(self.out, MoveUp(self.cursor_row as u16))?;
-        }
-        queue!(self.out, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
-        for line in self.pending.drain(..) {
-            write!(self.out, "{}{RESET}\r\n", text::plain(&line))?;
-        }
         let rows: Vec<String> = rows.iter().map(|row| text::plain(row).into_owned()).collect();
-        write!(self.out, "{}", rows.join("\r\n"))?;
-        let last = rows.len().saturating_sub(1);
-        if last > cursor_row {
-            queue!(self.out, MoveUp((last - cursor_row) as u16))?;
+        let changed = self.pending.is_empty().then(|| changed_rows(&self.shown, &rows)).flatten();
+        if changed.as_ref().is_some_and(|changed| changed.is_empty()) && cursor_row == self.cursor_row && cursor_col == self.shown_col {
+            return Ok(());
         }
-        queue!(self.out, MoveToColumn(cursor_col as u16))?;
-        self.cursor_row = cursor_row;
+        let mut frame: Vec<u8> = Vec::new();
+        queue!(frame, BeginSynchronizedUpdate, Hide)?;
+        match changed {
+            Some(changed) => {
+                let mut at = self.cursor_row;
+                for i in changed {
+                    move_rows(&mut frame, at, i)?;
+                    queue!(frame, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
+                    write!(frame, "{}{RESET}", rows[i])?;
+                    at = i;
+                }
+                move_rows(&mut frame, at, cursor_row)?;
+            }
+            None => {
+                if self.cursor_row > 0 {
+                    queue!(frame, MoveUp(self.cursor_row as u16))?;
+                }
+                queue!(frame, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
+                for line in self.pending.drain(..) {
+                    write!(frame, "{}{RESET}\r\n", text::plain(&line))?;
+                }
+                write!(frame, "{}", rows.join("\r\n"))?;
+                move_rows(&mut frame, rows.len().saturating_sub(1), cursor_row)?;
+            }
+        }
+        queue!(frame, MoveToColumn(cursor_col as u16), Show, EndSynchronizedUpdate)?;
+        self.out.write_all(&frame)?;
         self.out.flush()?;
+        self.shown = rows;
+        self.shown_col = cursor_col;
+        self.cursor_row = cursor_row;
         Ok(())
     }
 
@@ -1691,6 +1806,33 @@ fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width:
         .collect()
 }
 
+/// A /btw question and its answer as one block: the question, the answer hung off the output
+/// gutter like a tool's output, and `note` last, so it reads as set aside from the conversation.
+fn aside_rows(question: &str, answer: &str, note: &str, width: usize) -> Vec<String> {
+    let question = question.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut rows = wrap_words(&format!("{BOLD}{FIN}btw{RESET} {BOLD}{question}{RESET}"), width, 4);
+    let gutter = format!("  {FAINT}│{RESET}");
+    let inner = width.saturating_sub(4);
+    let mut markdown = Markdown::new(inner);
+    let mut styled: Vec<String> = answer.lines().flat_map(|line| markdown.line(line)).collect();
+    styled.extend(markdown.finish());
+    while styled.last().is_some_and(|row| text::width(row) == 0) {
+        styled.pop();
+    }
+    for row in styled {
+        if text::width(&row) == 0 {
+            rows.push(gutter.clone());
+            continue;
+        }
+        for wrapped in wrap_words(&row, inner, text::hanging_indent(&row)) {
+            rows.push(format!("{gutter} {wrapped}"));
+        }
+    }
+    rows.push(gutter.clone());
+    rows.push(format!("{gutter} {DIM}{note}{RESET}"));
+    rows
+}
+
 /// A full-width line around the prompt, in lagoon with `label` on it in plan mode.
 fn rule(label: Option<&str>, width: usize) -> String {
     match label {
@@ -1709,28 +1851,40 @@ fn title_rule(title: &str, width: usize) -> String {
     format!("{LAGOON}── {BOLD}{title}{RESET}{LAGOON} {}{RESET}", "─".repeat(rest))
 }
 
-/// The status line's parts fitted to `width`; see `App::status_line`.
+/// The status line's parts fitted to `width`; see `App::status_line`. Each kind of figure has
+/// its own color: the effort, the tokens and the branch; the meter is lagoon, and warn from 80%.
 fn status_layout(head: &str, status: &Status, width: usize) -> String {
+    let warn = status.window.is_some_and(|window| near_full(status.context, window));
+    let figure = |text: String| if warn { tint(WARN, &text) } else { text };
     let context = |bar: bool| match (status.window, bar) {
-        (Some(window), true) => format!("ctx {} {}/{}", gauge(status.context, window), short(status.context), short(window)),
-        (Some(window), false) => format!("ctx {}/{}", short(status.context), short(window)),
+        (Some(window), true) => format!("ctx {} {}", gauge(status.context, window), figure(format!("{}/{}", short(status.context), short(window)))),
+        (Some(window), false) => format!("ctx {}", figure(format!("{}/{}", short(status.context), short(window)))),
         (None, _) => format!("ctx {}", short(status.context)),
     };
     let percent = match status.window {
-        Some(window) => format!("ctx {}%", status.context * 100 / window.max(1)),
+        Some(window) => format!("ctx {}", figure(format!("{}%", status.context * 100 / window.max(1)))),
         None => format!("ctx {}", short(status.context)),
     };
     let tokens = |cache: bool| {
         if status.prompt == 0 {
             return None;
         }
+        let count = |n: String| tint(TOKENS, &n);
         let cached = status.cached * 100 / status.prompt.max(1);
         Some(match cache {
-            true => format!("{} in · {cached}% cached · {} out", short(status.prompt), short(status.completion)),
-            false => format!("{} in · {} out", short(status.prompt), short(status.completion)),
+            true => format!("{} in · {} cached · {} out", count(short(status.prompt)), count(format!("{cached}%")), count(short(status.completion))),
+            false => format!("{} in · {} out", count(short(status.prompt)), count(short(status.completion))),
         })
     };
-    let branch = |max: usize| status.branch.as_ref().map(|b| format!("⎇ {}", clip(b, max)));
+    let branch = |max: usize| {
+        status.branch.as_ref().map(|branch| {
+            let branch = clip(branch, max);
+            match branch.strip_suffix('*') {
+                Some(name) => format!("{}{}", tint(BRANCH, &format!("⎇ {name}")), tint(WARN, "*")),
+                None => tint(BRANCH, &format!("⎇ {branch}")),
+            }
+        })
+    };
     let layouts = [
         (context(true), tokens(true), branch(usize::MAX)),
         (context(true), tokens(false), branch(usize::MAX)),
@@ -1739,9 +1893,10 @@ fn status_layout(head: &str, status: &Status, width: usize) -> String {
         (percent.clone(), None, branch(16)),
         (percent.clone(), None, None),
     ];
+    let divider = format!(" {} ", tint(FAINT, "│"));
     for (context, tokens, branch) in layouts {
         let groups: Vec<String> = [Some(head.to_string()), Some(context), tokens, branch].into_iter().flatten().collect();
-        let line = groups.join(" │ ");
+        let line = groups.join(&divider);
         if text::width(&line) <= width {
             return format!("{DIM}{line}{RESET}");
         }
@@ -1749,10 +1904,20 @@ fn status_layout(head: &str, status: &Status, width: usize) -> String {
     format!("{DIM}{}{RESET}", fit(head, width))
 }
 
+/// `text` in `color` inside a dim line: it resets, colors, and goes back to dim after.
+fn tint(color: impl std::fmt::Display, text: &str) -> String {
+    format!("{RESET}{color}{text}{RESET}{DIM}")
+}
+
+/// Whether the context has reached the share of the window where the meter turns warn.
+fn near_full(used: u64, window: u64) -> bool {
+    used * 100 / window.max(1) >= 80
+}
+
 /// How full the context window is, as a ten-cell lagoon meter that turns warn from 80%.
 fn gauge(used: u64, window: u64) -> String {
     let filled = (used.saturating_mul(10).div_ceil(window.max(1)) as usize).min(10);
-    let color = if used * 100 / window.max(1) >= 80 { WARN } else { LAGOON };
+    let color = if near_full(used, window) { WARN } else { LAGOON };
     format!("{RESET}{color}{}{RESET}{FAINT}{}{RESET}{DIM}", "━".repeat(filled), "╌".repeat(10 - filled))
 }
 
@@ -1771,17 +1936,33 @@ fn clip(text: &str, max: usize) -> String {
     out + "…"
 }
 
-/// The effort as the banner and status line show it; nothing for the provider's default.
-fn thinking_note(thinking: &str) -> String {
+/// The effort as a label and its value, as the banner and status line show them; nothing for
+/// the provider's default.
+fn thinking_parts(thinking: &str) -> Option<(&'static str, &str)> {
     match thinking {
-        "on" => String::new(),
-        "off" => "thinking off".into(),
-        effort => format!("effort {effort}"),
+        "on" => None,
+        "off" => Some(("thinking", "off")),
+        effort => Some(("effort", effort)),
     }
 }
 
 fn fit(line: &str, width: usize) -> String {
     wrap(line, width).into_iter().next().unwrap_or_default()
+}
+
+/// The indexes of the rows that differ from those on screen, or None when the area changed size
+/// and has to be painted whole.
+fn changed_rows(shown: &[String], rows: &[String]) -> Option<Vec<usize>> {
+    (shown.len() == rows.len()).then(|| (0..rows.len()).filter(|&i| shown[i] != rows[i]).collect())
+}
+
+/// Moves the cursor from one row of the live area to another.
+fn move_rows(out: &mut impl Write, from: usize, to: usize) -> std::io::Result<()> {
+    match to.cmp(&from) {
+        std::cmp::Ordering::Less => queue!(out, MoveUp((from - to) as u16)),
+        std::cmp::Ordering::Greater => queue!(out, MoveDown((to - from) as u16)),
+        std::cmp::Ordering::Equal => Ok(()),
+    }
 }
 
 /// What to try for the failures people hit most, from the text of the error.
@@ -1805,16 +1986,20 @@ fn error_hint(error: &str) -> Option<&'static str> {
     }
 }
 
-/// An error reason with a JSON body cut down to its status and message: `HTTP 529: busy`.
+/// An error reason with a JSON body cut down to its status and message: `HTTP 529: busy`. What
+/// follows the body, such as `(after 3 attempts)`, stays.
 fn gist(reason: &str) -> String {
     let reason = reason.replace('\n', " ");
     let Some(start) = reason.find('{') else { return reason };
-    let Ok(body) = serde_json::from_str::<serde_json::Value>(&reason[start..]) else { return reason };
+    let mut bodies = serde_json::Deserializer::from_str(&reason[start..]).into_iter::<serde_json::Value>();
+    let Some(Ok(body)) = bodies.next() else { return reason };
     let Some(message) = body.pointer("/error/message").or(body.get("message")).and_then(|m| m.as_str()) else { return reason };
+    let after = reason[start + bodies.byte_offset()..].trim();
+    let after = if after.is_empty() { String::new() } else { format!(" {after}") };
     let status: Vec<&str> = reason[..start].split_whitespace().take(2).collect();
     match status.as_slice() {
-        ["HTTP", code] => format!("HTTP {}: {message}", code.trim_end_matches(':')),
-        _ => message.to_string(),
+        ["HTTP", code] => format!("HTTP {}: {message}{after}", code.trim_end_matches(':')),
+        _ => format!("{message}{after}"),
     }
 }
 
@@ -1941,7 +2126,7 @@ const COMMANDS: &[Command] = &[
 
 const KEYS: &[(&str, &str)] = &[
     ("Enter", "send; while the agent works, sends your message at its next step"),
-    ("Shift+Enter, Ctrl+J, \\ then Enter", "new line"),
+    ("Shift+Enter", "new line; also Ctrl+J, or \\ then Enter"),
     ("Esc", "interrupt the agent"),
     ("Shift+Tab", "plan mode"),
     ("Ctrl+O", "show the last tool output or thought in full"),
@@ -1973,7 +2158,7 @@ impl Drop for TerminalGuard {
         if self.enhanced {
             let _ = execute!(out, PopKeyboardEnhancementFlags);
         }
-        let _ = execute!(out, DisableBracketedPaste);
+        let _ = execute!(out, DisableBracketedPaste, Show);
         let _ = terminal::disable_raw_mode();
         let _ = writeln!(out);
     }
@@ -2110,6 +2295,52 @@ mod tests {
         assert!(picker.choice().is_none());
         picker.filter(String::new());
         assert_eq!(picker.shown.len(), 4);
+    }
+
+    #[test]
+    fn a_failed_request_shows_its_status_and_message_and_what_follows() {
+        let reason = r#"HTTP 401 Unauthorized: {"error":{"message":"Invalid API key"}} (after 1 attempt(s))"#;
+        assert_eq!(gist(reason), "HTTP 401: Invalid API key (after 1 attempt(s))");
+    }
+
+    #[test]
+    fn a_side_answer_is_one_block_hung_off_the_gutter() {
+        let rows = aside_rows("what\nnow?", "It **reads** first.\n\n- one\n- two\n", "Not kept · 4k in", 40);
+        let rows: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
+        assert_eq!(rows, ["btw what now?", "  │ It reads first.", "  │", "  │ • one", "  │ • two", "  │", "  │ Not kept · 4k in"]);
+        let long = aside_rows("q", &"word ".repeat(30), "n", 30);
+        assert!(long.iter().all(|row| text::width(row) <= 30));
+        assert!(long.iter().skip(1).all(|row| unstyled(row).starts_with("  │")));
+    }
+
+    #[test]
+    fn each_kind_of_status_figure_has_its_own_color() {
+        let status = Status {
+            window: Some(200_000),
+            context: 38_000,
+            prompt: 38_000,
+            cached: 30_000,
+            completion: 2_000,
+            branch: Some("main*".into()),
+            ..Status::default()
+        };
+        let line = status_layout(&format!("model · effort {}", tint(EFFORT, "high")), &status, 140);
+        assert!(line.contains(&format!("{EFFORT}high")));
+        assert!(line.contains(&format!("{TOKENS}38k")) && line.contains(&format!("{TOKENS}78%")) && line.contains(&format!("{TOKENS}2k")));
+        assert!(line.contains(&format!("{BRANCH}⎇ main")) && line.contains(&format!("{WARN}*")));
+        assert!(line.contains(&format!("{FAINT}│")));
+        assert!(!line.contains(&format!("{WARN}38k/200k")));
+        let full = status_layout("model", &Status { context: 170_000, ..status }, 140);
+        assert!(full.contains(&format!("{WARN}170k/200k")));
+    }
+
+    #[test]
+    fn a_tick_repaints_only_the_rows_that_changed() {
+        let rows = |texts: &[&str]| texts.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        let before = rows(&["working 1s", "rule", "❯", "rule", "status"]);
+        assert_eq!(changed_rows(&before, &rows(&["working 2s", "rule", "❯", "rule", "status"])), Some(vec![0]));
+        assert_eq!(changed_rows(&before, &before), Some(vec![]));
+        assert_eq!(changed_rows(&before, &rows(&["rule", "❯", "rule", "status"])), None);
     }
 
     #[test]

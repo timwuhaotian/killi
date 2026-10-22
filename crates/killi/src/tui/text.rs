@@ -71,6 +71,12 @@ pub const WARN: Sgr = Sgr { dark: "\x1b[38;5;221m", light: "\x1b[38;5;136m" };
 pub const DANGER: Sgr = Sgr { dark: "\x1b[38;5;204m", light: "\x1b[38;5;124m" };
 /// Marks the eye may skip: gutters, rules, the empty part of a meter.
 pub const FAINT: Sgr = Sgr { dark: "\x1b[38;5;242m", light: "\x1b[38;5;245m" };
+/// The thinking effort in the status line and the banner.
+pub const EFFORT: Sgr = Sgr { dark: "\x1b[38;5;105m", light: "\x1b[38;5;61m" };
+/// Token counts and the cache hit rate in the status line.
+pub const TOKENS: Sgr = Sgr { dark: "\x1b[38;5;75m", light: "\x1b[38;5;25m" };
+/// The git branch in the status line.
+pub const BRANCH: Sgr = Sgr { dark: "\x1b[38;5;176m", light: "\x1b[38;5;127m" };
 /// A background a step off the terminal's own, for the selected row and your messages.
 pub const TINT: Sgr = Sgr { dark: "\x1b[48;5;237m", light: "\x1b[48;5;254m" };
 

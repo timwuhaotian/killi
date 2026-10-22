@@ -5,6 +5,27 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.17 — 2026-10-22
+
+- **The status line no longer flashes while the agent works.** The live area is painted in one
+  write inside a synchronized update, with the cursor hidden, and a spinner tick rewrites only
+  the rows that changed. In a 4 s turn the status line was rewritten 59 times, now about 10, and
+  only when its content changed.
+- **The status line colors each kind of figure.** The effort, the token counts with the cache
+  rate and the git branch each have their own hue (`effort`, `tokens`, `branch` in the design
+  system), `│` is faint, and the context figures and a dirty `*` turn yellow, the meter from
+  80%. The banner shows the effort in its color too.
+- **Room to read.** One rule decides where blank rows go: notices, errors, questions,
+  `/help`, `Ctrl+O` output and `/btw` answers are each set apart, and a thought no longer
+  touches the prose after it. A blank row sits above the prompt and above the task list, and
+  under the prompt before a picker or a question's choices, so the conversation, the work and
+  the prompt don't touch. `/help` lines up its columns. A failed request shows `HTTP 401:
+  Invalid API key` instead of the raw JSON, and no `0 in, 0% cached` summary after it.
+- **`/btw` is a block you can see.** While it is answered it shows as `◐ btw <question> · 2s`
+  in the live area. The answer is one block: the question, the answer hung off the `│` gutter
+  and a last line saying it is not kept. If the model is in the middle of a paragraph the
+  block waits for its end instead of cutting it in two.
+
 ## 0.2.16 — 2026-10-22
 
 - **A resumed session shows its conversation again.** `killi -r`, `-c` and `/resume` print the
