@@ -6,6 +6,9 @@ cd "$(dirname "$0")/.."
 
 [ "$(uname -s)-$(uname -m)" = "Darwin-arm64" ] || { echo "release builds run on Apple Silicon macOS" >&2; exit 1; }
 
+# Panic messages name source files; keep this machine's home folder out of them.
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=~"
+
 cargo clippy --workspace --all-targets --locked -q -- -D warnings
 cargo test --workspace --locked -q
 cargo build --release --locked -p killi

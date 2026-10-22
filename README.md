@@ -16,7 +16,7 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 [Kiled](https://github.com/timwuhaotian/kiled) editor.
 
 <p align="center">
-  <img src="docs/screenshot.png" width="960" alt="killi fixing a failing Rust test: it globs and reads the project, runs the tests, edits src/lib.rs with a diff shown, reruns the tests and explains the fix; the status line shows the model, context used, git branch and tokens with 86% cached">
+  <img src="docs/screenshot.png" width="960" alt="killi's banner, then killi fixing a failing Rust test: it reads the project, runs the tests, edits src/lib.rs with a numbered line diff, reruns the tests and explains the fix; the status line shows the model, thinking effort, a context gauge and tokens with 78% cached">
 </p>
 
 > **Status: early.** Apple silicon Macs only. Used daily by its author; expect rough edges.
@@ -34,8 +34,9 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
   resumed sessions reuse the same cached prefix; 70–90% of input tokens come from the cache.
 - **An interactive mode that stays out of the way.** The conversation prints into your
   terminal's own scrollback; only a small area at the bottom redraws: what's running, your task
-  list, the prompt and a status line. Type while the agent works and your message reaches it at
-  its next step. Esc interrupts, and nothing it started keeps running.
+  list, the prompt and a status line. Type `/` for a menu of commands and skills that narrows as
+  you type. Type while the agent works and your message reaches it at its next step. Esc
+  interrupts, and nothing it started keeps running.
 - **Plan mode** (Shift+Tab): the agent researches and writes a plan; edits are blocked and
   bash runs only read-only commands until you approve it.
 - **Tools that forgive small mistakes.** `edit` takes several changes in one call and still
@@ -151,6 +152,7 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 
 | Key | |
 |---|---|
+| / | the command menu: ↑↓ choose, Tab completes, Enter runs, Esc closes |
 | Enter | send; while the agent works, your message reaches it at its next step |
 | Shift+Enter, Ctrl+J | new line |
 | Esc | interrupt |
@@ -158,8 +160,14 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | Ctrl+O | the last tool output or thought in full |
 | ↑ ↓ | history |
 
-Commands: `/plan`, `/undo`, `/compact [focus]`, `/clear`, `/resume`, `/model [alias]`,
-`/reload`, `/usage`, `/help`, and `/<skill-name> [request]` for any skill.
+<p align="center">
+  <img src="docs/menu.png" width="960" alt="The slash menu after typing /re: resume, reload, then the refactor, release, code-review and write-tests skills, each with its description">
+</p>
+
+Commands: `/model [alias]`, `/effort [level]` (thinking effort), `/new` (or `/clear`),
+`/resume`, `/compact [focus]`, `/undo`, `/plan`, `/usage`, `/reload`, `/help`, `/exit`, and
+`/<skill-name> [request]` for any skill. The menu matches loosely, the way Kimi Code's does:
+`/cr` finds `code-review`.
 
 killi runs commands and edits files without asking; `/undo` is the safety net.
 

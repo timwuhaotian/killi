@@ -5,6 +5,31 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.2 — 2026-10-22
+
+- **Slash menu.** Typing `/` opens a menu of commands and skills that narrows as you type,
+  ranked with the fuzzy matcher Kimi Code uses, so `/rev` finds `code-review`; skills whose
+  description mentions the word follow. ↑↓ choose, Tab completes, Enter runs, Esc closes.
+  After `/model ` or `/effort ` it offers the models or efforts, starting on the current one.
+- **`/effort`** (or `/thinking`) switches the thinking effort for the session, from a list or
+  as `/effort high`; the status line shows it. `/new` is the main name for `/clear`, and
+  `/quit` and `/q` exit too. `/skill:<name>` runs a skill, as in Kimi Code.
+- **A banner** at start: killi in gradient block letters, with the version, model, effort and
+  folder beside it.
+- **Tidier output.**
+  - The model's text wraps between words, with list items indented under their text.
+  - Code blocks show without their fences.
+  - Edits show a line diff with line numbers and a little context, instead of the whole old
+    and new text.
+  - Tool lines stay on one line, with paths relative to the folder and a leading
+    `cd <folder> &&` left out.
+  - Retry notices show the provider's message instead of the raw JSON.
+- **Lists and the prompt.**
+  - The model and effort lists and the agent's questions open under the prompt, in the
+    same style as the slash menu.
+  - The prompt sits between two rules, which turn yellow in plan mode.
+  - The status line has a context gauge.
+
 ## 0.2.1 — 2026-10-22
 
 - `killi init` writes a starting `~/.killi/config.toml` for machines without Kimi Code.

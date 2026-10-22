@@ -19,6 +19,7 @@ pub use openai::REASONING_KEYS;
 
 const MAX_ATTEMPTS: u32 = 10;
 
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     pub model: ResolvedModel,

@@ -74,7 +74,7 @@ struct Applied {
     count: usize,
     added: usize,
     removed: usize,
-    /// `@@ line`, `-` and `+` lines for the terminal.
+    /// The changes for the terminal; see `line_diff`.
     diff: String,
 }
 
@@ -132,15 +132,14 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
     for &(start, end, i) in &ranges {
         let new = edits[i].new.replace("\r\n", "\n");
         let line = text[..start].matches('\n').count() + 1;
-        diff.push_str(&format!("@@ line {line}\n"));
-        for old in text[start..end].lines() {
-            diff.push_str(&format!("- {old}\n"));
-            removed += 1;
+        let shift = added as isize - removed as isize;
+        if !diff.is_empty() {
+            diff.push_str("⋮\n");
         }
-        for new in new.lines() {
-            diff.push_str(&format!("+ {new}\n"));
-            added += 1;
-        }
+        let (hunk, plus, minus) = line_diff(&text[start..end], &new, line, line.saturating_add_signed(shift));
+        diff.push_str(&hunk);
+        added += plus;
+        removed += minus;
     }
     for &(start, end, i) in ranges.iter().rev() {
         out.replace_range(start..end, &edits[i].new.replace("\r\n", "\n"));
@@ -149,6 +148,59 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
         return Err(format!("No changes made to {path}: the replacement produced identical content."));
     }
     Ok(Applied { text: out, count: ranges.len(), added, removed, diff })
+}
+
+/// The lines that changed between `old` and `new`, and how many were added and removed. Each
+/// row is `-`, `+` or a space, then the line number (from `old_line` or `new_line`), a tab
+/// and the text; unchanged lines more than two away from a change fold into one `⋮`.
+fn line_diff(old: &str, new: &str, old_line: usize, new_line: usize) -> (String, usize, usize) {
+    let a: Vec<&str> = old.lines().collect();
+    let b: Vec<&str> = new.lines().collect();
+    let mut ops: Vec<(char, &str)> = Vec::new();
+    if a.len() * b.len() > 250_000 {
+        ops.extend(a.iter().map(|l| ('-', *l)).chain(b.iter().map(|l| ('+', *l))));
+    } else {
+        // lcs[i][j]: the longest common subsequence of a[i..] and b[j..].
+        let mut lcs = vec![vec![0u32; b.len() + 1]; a.len() + 1];
+        for i in (0..a.len()).rev() {
+            for j in (0..b.len()).rev() {
+                lcs[i][j] = if a[i] == b[j] { lcs[i + 1][j + 1] + 1 } else { lcs[i + 1][j].max(lcs[i][j + 1]) };
+            }
+        }
+        let (mut i, mut j) = (0, 0);
+        while i < a.len() || j < b.len() {
+            if i < a.len() && j < b.len() && a[i] == b[j] {
+                ops.push((' ', a[i]));
+                (i, j) = (i + 1, j + 1);
+            } else if j == b.len() || i < a.len() && lcs[i + 1][j] >= lcs[i][j + 1] {
+                ops.push(('-', a[i]));
+                i += 1;
+            } else {
+                ops.push(('+', b[j]));
+                j += 1;
+            }
+        }
+    }
+    let near = |k: usize| ops[k.saturating_sub(2)..(k + 3).min(ops.len())].iter().any(|(sign, _)| *sign != ' ');
+    let (mut out, mut folded) = (String::new(), false);
+    let (mut old_no, mut new_no) = (old_line, new_line);
+    for (k, (sign, text)) in ops.iter().enumerate() {
+        let number = if *sign == '-' { old_no } else { new_no };
+        if near(k) {
+            out.push_str(&format!("{sign}{number}\t{text}\n"));
+            folded = false;
+        } else if !folded {
+            out.push_str("⋮\n");
+            folded = true;
+        }
+        match sign {
+            '-' => old_no += 1,
+            '+' => new_no += 1,
+            _ => (old_no, new_no) = (old_no + 1, new_no + 1),
+        }
+    }
+    let count = |c: char| ops.iter().filter(|(sign, _)| *sign == c).count();
+    (out, count('+'), count('-'))
 }
 
 /// Text with trailing whitespace removed from each line and look-alike characters folded,
@@ -197,6 +249,15 @@ mod tests {
 
     fn run(text: &str, args: Value) -> Result<String, String> {
         apply(text, &parse_edits(&args)?, "f").map(|applied| applied.text)
+    }
+
+    #[test]
+    fn the_diff_shows_only_changed_lines_with_context_and_numbers() {
+        let old = "a\nb\nc\nd\ne\nf\ng\n";
+        let new = "a\nb\nc\nD\ne\nf\ng\nh\n";
+        let (diff, added, removed) = line_diff(old, new, 10, 10);
+        assert_eq!((added, removed), (2, 1));
+        assert_eq!(diff, "⋮\n 11\tb\n 12\tc\n-13\td\n+13\tD\n 14\te\n 15\tf\n 16\tg\n+17\th\n");
     }
 
     #[test]

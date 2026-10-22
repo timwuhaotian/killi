@@ -10,7 +10,8 @@ pub const ITALIC: &str = "\x1b[3m";
 pub const RED: &str = "\x1b[31m";
 pub const GREEN: &str = "\x1b[32m";
 pub const YELLOW: &str = "\x1b[33m";
-pub const BLUE: &str = "\x1b[34m";
+/// Sky blue, where the banner's gradient starts; one 256-color shade on every theme.
+pub const ACCENT: &str = "\x1b[38;5;75m";
 pub const MAGENTA: &str = "\x1b[35m";
 pub const CYAN: &str = "\x1b[36m";
 
@@ -75,6 +76,125 @@ pub fn wrap(line: &str, max: usize) -> Vec<String> {
     rows
 }
 
+/// Like `wrap`, but breaks at spaces where it can, so words stay whole; rows after the first
+/// start with `indent` spaces. A word longer than a row is still split.
+pub fn wrap_words(line: &str, max: usize, indent: usize) -> Vec<String> {
+    let max = max.max(1);
+    if width(line) <= max {
+        return vec![line.to_string()];
+    }
+    let mut rows = Rows { rows: Vec::new(), row: String::new(), width: 0, active: String::new(), indent: indent.min(max / 2), max };
+    let mut word: Vec<(String, usize)> = Vec::new();
+    let mut spaces = 0;
+    let mut placed = false;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            let mut seq = String::from(c);
+            for c in chars.by_ref() {
+                seq.push(c);
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            word.push((seq, 0));
+        } else if c == ' ' {
+            if rows.place(&std::mem::take(&mut word), spaces, placed) {
+                spaces = 0;
+                placed = true;
+            }
+            spaces += 1;
+        } else {
+            word.push((c.to_string(), c.width().unwrap_or(0)));
+        }
+    }
+    rows.place(&word, spaces, placed);
+    rows.finish()
+}
+
+/// Rows being filled by `wrap_words`.
+struct Rows {
+    rows: Vec<String>,
+    row: String,
+    width: usize,
+    /// Styles open at the end of `row`.
+    active: String,
+    indent: usize,
+    max: usize,
+}
+
+impl Rows {
+    /// Places a word after `spaces` spaces, on a new row when it doesn't fit; the spaces go
+    /// at a break. A word of only escape sequences takes effect without placing the spaces.
+    /// Returns whether the word had any width.
+    fn place(&mut self, word: &[(String, usize)], spaces: usize, placed: bool) -> bool {
+        let wide: usize = word.iter().map(|(_, w)| w).sum();
+        if wide == 0 {
+            word.iter().for_each(|(s, _)| self.push(s, 0));
+            return false;
+        }
+        if placed && self.width + spaces + wide > self.max {
+            self.break_row();
+        } else {
+            self.push(&" ".repeat(spaces), spaces);
+        }
+        for (s, w) in word {
+            if self.width + w > self.max && self.width > self.indent {
+                self.break_row();
+            }
+            self.push(s, *w);
+        }
+        true
+    }
+
+    fn push(&mut self, s: &str, w: usize) {
+        if s.starts_with('\x1b') {
+            if s == RESET {
+                self.active.clear();
+            } else {
+                self.active.push_str(s);
+            }
+        }
+        self.row.push_str(s);
+        self.width += w;
+    }
+
+    fn break_row(&mut self) {
+        if !self.active.is_empty() {
+            self.row.push_str(RESET);
+        }
+        self.rows.push(std::mem::take(&mut self.row));
+        self.row = format!("{}{}", " ".repeat(self.indent), self.active);
+        self.width = self.indent;
+    }
+
+    fn finish(mut self) -> Vec<String> {
+        self.rows.push(self.row);
+        self.rows
+    }
+}
+
+/// The columns a line's leading spaces and list marker take, for wrapping its later rows
+/// under its text.
+pub fn hanging_indent(line: &str) -> usize {
+    let mut plain = String::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            chars.by_ref().find(char::is_ascii_alphabetic);
+        } else {
+            plain.push(c);
+        }
+    }
+    let text = plain.trim_start_matches(' ');
+    let lead = plain.len() - text.len();
+    let marker = ["• ", "│ "].iter().find(|m| text.starts_with(**m)).map(|_| 2).or_else(|| {
+        let digits = text.chars().take_while(char::is_ascii_digit).count();
+        (digits > 0 && text[digits..].starts_with(". ")).then_some(digits + 2)
+    });
+    lead + marker.unwrap_or(0)
+}
+
 /// Styles complete lines of Markdown as they arrive, remembering whether a code block is open.
 #[derive(Default)]
 pub struct Markdown {
@@ -86,10 +206,10 @@ impl Markdown {
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") {
             self.in_code = !self.in_code;
-            return format!("{DIM}{line}{RESET}");
+            return String::new();
         }
         if self.in_code {
-            return format!("{CYAN}{line}{RESET}");
+            return format!("  {CYAN}{line}{RESET}");
         }
         if let Some(rest) = heading(trimmed) {
             return format!("{BOLD}{}{RESET}", inline(rest));
@@ -147,6 +267,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wrap_words_breaks_at_spaces_and_keeps_styles() {
+        assert_eq!(wrap_words("hello brave new world", 11, 0), ["hello brave", "new world"]);
+        assert_eq!(wrap_words("• one two three four", 11, 2), ["• one two", "  three", "  four"]);
+        assert_eq!(wrap_words("  indented words here", 12, 2), ["  indented", "  words here"]);
+        let rows = wrap_words(&format!("a {BOLD}bold words{RESET} end"), 9, 0);
+        assert_eq!(rows, [format!("a {BOLD}bold{RESET}"), format!("{BOLD}words{RESET} end")]);
+        assert_eq!(wrap_words("abcdefghij", 4, 0), ["abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn hanging_indent_follows_the_list_marker() {
+        assert_eq!(hanging_indent("plain"), 0);
+        assert_eq!(hanging_indent(&format!("  • {BOLD}item{RESET}")), 4);
+        assert_eq!(hanging_indent("12. step"), 4);
+    }
+
+    #[test]
     fn width_skips_escapes_and_counts_wide_characters() {
         assert_eq!(width(&format!("{BOLD}ab{RESET}")), 2);
         assert_eq!(width("中文"), 4);
@@ -166,8 +303,8 @@ mod tests {
         let mut md = Markdown::default();
         assert_eq!(md.line("## Title"), format!("{BOLD}Title{RESET}"));
         assert_eq!(md.line("- use `cargo` **now**"), format!("• use {CYAN}cargo{RESET} {BOLD}now{RESET}"));
-        assert!(md.line("```rust").starts_with(DIM));
-        assert_eq!(md.line("let x = 1;"), format!("{CYAN}let x = 1;{RESET}"));
+        assert_eq!(md.line("```rust"), "", "a fence becomes a blank line around the block");
+        assert_eq!(md.line("let x = 1;"), format!("  {CYAN}let x = 1;{RESET}"));
         md.line("```");
         assert_eq!(md.line("a * b"), "a * b");
     }

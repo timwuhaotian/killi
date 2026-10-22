@@ -25,6 +25,22 @@ impl Editor {
         self.text.is_empty()
     }
 
+    pub fn before_cursor(&self) -> &str {
+        &self.text[..self.cursor]
+    }
+
+    /// Replaces the text from byte `start` to the cursor with `with`, leaving the cursor after it.
+    pub fn replace_before(&mut self, start: usize, with: &str) {
+        self.text.replace_range(start..self.cursor, with);
+        self.cursor = start + with.len();
+        self.browsing = None;
+    }
+
+    /// The text is a history entry that hasn't been typed into.
+    pub fn browsing(&self) -> bool {
+        self.browsing.is_some()
+    }
+
     pub fn insert(&mut self, s: &str) {
         let s = s.replace("\r\n", "\n").replace('\r', "\n");
         self.text.insert_str(self.cursor, &s);

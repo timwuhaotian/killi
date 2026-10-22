@@ -197,6 +197,13 @@ Measured:
 - The top-level listing added in 0.2.1 cut killi's input tokens per task by 16% against
   0.2.0, with the same pass rate.
 
+0.2.2 added the slash menu. It ranks with pi-tui's fuzzy matcher, which Kimi Code uses,
+ported as is, and keeps Kimi Code's keys: Enter runs a command, Tab only completes, Esc
+closes. Two additions: entries whose description contains the typed word follow the name
+matches, and after `/model ` or `/effort ` the menu offers the choices, starting on the current
+one. `/effort` changes only a request parameter, so the cached prefix still hits: on MiMo the
+request after switching from high to low was 96% cached.
+
 Seen in testing, left as they are:
 - MiMo now and then writes its native tool-call markup (`<tool_call><function=…>`) into the
   reply text and sends a broken call; the invalid-arguments error lets it recover on the next

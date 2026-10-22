@@ -113,6 +113,10 @@ impl Setup {
         self.prompt.instruction_files.len()
     }
 
+    pub fn skills(&self) -> &Skills {
+        &self.skills
+    }
+
     /// The prompt for `/name args` when `name` is a skill.
     pub fn skill_prompt(&self, name: &str, args: &str) -> Option<String> {
         self.skills.invocation(name, args)

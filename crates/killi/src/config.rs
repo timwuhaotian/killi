@@ -189,10 +189,33 @@ impl Config {
             let efforts = &model.support_efforts;
             (!efforts.is_empty()).then(|| efforts[efforts.len() / 2].clone())
         });
-        match effort.as_deref() {
-            None | Some("on") => Thinking::On,
-            Some("off") => Thinking::Off,
-            Some(effort) => Thinking::Effort(effort.to_string()),
+        effort.as_deref().map_or(Thinking::On, Thinking::parse)
+    }
+
+    /// The efforts `/effort` offers for a model, as Kimi Code lists them: off, then the
+    /// model's `support_efforts`, or on/off and the common levels when it declares none.
+    pub fn efforts(&self, alias: &str) -> Vec<String> {
+        let declared = self.models.get(alias).map(|m| m.support_efforts.clone()).unwrap_or_default();
+        let levels: Vec<&str> = if declared.is_empty() { vec!["on", "low", "medium", "high"] } else { Vec::new() };
+        std::iter::once("off").chain(levels).map(String::from).chain(declared).collect()
+    }
+}
+
+impl Thinking {
+    pub fn parse(effort: &str) -> Self {
+        match effort {
+            "on" => Thinking::On,
+            "off" => Thinking::Off,
+            effort => Thinking::Effort(effort.to_string()),
+        }
+    }
+
+    /// The name `parse` reads back.
+    pub fn label(&self) -> &str {
+        match self {
+            Thinking::Off => "off",
+            Thinking::On => "on",
+            Thinking::Effort(effort) => effort,
         }
     }
 }

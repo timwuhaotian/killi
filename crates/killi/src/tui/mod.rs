@@ -2,7 +2,9 @@
 //! scrollback, so scrolling, selecting and copying work as usual; only a live area at the
 //! bottom is redrawn: what is happening now, the task list, the prompt and a status line.
 
+mod banner;
 mod editor;
+mod menu;
 mod text;
 
 use std::io::{Stdout, Write, stdout};
@@ -23,16 +25,19 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::agent::{Agent, Controls, Event, Question, Sink, Stop, Todo};
-use crate::config::Config;
+use crate::config::{Config, Thinking};
 use crate::setup::Setup;
 use crate::llm::{Client, Usage};
 use crate::snapshot::Snapshots;
 use editor::Editor;
-use text::{BLUE, BOLD, DIM, GREEN, ITALIC, MAGENTA, Markdown, RED, RESET, YELLOW, wrap};
+use menu::{Entry, Item, Suggestions};
+use text::{ACCENT, BOLD, DIM, GREEN, ITALIC, MAGENTA, Markdown, RED, RESET, YELLOW, wrap};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const PROMPT: &str = "\x1b[34m›\x1b[0m ";
+const PROMPT: &str = "\x1b[38;5;75m›\x1b[0m ";
 const MAX_INPUT_ROWS: usize = 10;
+const MENU_ROWS: usize = 8;
+const DIFF_ROWS: usize = 16;
 
 pub struct Start {
     pub model: Option<String>,
@@ -62,6 +67,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     };
     let mut snapshots = Snapshots::new(&cwd);
     let mut app = App::new(&agent, controls.clone(), &cwd);
+    app.entries = entries(&session);
+    app.refresh_choices(session.config());
     app.notify_after = Duration::from_secs(session.config().agent.notify_after.unwrap_or(10));
     let _terminal = TerminalGuard::enter()?;
     app.banner(&agent, &session, &snapshots, start.resume.is_some());
@@ -101,11 +108,24 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 Ok(client) => {
                     app.status.model = alias.clone();
                     app.status.window = client.model.context_window;
+                    app.status.thinking = client.model.thinking.label().to_string();
                     agent.switch_model(client);
+                    app.refresh_choices(session.config());
                     app.notice(&format!("Switched to {alias}. The cache starts over with the new model."));
                 }
                 Err(e) => app.error(&format!("{e:#}")),
             },
+            Input::Effort(effort) => {
+                let efforts = session.config().efforts(agent.model_alias());
+                if efforts.contains(&effort) {
+                    agent.set_thinking(Thinking::parse(&effort));
+                    app.status.thinking = effort.clone();
+                    app.refresh_choices(session.config());
+                    app.notice(&format!("Thinking effort {effort} for this session. To keep it, set [thinking] effort in ~/.killi/config.toml."));
+                } else {
+                    app.error(&format!("{} has no effort “{effort}”; choose one of {}.", agent.model_alias(), efforts.join(", ")));
+                }
+            }
         }
         app.refresh_branch();
         app.draw()?;
@@ -160,8 +180,8 @@ async fn handle_command(
     arg: &str,
 ) -> Result<bool> {
     match command {
-        "exit" | "quit" => return Ok(false),
-        "help" => app.help(),
+        "exit" | "quit" | "q" => return Ok(false),
+        "help" | "h" | "?" => app.help(),
         "plan" => app.toggle_plan(),
         "undo" => match snapshots.undo() {
             Ok(changes) if changes.is_empty() => app.notice("Undone. No files had changed in the last turn."),
@@ -194,13 +214,15 @@ async fn handle_command(
         },
         "resume" => app.open_session_picker(cwd),
         "model" if arg.is_empty() => app.open_model_picker(session.config()),
-        "model" => app.pending_model = Some(arg.to_string()),
+        "model" => app.next_input = Some(Input::Model(arg.to_string())),
+        "effort" | "thinking" if arg.is_empty() => app.open_effort_picker(session.config()),
+        "effort" | "thinking" => app.next_input = Some(Input::Effort(arg.to_lowercase())),
         "reload" => {
             agent.reload_system(&session.system_prompt())?;
             app.notice("Reloaded the system prompt, AGENTS.md files and skills. The next request starts the cache over.");
         }
         "usage" | "cost" => app.usage_report(agent),
-        other => match session.skill_prompt(other, arg) {
+        other => match session.skill_prompt(other.strip_prefix("skill:").unwrap_or(other), arg) {
             Some(prompt) => {
                 snapshots.take();
                 app.begin_turn(format!("/{other} {arg}").trim_end());
@@ -219,6 +241,22 @@ async fn handle_command(
 
 fn agent_sink(agent: &Agent) -> Sink {
     agent.sink()
+}
+
+/// What the slash menu searches: the commands, then every skill not named like one.
+fn entries(session: &Setup) -> Vec<Entry> {
+    let taken = |name: &str| COMMANDS.iter().any(|c| c.name == name || c.aliases.contains(&name));
+    let commands = COMMANDS.iter().map(|c| Entry {
+        name: c.name.to_string(),
+        aliases: c.aliases.iter().map(|a| a.to_string()).collect(),
+        description: if c.args.is_empty() { c.about.to_string() } else { format!("{} — {}", c.args, c.about) },
+    });
+    let skills = session.skills().iter().filter(|s| !taken(&s.name)).map(|s| Entry {
+        name: s.name.clone(),
+        aliases: Vec::new(),
+        description: s.description.clone(),
+    });
+    commands.chain(skills).collect()
 }
 
 /// Session totals before and after a turn, to report what the turn cost.
@@ -242,6 +280,7 @@ enum Input {
     Command(String, String),
     Resume(PathBuf),
     Model(String),
+    Effort(String),
 }
 
 enum LastEnd {
@@ -263,7 +302,8 @@ struct Asking {
 
 struct Picker {
     title: String,
-    options: Vec<(String, PickerChoice)>,
+    /// Each option's name, a note shown beside it, and what choosing it does.
+    options: Vec<(String, String, PickerChoice)>,
     selected: usize,
 }
 
@@ -271,11 +311,14 @@ struct Picker {
 enum PickerChoice {
     Session(PathBuf),
     Model(String),
+    Effort(String),
 }
 
 #[derive(Default)]
 struct Status {
     model: String,
+    /// The thinking effort, as `Thinking::label` names it.
+    thinking: String,
     window: Option<u64>,
     context: u64,
     branch: Option<String>,
@@ -306,7 +349,17 @@ struct App {
     todos: Vec<Todo>,
     asking: Option<Asking>,
     picker: Option<Picker>,
-    pending_model: Option<String>,
+    /// Input to act on before reading keys again, such as `/model <alias>`.
+    next_input: Option<Input>,
+    /// What the slash menu searches, and the choices it offers after /model and /effort.
+    entries: Vec<Entry>,
+    model_choices: Vec<Item>,
+    effort_choices: Vec<Item>,
+    menu_selected: usize,
+    /// The text the menu's selection belongs to; another text starts it over.
+    menu_text: String,
+    /// The text the menu was closed on with Esc; it opens again when the text changes.
+    menu_closed: Option<String>,
     busy: Option<Instant>,
     /// The last tool output or thought, for Ctrl+O.
     detail: Option<(String, String)>,
@@ -347,10 +400,21 @@ impl App {
             todos: Vec::new(),
             asking: None,
             picker: None,
-            pending_model: None,
+            next_input: None,
+            entries: Vec::new(),
+            model_choices: Vec::new(),
+            effort_choices: Vec::new(),
+            menu_selected: 0,
+            menu_text: String::new(),
+            menu_closed: None,
             busy: None,
             detail: None,
-            status: Status { model: agent.model_alias().to_string(), window: agent.context_window(), ..Status::default() },
+            status: Status {
+                model: agent.model_alias().to_string(),
+                thinking: agent.thinking().label().to_string(),
+                window: agent.context_window(),
+                ..Status::default()
+            },
             controls,
             spinner: 0,
             exit_armed: None,
@@ -369,7 +433,27 @@ impl App {
             Ok(rest) => format!("~/{}", rest.display()),
             Err(_) => self.cwd.display().to_string(),
         };
-        self.commit(format!("{BOLD}killi{RESET} {DIM}{} · {} · {cwd}{RESET}", env!("CARGO_PKG_VERSION"), agent.model_alias()));
+        let room = self.width.saturating_sub(41).max(20);
+        let cwd = if text::width(&cwd) > room {
+            let tail: String = cwd.chars().rev().take(room - 1).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("…{tail}")
+        } else {
+            cwd
+        };
+        let thinking = thinking_note(agent.thinking().label());
+        let thinking = if thinking.is_empty() { String::new() } else { format!(" {DIM}· {thinking}{RESET}") };
+        let side = [
+            format!("{BOLD}killi{RESET} {DIM}{}{RESET}", env!("CARGO_PKG_VERSION")),
+            format!("{DIM}a coding agent for the terminal{RESET}"),
+            String::new(),
+            format!("{DIM}model {RESET} {}{thinking}", agent.model_alias()),
+            format!("{DIM}folder{RESET} {cwd}"),
+        ];
+        self.commit(String::new());
+        for row in banner::render(self.width, &side) {
+            self.commit(row);
+        }
+        self.commit(String::new());
         let info = session.describe();
         if !info.is_empty() {
             self.commit(format!("{DIM}{info}{RESET}"));
@@ -381,20 +465,21 @@ impl App {
             let prompts = agent.user_prompts();
             self.commit(format!("{DIM}Resumed a session with {} prompt(s); the last was “{}”.{RESET}", prompts.len(), prompts.last().map_or("", |s| s.lines().next().unwrap_or(""))));
         }
-        self.commit(format!("{DIM}Enter sends · Shift+Enter or Ctrl+J for a new line · Shift+Tab plan mode · Esc interrupts · /help{RESET}"));
+        self.commit(format!("{DIM}/ commands and skills · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts{RESET}"));
         self.commit(String::new());
     }
 
     // ---------- input ----------
 
     async fn read_input(&mut self, keys: &mut EventStream) -> Result<Option<Input>> {
-        if let Some(alias) = self.pending_model.take() {
-            return Ok(Some(Input::Model(alias)));
+        if let Some(input) = self.next_input.take() {
+            return Ok(Some(input));
         }
         loop {
             let Some(event) = keys.next().await else { return Ok(None) };
             let event = event?;
             let result = self.on_key_idle(event);
+            self.sync_menu();
             self.draw()?;
             match result {
                 Idle::Continue => {}
@@ -419,6 +504,11 @@ impl App {
         };
         if self.picker.is_some() {
             return self.on_key_picker(key);
+        }
+        if let Some(menu) = self.suggestions()
+            && let Some(idle) = self.on_key_menu(key, &menu)
+        {
+            return idle;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
@@ -464,16 +554,94 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.picker = None,
             KeyCode::Enter => {
                 let picker = self.picker.take().expect("picker is open");
-                if let Some((_, choice)) = picker.options.get(picker.selected) {
+                if let Some((_, _, choice)) = picker.options.get(picker.selected) {
                     return Idle::Input(match choice.clone() {
                         PickerChoice::Session(path) => Input::Resume(path),
                         PickerChoice::Model(alias) => Input::Model(alias),
+                        PickerChoice::Effort(effort) => Input::Effort(effort),
                     });
                 }
             }
             _ => {}
         }
         Idle::Continue
+    }
+
+    /// Keys for the slash menu: ↑↓ choose, Tab completes, Enter runs a command or fills in an
+    /// argument, Esc closes it. None lets the key through, as Enter is after a command.
+    fn on_key_menu(&mut self, key: KeyEvent, menu: &Suggestions) -> Option<Idle> {
+        let count = menu.items.len();
+        let selected = self.menu_selected.min(count - 1);
+        match key.code {
+            KeyCode::Up => self.menu_selected = (selected + count - 1) % count,
+            KeyCode::Down => self.menu_selected = (selected + 1) % count,
+            KeyCode::Esc => self.menu_closed = Some(self.editor.text().to_string()),
+            KeyCode::Tab => self.choose(menu, selected),
+            KeyCode::Enter if !newline_key(&key) => {
+                self.choose(menu, selected);
+                return if menu.command { None } else { Some(Idle::Continue) };
+            }
+            _ => return None,
+        }
+        Some(Idle::Continue)
+    }
+
+    fn choose(&mut self, menu: &Suggestions, index: usize) {
+        let value = &menu.items[index].value;
+        let with = if menu.command { format!("/{value} ") } else { value.clone() };
+        self.editor.replace_before(menu.start, &with);
+    }
+
+    /// The slash menu for the prompt as typed, while killi is idle.
+    fn suggestions(&self) -> Option<Suggestions> {
+        if self.busy.is_some() || self.picker.is_some() || self.asking.is_some() || self.editor.browsing() {
+            return None;
+        }
+        if self.menu_closed.as_deref() == Some(self.editor.text()) {
+            return None;
+        }
+        menu::suggest(self.editor.before_cursor(), &self.entries, |command| match command {
+            "model" => self.model_choices.clone(),
+            "effort" | "thinking" => self.effort_choices.clone(),
+            _ => Vec::new(),
+        })
+    }
+
+    /// Starts the menu's selection over when the text changes: on the first item, or on the
+    /// current model or effort when it offers those.
+    fn sync_menu(&mut self) {
+        if self.editor.text() == self.menu_text {
+            return;
+        }
+        self.menu_text = self.editor.text().to_string();
+        let current = |item: &Item| item.value == self.status.model || item.value == self.status.thinking;
+        self.menu_selected = self.suggestions().filter(|m| !m.command).and_then(|m| m.items.iter().position(current)).unwrap_or(0);
+    }
+
+    fn refresh_choices(&mut self, config: &Config) {
+        let mark = |about: &str, current: bool| match (about.is_empty(), current) {
+            (_, false) => about.to_string(),
+            (true, true) => "current".to_string(),
+            (false, true) => format!("{about} · current"),
+        };
+        self.model_choices = config
+            .models
+            .iter()
+            .map(|(alias, model)| Item { value: alias.clone(), description: mark(&model.provider, *alias == self.status.model) })
+            .collect();
+        self.effort_choices = config
+            .efforts(&self.status.model)
+            .into_iter()
+            .map(|effort| {
+                let about = match effort.as_str() {
+                    "off" => "no thinking",
+                    "on" => "the provider's default effort",
+                    _ => "",
+                };
+                let description = mark(about, effort == self.status.thinking);
+                Item { value: effort, description }
+            })
+            .collect();
     }
 
     /// Keys while the agent works. Returns true to interrupt it.
@@ -586,7 +754,7 @@ impl App {
     fn complete_command(&mut self) {
         let text = self.editor.text().to_string();
         let Some(partial) = text.strip_prefix('/').filter(|p| !p.contains(char::is_whitespace)) else { return };
-        if let Some(name) = COMMANDS.iter().map(|(name, _)| *name).find(|name| name.starts_with(partial)) {
+        if let Some(name) = COMMANDS.iter().map(|c| c.name).find(|name| name.starts_with(partial)) {
             self.editor.clear();
             self.editor.insert(&format!("/{name} "));
         }
@@ -607,7 +775,7 @@ impl App {
     fn begin_turn(&mut self, prompt: &str) {
         self.commit(String::new());
         for (i, line) in prompt.lines().enumerate() {
-            let lead = if i == 0 { format!("{BLUE}›{RESET} ") } else { "  ".into() };
+            let lead = if i == 0 { format!("{ACCENT}›{RESET} ") } else { "  ".into() };
             self.commit(format!("{lead}{BOLD}{line}{RESET}"));
         }
         self.commit(String::new());
@@ -656,10 +824,11 @@ impl App {
         let prompt = after.prompt - before.prompt;
         let cached = (after.cached - before.cached) * 100 / prompt.max(1);
         self.commit(String::new());
+        let requests = after.requests - before.requests;
         self.commit(format!(
-            "{DIM}{:.0}s · {} request(s) · {} in, {cached}% cached · {} out{RESET}",
+            "{DIM}{:.0}s · {requests} request{} · {} in, {cached}% cached · {} out{RESET}",
             elapsed.as_secs_f32(),
-            after.requests - before.requests,
+            if requests == 1 { "" } else { "s" },
             short(prompt),
             short(after.completion - before.completion)
         ));
@@ -695,7 +864,7 @@ impl App {
                         self.commit(String::new());
                     }
                     let styled = self.markdown.line(line);
-                    self.commit(styled);
+                    self.commit_wrapped(styled);
                 }
             }
             Event::Reasoning(text) => match &mut self.thinking {
@@ -703,7 +872,8 @@ impl App {
                 None => self.thinking = Some((Instant::now(), text)),
             },
             Event::Retry { attempt, wait, reason } => {
-                self.commit(format!("{DIM}{YELLOW}retry {attempt} in {:.0}s:{RESET}{DIM} {}{RESET}", wait.as_secs_f32(), crate::llm::truncate(&reason, 200)));
+                let line = format!("{DIM}{YELLOW}retry {attempt} in {:.0}s:{RESET}{DIM} {}{RESET}", wait.as_secs_f32(), gist(&reason));
+                self.commit(fit(&line, self.width));
             }
             Event::ToolStart { id, summary, .. } => {
                 self.flush_partial();
@@ -718,8 +888,13 @@ impl App {
                 let summary = self.take_running(&id).map(|r| r.summary).unwrap_or_default();
                 self.tool_line(None, &summary, is_error, &brief);
                 if let Some(display) = display {
-                    for line in display.lines().take(16) {
-                        self.commit(diff_line(line));
+                    let lines: Vec<&str> = display.lines().collect();
+                    for line in lines.iter().take(DIFF_ROWS) {
+                        self.commit(fit(&diff_line(line), self.width));
+                    }
+                    if lines.len() > DIFF_ROWS {
+                        let more = lines.len() - DIFF_ROWS;
+                        self.commit(format!("        {DIM}… {more} more line{}{RESET}", if more == 1 { "" } else { "s" }));
                     }
                 }
                 self.detail = Some((summary, output));
@@ -733,7 +908,7 @@ impl App {
                     self.commit(format!("{BOLD}{MAGENTA}Plan{RESET}"));
                     let mut markdown = Markdown::default();
                     for line in question.text.lines() {
-                        self.commit(format!("  {}", markdown.line(line)));
+                        self.commit_wrapped(format!("  {}", markdown.line(line)));
                     }
                     self.commit(String::new());
                 } else {
@@ -771,7 +946,6 @@ impl App {
     }
 
     fn tool_line(&mut self, label: Option<&str>, summary: &str, is_error: bool, brief: &str) {
-        let summary = summary.replace(&format!("{}/", self.cwd.display()), "").replace(&self.cwd.display().to_string(), ".");
         let (bullet, note) = if is_error {
             (format!("{RED}●{RESET}"), format!(" {RED}{brief}{RESET}"))
         } else if brief.is_empty() {
@@ -779,10 +953,13 @@ impl App {
         } else {
             (format!("{GREEN}●{RESET}"), format!(" {DIM}· {brief}{RESET}"))
         };
-        match label {
-            Some(label) => self.commit(format!("  {DIM}↳ {label}:{RESET} {bullet} {DIM}{summary}{RESET}{note}")),
-            None => self.commit(format!("{bullet} {summary}{note}")),
-        }
+        let lead = label.map_or(0, |l| text::width(l) + 5);
+        let summary = clip(summary, self.width.saturating_sub(lead + 2 + text::width(&note)).max(20));
+        let line = match label {
+            Some(label) => format!("  {DIM}↳ {label}:{RESET} {bullet} {DIM}{summary}{RESET}{note}"),
+            None => format!("{bullet} {summary}{note}"),
+        };
+        self.commit(fit(&line, self.width));
     }
 
     fn add_usage(&mut self, usage: &Usage, main: bool) {
@@ -806,7 +983,7 @@ impl App {
         if !self.partial.trim().is_empty() {
             let line = std::mem::take(&mut self.partial);
             let styled = self.markdown.line(&line);
-            self.commit(styled);
+            self.commit_wrapped(styled);
         }
         self.partial.clear();
     }
@@ -821,7 +998,8 @@ impl App {
             }
             let first = first_sentence(&text);
             let gist = if first.is_empty() { String::new() } else { format!(": {first}") };
-            self.commit(format!("{DIM}{ITALIC}∴ Thought for {seconds:.0}s{gist}{RESET}"));
+            let line = fit(&format!("{DIM}{ITALIC}∴ Thought for {seconds:.0}s{gist}{RESET}"), self.width);
+            self.commit(line);
             self.detail = Some(("Thinking".into(), text));
         }
     }
@@ -844,13 +1022,16 @@ impl App {
     // ---------- commands ----------
 
     fn help(&mut self) {
-        self.commit(format!("{BOLD}Commands{RESET}"));
-        for (name, about) in COMMANDS {
-            self.commit(format!("  {BLUE}/{name}{RESET} {DIM}{about}{RESET}"));
+        self.commit(format!("{BOLD}Commands{RESET} {DIM}type / to search them and your skills{RESET}"));
+        for c in COMMANDS {
+            let aliases: String = c.aliases.iter().map(|a| format!(", /{a}")).collect();
+            let args = if c.args.is_empty() { String::new() } else { format!(" {}", c.args) };
+            self.commit(format!("  {ACCENT}/{}{RESET}{DIM}{aliases}{args}{RESET}  {}", c.name, c.about));
         }
+        self.commit(format!("  {ACCENT}/<skill>{RESET}{DIM} [request]{RESET}  Run a skill"));
         self.commit(format!("{BOLD}Keys{RESET}"));
         for (key, about) in KEYS {
-            self.commit(format!("  {BLUE}{key}{RESET} {DIM}{about}{RESET}"));
+            self.commit(format!("  {ACCENT}{key}{RESET} {DIM}{about}{RESET}"));
         }
     }
 
@@ -877,7 +1058,8 @@ impl App {
             .take(20)
             .map(|s| {
                 let age = s.modified.elapsed().map(ago).unwrap_or_default();
-                (format!("{age:>8}  {} {DIM}({} prompts){RESET}", crate::llm::truncate(&s.first_prompt, 70), s.prompts), PickerChoice::Session(s.path))
+                let prompt = s.first_prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+                (format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)), format!("{} prompts", s.prompts), PickerChoice::Session(s.path))
             })
             .collect();
         self.picker = Some(Picker { title: "Resume a session".into(), options, selected: 0 });
@@ -888,12 +1070,25 @@ impl App {
             .models
             .iter()
             .map(|(alias, model)| {
-                let current = if *alias == self.status.model { " (current)" } else { "" };
-                (format!("{alias} {DIM}{}{current}{RESET}", model.provider), PickerChoice::Model(alias.clone()))
+                let current = if *alias == self.status.model { " · current" } else { "" };
+                (alias.clone(), format!("{}{current}", model.provider), PickerChoice::Model(alias.clone()))
             })
             .collect();
-        let selected = options.iter().position(|(_, c)| matches!(c, PickerChoice::Model(a) if *a == self.status.model)).unwrap_or(0);
+        let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) if *a == self.status.model)).unwrap_or(0);
         self.picker = Some(Picker { title: "Switch model".into(), options, selected });
+    }
+
+    fn open_effort_picker(&mut self, config: &Config) {
+        let options: Vec<_> = config
+            .efforts(&self.status.model)
+            .into_iter()
+            .map(|effort| {
+                let current = if effort == self.status.thinking { "current" } else { "" };
+                (effort.clone(), current.to_string(), PickerChoice::Effort(effort))
+            })
+            .collect();
+        let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Effort(e) if *e == self.status.thinking)).unwrap_or(0);
+        self.picker = Some(Picker { title: format!("Thinking effort for {}", self.status.model), options, selected });
     }
 
     fn refresh_branch(&mut self) {
@@ -913,6 +1108,14 @@ impl App {
     }
 
     // ---------- drawing ----------
+
+    /// Commits a line of the model's text, wrapped between words, list items under their text.
+    fn commit_wrapped(&mut self, line: String) {
+        let indent = text::hanging_indent(&line);
+        for row in text::wrap_words(&line, self.width, indent) {
+            self.commit(row);
+        }
+    }
 
     /// Queues a line for the scrollback, never two blank lines in a row.
     fn commit(&mut self, line: String) {
@@ -959,10 +1162,10 @@ impl App {
             }
             for running in self.running.iter().take(5) {
                 let label = running.label.as_ref().map(|l| format!("{DIM}↳ {l}:{RESET} ")).unwrap_or_default();
-                rows.push(fit(&format!("{BLUE}{spin}{RESET} {label}{} {DIM}{}s{RESET}", running.summary, running.started.elapsed().as_secs()), width));
+                rows.push(fit(&format!("{ACCENT}{spin}{RESET} {label}{} {DIM}{}s{RESET}", running.summary, running.started.elapsed().as_secs()), width));
             }
             if self.thinking.is_none() && self.running.is_empty() && self.asking.is_none() {
-                rows.push(fit(&format!("{BLUE}{spin}{RESET} {DIM}working {}s · Esc to interrupt{RESET}", started.elapsed().as_secs()), width));
+                rows.push(fit(&format!("{ACCENT}{spin}{RESET} {DIM}working {}s · Esc to interrupt{RESET}", started.elapsed().as_secs()), width));
             }
             for queued in &self.queued {
                 rows.push(fit(&format!("{DIM}› {} (sent at the next step){RESET}", queued.replace('\n', " ")), width));
@@ -978,32 +1181,38 @@ impl App {
                 rows.push(fit(&format!("  {style}{mark} {}{RESET}", todo.content), width));
             }
         }
-        if let Some(asking) = &self.asking {
-            for (i, option) in asking.question.options.iter().enumerate() {
-                let line = if i == asking.selected {
-                    format!("  {BLUE}❯ {}. {option}{RESET}", i + 1)
-                } else {
-                    format!("    {}. {option}", i + 1)
-                };
-                rows.push(fit(&line, width));
-            }
-            let hint = if asking.question.plan { "or type what to change" } else { "or type your own answer" };
-            rows.push(fit(&format!("  {DIM}↑↓ and Enter to choose, {hint} · Esc to dismiss{RESET}"), width));
-        }
-        if let Some(picker) = &self.picker {
-            rows.push(fit(&format!("{BOLD}{}{RESET} {DIM}↑↓ Enter · Esc{RESET}", picker.title), width));
-            let start = picker.selected.saturating_sub(7);
-            for (i, (label, _)) in picker.options.iter().enumerate().skip(start).take(8) {
-                let line = if i == picker.selected { format!("{BLUE}❯ {label}{RESET}") } else { format!("  {label}") };
-                rows.push(fit(&line, width));
-            }
-        }
-        rows.push(format!("{DIM}{}{RESET}", "─".repeat(width)));
+        let mode = self.controls.plan.get().then_some("plan mode · Shift+Tab leaves it");
+        rows.push(rule(mode, width));
         let (input, cursor_row, cursor_col) = self.editor.render(PROMPT, width);
         let first = cursor_row.saturating_sub(MAX_INPUT_ROWS - 1);
         let top = rows.len();
         rows.extend(input.into_iter().skip(first).take(MAX_INPUT_ROWS));
         let mut cursor = (top + cursor_row - first, cursor_col);
+        rows.push(rule(mode.map(|_| ""), width));
+        let room = (self.height - 1).saturating_sub(rows.len() - top + 3).min(MENU_ROWS);
+        if let Some(menu) = self.suggestions() {
+            let visible = menu.items.len().min(room);
+            if visible > 0 {
+                rows.extend(self.menu_rows(&menu, visible));
+            }
+        }
+        if let Some(picker) = &self.picker {
+            let count = picker.options.len();
+            let visible = count.min(room.max(1));
+            let options: Vec<(&str, &str)> = picker.options.iter().map(|(name, note, _)| (name.as_str(), note.as_str())).collect();
+            rows.extend(choice_rows(&options, picker.selected, visible, width, width * 3 / 5));
+            let position = if count > visible { format!("{}/{count} · ", picker.selected + 1) } else { String::new() };
+            rows.push(fit(&format!("  {DIM}{}{RESET} {DIM}· {position}↑↓ choose · Enter selects · Esc closes{RESET}", picker.title), width));
+        }
+        if let Some(asking) = &self.asking {
+            let names: Vec<String> = asking.question.options.iter().enumerate().map(|(i, o)| format!("{}. {o}", i + 1)).collect();
+            let options: Vec<(&str, &str)> = names.iter().map(|name| (name.as_str(), "")).collect();
+            let visible = options.len().min(room.max(1));
+            rows.extend(choice_rows(&options, asking.selected.min(options.len().saturating_sub(1)), visible, width, width));
+            let hint = if asking.question.plan { "or type what to change" } else { "or type your own answer" };
+            let choose = if options.is_empty() { String::new() } else { "↑↓ and Enter to choose, ".into() };
+            rows.push(fit(&format!("  {DIM}{choose}{hint} · Esc to dismiss{RESET}"), width));
+        }
         rows.push(fit(&self.status_line(), width));
         let excess = rows.len().saturating_sub(self.height - 1);
         if excess > 0 {
@@ -1014,22 +1223,39 @@ impl App {
         (rows, cursor.0, cursor.1)
     }
 
+    /// The slash menu, `visible` items at a time around the selection, and a line of keys.
+    fn menu_rows(&self, menu: &Suggestions, visible: usize) -> Vec<String> {
+        let count = menu.items.len();
+        let selected = self.menu_selected.min(count - 1);
+        let lead = if menu.command { "/" } else { "" };
+        let names: Vec<String> = menu.items.iter().map(|i| format!("{lead}{}", i.value)).collect();
+        let options: Vec<(&str, &str)> = names.iter().zip(&menu.items).map(|(name, item)| (name.as_str(), item.description.as_str())).collect();
+        let mut rows = choice_rows(&options, selected, visible, self.width, 32);
+        let position = if count > visible { format!("{}/{count} · ", selected + 1) } else { String::new() };
+        let enter = if menu.command { "Enter runs" } else { "Enter fills in" };
+        rows.push(fit(&format!("  {DIM}{position}↑↓ choose · Tab completes · {enter} · Esc closes{RESET}"), self.width));
+        rows
+    }
+
     fn status_line(&self) -> String {
-        let mut parts = vec![self.status.model.clone()];
+        let mut parts = vec![format!("{RESET}{}{DIM}", self.status.model)];
+        let thinking = thinking_note(&self.status.thinking);
+        if !thinking.is_empty() {
+            parts.push(thinking);
+        }
         if self.controls.plan.get() {
             parts.push(format!("{YELLOW}plan mode{RESET}{DIM}"));
         }
-        let context = match self.status.window {
-            Some(window) => format!("ctx {}/{}", short(self.status.context), short(window)),
+        parts.push(match self.status.window {
+            Some(window) => format!("ctx {} {}/{}", gauge(self.status.context, window), short(self.status.context), short(window)),
             None => format!("ctx {}", short(self.status.context)),
-        };
-        parts.push(context);
-        if let Some(branch) = &self.status.branch {
-            parts.push(format!("⎇ {branch}"));
-        }
+        });
         if self.status.prompt > 0 {
             let cached = self.status.cached * 100 / self.status.prompt.max(1);
-            parts.push(format!("{} in ({cached}% cached) · {} out", short(self.status.prompt), short(self.status.completion)));
+            parts.push(format!("{} in · {cached}% cached · {} out", short(self.status.prompt), short(self.status.completion)));
+        }
+        if let Some(branch) = &self.status.branch {
+            parts.push(format!("⎇ {branch}"));
         }
         format!("{DIM}{}{RESET}", parts.join(" · "))
     }
@@ -1079,16 +1305,105 @@ fn newline_key(key: &KeyEvent) -> bool {
     key.code == KeyCode::Enter && key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL)
 }
 
+/// Rows for a list of (name, note) choices, `visible` at a time around `selected`, the names
+/// in a column at most `column` wide and the notes dimmed beside them.
+fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width: usize, column: usize) -> Vec<String> {
+    let start = selected.saturating_sub(visible / 2).min(options.len() - visible);
+    let shown = &options[start..start + visible];
+    let column = shown.iter().map(|(name, _)| text::width(name)).max().unwrap_or(0).clamp(12, column.max(12));
+    shown
+        .iter()
+        .enumerate()
+        .map(|(i, (name, note))| {
+            let name = clip(name, column);
+            let pad = " ".repeat(column.saturating_sub(text::width(&name)));
+            let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
+            let line = if start + i == selected {
+                format!("{ACCENT}❯ {BOLD}{name}{RESET}{pad}  {note}")
+            } else {
+                format!("  {name}{pad}  {DIM}{note}{RESET}")
+            };
+            fit(&line, width)
+        })
+        .collect()
+}
+
+/// A full-width line around the prompt, in yellow with `label` on it in plan mode.
+fn rule(label: Option<&str>, width: usize) -> String {
+    match label {
+        None => format!("{DIM}{}{RESET}", "─".repeat(width)),
+        Some("") => format!("{YELLOW}{}{RESET}", "─".repeat(width)),
+        Some(label) => {
+            let rest = width.saturating_sub(text::width(label) + 4);
+            format!("{YELLOW}── {BOLD}{label}{RESET}{YELLOW} {}{RESET}", "─".repeat(rest))
+        }
+    }
+}
+
+/// How full the context window is, as a ten-cell bar that turns yellow, then red.
+fn gauge(used: u64, window: u64) -> String {
+    let filled = (used.saturating_mul(10).div_ceil(window.max(1)) as usize).min(10);
+    let color = match used * 100 / window.max(1) {
+        0..50 => GREEN,
+        50..80 => YELLOW,
+        _ => RED,
+    };
+    format!("{RESET}{color}{}{RESET}{DIM}{}", "━".repeat(filled), "─".repeat(10 - filled))
+}
+
+/// `text` cut to `max` columns with an ellipsis.
+fn clip(text: &str, max: usize) -> String {
+    if text::width(text) <= max {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for c in text.chars() {
+        if text::width(&out) + 2 > max {
+            break;
+        }
+        out.push(c);
+    }
+    out + "…"
+}
+
+/// The effort as the banner and status line show it; nothing for the provider's default.
+fn thinking_note(thinking: &str) -> String {
+    match thinking {
+        "on" => String::new(),
+        "off" => "thinking off".into(),
+        effort => format!("effort {effort}"),
+    }
+}
+
 fn fit(line: &str, width: usize) -> String {
     wrap(line, width).into_iter().next().unwrap_or_default()
 }
 
-fn diff_line(line: &str) -> String {
-    match line.chars().next() {
-        Some('+') => format!("    {GREEN}{line}{RESET}"),
-        Some('-') => format!("    {RED}{line}{RESET}"),
-        _ => format!("    {DIM}{line}{RESET}"),
+/// An error reason with a JSON body cut down to its status and message: `HTTP 529: busy`.
+fn gist(reason: &str) -> String {
+    let reason = reason.replace('\n', " ");
+    let Some(start) = reason.find('{') else { return reason };
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(&reason[start..]) else { return reason };
+    let Some(message) = body.pointer("/error/message").or(body.get("message")).and_then(|m| m.as_str()) else { return reason };
+    let status: Vec<&str> = reason[..start].split_whitespace().take(2).collect();
+    match status.as_slice() {
+        ["HTTP", code] => format!("HTTP {}: {message}", code.trim_end_matches(':')),
+        _ => message.to_string(),
     }
+}
+
+/// A row of the edit tool's diff: the sign, line number and text, colored by the sign.
+fn diff_line(line: &str) -> String {
+    let Some((head, text)) = line.split_once('\t').filter(|(head, _)| head.len() > 1 && head.is_char_boundary(1)) else {
+        return format!("        {DIM}{line}{RESET}");
+    };
+    let (sign, number) = head.split_at(1);
+    let color = match sign {
+        "+" => GREEN,
+        "-" => RED,
+        _ => DIM,
+    };
+    format!("  {DIM}{number:>5}{RESET} {color}{sign} {text}{RESET}")
 }
 
 fn first_sentence(text: &str) -> String {
@@ -1128,17 +1443,27 @@ fn notify(body: &str) {
     }
 }
 
-const COMMANDS: &[(&str, &str)] = &[
-    ("help", "this list"),
-    ("plan", "toggle plan mode (also Shift+Tab)"),
-    ("undo", "put files back as they were before the last turn"),
-    ("compact", "summarize the conversation to free context; add a focus if you like"),
-    ("clear", "start a new session"),
-    ("resume", "continue an earlier session in this folder"),
-    ("model", "switch model; /model <alias> or pick from a list"),
-    ("reload", "re-read AGENTS.md files and skills into the system prompt"),
-    ("usage", "tokens and requests this session"),
-    ("exit", "quit (also Ctrl+D)"),
+struct Command {
+    name: &'static str,
+    /// Other names the menu finds it by. `/q`, `/h` and `/?` work too, unlisted.
+    aliases: &'static [&'static str],
+    args: &'static str,
+    about: &'static str,
+}
+
+/// The built-in commands, in the order the menu lists them.
+const COMMANDS: &[Command] = &[
+    Command { name: "model", aliases: &[], args: "[alias]", about: "Switch model" },
+    Command { name: "effort", aliases: &["thinking"], args: "[level]", about: "Switch thinking effort" },
+    Command { name: "new", aliases: &["clear"], args: "", about: "Start a fresh session in this folder" },
+    Command { name: "resume", aliases: &[], args: "", about: "Continue an earlier session in this folder" },
+    Command { name: "compact", aliases: &[], args: "[focus]", about: "Summarize the conversation to free context" },
+    Command { name: "undo", aliases: &[], args: "", about: "Put files back as they were before the last turn" },
+    Command { name: "plan", aliases: &[], args: "", about: "Toggle plan mode (also Shift+Tab)" },
+    Command { name: "usage", aliases: &["cost"], args: "", about: "Tokens and requests this session" },
+    Command { name: "reload", aliases: &[], args: "", about: "Re-read AGENTS.md files and skills" },
+    Command { name: "help", aliases: &[], args: "", about: "Commands and keys" },
+    Command { name: "exit", aliases: &["quit"], args: "", about: "Quit killi (also Ctrl+D)" },
 ];
 
 const KEYS: &[(&str, &str)] = &[
@@ -1184,6 +1509,13 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_reasons_keep_the_status_and_message() {
+        let reason = r#"HTTP 529 <unknown status code>: {"type":"error","error":{"type":"overloaded_error","message":"busy (2064)"}}"#;
+        assert_eq!(gist(reason), "HTTP 529: busy (2064)");
+        assert_eq!(gist("connection reset"), "connection reset");
+    }
 
     #[test]
     fn short_numbers() {

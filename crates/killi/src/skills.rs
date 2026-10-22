@@ -61,6 +61,10 @@ impl Skills {
         self.list.len()
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Skill> {
+        self.list.iter()
+    }
+
     /// The system prompt's skills section.
     pub fn prompt_section(&self) -> String {
         if self.list.is_empty() {

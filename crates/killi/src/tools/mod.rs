@@ -8,7 +8,7 @@ mod search;
 mod web;
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -78,12 +78,21 @@ pub async fn run(ctx: &Context, name: &str, args: Value) -> Output {
     }
 }
 
-/// One line for the terminal: what the call touches.
-pub fn summary(name: &str, args: &Value) -> String {
+/// One line for the terminal: what the call touches, with paths relative to `cwd` and a
+/// leading `cd <cwd> &&` left out.
+pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
     let field = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or_default();
+    let cwd = cwd.display().to_string();
     let detail = match name {
         "read" | "write" | "edit" => field("path").to_string(),
-        "bash" => field("command").lines().next().unwrap_or_default().to_string(),
+        "bash" => {
+            let command = field("command").lines().next().unwrap_or_default();
+            let command = [format!("cd {cwd} && "), format!("cd \"{cwd}\" && "), format!("cd '{cwd}' && ")]
+                .iter()
+                .find_map(|prefix| command.strip_prefix(prefix.as_str()))
+                .unwrap_or(command);
+            command.to_string()
+        }
         "grep" => format!("{:?} {}", field("pattern"), field("path")),
         "glob" => format!("{} {}", field("pattern"), field("path")),
         "task_output" | "task_stop" => format!("task {}", args.get("id").map(Value::to_string).unwrap_or_default()),
@@ -94,6 +103,7 @@ pub fn summary(name: &str, args: &Value) -> String {
         "ask_user_question" => field("question").to_string(),
         _ => String::new(),
     };
+    let detail = detail.replace(&format!("{cwd}/"), "").replace(&cwd, ".");
     format!("{name} {}", crate::llm::truncate(&detail, 120)).trim_end().to_string()
 }
 

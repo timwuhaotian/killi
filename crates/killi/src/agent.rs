@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
+use crate::config::Thinking;
 use crate::llm::{Client, Delta, Reply, ToolCall, Usage, truncate};
 use crate::session::Session;
 use crate::hooks::{HooksConfig, tool_payload};
@@ -217,6 +218,17 @@ impl Agent {
         self.ctx_images(client.model.images);
         self.client = Rc::new(client);
         self.stats.context = 0;
+    }
+
+    /// Reasons at another effort from the next request on, on the same model.
+    pub fn set_thinking(&mut self, thinking: Thinking) {
+        let mut client = (*self.client).clone();
+        client.model.thinking = thinking;
+        self.client = Rc::new(client);
+    }
+
+    pub fn thinking(&self) -> &Thinking {
+        &self.client.model.thinking
     }
 
     fn ctx_images(&mut self, images: bool) {
@@ -435,7 +447,7 @@ impl Agent {
             let (id, call) = &calls[i];
             let output = self.execute(id, call, truncated).await;
             if let Some(image) = &output.image {
-                images.push((tools::summary(&call.name, &parse_args(call).unwrap_or_default()), image.clone()));
+                images.push((tools::summary(&call.name, &parse_args(call).unwrap_or_default(), &self.ctx.cwd), image.clone()));
             }
             stop |= self.finish_call(id, call, output)?;
             i += 1;
@@ -461,7 +473,7 @@ impl Agent {
                 return output;
             }
         };
-        self.tool_start(id, &tools::summary(&call.name, &args));
+        self.tool_start(id, &tools::summary(&call.name, &args, &self.ctx.cwd));
         let before = self.hook("PreToolUse", Some(&call.name), tool_payload(&call.name, &args, None)).await;
         if let Some(reason) = before.block {
             return tools::Output::error(format!("A hook blocked this call: {reason}"));
@@ -617,7 +629,7 @@ impl Agent {
                 }
             };
             let label = args["description"].as_str().unwrap_or("subagent").to_string();
-            self.tool_start(id, &tools::summary("agent", &args));
+            self.tool_start(id, &tools::summary("agent", &args, &self.ctx.cwd));
             let prompt = args["prompt"].as_str().unwrap_or_default().to_string();
             if prompt.trim().is_empty() {
                 children.push(Err(tools::Output::error("agent needs a `prompt`.")));
