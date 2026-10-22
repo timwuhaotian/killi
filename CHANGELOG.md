@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.5 — 2026-10-22
+
+- **Pickers filter as you type.** In `/model`, `/effort` and `/resume`, typing narrows the
+  list with the slash menu's fuzzy matcher (`q38` finds `qwen/qwen3.8-max`), best match
+  first; Backspace widens it again.
+
 ## 0.2.4 — 2026-10-22
 
 - **First run sets you up.** Started in a terminal without a config, `killi` offers to import
