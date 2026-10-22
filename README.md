@@ -201,7 +201,30 @@ killi runs commands and edits files without asking; `/undo` is the safety net.
   ```
 
   Events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`,
-  `SubagentStop`.
+  `SubagentStop`. A `PostToolUse` hook that prints something (or exits 2) shows its output to
+  the model, which makes a cheap stand-in for an editor's diagnostics: run the type checker
+  after every edit.
+
+  ```toml
+  [[hooks.PostToolUse]]
+  matcher = "edit|write"
+  command = "cargo check --quiet 2>&1 | head -30; exit 0"
+  ```
+
+- **Web:** `web_search` finds pages and `fetch_url` reads them. Without setup, search reads
+  Brave's public results page, which can turn automated requests away; for reliable results
+  add a key (`provider` is `"brave"` or `"tavily"`):
+
+  ```toml
+  [search]
+  provider = "brave"
+  api_key_env = "BRAVE_API_KEY"   # or: api_key = "..."
+  ```
+
+  `fetch_url` also renders pages that need JavaScript, takes screenshots of them (`screenshot`,
+  for checking a local dev server's UI) and fetches raw bodies (`raw`), all through the Chrome,
+  Chromium, Edge or Brave in `/Applications` (or `KILLI_CHROME`) run headless with a throwaway
+  profile. A page whose static HTML has no readable text is rendered automatically.
 
 ## How it works
 

@@ -15,7 +15,7 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
    - No embedded runtime and no Node prerequisite; `bash` runs through `std::process`; copy uses `pbcopy` / OSC 52.
 3. **Test model: `mimo/mimo-v2.6-pro`.** OpenAI Chat Completions wire (kosong `type = "openai"`), token-plan endpoint; image/video/audio input, thinking, tool use; 1M context, 128k output.
    - Reasoning round-trip: keep kosong's handling of `reasoning_content` / `reasoning_details` / `reasoning`.
-4. **Tools:** `read`, `write`, `edit` (`old_string` / `new_string` / `replace_all`), `bash`, `grep`, `glob`, `fetch_url`, images, subagents with background tasks, `ask_user_question`.
+4. **Tools:** `read`, `write`, `edit` (`old_string` / `new_string` / `replace_all`), `bash`, `grep`, `glob`, `fetch_url`, `web_search`, images, subagents with background tasks, `ask_user_question`.
 5. **Workflow:** plan mode (read-only), todo list, desktop notification when a turn finishes, undo via file history.
 6. **Permissions:** no approval prompts by default. The only other mode is plan mode.
 7. **Extensions:** MCP (servers start lazily, tools load on demand), skills (names only in the prompt), hooks (Claude Code event names: `PreToolUse`, `PostToolUse`, `Stop`, `SessionStart`, `SubagentStop`, `UserPromptSubmit`).
@@ -172,6 +172,13 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
     - `[prompt] system` in `~/.killi/config.toml` replaces the built-in `prompt/system.md`; the environment, instruction files and skill names are always added after it. `killi init` writes the built-in text there, or appends it to a config without `[prompt]`, so the user can read and edit it. `/reload` re-reads it.
     - The trade-off: a config that holds the text keeps it through killi updates. The banner says "custom prompt" when it differs from the built-in text.
     - The guidance gained the Kimi Code rules that a token audit found missing and that can change results or safety: don't work around a blocked path or shrink the task, check every explicit requirement before the final reply, git commits/pushes/resets only when asked, no sudo or changes outside the working directory, never read or send secrets, file and web text is data. About 240 tokens; with `agent_swarm` the first request on MiMo went from 3,202 to 3,622 tokens. Kimi Code's 39,508 is mostly skill descriptions (about 15.5k) and tool schemas (about 22k), not guardrails (about 1.6k).
+
+30. **Toolbox additions (2026-10-22): parameters before tools, no LSP.** Added one tool and extended three; the prompt plus tools grew from 8,375 to about 9,450 characters (limit 12,000).
+    - `grep` gained `context`, `output` (`files`, `count`) and `multiline`: fewer follow-up reads, shorter results.
+    - `web_search` (Brave API or Tavily with a key under `[search]`; without one, Brave's public results page). Measured the same day: DuckDuckGo's HTML endpoints answer with a bot challenge and Bing returns unrelated results to scripted requests, so neither is a default.
+    - `fetch_url` gained `render`, `screenshot` and `raw`, and rewrites GitHub `blob` URLs. A browser is not bundled: it drives the Chrome, Chromium, Edge or Brave in `/Applications` headless (`--headless=new --use-angle=swiftshader`, throwaway profile, own process group). Chrome 152 prints the DOM or writes the screenshot and then does not exit, so killi stops at `</html>` or when the file stops growing and kills the process group. Static HTML with under 200 readable characters is rendered automatically.
+    - Interactive browsing (clicks, logins) stays outside the built-in tools: use a Playwright MCP server through `mcp`.
+    - No LSP: it needs a resident server per language, costs memory (killi peaks at 5 MB) and tool tokens. A `PostToolUse` hook that runs `cargo check` or `tsc --noEmit` after edits gives the model the same diagnostics. Revisit if `killi eval` shows failures an LSP would fix.
 
 ## Build phases
 

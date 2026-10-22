@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use globset::GlobBuilder;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
-use regex::RegexBuilder;
+use regex::{Regex, RegexBuilder};
 use serde_json::Value;
 
 use super::{Context, MAX_BYTES, Output, is_binary, resolve};
@@ -11,6 +11,7 @@ use crate::llm::truncate;
 
 const DEFAULT_MATCHES: usize = 100;
 const MAX_MATCH_LINE: usize = 500;
+const MAX_CONTEXT: u64 = 20;
 const MAX_FILES: usize = 1000;
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
@@ -47,15 +48,52 @@ fn walker(root: &Path, glob: Option<&str>) -> Result<ignore::Walk, String> {
     Ok(builder.build())
 }
 
+#[derive(PartialEq)]
+enum Mode {
+    Content,
+    Files,
+    Count,
+}
+
+/// Line ranges (first, last; 0-based) of every match in `text`.
+fn match_ranges(regex: &Regex, text: &str, lines: &[&str], multiline: bool) -> Vec<(usize, usize)> {
+    if !multiline {
+        return lines.iter().enumerate().filter(|(_, line)| regex.is_match(line)).map(|(n, _)| (n, n)).collect();
+    }
+    let mut starts = vec![0];
+    starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
+    let line_of = |offset: usize| starts.partition_point(|&s| s <= offset).saturating_sub(1);
+    regex
+        .find_iter(text)
+        .map(|m| {
+            let last_line = lines.len().saturating_sub(1);
+            let first = line_of(m.start()).min(last_line);
+            (first, line_of(m.end().saturating_sub(1).max(m.start())).clamp(first, last_line))
+        })
+        .collect()
+}
+
 fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
     let Some(pattern) = args.get("pattern").and_then(Value::as_str) else {
         return Output::error("grep needs `pattern`.");
     };
-    let ignore_case = args.get("ignore_case").and_then(Value::as_bool).unwrap_or(false);
-    let regex = match RegexBuilder::new(pattern).case_insensitive(ignore_case).build() {
+    let flag = |key: &str| args.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let multiline = flag("multiline");
+    let regex = match RegexBuilder::new(pattern)
+        .case_insensitive(flag("ignore_case"))
+        .multi_line(multiline)
+        .dot_matches_new_line(multiline)
+        .build()
+    {
         Ok(regex) => regex,
         Err(e) => return Output::error(format!("Invalid regex: {e}")),
     };
+    let mode = match args.get("output").and_then(Value::as_str) {
+        Some("files") => Mode::Files,
+        Some("count") => Mode::Count,
+        _ => Mode::Content,
+    };
+    let context = args.get("context").and_then(Value::as_u64).map_or(0, |c| c.min(MAX_CONTEXT) as usize);
     let limit = args.get("limit").and_then(Value::as_u64).map_or(DEFAULT_MATCHES, |l| l.max(1) as usize);
     let walk = match walker(root, args.get("glob").and_then(Value::as_str)) {
         Ok(walk) => walk,
@@ -64,6 +102,7 @@ fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
 
     let mut out = String::new();
     let mut matches = 0;
+    let mut files = 0;
     let mut notes = Vec::new();
     'files: for entry in walk.flatten() {
         if !entry.file_type().is_some_and(|t| t.is_file()) || entry.metadata().is_ok_and(|m| m.len() > MAX_FILE_SIZE) {
@@ -74,27 +113,55 @@ fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
             continue;
         }
         let text = String::from_utf8_lossy(&bytes);
+        let lines: Vec<&str> = text.lines().collect();
+        let ranges = match_ranges(&regex, &text, &lines, multiline);
+        if ranges.is_empty() || lines.is_empty() {
+            continue;
+        }
         let shown_path = entry.path().strip_prefix(cwd).unwrap_or(entry.path()).display().to_string();
-        for (n, line) in text.lines().enumerate() {
-            if !regex.is_match(line) {
-                continue;
+        if mode != Mode::Content {
+            if files == limit {
+                notes.push(format!("{limit} files limit reached; use limit={} for more or refine the pattern.", limit * 2));
+                break 'files;
             }
+            files += 1;
+            matches += ranges.len();
+            out.push_str(&if mode == Mode::Files { format!("{shown_path}\n") } else { format!("{shown_path}:{}\n", ranges.len()) });
+            continue;
+        }
+        let mut is_match = vec![false; lines.len()];
+        for &(first, last) in &ranges {
+            is_match[first..=last.min(lines.len().saturating_sub(1))].fill(true);
+        }
+        let mut printed: Option<usize> = None;
+        for &(first, last) in &ranges {
             if matches == limit {
                 notes.push(format!("{limit} matches limit reached; use limit={} for more or refine the pattern.", limit * 2));
                 break 'files;
             }
-            let line = if line.len() > MAX_MATCH_LINE {
-                format!("{}… [truncated]", truncate(line, MAX_MATCH_LINE))
-            } else {
-                line.to_string()
-            };
-            let entry = format!("{shown_path}:{}: {line}\n", n + 1);
-            if out.len() + entry.len() > MAX_BYTES {
+            matches += 1;
+            let from = first.saturating_sub(context).max(printed.map_or(0, |p| p + 1));
+            let to = (last + context).min(lines.len().saturating_sub(1));
+            let mut chunk = String::new();
+            if context > 0 && printed.is_some_and(|p| from > p + 1) && from <= to {
+                chunk.push_str("--\n");
+            }
+            for n in from..=to {
+                let line = lines[n];
+                let line = if line.len() > MAX_MATCH_LINE {
+                    format!("{}… [truncated]", truncate(line, MAX_MATCH_LINE))
+                } else {
+                    line.to_string()
+                };
+                let (sep_a, sep_b) = if is_match[n] { (':', ':') } else { ('-', '-') };
+                chunk.push_str(&format!("{shown_path}{sep_a}{}{sep_b} {line}\n", n + 1));
+            }
+            if out.len() + chunk.len() > MAX_BYTES {
                 notes.push("50KB limit reached; refine the pattern or path.".into());
                 break 'files;
             }
-            out.push_str(&entry);
-            matches += 1;
+            out.push_str(&chunk);
+            printed = Some(printed.map_or(to, |p| p.max(to)));
         }
     }
     if matches == 0 {
@@ -103,7 +170,11 @@ fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
     if !notes.is_empty() {
         out.push_str(&format!("[{}]", notes.join(" ")));
     }
-    Output::ok(out.trim_end().to_string()).brief(format!("{matches} match{}", if matches == 1 { "" } else { "es" }))
+    let brief = match mode {
+        Mode::Content => format!("{matches} match{}", if matches == 1 { "" } else { "es" }),
+        _ => format!("{files} file{}", if files == 1 { "" } else { "s" }),
+    };
+    Output::ok(out.trim_end().to_string()).brief(brief)
 }
 
 fn glob_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
@@ -175,6 +246,27 @@ mod tests {
         assert_eq!(out.text, "notes.txt:1: alpha notes\nsrc/a.rs:1: fn alpha() {}");
         let out = grep_blocking(&dir, &dir, &json!({"pattern": "ALPHA", "ignore_case": true, "glob": "*.rs"}));
         assert_eq!(out.text, "src/a.rs:1: fn alpha() {}");
+    }
+
+    #[test]
+    fn grep_shows_context_and_other_output_modes() {
+        let dir = tree();
+        std::fs::write(dir.join("long.txt"), "a\nb\nneedle\nc\nd\ne\nf\ng\nneedle\nh\n").unwrap();
+        let out = grep_blocking(&dir, &dir, &json!({"pattern": "needle", "context": 1, "glob": "long.txt"}));
+        assert_eq!(out.text, "long.txt-2- b\nlong.txt:3: needle\nlong.txt-4- c\n--\nlong.txt-8- g\nlong.txt:9: needle\nlong.txt-10- h");
+        let out = grep_blocking(&dir, &dir, &json!({"pattern": "alpha", "output": "files"}));
+        assert_eq!(out.text, "notes.txt\nsrc/a.rs");
+        let out = grep_blocking(&dir, &dir, &json!({"pattern": "needle", "output": "count"}));
+        assert_eq!(out.text, "long.txt:2");
+    }
+
+    #[test]
+    fn grep_matches_across_lines() {
+        let dir = tree();
+        let out = grep_blocking(&dir, &dir, &json!({"pattern": r"alpha\(\) \{\}\nfn beta", "multiline": true}));
+        assert_eq!(out.text, "src/a.rs:1: fn alpha() {}\nsrc/a.rs:2: fn beta() {}");
+        let out = grep_blocking(&dir, &dir, &json!({"pattern": "$", "multiline": true, "glob": "*.txt"}));
+        assert!(!out.is_error, "{}", out.text);
     }
 
     #[test]

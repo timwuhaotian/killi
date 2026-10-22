@@ -5,6 +5,17 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.9 — 2026-10-22
+
+- **`web_search`.** Searches Brave, through its API or Tavily's with a key under `[search]`,
+  or, with none, Brave's public results page.
+- **`fetch_url` renders pages.** `render` runs a page's JavaScript in headless Chrome (also
+  tried automatically when the static HTML has no readable text), `screenshot` returns a
+  picture of the page for checking a local dev server's UI, `raw` returns the body as is, and
+  GitHub `blob` URLs fetch the raw file.
+- **Better `grep`.** `context` lines around matches, `output` modes `files` and `count`, and
+  `multiline` patterns, so fewer follow-up `read` calls.
+
 ## 0.2.8 — 2026-10-22
 
 - **Your message shows at once.** Pressing Enter puts the message in the transcript before the

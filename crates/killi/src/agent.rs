@@ -84,6 +84,7 @@ pub struct Settings {
     pub plan_allow: Vec<String>,
     /// Subagents an `agent_swarm` call runs at once.
     pub swarm_parallel: usize,
+    pub search: crate::tools::SearchSettings,
     pub skills: Skills,
     pub hooks: Rc<HooksConfig>,
     pub mcp: Rc<crate::mcp::Mcp>,
@@ -194,6 +195,7 @@ impl Agent {
         let settings_files = settings.instruction_files.clone();
         let mut ctx = tools::Context::new(cwd.to_path_buf(), session.dir.clone());
         ctx.images = client.model.images;
+        ctx.search = settings.search.clone();
         Self {
             client: Rc::new(client),
             tools: Rc::new(tools),

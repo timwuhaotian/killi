@@ -81,7 +81,7 @@ fn image_type(path: &Path) -> Option<&'static str> {
 /// Large images are shrunk with macOS's `sips` to at most 1568 pixels on the long side.
 const SHRINK_ABOVE: u64 = 500 * 1024;
 
-fn read_image(ctx: &Context, path: &str, full: &Path, media_type: &str) -> Output {
+pub(super) fn read_image(ctx: &Context, path: &str, full: &Path, media_type: &str) -> Output {
     if !ctx.images {
         return Output::error(format!("{path} is an image, and this model can't see images."));
     }

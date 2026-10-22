@@ -55,6 +55,15 @@ impl Setup {
             compact_at: config.agent.compact_at.unwrap_or(DEFAULT_COMPACT_AT),
             plan_allow: config.agent.plan_allow.clone(),
             swarm_parallel: config.agent.swarm_parallel.unwrap_or(DEFAULT_SWARM_PARALLEL).max(1),
+            search: crate::tools::SearchSettings {
+                provider: config.search.provider.clone().unwrap_or_default(),
+                api_key: config
+                    .search
+                    .api_key
+                    .clone()
+                    .or_else(|| config.search.api_key_env.as_deref().and_then(|name| std::env::var(name).ok()))
+                    .filter(|key| !key.is_empty()),
+            },
             skills: skills.clone(),
             hooks: Rc::new(config.hooks.clone()),
             mcp: Rc::new(mcp),

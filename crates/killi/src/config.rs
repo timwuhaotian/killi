@@ -28,6 +28,18 @@ pub struct Config {
     pub prompt: PromptConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub search: SearchConfig,
+}
+
+/// `[search]`: the service behind `web_search`. Without a key, "brave" reads Brave's public
+/// search page, which can turn automated requests away.
+#[derive(Debug, Default, Deserialize)]
+pub struct SearchConfig {
+    /// "brave" (default) or "tavily".
+    pub provider: Option<String>,
+    pub api_key: Option<String>,
+    pub api_key_env: Option<String>,
 }
 
 /// `[ui]`: how the terminal UI looks.

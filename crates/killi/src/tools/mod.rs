@@ -17,6 +17,14 @@ pub use bash::Tasks;
 pub const MAX_LINES: usize = 2000;
 pub const MAX_BYTES: usize = 50 * 1024;
 
+/// Which service `web_search` asks, from `[search]` in the config.
+#[derive(Clone, Default)]
+pub struct SearchSettings {
+    /// "brave" (the default) or "tavily".
+    pub provider: String,
+    pub api_key: Option<String>,
+}
+
 pub struct Context {
     pub cwd: PathBuf,
     /// Where full outputs go when a result is truncated.
@@ -24,11 +32,12 @@ pub struct Context {
     pub tasks: RefCell<Tasks>,
     /// Whether the model can see images.
     pub images: bool,
+    pub search: SearchSettings,
 }
 
 impl Context {
     pub fn new(cwd: PathBuf, spill_dir: PathBuf) -> Self {
-        Self { cwd, spill_dir, tasks: RefCell::new(Tasks::default()), images: true }
+        Self { cwd, spill_dir, tasks: RefCell::new(Tasks::default()), images: true, search: SearchSettings::default() }
     }
 }
 
@@ -73,7 +82,8 @@ pub async fn run(ctx: &Context, name: &str, args: Value) -> Output {
         "task_stop" => bash::task_stop(ctx, &args),
         "grep" => search::grep(ctx, args).await,
         "glob" => search::glob(ctx, args).await,
-        "fetch_url" => web::fetch_url(&args).await,
+        "fetch_url" => web::fetch_url(ctx, &args).await,
+        "web_search" => web::web_search(ctx, &args).await,
         _ => Output::error(format!("Unknown tool `{name}`.")),
     }
 }
@@ -97,6 +107,7 @@ pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
         "glob" => format!("{} {}", field("pattern"), field("path")),
         "task_output" | "task_stop" => format!("task {}", args.get("id").map(Value::to_string).unwrap_or_default()),
         "fetch_url" => field("url").to_string(),
+        "web_search" => field("query").to_string(),
         "agent" => field("description").to_string(),
         "agent_swarm" => format!("{} ({} items)", field("description"), args["items"].as_array().map_or(0, Vec::len)),
         "skill" => field("name").to_string() + field("query"),
@@ -169,13 +180,16 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "grep",
-            "Search file contents with a regex (Rust syntax), honoring .gitignore. Returns `path:line: text`.",
+            "Search file contents with a regex (Rust syntax), honoring .gitignore. Returns `path:line: text`; context lines use `-`.",
             json!({"type": "object", "properties": {
                 "pattern": {"type": "string"},
                 "path": {"type": "string", "description": "File or directory, default working directory"},
                 "glob": {"type": "string", "description": "Only files matching, e.g. *.rs"},
                 "ignore_case": {"type": "boolean"},
-                "limit": {"type": "integer", "description": "Max matches, default 100"}
+                "context": {"type": "integer", "description": "Lines before and after each match"},
+                "output": {"type": "string", "enum": ["content", "files", "count"], "description": "files: only paths; count: matches per file"},
+                "multiline": {"type": "boolean", "description": "Let the pattern span lines (. matches newline)"},
+                "limit": {"type": "integer", "description": "Max matches (files in files/count mode), default 100"}
             }, "required": ["pattern"]}),
         ),
         tool(
@@ -188,8 +202,21 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "fetch_url",
-            "Fetch a web page or file over HTTP(S) and return its main text as Markdown.",
-            json!({"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}),
+            "Fetch a web page or file over HTTP(S) and return its main text as Markdown. Pages that need JavaScript are rendered in a headless browser automatically; GitHub blob URLs fetch the raw file.",
+            json!({"type": "object", "properties": {
+                "url": {"type": "string"},
+                "render": {"type": "boolean", "description": "Run the page's JavaScript first"},
+                "screenshot": {"type": "boolean", "description": "Return a picture of the page instead; to check a local dev server's UI"},
+                "raw": {"type": "boolean", "description": "Return the body as is (HTML, JSON) instead of extracted text"}
+            }, "required": ["url"]}),
+        ),
+        tool(
+            "web_search",
+            "Search the web; returns titles, URLs and snippets. Read a result with fetch_url.",
+            json!({"type": "object", "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "description": "Default 8, max 20"}
+            }, "required": ["query"]}),
         ),
         tool(
             "todo_write",
