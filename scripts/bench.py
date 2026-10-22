@@ -34,6 +34,12 @@ def binary(env_var, name):
     return Path(path).resolve()
 
 
+def machine():
+    chip = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True).stdout.strip()
+    macos = subprocess.run(["sw_vers", "-productVersion"], capture_output=True, text=True).stdout.strip()
+    return f"{chip}, macOS {macos}"
+
+
 def size_mb(paths):
     return round(sum(p.stat().st_size for p in paths if p.exists()) / 1048576, 1)
 
@@ -98,7 +104,7 @@ def main():
         measure("Claude Code", [claude, "--version"], [claude, "-p", PROMPT, "--output-format", "json"],
                 claude_tokens, [claude], "Bun", "default model"),
     ]
-    out = {"measured": date.today().isoformat(), "prompt": PROMPT, "tools": tools}
+    out = {"measured": date.today().isoformat(), "machine": machine(), "prompt": PROMPT, "tools": tools}
     (ROOT / "docs/bench.json").write_text(json.dumps(out, indent=2) + "\n")
     print(f"wrote {ROOT / 'docs/bench.json'}")
 

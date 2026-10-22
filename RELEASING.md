@@ -15,5 +15,6 @@ Releases are built locally on an Apple silicon Mac; CI only checks. Users instal
    GitHub serves raw files through a cache for about five minutes after a push, so until then
    `killi update` may still see the previous version.
 
-To refresh the size and memory chart, run `python3 scripts/bench.py` (it needs `kimi` and
-`claude` installed and signed in), then `python3 scripts/chart.py`.
+To refresh the size, memory and capability charts and the README numbers, follow the
+`refresh-metrics` skill (`.agents/skills/refresh-metrics`); it needs `kimi` and `claude`
+installed and signed in.

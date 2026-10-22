@@ -12,7 +12,7 @@ THEMES = {
     "dark": dict(bg="#0d1117", border="#30363d", text="#f0f6fc", sub="#9ea7b3", muted="#7d8590",
                  accent="#5b9bff", highlight="#13213a", bar="#3a414b"),
 }
-MODELS = {"mimo-v2.6-pro": "MiMo-V2.6-Pro", "claude-opus-5-5": "Claude Opus 5.5"}
+MODELS = {"mimo-v2.6-pro": "MiMo-V2.6-Pro", "claude-opus-5-5": "Claude Opus 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5"}
 WIDTH, LABEL_X, BAR_X, BAR_MAX, ROW = 960, 182, 194, 560, 40
 
 
@@ -67,7 +67,7 @@ def render(data, c):
             y += ROW
         y += 34
     notes = [
-        f'Measured {data["measured"]} on an Apple M4 Pro (macOS 27) with scripts/bench.py, each tool given “{data["prompt"]}” in an empty folder.',
+        f'Measured {data["measured"]} on {data["machine"]} with scripts/bench.py, each tool given “{data["prompt"]}” in an empty folder.',
         "Size is the installed binary (Kimi Code’s includes its bundled rg and fd). Memory is the median maximum resident set size of 3 runs.",
         "Tokens are the first request’s input as each tool reports it, with this machine’s skills, instructions and MCP servers loaded.",
     ]

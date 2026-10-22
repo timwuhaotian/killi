@@ -1,50 +1,50 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="668" viewBox="0 0 960 668" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="killi 6.0 MB installed, 16.4 MB memory, 3,202 tokens; Kimi Code 187.2 MB installed, 416.6 MB memory, 39,508 tokens; Claude Code 260.3 MB installed, 322.9 MB memory, 47,359 tokens">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="668" viewBox="0 0 960 668" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="killi 6.3 MB installed, 15.2 MB memory, 3,064 tokens; Kimi Code 187.8 MB installed, 407.8 MB memory, 44,306 tokens; Claude Code 262.0 MB installed, 324.4 MB memory, 29,984 tokens">
 <rect x="0.5" y="0.5" width="959" height="667" rx="12" fill="#ffffff" stroke="#e5e7eb"/>
-<text x="32" y="58" font-size="26" font-weight="700" fill="#111827">killi is <tspan fill="#2563eb">6.0 MB</tspan> and runs in <tspan fill="#2563eb">16.4 MB</tspan>.</text>
-<text x="32" y="86" font-size="15" fill="#4b5563">Against Kimi Code on the same model: 31× smaller, 25× less memory, 12× fewer tokens before you type.</text>
+<text x="32" y="58" font-size="26" font-weight="700" fill="#111827">killi is <tspan fill="#2563eb">6.3 MB</tspan> and runs in <tspan fill="#2563eb">15.2 MB</tspan>.</text>
+<text x="32" y="86" font-size="15" fill="#4b5563">Against Kimi Code on the same model: 30× smaller, 27× less memory, 14× fewer tokens before you type.</text>
 <text x="32" y="124" font-size="13" font-weight="700" fill="#6b7280" letter-spacing="0.4">INSTALLED SIZE</text>
 <rect x="20" y="134" width="920" height="38" rx="8" fill="#eff4ff"/>
 <text x="182" y="151" font-size="15" font-weight="700" fill="#111827" text-anchor="end">killi</text>
 <text x="182" y="166" font-size="11" fill="#6b7280" text-anchor="end">Rust</text>
-<rect x="194" y="146" width="12.9" height="14" rx="4" fill="#2563eb"/>
-<text x="216.9" y="158" font-size="14" font-weight="700" fill="#111827">6.0 MB</text>
+<rect x="194" y="146" width="13.5" height="14" rx="4" fill="#2563eb"/>
+<text x="217.5" y="158" font-size="14" font-weight="700" fill="#111827">6.3 MB</text>
 <text x="182" y="191" font-size="15" font-weight="500" fill="#111827" text-anchor="end">Kimi Code</text>
 <text x="182" y="206" font-size="11" fill="#6b7280" text-anchor="end">Node.js</text>
-<rect x="194" y="186" width="402.7" height="14" rx="4" fill="#d1d5db"/>
-<text x="606.7" y="198" font-size="14" font-weight="500" fill="#111827">187.2 MB<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 31× killi</tspan></text>
+<rect x="194" y="186" width="401.4" height="14" rx="4" fill="#d1d5db"/>
+<text x="605.4" y="198" font-size="14" font-weight="500" fill="#111827">187.8 MB<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 30× killi</tspan></text>
 <text x="182" y="231" font-size="15" font-weight="500" fill="#111827" text-anchor="end">Claude Code</text>
 <text x="182" y="246" font-size="11" fill="#6b7280" text-anchor="end">Bun</text>
 <rect x="194" y="226" width="560.0" height="14" rx="4" fill="#d1d5db"/>
-<text x="764.0" y="238" font-size="14" font-weight="500" fill="#111827">260.3 MB<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 43× killi</tspan></text>
+<text x="764.0" y="238" font-size="14" font-weight="500" fill="#111827">262.0 MB<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 42× killi</tspan></text>
 <text x="32" y="288" font-size="13" font-weight="700" fill="#6b7280" letter-spacing="0.4">PEAK MEMORY RUNNING ONE PROMPT</text>
 <rect x="20" y="298" width="920" height="38" rx="8" fill="#eff4ff"/>
 <text x="182" y="315" font-size="15" font-weight="700" fill="#111827" text-anchor="end">killi</text>
 <text x="182" y="330" font-size="11" fill="#6b7280" text-anchor="end">Rust</text>
-<rect x="194" y="310" width="22.0" height="14" rx="4" fill="#2563eb"/>
-<text x="226.0" y="322" font-size="14" font-weight="700" fill="#111827">16.4 MB</text>
+<rect x="194" y="310" width="20.9" height="14" rx="4" fill="#2563eb"/>
+<text x="224.9" y="322" font-size="14" font-weight="700" fill="#111827">15.2 MB</text>
 <text x="182" y="355" font-size="15" font-weight="500" fill="#111827" text-anchor="end">Kimi Code</text>
 <text x="182" y="370" font-size="11" fill="#6b7280" text-anchor="end">Node.js</text>
 <rect x="194" y="350" width="560.0" height="14" rx="4" fill="#d1d5db"/>
-<text x="764.0" y="362" font-size="14" font-weight="500" fill="#111827">416.6 MB<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 25× killi</tspan></text>
+<text x="764.0" y="362" font-size="14" font-weight="500" fill="#111827">407.8 MB<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 27× killi</tspan></text>
 <text x="182" y="395" font-size="15" font-weight="500" fill="#111827" text-anchor="end">Claude Code</text>
 <text x="182" y="410" font-size="11" fill="#6b7280" text-anchor="end">Bun</text>
-<rect x="194" y="390" width="434.0" height="14" rx="4" fill="#d1d5db"/>
-<text x="638.0" y="402" font-size="14" font-weight="500" fill="#111827">322.9 MB<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 20× killi</tspan></text>
+<rect x="194" y="390" width="445.5" height="14" rx="4" fill="#d1d5db"/>
+<text x="649.5" y="402" font-size="14" font-weight="500" fill="#111827">324.4 MB<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 21× killi</tspan></text>
 <text x="32" y="452" font-size="13" font-weight="700" fill="#6b7280" letter-spacing="0.4">TOKENS SENT BEFORE YOU TYPE</text>
 <rect x="20" y="462" width="920" height="38" rx="8" fill="#eff4ff"/>
 <text x="182" y="479" font-size="15" font-weight="700" fill="#111827" text-anchor="end">killi</text>
 <text x="182" y="494" font-size="11" fill="#6b7280" text-anchor="end">MiMo-V2.6-Pro</text>
-<rect x="194" y="474" width="37.9" height="14" rx="4" fill="#2563eb"/>
-<text x="241.9" y="486" font-size="14" font-weight="700" fill="#111827">3,202 tokens</text>
+<rect x="194" y="474" width="38.7" height="14" rx="4" fill="#2563eb"/>
+<text x="242.7" y="486" font-size="14" font-weight="700" fill="#111827">3,064 tokens</text>
 <text x="182" y="519" font-size="15" font-weight="500" fill="#111827" text-anchor="end">Kimi Code</text>
 <text x="182" y="534" font-size="11" fill="#6b7280" text-anchor="end">MiMo-V2.6-Pro</text>
-<rect x="194" y="514" width="467.2" height="14" rx="4" fill="#d1d5db"/>
-<text x="671.2" y="526" font-size="14" font-weight="500" fill="#111827">39,508 tokens<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 12× killi</tspan></text>
+<rect x="194" y="514" width="560.0" height="14" rx="4" fill="#d1d5db"/>
+<text x="764.0" y="526" font-size="14" font-weight="500" fill="#111827">44,306 tokens<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 14× killi</tspan></text>
 <text x="182" y="559" font-size="15" font-weight="500" fill="#111827" text-anchor="end">Claude Code</text>
-<text x="182" y="574" font-size="11" fill="#6b7280" text-anchor="end">Claude Opus 5.5</text>
-<rect x="194" y="554" width="560.0" height="14" rx="4" fill="#d1d5db"/>
-<text x="764.0" y="566" font-size="14" font-weight="500" fill="#111827">47,359 tokens<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 15× killi</tspan></text>
-<text x="32" y="608" font-size="12" fill="#6b7280">Measured 2026-10-22 on an Apple M4 Pro (macOS 27) with scripts/bench.py, each tool given “Reply with the single word OK.” in an empty folder.</text>
+<text x="182" y="574" font-size="11" fill="#6b7280" text-anchor="end">Claude Sonnet 5.5</text>
+<rect x="194" y="554" width="379.0" height="14" rx="4" fill="#d1d5db"/>
+<text x="583.0" y="566" font-size="14" font-weight="500" fill="#111827">29,984 tokens<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 9.8× killi</tspan></text>
+<text x="32" y="608" font-size="12" fill="#6b7280">Measured 2026-10-22 on Apple M1 Pro, macOS 26.6.2 with scripts/bench.py, each tool given “Reply with the single word OK.” in an empty folder.</text>
 <text x="32" y="626" font-size="12" fill="#6b7280">Size is the installed binary (Kimi Code’s includes its bundled rg and fd). Memory is the median maximum resident set size of 3 runs.</text>
 <text x="32" y="644" font-size="12" fill="#6b7280">Tokens are the first request’s input as each tool reports it, with this machine’s skills, instructions and MCP servers loaded.</text>
 </svg>

@@ -23,12 +23,12 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 
 ## Features
 
-- **Small and quick.** One 6 MB binary with no runtime to install. It starts in 5 ms and uses
-  about 16 MB of memory running a prompt, where Kimi Code uses 417 MB and Claude Code 323 MB.
+- **Small and quick.** One 6 MB binary with no runtime to install. It starts in under 20 ms and
+  uses about 15 MB of memory running a prompt, where Kimi Code uses 408 MB and Claude Code 324 MB.
 - **Few tokens.** The system prompt and every tool together come to about 2,600 tokens, plus
   your `AGENTS.md` files and about 4 tokens per installed skill. In the
   [capability tests](#capability-tests) killi passed every task Kimi Code passed, on the same
-  model, with 7.5× fewer input tokens.
+  model, with 5.6× fewer input tokens.
 - **Cache-friendly by design.** The system prompt and the tool list are fixed for the whole
   session, and history is only appended to, never rewritten. Even plan mode, subagents and
   resumed sessions reuse the same cached prefix; 70–90% of input tokens come from the cache.
@@ -62,8 +62,8 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 
 Measured with [`scripts/bench.py`](scripts/bench.py); the versions and models are in
 [`docs/bench.json`](docs/bench.json). killi and Kimi Code ran the same model, MiMo-V2.6-Pro;
-Claude Code ran its default, Claude Opus 5.5. All three loaded this machine's 204 skills,
-global instructions and MCP servers.
+Claude Code ran its default, Claude Sonnet 5.5. All three loaded this machine's skills, global
+instructions and MCP servers.
 
 ## Capability tests
 
@@ -80,6 +80,10 @@ misleading README. Each starts from a fresh git repo; it passes when its check (
 clippy, or an exact answer) succeeds after the tool finishes, with the tests restored first.
 Every task was checked to fail as given and pass with its reference solution.
 [`scripts/eval.py`](scripts/eval.py) runs them; [docs/eval.md](docs/eval.md) has every result.
+killi's row is 0.2.16; Kimi Code's and Claude Code's were measured earlier (2.2.0 and 2.1.306), and each
+tool ran every task once, so a single task's token count can swing by a third or more. killi's times
+were taken on a busy machine and aren't comparable with the other two; tokens and memory are not
+affected by load.
 
 ## Install
 

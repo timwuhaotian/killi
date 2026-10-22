@@ -9,6 +9,10 @@ behind it are in `docs/decisions.md`.
 - Capability tasks: `python3 scripts/eval.py verify` (each task fails as given and passes with
   its solution); `run` and `report` compare tools and need models configured.
 - Release: see `RELEASING.md`. `scripts/release.sh` builds `releases/killi-arm64`.
+- Re-measure size, memory and tokens and redraw the charts and README numbers: the
+  `refresh-metrics` skill. Find bugs and optimizations from real use: the `review-sessions`
+  skill, with `scripts/sessions.py` (reads `~/.killi/sessions`) and `scripts/probe.py` (asks a
+  provider how it behaves). Both live in `.agents/skills/`.
 
 ## Rules that keep the prompt cache hitting
 
