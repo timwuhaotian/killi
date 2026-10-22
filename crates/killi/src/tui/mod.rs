@@ -921,8 +921,8 @@ impl App {
         let quick = matches!(self.last_end, Some(LastEnd::Done)) && elapsed < Duration::from_secs(3) && requests <= 1;
         if !quick {
             self.commit(format!(
-                "{DIM}{:.0}s · {requests} request{} · {} in, {cached}% cached · {} out{RESET}",
-                elapsed.as_secs_f32(),
+                "{DIM}{} · {requests} request{} · {} in, {cached}% cached · {} out{RESET}",
+                clock(elapsed),
                 if requests == 1 { "" } else { "s" },
                 short(prompt),
                 short(after.completion - before.completion)
@@ -970,7 +970,7 @@ impl App {
                 None => self.thinking = Some((Instant::now(), text)),
             },
             Event::Retry { attempt, wait, reason } => {
-                let line = format!("{DIM}{YELLOW}retry {attempt} in {:.0}s:{RESET}{DIM} {}{RESET}", wait.as_secs_f32(), gist(&reason));
+                let line = format!("{DIM}{YELLOW}retry {attempt} in {}:{RESET}{DIM} {}{RESET}", clock(wait), gist(&reason));
                 self.commit(fit(&line, self.width));
             }
             Event::ToolStart { id, summary, .. } => {
@@ -1060,7 +1060,7 @@ impl App {
         } else {
             (format!("{GREEN}●{RESET}"), format!(" {DIM}· {brief}{RESET}"))
         };
-        let took = elapsed.filter(|e| e.as_secs() >= 1).map(|e| format!(" {DIM}· {:.1}s{RESET}", e.as_secs_f32()));
+        let took = elapsed.filter(|e| e.as_secs() >= 1).map(|e| format!(" {DIM}· {}{RESET}", precise_clock(e)));
         let note = format!("{note}{}", took.unwrap_or_default());
         let lead = label.map_or(0, |l| text::width(l) + 5);
         let summary = clip(summary, self.width.saturating_sub(lead + 2 + text::width(&note)).max(20));
@@ -1133,13 +1133,14 @@ impl App {
     fn end_thinking(&mut self) {
         if let Some((started, text)) = self.thinking.take() {
             let seconds = started.elapsed().as_secs_f32();
+            let took = clock(started.elapsed());
             self.push_detail("Thinking".into(), text.clone());
             if seconds < 2.0 {
                 return;
             }
             let first = first_sentence(&text);
             let gist = if first.is_empty() { String::new() } else { format!(": {first}") };
-            let line = fit(&format!("{DIM}{ITALIC}∴ Thought for {seconds:.0}s{gist}{RESET}"), self.width);
+            let line = fit(&format!("{DIM}{ITALIC}∴ Thought for {took}{gist}{RESET}"), self.width);
             self.commit(line);
         }
     }
@@ -1322,14 +1323,14 @@ impl App {
             let spin = SPINNER[self.spinner % SPINNER.len()];
             if let Some((since, text)) = &self.thinking {
                 let first = first_sentence(text);
-                rows.push(fit(&format!("{MAGENTA}{spin}{RESET} {DIM}thinking {}s {first}{RESET}", since.elapsed().as_secs()), width));
+                rows.push(fit(&format!("{MAGENTA}{spin}{RESET} {DIM}thinking {} {first}{RESET}", clock(since.elapsed())), width));
             }
             for running in self.running.iter().take(5) {
                 let label = running.label.as_ref().map(|l| format!("{DIM}↳ {l}:{RESET} ")).unwrap_or_default();
-                rows.push(fit(&format!("{ACCENT}{spin}{RESET} {label}{} {DIM}{}s{RESET}", running.summary, running.started.elapsed().as_secs()), width));
+                rows.push(fit(&format!("{ACCENT}{spin}{RESET} {label}{} {DIM}{}{RESET}", running.summary, clock(running.started.elapsed())), width));
             }
             if self.thinking.is_none() && self.running.is_empty() && self.asking.is_none() {
-                rows.push(fit(&format!("{ACCENT}{spin}{RESET} {DIM}working {}s · Esc to interrupt{RESET}", started.elapsed().as_secs()), width));
+                rows.push(fit(&format!("{ACCENT}{spin}{RESET} {DIM}working {} · Esc to interrupt{RESET}", clock(started.elapsed())), width));
             }
             for queued in &self.queued {
                 rows.push(fit(&format!("{DIM}› {} (sent at the next step){RESET}", queued.replace('\n', " ")), width));
@@ -1393,7 +1394,7 @@ impl App {
             };
             rows.push(fit(&format!("  {DIM}{choose}{hint} · Esc to dismiss{RESET}"), width));
         }
-        rows.push(fit(&self.status_line(), width));
+        rows.push(self.status_line(width));
         let excess = rows.len().saturating_sub(self.height - 1);
         if excess > 0 {
             let cut = excess.min(top);
@@ -1417,7 +1418,10 @@ impl App {
         rows
     }
 
-    fn status_line(&self) -> String {
+    /// The status line for `width` columns. Parts drop out from the least to the most useful as
+    /// the terminal narrows: the cache and token detail, the context bar, the branch, and last
+    /// the context figure, so the model and mode stay on screen at any width.
+    fn status_line(&self, width: usize) -> String {
         let mut head = vec![format!("{RESET}{}{DIM}", self.status.model)];
         let thinking = thinking_note(&self.status.thinking);
         if !thinking.is_empty() {
@@ -1429,19 +1433,7 @@ impl App {
         if self.controls.swarm.get() {
             head.push(format!("{MAGENTA}swarm mode{RESET}{DIM}"));
         }
-        let mut groups = vec![head.join(" · ")];
-        groups.push(match self.status.window {
-            Some(window) => format!("ctx {} {}/{}", gauge(self.status.context, window), short(self.status.context), short(window)),
-            None => format!("ctx {}", short(self.status.context)),
-        });
-        if self.status.prompt > 0 {
-            let cached = self.status.cached * 100 / self.status.prompt.max(1);
-            groups.push(format!("{} in · {cached}% cached · {} out", short(self.status.prompt), short(self.status.completion)));
-        }
-        if let Some(branch) = &self.status.branch {
-            groups.push(format!("{RESET}{ACCENT}⎇ {branch}{DIM}"));
-        }
-        format!("{DIM}{}{RESET}", groups.join(" │ "))
+        status_layout(&head.join(" · "), &self.status, width)
     }
 
     fn draw(&mut self) -> Result<()> {
@@ -1530,6 +1522,46 @@ fn rule(label: Option<&str>, width: usize) -> String {
 fn title_rule(title: &str, width: usize) -> String {
     let rest = width.saturating_sub(text::width(title) + 4);
     format!("{ACCENT}── {BOLD}{title}{RESET}{ACCENT} {}{RESET}", "─".repeat(rest))
+}
+
+/// The status line's parts fitted to `width`; see `App::status_line`.
+fn status_layout(head: &str, status: &Status, width: usize) -> String {
+    let context = |bar: bool| match (status.window, bar) {
+        (Some(window), true) => format!("ctx {} {}/{}", gauge(status.context, window), short(status.context), short(window)),
+        (Some(window), false) => format!("ctx {}/{}", short(status.context), short(window)),
+        (None, _) => format!("ctx {}", short(status.context)),
+    };
+    let percent = match status.window {
+        Some(window) => format!("ctx {}%", status.context * 100 / window.max(1)),
+        None => format!("ctx {}", short(status.context)),
+    };
+    let tokens = |cache: bool| {
+        if status.prompt == 0 {
+            return None;
+        }
+        let cached = status.cached * 100 / status.prompt.max(1);
+        Some(match cache {
+            true => format!("{} in · {cached}% cached · {} out", short(status.prompt), short(status.completion)),
+            false => format!("{} in · {} out", short(status.prompt), short(status.completion)),
+        })
+    };
+    let branch = |max: usize| status.branch.as_ref().map(|b| format!("{RESET}{ACCENT}⎇ {}{DIM}", clip(b, max)));
+    let layouts = [
+        (context(true), tokens(true), branch(usize::MAX)),
+        (context(true), tokens(false), branch(usize::MAX)),
+        (context(true), None, branch(usize::MAX)),
+        (context(false), None, branch(usize::MAX)),
+        (percent.clone(), None, branch(16)),
+        (percent.clone(), None, None),
+    ];
+    for (context, tokens, branch) in layouts {
+        let groups: Vec<String> = [Some(head.to_string()), Some(context), tokens, branch].into_iter().flatten().collect();
+        let line = groups.join(" │ ");
+        if text::width(&line) <= width {
+            return format!("{DIM}{line}{RESET}");
+        }
+    }
+    format!("{DIM}{}{RESET}", fit(head, width))
 }
 
 /// How full the context window is, as a ten-cell bar that turns yellow, then red.
@@ -1621,6 +1653,24 @@ fn first_sentence(text: &str) -> String {
     let text = text.trim().replace('\n', " ");
     let end = text.find(['.', '。', '!', '?']).map_or(text.len(), |i| i + text[i..].chars().next().map_or(1, char::len_utf8));
     crate::llm::truncate(&text[..end], 100).to_string()
+}
+
+/// A duration in whole seconds that moves up a unit as it grows: `45s`, `1m05s`, `1h02m`.
+fn clock(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs_f32().round() as u64;
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3_600 => format!("{}m{:02}s", secs / 60, secs % 60),
+        _ => format!("{}h{:02}m", secs / 3_600, secs % 3_600 / 60),
+    }
+}
+
+/// Like `clock`, with a tenth of a second below a minute: `2.4s`, `1m05s`.
+fn precise_clock(elapsed: Duration) -> String {
+    match elapsed.as_secs() {
+        0..60 => format!("{:.1}s", elapsed.as_secs_f32()),
+        _ => clock(elapsed),
+    }
 }
 
 fn short(n: u64) -> String {
@@ -1733,6 +1783,42 @@ mod tests {
         let reason = r#"HTTP 529 <unknown status code>: {"type":"error","error":{"type":"overloaded_error","message":"busy (2064)"}}"#;
         assert_eq!(gist(reason), "HTTP 529: busy (2064)");
         assert_eq!(gist("connection reset"), "connection reset");
+    }
+
+    #[test]
+    fn the_status_line_drops_detail_before_the_model_as_it_narrows() {
+        let status = Status {
+            window: Some(200_000),
+            context: 38_000,
+            prompt: 38_000,
+            cached: 30_000,
+            completion: 2_000,
+            branch: Some("main".into()),
+            ..Status::default()
+        };
+        let line = |width| text::plain(&status_layout("qwen3.7-plus", &status, width)).replace('\x1b', "").replace("[2m", "").replace("[0m", "");
+        let wide = line(120);
+        assert!(wide.contains("cached") && wide.contains("⎇ main"));
+        for width in 12..120 {
+            let shown = line(width);
+            assert!(text::width(&shown) <= width, "{width}: {shown}");
+            assert!(shown.starts_with("qwen3.7-plus") || width < 12, "{width}: {shown:?}");
+        }
+        let narrow = line(40);
+        assert!(narrow.contains("ctx") && !narrow.contains("cached"));
+    }
+
+    #[test]
+    fn durations_move_up_a_unit() {
+        let secs = Duration::from_secs;
+        assert_eq!(clock(secs(0)), "0s");
+        assert_eq!(clock(secs(59)), "59s");
+        assert_eq!(clock(secs(60)), "1m00s");
+        assert_eq!(clock(secs(125)), "2m05s");
+        assert_eq!(clock(secs(3_600)), "1h00m");
+        assert_eq!(clock(secs(3_725)), "1h02m");
+        assert_eq!(precise_clock(Duration::from_millis(2_400)), "2.4s");
+        assert_eq!(precise_clock(secs(70)), "1m10s");
     }
 
     #[test]

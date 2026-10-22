@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.10 — 2026-10-22
+
+- **Responsive status line.** In a narrow terminal the status line drops cache and token
+  detail, then the context bar and the branch, instead of cutting off at the edge; the model
+  and mode always stay.
+- **Timers move up a unit.** Elapsed times read `59s`, then `1m05s`, then `1h02m`, instead of
+  a growing count of seconds.
+
 ## 0.2.9 — 2026-10-22
 
 - **`web_search`.** Searches Brave, through its API or Tavily's with a key under `[search]`,
