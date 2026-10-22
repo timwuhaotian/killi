@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.3 — 2026-10-22
+
 - **Swarms.** The `agent_swarm` tool runs one subagent per item of a prompt template (up to
   128, 8 at a time; `[agent] swarm_parallel` changes that) and returns every report in item
   order. `/swarm` turns swarm mode on or off, telling the agent to split its work this way;
@@ -17,6 +19,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
   check of every explicit requirement before the final reply.
 - In `killi -p`, a subagent's first line no longer runs onto the line of the call that
   started it.
+- **First run.** Without a config, killi says to run `killi init` or `killi import-kimi`
+  instead of showing an OS error, and the installer suggests `killi init` too.
 
 ## 0.2.2 — 2026-10-22
 

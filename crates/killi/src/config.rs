@@ -141,9 +141,13 @@ pub fn home() -> PathBuf {
 impl Config {
     pub fn load() -> Result<Self> {
         let path = killi_home().join("config.toml");
-        let text = fs::read_to_string(&path).with_context(|| {
-            format!("could not read {}; run `killi init` to create one, or `killi import-kimi` to copy Kimi Code's", path.display())
-        })?;
+        let text = match fs::read_to_string(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!(
+                "no config yet at {}; run `killi init` to write one to edit, or `killi import-kimi` to copy Kimi Code's",
+                path.display()
+            ),
+            read => read.with_context(|| format!("could not read {}", path.display()))?,
+        };
         toml::from_str(&text).with_context(|| format!("invalid config in {}", path.display()))
     }
 
