@@ -34,7 +34,7 @@ use crate::session::Choice;
 use crate::snapshot::Snapshots;
 use editor::Editor;
 use menu::{Entry, Item, Suggestions};
-use text::{ACCENT, BOLD, DIM, GREEN, ITALIC, MAGENTA, Markdown, RED, RESET, TINT, YELLOW, wrap};
+use text::{BOLD, DANGER, DIM, FAINT, FIN, LAGOON, Markdown, RESET, TINT, WARN, wrap};
 
 const MAX_INPUT_ROWS: usize = 10;
 const MENU_ROWS: usize = 8;
@@ -43,6 +43,8 @@ const DIFF_ROWS: usize = 16;
 const PREVIEW_ROWS: usize = 3;
 /// Tool outputs and thoughts Ctrl+O can step back through.
 const DETAIL_KEPT: usize = 10;
+/// The frames of a running tool call's glyph, a step each tick.
+const QUARTER: [char; 4] = ['◐', '◓', '◑', '◒'];
 
 pub struct Start {
     pub model: Option<String>,
@@ -882,7 +884,7 @@ impl App {
     fn answer(&mut self, typed: Option<String>) {
         let asking = self.asking.take().expect("a question is open");
         let answer = typed.unwrap_or_else(|| asking.question.options.get(asking.selected).cloned().unwrap_or_default());
-        self.commit(format!("  {GREEN}↳{RESET} {answer}"));
+        self.commit(format!("  {FIN}↳{RESET} {answer}"));
         let _ = asking.question.reply.send(answer);
     }
 
@@ -959,7 +961,7 @@ impl App {
         let mut first = true;
         for line in prompt.lines() {
             for row in text::wrap_words(line, self.width.saturating_sub(3), 0) {
-                let lead = if std::mem::take(&mut first) { format!("{ACCENT}›{BOLD}") } else { BOLD.to_string() };
+                let lead = if std::mem::take(&mut first) { format!("{FIN}❯{RESET}{TINT}{BOLD}") } else { format!(" {BOLD}") };
                 let pad = " ".repeat(self.width.saturating_sub(3 + text::width(&row)));
                 self.commit(format!("{TINT} {lead} {row}{pad}{RESET}"));
             }
@@ -992,7 +994,7 @@ impl App {
         match ended {
             Ended::Interrupted => {
                 self.last_end = Some(LastEnd::Interrupted);
-                self.commit(format!("{YELLOW}Interrupted.{RESET} {DIM}Tell killi what to do instead.{RESET}"));
+                self.commit(format!("{WARN}Interrupted.{RESET} {DIM}Tell killi what to do instead.{RESET}"));
                 self.controls.steer.borrow_mut().clear();
             }
             Ended::Done(Err(e)) => {
@@ -1064,7 +1066,7 @@ impl App {
                 None => self.thinking = Some((Instant::now(), text)),
             },
             Event::Retry { attempt, wait, reason } => {
-                let line = format!("{DIM}{YELLOW}retry {attempt} in {}:{RESET}{DIM} {}{RESET}", clock(wait), gist(&reason));
+                let line = format!("{WARN}⚠ retry {attempt} in {}:{RESET}{DIM} {}{RESET}", clock(wait), gist(&reason));
                 self.commit(fit(&line, self.width));
             }
             Event::ToolStart { id, summary, .. } => {
@@ -1091,7 +1093,7 @@ impl App {
                     }
                     if lines.len() > DIFF_ROWS {
                         let more = lines.len() - DIFF_ROWS;
-                        self.commit(format!("        {DIM}… {more} more line{}{RESET}", if more == 1 { "" } else { "s" }));
+                        self.commit(format!("  {FAINT}│{RESET} {DIM}… {more} more line{}{RESET}", if more == 1 { "" } else { "s" }));
                     }
                 }
                 self.push_detail(summary, output);
@@ -1102,7 +1104,7 @@ impl App {
                 self.flush_partial();
                 self.end_thinking();
                 if question.plan {
-                    self.commit(format!("{BOLD}{MAGENTA}Plan{RESET}"));
+                    self.commit(format!("{BOLD}{FIN}? Plan{RESET}"));
                     let mut markdown = Markdown::new(self.width.saturating_sub(2));
                     let mut rows: Vec<String> = question.text.lines().flat_map(|line| markdown.line(line)).collect();
                     rows.extend(markdown.finish());
@@ -1111,7 +1113,7 @@ impl App {
                     }
                     self.commit(String::new());
                 } else {
-                    self.commit(format!("{BOLD}{MAGENTA}?{RESET} {BOLD}{}{RESET}", question.text));
+                    self.commit(format!("{BOLD}{FIN}?{RESET} {BOLD}{}{RESET}", question.text));
                 }
                 self.asking = Some(Asking { question, selected: 0 });
                 notify("Waiting for your answer");
@@ -1147,20 +1149,20 @@ impl App {
     }
 
     fn tool_line(&mut self, label: Option<&str>, summary: &str, is_error: bool, brief: &str, elapsed: Option<Duration>) {
-        let (bullet, note) = if is_error {
-            (format!("{RED}●{RESET}"), format!(" {RED}{brief}{RESET}"))
+        let (glyph, note) = if is_error {
+            (format!("{DANGER}✗{RESET}"), format!(" {DANGER}{brief}{RESET}"))
         } else if brief.is_empty() {
-            (format!("{GREEN}●{RESET}"), String::new())
+            (format!("{LAGOON}✓{RESET}"), String::new())
         } else {
-            (format!("{GREEN}●{RESET}"), format!(" {DIM}· {brief}{RESET}"))
+            (format!("{LAGOON}✓{RESET}"), format!(" {DIM}· {brief}{RESET}"))
         };
         let took = elapsed.filter(|e| e.as_secs() >= 1).map(|e| format!(" {DIM}· {}{RESET}", precise_clock(e)));
         let note = format!("{note}{}", took.unwrap_or_default());
         let lead = label.map_or(0, |l| text::width(l) + 5);
         let summary = clip(summary, self.width.saturating_sub(lead + 2 + text::width(&note)).max(20));
         let line = match label {
-            Some(label) => format!("  {DIM}↳ {label}:{RESET} {bullet} {DIM}{summary}{RESET}{note}"),
-            None => format!("{bullet} {summary}{note}"),
+            Some(label) => format!("  {DIM}↳ {label}:{RESET} {glyph} {DIM}{summary}{RESET}{note}"),
+            None => format!("{glyph} {}{note}", tool_summary(&summary)),
         };
         self.commit(fit(&line, self.width));
     }
@@ -1177,13 +1179,12 @@ impl App {
         }
         let skipped = lines.len().saturating_sub(PREVIEW_ROWS);
         let shown = if is_error { &lines[skipped..] } else { &lines[..lines.len() - skipped] };
-        for (i, line) in shown.iter().enumerate() {
-            let lead = if i == 0 { "⎿ " } else { "  " };
-            self.commit(fit(&format!("  {DIM}{lead}{line}{RESET}"), self.width));
+        for line in shown {
+            self.commit(fit(&format!("  {FAINT}│{RESET} {DIM}{line}{RESET}"), self.width));
         }
         if skipped > 0 {
             let which = if is_error { "earlier" } else { "more" };
-            self.commit(format!("    {DIM}… {skipped} {which} line{} · Ctrl+O{RESET}", if skipped == 1 { "" } else { "s" }));
+            self.commit(format!("  {FAINT}│{RESET} {DIM}… {skipped} {which} line{} · Ctrl+O{RESET}", if skipped == 1 { "" } else { "s" }));
         }
     }
 
@@ -1234,7 +1235,7 @@ impl App {
             }
             let first = first_sentence(&text);
             let gist = if first.is_empty() { String::new() } else { format!(": {first}") };
-            let line = fit(&format!("{DIM}{ITALIC}∴ Thought for {took}{gist}{RESET}"), self.width);
+            let line = fit(&format!("{DIM}∴ Thought for {took}{gist}{RESET}"), self.width);
             self.commit(line);
         }
     }
@@ -1265,12 +1266,12 @@ impl App {
         for c in COMMANDS {
             let aliases: String = c.aliases.iter().map(|a| format!(", /{a}")).collect();
             let args = if c.args.is_empty() { String::new() } else { format!(" {}", c.args) };
-            self.commit(format!("  {ACCENT}/{}{RESET}{DIM}{aliases}{args}{RESET}  {}", c.name, c.about));
+            self.commit(format!("  {LAGOON}/{}{RESET}{DIM}{aliases}{args}{RESET}  {}", c.name, c.about));
         }
-        self.commit(format!("  {ACCENT}/<skill>{RESET}{DIM} [request]{RESET}  Run a skill"));
+        self.commit(format!("  {LAGOON}/<skill>{RESET}{DIM} [request]{RESET}  Run a skill"));
         self.commit(format!("{BOLD}Keys{RESET}"));
         for (key, about) in KEYS {
-            self.commit(format!("  {ACCENT}{key}{RESET} {DIM}{about}{RESET}"));
+            self.commit(format!("  {BOLD}{key}{RESET} {DIM}{about}{RESET}"));
         }
     }
 
@@ -1281,7 +1282,7 @@ impl App {
             Err(e) => return self.error(&format!("/btw: {e:#}")),
         };
         self.commit(String::new());
-        self.commit_wrapped(format!("{BOLD}{MAGENTA}btw{RESET} {BOLD}{question}{RESET}"));
+        self.commit_wrapped(format!("{BOLD}{FIN}btw{RESET} {BOLD}{question}{RESET}"));
         let mut markdown = Markdown::new(self.width.saturating_sub(2));
         let mut rows: Vec<String> = text.lines().flat_map(|line| markdown.line(line)).collect();
         rows.extend(markdown.finish());
@@ -1417,7 +1418,7 @@ impl App {
     }
 
     fn error(&mut self, text: &str) {
-        self.commit(format!("{RED}Error:{RESET} {text}"));
+        self.commit(format!("{DANGER}✗ Error:{RESET} {text}"));
         if let Some(hint) = error_hint(text) {
             self.commit(format!("{DIM}{hint}{RESET}"));
         }
@@ -1446,32 +1447,37 @@ impl App {
             rows.extend(preview.into_iter().rev().take(6).rev());
         }
         if let Some(started) = self.busy {
-            let spin = banner::working(self.spinner);
+            let frame = QUARTER[self.spinner % QUARTER.len()];
             if let Some((since, text)) = &self.thinking {
                 let first = first_sentence(text);
-                rows.push(fit(&format!("{spin} {DIM}thinking {} {first}{RESET}", clock(since.elapsed())), width));
+                rows.push(fit(&format!("{DIM}∴ thinking {} {first}{RESET}", clock(since.elapsed())), width));
             }
             for running in self.running.iter().take(5) {
-                let label = running.label.as_ref().map(|l| format!("{DIM}↳ {l}:{RESET} ")).unwrap_or_default();
-                rows.push(fit(&format!("{spin} {label}{} {DIM}{}{RESET}", running.summary, clock(running.started.elapsed())), width));
+                let took = format!(" {DIM}· {}{RESET}", clock(running.started.elapsed()));
+                let line = match &running.label {
+                    Some(label) => format!("  {DIM}↳ {label}:{RESET} {LAGOON}{frame}{RESET} {DIM}{}{RESET}{took}", running.summary),
+                    None => format!("{LAGOON}{frame}{RESET} {}{took}", tool_summary(&running.summary)),
+                };
+                rows.push(fit(&line, width));
             }
-            if self.thinking.is_none() && self.running.is_empty() && self.asking.is_none() {
+            if self.asking.is_none() {
+                let spin = banner::working(self.spinner);
                 rows.push(fit(&format!("{spin} {DIM}working {} · Esc to interrupt{RESET}", clock(started.elapsed())), width));
             }
             for queued in &self.queued {
-                rows.push(fit(&format!("{DIM}› {} (sent at the next step){RESET}", queued.replace('\n', " ")), width));
+                rows.push(fit(&format!("{FIN}❯{RESET} {DIM}{} (sent at the next step){RESET}", queued.replace('\n', " ")), width));
             }
         }
         if self.todos.iter().any(|t| t.status != "completed") {
             let done = self.todos.iter().filter(|t| t.status == "completed").count();
             rows.push(fit(&format!("  {DIM}tasks {done}/{}{RESET}", self.todos.len()), width));
             for todo in self.todos.iter().take(8) {
-                let (mark, style) = match todo.status.as_str() {
-                    "completed" => ("☑", DIM.to_string()),
-                    "in_progress" => ("◐", YELLOW.to_string()),
-                    _ => ("☐", String::new()),
+                let line = match todo.status.as_str() {
+                    "completed" => format!("{LAGOON}✓{RESET} {DIM}{}{RESET}", todo.content),
+                    "in_progress" => format!("{LAGOON}◐{RESET} {}", todo.content),
+                    _ => format!("{FAINT}○{RESET} {}", todo.content),
                 };
-                rows.push(fit(&format!("  {style}{mark} {}{RESET}", todo.content), width));
+                rows.push(fit(&format!("  {line}"), width));
             }
             if self.todos.len() > 8 {
                 rows.push(format!("  {DIM}… {} more{RESET}", self.todos.len() - 8));
@@ -1480,7 +1486,7 @@ impl App {
         let mode = self.controls.plan.get().then_some("plan mode · Shift+Tab leaves it");
         rows.push(rule(mode, width));
         let known = |name: &str| self.entries.iter().any(|e| e.name == name || e.aliases.iter().any(|a| a == name));
-        let (input, cursor_row, cursor_col) = self.editor.render(&format!("{ACCENT}›{RESET} "), width, &known);
+        let (input, cursor_row, cursor_col) = self.editor.render(&format!("{LAGOON}❯{RESET} "), width, &known);
         let first = cursor_row.saturating_sub(MAX_INPUT_ROWS - 1);
         let top = rows.len();
         rows.extend(input.into_iter().skip(first).take(MAX_INPUT_ROWS));
@@ -1558,10 +1564,10 @@ impl App {
             head.push(thinking);
         }
         if self.controls.plan.get() {
-            head.push(format!("{YELLOW}plan mode{RESET}{DIM}"));
+            head.push(format!("{LAGOON}plan mode{RESET}{DIM}"));
         }
         if self.controls.swarm.get() {
-            head.push(format!("{MAGENTA}swarm mode{RESET}{DIM}"));
+            head.push(format!("{LAGOON}swarm mode{RESET}{DIM}"));
         }
         status_layout(&head.join(" · "), &self.status, width)
     }
@@ -1626,7 +1632,7 @@ fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width:
             let pad = " ".repeat(column.saturating_sub(text::width(&name)));
             let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
             if start + i == selected {
-                let line = fit(&format!("{TINT}{ACCENT}❯ {BOLD}{name}{RESET}{TINT}{pad}  {note}"), width);
+                let line = fit(&format!("{TINT}{LAGOON}❯ {RESET}{TINT}{BOLD}{name}{RESET}{TINT}{pad}  {note}"), width);
                 let fill = " ".repeat(width.saturating_sub(text::width(&line)));
                 format!("{line}{TINT}{fill}{RESET}")
             } else {
@@ -1636,22 +1642,22 @@ fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width:
         .collect()
 }
 
-/// A full-width line around the prompt, in yellow with `label` on it in plan mode.
+/// A full-width line around the prompt, in lagoon with `label` on it in plan mode.
 fn rule(label: Option<&str>, width: usize) -> String {
     match label {
-        None => format!("{DIM}{}{RESET}", "─".repeat(width)),
-        Some("") => format!("{YELLOW}{}{RESET}", "─".repeat(width)),
+        None => format!("{FAINT}{}{RESET}", "─".repeat(width)),
+        Some("") => format!("{LAGOON}{}{RESET}", "─".repeat(width)),
         Some(label) => {
             let rest = width.saturating_sub(text::width(label) + 4);
-            format!("{YELLOW}── {BOLD}{label}{RESET}{YELLOW} {}{RESET}", "─".repeat(rest))
+            format!("{LAGOON}── {BOLD}{label}{RESET}{LAGOON} {}{RESET}", "─".repeat(rest))
         }
     }
 }
 
-/// A full-width line with `title` on it in the accent color, above a list of choices.
+/// A full-width line with `title` on it in lagoon, above a list of choices.
 fn title_rule(title: &str, width: usize) -> String {
     let rest = width.saturating_sub(text::width(title) + 4);
-    format!("{ACCENT}── {BOLD}{title}{RESET}{ACCENT} {}{RESET}", "─".repeat(rest))
+    format!("{LAGOON}── {BOLD}{title}{RESET}{LAGOON} {}{RESET}", "─".repeat(rest))
 }
 
 /// The status line's parts fitted to `width`; see `App::status_line`.
@@ -1675,7 +1681,7 @@ fn status_layout(head: &str, status: &Status, width: usize) -> String {
             false => format!("{} in · {} out", short(status.prompt), short(status.completion)),
         })
     };
-    let branch = |max: usize| status.branch.as_ref().map(|b| format!("{RESET}{ACCENT}⎇ {}{DIM}", clip(b, max)));
+    let branch = |max: usize| status.branch.as_ref().map(|b| format!("⎇ {}", clip(b, max)));
     let layouts = [
         (context(true), tokens(true), branch(usize::MAX)),
         (context(true), tokens(false), branch(usize::MAX)),
@@ -1694,15 +1700,11 @@ fn status_layout(head: &str, status: &Status, width: usize) -> String {
     format!("{DIM}{}{RESET}", fit(head, width))
 }
 
-/// How full the context window is, as a ten-cell bar that turns yellow, then red.
+/// How full the context window is, as a ten-cell lagoon meter that turns warn from 80%.
 fn gauge(used: u64, window: u64) -> String {
     let filled = (used.saturating_mul(10).div_ceil(window.max(1)) as usize).min(10);
-    let color = match used * 100 / window.max(1) {
-        0..50 => GREEN,
-        50..80 => YELLOW,
-        _ => RED,
-    };
-    format!("{RESET}{color}{}{RESET}{DIM}{}", "━".repeat(filled), "─".repeat(10 - filled))
+    let color = if used * 100 / window.max(1) >= 80 { WARN } else { LAGOON };
+    format!("{RESET}{color}{}{RESET}{FAINT}{}{RESET}{DIM}", "━".repeat(filled), "╌".repeat(10 - filled))
 }
 
 /// `text` cut to `max` columns with an ellipsis.
@@ -1765,18 +1767,27 @@ fn gist(reason: &str) -> String {
     }
 }
 
-/// A row of the edit tool's diff: the sign, line number and text, colored by the sign.
+/// A row of the edit tool's diff behind the output gutter: the line number, then the sign and
+/// text in lagoon for an added line, danger for a removed one, muted for context.
 fn diff_line(line: &str) -> String {
     let Some((head, text)) = line.split_once('\t').filter(|(head, _)| head.len() > 1 && head.is_char_boundary(1)) else {
-        return format!("        {DIM}{line}{RESET}");
+        return format!("  {FAINT}│{RESET} {DIM}{line}{RESET}");
     };
     let (sign, number) = head.split_at(1);
     let color = match sign {
-        "+" => GREEN.to_string(),
-        "-" => RED.to_string(),
+        "+" => LAGOON.to_string(),
+        "-" => DANGER.to_string(),
         _ => DIM.to_string(),
     };
-    format!("  {DIM}{number:>5}{RESET} {color}{sign} {text}{RESET}")
+    format!("  {FAINT}│{RESET} {DIM}{number:>4}{RESET} {color}{sign} {text}{RESET}")
+}
+
+/// A tool call's summary with the tool's name in bold: `read src/lib.rs`.
+fn tool_summary(summary: &str) -> String {
+    match summary.split_once(' ') {
+        Some((name, args)) => format!("{BOLD}{name}{RESET} {args}"),
+        None => format!("{BOLD}{summary}{RESET}"),
+    }
 }
 
 fn first_sentence(text: &str) -> String {
@@ -1979,6 +1990,22 @@ mod tests {
         }
         let narrow = line(40);
         assert!(narrow.contains("ctx") && !narrow.contains("cached"));
+    }
+
+    #[test]
+    fn tool_rows_bold_the_name_and_hang_output_off_a_gutter() {
+        assert_eq!(tool_summary("read src/lib.rs"), format!("{BOLD}read{RESET} src/lib.rs"));
+        assert_eq!(tool_summary("todo"), format!("{BOLD}todo{RESET}"));
+        assert_eq!(unstyled(&diff_line("+12\tlet x = 1;")), "  │   12 + let x = 1;");
+        assert!(diff_line("-3\told").contains(&format!("{DANGER}- old")));
+        assert_eq!(unstyled(&diff_line("@@ hunk")), "  │ @@ hunk");
+    }
+
+    #[test]
+    fn the_context_meter_turns_warn_at_80_percent() {
+        assert_eq!(unstyled(&gauge(30, 100)), "━━━╌╌╌╌╌╌╌");
+        assert!(gauge(79, 100).contains(&LAGOON.to_string()));
+        assert!(gauge(80, 100).contains(&WARN.to_string()));
     }
 
     #[test]

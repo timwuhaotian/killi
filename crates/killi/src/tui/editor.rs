@@ -1,6 +1,6 @@
 //! The prompt editor: multi-line text with a cursor, readline-style keys and history.
 
-use super::text::{ACCENT, RESET};
+use super::text::{LAGOON, RESET};
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Default)]
@@ -207,7 +207,7 @@ impl Editor {
     }
 
     /// The text as rows no wider than `width` after `prompt`, and the cursor's row and column.
-    /// Words `/name` that `known` accepts are drawn in the accent color.
+    /// Words `/name` that `known` accepts are drawn in lagoon, like other commands.
     pub fn render(&self, prompt: &str, width: usize, known: &dyn Fn(&str) -> bool) -> (Vec<String>, usize, usize) {
         let prompt_width = super::text::width(prompt);
         let room = width.saturating_sub(prompt_width).max(1);
@@ -238,7 +238,7 @@ impl Editor {
                 }
                 let on = marked.iter().any(|&(s, e)| (s..e).contains(&(offset + i)));
                 if on != lit {
-                    row.push_str(&if on { ACCENT.to_string() } else { RESET.to_string() });
+                    row.push_str(&if on { LAGOON.to_string() } else { RESET.to_string() });
                     lit = on;
                 }
                 row.push(c);
@@ -309,9 +309,9 @@ mod tests {
         let mut e = Editor::default();
         e.insert("a /pdf /nope b/pdf\n/pdf");
         let (rows, ..) = e.render("", 40, &|name| name == "pdf");
-        assert_eq!(rows[0], format!("a {ACCENT}/pdf{RESET} /nope b/pdf"));
-        assert_eq!(rows[1], format!("{ACCENT}/pdf{RESET}"));
+        assert_eq!(rows[0], format!("a {LAGOON}/pdf{RESET} /nope b/pdf"));
+        assert_eq!(rows[1], format!("{LAGOON}/pdf{RESET}"));
         let (rows, ..) = e.render("", 7, &|name| name == "pdf");
-        assert_eq!(rows[0], format!("a {ACCENT}/pdf{RESET} "));
+        assert_eq!(rows[0], format!("a {LAGOON}/pdf{RESET} "));
     }
 }

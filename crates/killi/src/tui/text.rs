@@ -58,15 +58,26 @@ impl fmt::Display for Sgr {
     }
 }
 
-pub const RED: Sgr = Sgr { dark: "\x1b[31m", light: "\x1b[31m" };
-pub const GREEN: Sgr = Sgr { dark: "\x1b[32m", light: "\x1b[38;5;28m" };
-pub const YELLOW: Sgr = Sgr { dark: "\x1b[33m", light: "\x1b[38;5;130m" };
-pub const MAGENTA: Sgr = Sgr { dark: "\x1b[35m", light: "\x1b[38;5;90m" };
-pub const CYAN: Sgr = Sgr { dark: "\x1b[36m", light: "\x1b[38;5;30m" };
-/// Sky blue, where the banner's gradient starts; one 256-color shade on dark themes.
-pub const ACCENT: Sgr = Sgr { dark: "\x1b[38;5;75m", light: "\x1b[38;5;27m" };
+// The roles of the design system (`docs/killi-design-system.html`), each the nearest
+// 256-color shade of its token so they read the same in every terminal.
+
+/// Killi: the prompt caret, running and finished work, the active mode, commands and links.
+pub const LAGOON: Sgr = Sgr { dark: "\x1b[38;5;80m", light: "\x1b[38;5;30m" };
+/// The human: your messages, questions and anything else waiting on you.
+pub const FIN: Sgr = Sgr { dark: "\x1b[38;5;209m", light: "\x1b[38;5;130m" };
+/// Retries, a context window nearly full, an interrupted turn.
+pub const WARN: Sgr = Sgr { dark: "\x1b[38;5;221m", light: "\x1b[38;5;136m" };
+/// Failed tool calls, errors and removed lines.
+pub const DANGER: Sgr = Sgr { dark: "\x1b[38;5;204m", light: "\x1b[38;5;124m" };
+/// Marks the eye may skip: gutters, rules, the empty part of a meter.
+pub const FAINT: Sgr = Sgr { dark: "\x1b[38;5;242m", light: "\x1b[38;5;245m" };
 /// A background a step off the terminal's own, for the selected row and your messages.
 pub const TINT: Sgr = Sgr { dark: "\x1b[48;5;237m", light: "\x1b[48;5;254m" };
+
+// Syntax colors for code blocks only; they carry no meaning in the rest of the UI.
+const STRING: Sgr = Sgr { dark: "\x1b[32m", light: "\x1b[38;5;28m" };
+const NUMBER: Sgr = Sgr { dark: "\x1b[33m", light: "\x1b[38;5;130m" };
+const KEYWORD: Sgr = Sgr { dark: "\x1b[35m", light: "\x1b[38;5;90m" };
 
 /// Whether `NO_COLOR` asks for no colors.
 fn no_color() -> bool {
@@ -355,21 +366,21 @@ impl Markdown {
             self.in_code = !self.in_code;
             self.lang = if self.in_code { Lang::of(lang) } else { Lang::Plain };
             let label = if self.in_code { lang } else { "" };
-            return format!("  {DIM}▏ {label}{RESET}");
+            return format!("  {FAINT}▏{RESET} {DIM}{label}{RESET}");
         }
         if self.in_code {
             let code = match self.lang {
-                Lang::Plain => format!("{CYAN}{line}{RESET}"),
+                Lang::Plain => line.to_string(),
                 lang => highlight(lang, line),
             };
-            return format!("  {DIM}▏{RESET} {code}");
+            return format!("  {FAINT}▏{RESET} {code}");
         }
         if let Some((level, rest)) = heading(trimmed) {
-            let color = if level <= 2 { ACCENT.to_string() } else { String::new() };
+            let color = if level <= 2 { LAGOON.to_string() } else { String::new() };
             return format!("{BOLD}{color}{}{RESET}", inline(rest));
         }
         if let Some(rest) = trimmed.strip_prefix("> ") {
-            return format!("{DIM}│ {}{RESET}", inline(rest));
+            return format!("{FAINT}│{RESET} {DIM}{}{RESET}", inline(rest));
         }
         let indent = &line[..line.len() - trimmed.len()];
         for bullet in ["- ", "* ", "+ "] {
@@ -387,7 +398,7 @@ impl Markdown {
             return format!("{indent}{DIM}{}.{RESET} {}", &trimmed[..digits], inline(&trimmed[digits + 2..]));
         }
         if matches!(trimmed, "---" | "***" | "___") {
-            return format!("{DIM}{}{RESET}", "─".repeat(self.width.clamp(10, 60)));
+            return format!("{FAINT}{}{RESET}", "─".repeat(self.width.clamp(10, 60)));
         }
         inline(line)
     }
@@ -406,7 +417,7 @@ fn inline(text: &str) -> String {
         if let Some(after) = rest.strip_prefix('`')
             && let Some(end) = after.find('`')
         {
-            out.push_str(&format!("{CYAN}{}{RESET}", &after[..end]));
+            out.push_str(&format!("{LAGOON}{}{RESET}", &after[..end]));
             rest = &after[end + 1..];
             continue;
         }
@@ -440,9 +451,9 @@ fn inline(text: &str) -> String {
             && let Some((label, url, used)) = link(rest)
         {
             if url.is_empty() || label == url {
-                out.push_str(&format!("{UNDERLINE}{label}{RESET}"));
+                out.push_str(&format!("{LAGOON}{UNDERLINE}{label}{RESET}"));
             } else {
-                out.push_str(&format!("{UNDERLINE}{label}{RESET} {DIM}({url}){RESET}"));
+                out.push_str(&format!("{LAGOON}{UNDERLINE}{label}{RESET} {DIM}({url}){RESET}"));
             }
             rest = &rest[used..];
             continue;
@@ -547,14 +558,14 @@ fn render_table(rows: &[String], max_width: usize) -> Vec<String> {
                 }
             })
             .collect();
-        format!("  {}", cells.join(&format!("{DIM} │ {RESET}")))
+        format!("  {}", cells.join(&format!(" {FAINT}│{RESET} ")))
     };
     let mut out = Vec::new();
     for (n, row) in styled.iter().enumerate() {
         out.push(line(row, header && n == 0));
         if header && n == 0 {
             let rule: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
-            out.push(format!("  {DIM}{}{RESET}", rule.join("─┼─")));
+            out.push(format!("  {FAINT}{}{RESET}", rule.join("─┼─")));
         }
     }
     out
@@ -621,9 +632,8 @@ impl Lang {
 fn highlight(lang: Lang, line: &str) -> String {
     if lang == Lang::Diff {
         let color = match line.chars().next() {
-            Some('+') if !line.starts_with("+++") => format!("{GREEN}"),
-            Some('-') if !line.starts_with("---") => format!("{RED}"),
-            Some('@') => format!("{CYAN}"),
+            Some('+') if !line.starts_with("+++") => LAGOON.to_string(),
+            Some('-') if !line.starts_with("---") => DANGER.to_string(),
             _ => DIM.to_string(),
         };
         return format!("{color}{line}{RESET}");
@@ -657,13 +667,13 @@ fn highlight(lang: Lang, line: &str) -> String {
                 end += if chars[end] == '\\' { 2 } else { 1 };
             }
             let end = (end + 1).min(chars.len());
-            out.push_str(&format!("{GREEN}{}{RESET}", chars[i..end].iter().collect::<String>()));
+            out.push_str(&format!("{STRING}{}{RESET}", chars[i..end].iter().collect::<String>()));
             i = end;
             continue;
         }
         if c.is_ascii_digit() && (i == 0 || !is_word(chars[i - 1])) {
             let end = chars[i..].iter().position(|&ch| !(ch.is_alphanumeric() || ch == '.' || ch == '_')).map_or(chars.len(), |p| i + p);
-            out.push_str(&format!("{YELLOW}{}{RESET}", chars[i..end].iter().collect::<String>()));
+            out.push_str(&format!("{NUMBER}{}{RESET}", chars[i..end].iter().collect::<String>()));
             i = end;
             continue;
         }
@@ -671,7 +681,7 @@ fn highlight(lang: Lang, line: &str) -> String {
             let end = chars[i..].iter().position(|&ch| !is_word(ch)).map_or(chars.len(), |p| i + p);
             let word: String = chars[i..end].iter().collect();
             if words.contains(&word.as_str()) {
-                out.push_str(&format!("{MAGENTA}{word}{RESET}"));
+                out.push_str(&format!("{KEYWORD}{word}{RESET}"));
             } else {
                 out.push_str(&word);
             }
@@ -713,10 +723,10 @@ mod tests {
 
     #[test]
     fn wrap_carries_styles_across_rows() {
-        let rows = wrap(&format!("{RED}abcdef{RESET}"), 4);
+        let rows = wrap(&format!("{DANGER}abcdef{RESET}"), 4);
         assert_eq!(rows.len(), 2);
         assert_eq!(width(&rows[0]), 4);
-        assert!(rows[1].starts_with(&RED.to_string()));
+        assert!(rows[1].starts_with(&DANGER.to_string()));
         assert_eq!(wrap("中文中文", 5).len(), 2);
     }
 
@@ -729,14 +739,14 @@ mod tests {
     #[test]
     fn markdown_styles_lines() {
         let mut md = Markdown::default();
-        assert_eq!(md.line("## Title"), [format!("{BOLD}{ACCENT}Title{RESET}")]);
+        assert_eq!(md.line("## Title"), [format!("{BOLD}{LAGOON}Title{RESET}")]);
         assert_eq!(md.line("### Small"), [format!("{BOLD}Small{RESET}")]);
-        assert_eq!(md.line("- use `cargo` **now**"), [format!("• use {CYAN}cargo{RESET} {BOLD}now{RESET}")]);
+        assert_eq!(md.line("- use `cargo` **now**"), [format!("• use {LAGOON}cargo{RESET} {BOLD}now{RESET}")]);
         assert_eq!(md.line("  - nested"), ["  ◦ nested"]);
         assert_eq!(md.line("- [x] done"), ["☑ done"]);
         assert_eq!(md.line("2. second"), [format!("{DIM}2.{RESET} second")]);
-        assert_eq!(md.line("```"), [format!("  {DIM}▏ {RESET}")]);
-        assert_eq!(md.line("let x = 1;"), [format!("  {DIM}▏{RESET} {CYAN}let x = 1;{RESET}")]);
+        assert_eq!(md.line("```"), [format!("  {FAINT}▏{RESET} {DIM}{RESET}")]);
+        assert_eq!(md.line("let x = 1;"), [format!("  {FAINT}▏{RESET} let x = 1;")]);
         md.line("```");
         assert_eq!(md.line("a * b"), ["a * b"]);
         assert_eq!(md.line("some *emphasis* here"), [format!("some {ITALIC}emphasis{RESET} here")]);
@@ -746,8 +756,8 @@ mod tests {
     #[test]
     fn markdown_links_show_their_address() {
         let mut md = Markdown::default();
-        assert_eq!(md.line("see [docs](https://a.b/c)"), [format!("see {UNDERLINE}docs{RESET} {DIM}(https://a.b/c){RESET}")]);
-        assert_eq!(md.line("[https://a.b](https://a.b)"), [format!("{UNDERLINE}https://a.b{RESET}")]);
+        assert_eq!(md.line("see [docs](https://a.b/c)"), [format!("see {LAGOON}{UNDERLINE}docs{RESET} {DIM}(https://a.b/c){RESET}")]);
+        assert_eq!(md.line("[https://a.b](https://a.b)"), [format!("{LAGOON}{UNDERLINE}https://a.b{RESET}")]);
         assert_eq!(md.line("[not a link] (x)"), ["[not a link] (x)"]);
     }
 
@@ -755,12 +765,12 @@ mod tests {
     fn code_blocks_are_colored_by_language() {
         let mut md = Markdown::default();
         let rows = lines(&mut md, "```rust\nlet n = 42; // note\n```");
-        assert_eq!(rows[0], format!("  {DIM}▏ rust{RESET}"));
-        assert!(rows[1].contains(&format!("{MAGENTA}let{RESET}")));
-        assert!(rows[1].contains(&format!("{YELLOW}42{RESET}")));
+        assert_eq!(rows[0], format!("  {FAINT}▏{RESET} {DIM}rust{RESET}"));
+        assert!(rows[1].contains(&format!("{KEYWORD}let{RESET}")));
+        assert!(rows[1].contains(&format!("{NUMBER}42{RESET}")));
         assert!(rows[1].contains(&format!("{DIM}// note{RESET}")));
         let rows = lines(&mut md, "```diff\n+new\n-old\n```");
-        assert!(rows[1].contains(&format!("{GREEN}+new")) && rows[2].contains(&format!("{RED}-old")));
+        assert!(rows[1].contains(&format!("{LAGOON}+new")) && rows[2].contains(&format!("{DANGER}-old")));
     }
 
     #[test]
@@ -782,7 +792,7 @@ mod tests {
 
     #[test]
     fn no_color_drops_colors_and_keeps_styles() {
-        let line = format!("{BOLD}{ACCENT}x{RESET}\x1b[38;2;1;2;3m\x1b[48;5;9my\x1b[1;32mz{DIM}");
+        let line = format!("{BOLD}{LAGOON}x{RESET}\x1b[38;2;1;2;3m\x1b[48;5;9my\x1b[1;32mz{DIM}");
         assert_eq!(strip_colors(&line), format!("{BOLD}x{RESET}y\x1b[1mz{DIM}"));
         assert_eq!(strip_colors("plain"), "plain");
     }

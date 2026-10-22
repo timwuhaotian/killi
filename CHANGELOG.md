@@ -5,6 +5,17 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.15 — 2026-10-22
+
+- **A polished conversation, following the new design system** (`docs/killi-design-system.html`).
+  Two colors with one meaning each: lagoon for killi (the prompt caret, running and finished
+  work, plan and swarm mode, commands, inline code, links) and orange for you (your messages,
+  questions, your answers). Finished tool calls are `✓` or `✗` with the tool's name in bold,
+  a running call turns `◐` in the same column, and output and diffs hang off a faint `│`
+  gutter. The task list marks tasks `✓ ◐ ○`; the context meter is lagoon and turns yellow
+  from 80%. The `killi` spinner now shows once, on a working row that stays while the agent
+  works. Every state keeps a glyph, so it still reads with `NO_COLOR`.
+
 ## 0.2.14 — 2026-10-22
 
 - **`/reload` takes effect without a restart.** Skills added or edited since the session

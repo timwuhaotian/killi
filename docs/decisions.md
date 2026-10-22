@@ -68,6 +68,7 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
     - Status line: model, plan mode, context used, git branch, session tokens (fresh and cached input, output).
     - Markdown is a small streaming styler in `tui/text.rs`, not `pulldown-cmark`: it styles a line as it arrives and holds table rows until the table ends. Code is colored by a built-in keyword table, not `syntect`.
     - Colors come from `Sgr` values that pick a dark or light shade (`[ui] theme`, else `COLORFGBG`); `NO_COLOR` strips color codes where lines are written.
+    - Colors are roles from `docs/killi-design-system.html`: `lagoon` for Killi (caret, running and done, modes, commands), `fin` for the human (your messages, questions), `warn`, `danger`, `fg-faint`, each the nearest 256-color shade. Every state also has a glyph (`✓ ✗ ◐ ○ ? ↳ ∴`) so it reads without color.
     - A message typed while the agent works steers it: it's added after the current tool call finishes. This is cache-safe because it goes at the end.
 
 17. **pi (github.com/earendil-works/pi) is a second reference and a second baseline, not the base.** Checked on 2026-10-21:
