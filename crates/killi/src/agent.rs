@@ -354,6 +354,7 @@ impl Agent {
         if std::mem::take(&mut self.interrupted) {
             notes.push("The user interrupted your previous turn.".to_string());
         }
+        notes.extend(self.settings.mcp.take_notes());
         let changed = self.instructions.changed();
         if !changed.is_empty() {
             notes.push(format!(

@@ -5,6 +5,19 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.13 — 2026-10-22
+
+- **Sessions share MCP servers.** Stdio servers now run in one shared `killi mcp-serve`
+  process, so every killi on the machine uses the same server instead of starting its own. It
+  starts on first use, as servers always have, and exits 15 minutes after the last session
+  lets go. A server that exits is started again on the next call. User servers from
+  `~/.killi/mcp.json` start in the home folder, project servers in the project root.
+- **`/mcp`** lists the MCP servers and turns one on or off with Enter, for this session and
+  new ones; `/mcp <server>` toggles one directly. The model is told, and calls to a server
+  that is off are refused.
+- **Choosing a skill in the slash menu no longer runs it.** Tab or Enter puts `/<skill> ` in
+  the prompt so you can add a request, then Enter sends it. Built-in commands still run at once.
+
 ## 0.2.12 — 2026-10-22
 
 - **`/btw <question>`** asks a side question about the conversation, also while the agent

@@ -190,7 +190,11 @@ killi runs commands and edits files without asking; `/undo` is the safety net.
   `{"mcpServers": {...}}` format (stdio or HTTP). The agent reaches them through one `mcp` tool,
   and a server starts, and its tools load, the first time it's used. To give a project's
   favorite server native tools from the start, add `[mcp] eager = ["godot"]` to its
-  `.killi/config.toml`.
+  `.killi/config.toml`. Stdio servers run in one shared `killi mcp-serve` process, so every
+  killi session on the machine uses the same server instead of starting its own; it exits 15
+  minutes after the last session lets go. User servers start in your home folder, project
+  servers in the project root. `/mcp` lists the servers and turns one on or off, for this
+  session and the next ones.
 - **Hooks** use Claude Code's protocol (JSON on stdin; exit code 2 blocks and tells the model
   why):
 

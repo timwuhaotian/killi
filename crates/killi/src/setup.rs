@@ -149,6 +149,10 @@ impl Setup {
         self.prompt.instruction_files.len()
     }
 
+    pub fn mcp(&self) -> &Mcp {
+        &self.settings.mcp
+    }
+
     pub fn skills(&self) -> &Skills {
         &self.skills
     }

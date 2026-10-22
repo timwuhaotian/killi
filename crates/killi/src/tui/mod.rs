@@ -29,6 +29,7 @@ use crate::agent::{Agent, Controls, Event, Question, Sink, Stop, Todo};
 use crate::config::{Config, Thinking};
 use crate::setup::Setup;
 use crate::llm::{Client, Usage};
+use crate::mcp::Mcp;
 use crate::session::Choice;
 use crate::snapshot::Snapshots;
 use editor::Editor;
@@ -122,6 +123,18 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     app.show_model(&agent, session.config());
                     app.save_choice(&agent);
                     app.notice(&format!("Switched to {alias}, keeping the conversation so far. The cache starts over with the new model."));
+                }
+                Err(e) => app.error(&format!("{e:#}")),
+            },
+            Input::Mcp(name, from_list) => match session.mcp().toggle(&name) {
+                Ok(on) => {
+                    app.notice(&match on {
+                        true => format!("MCP server {name} is on."),
+                        false => format!("MCP server {name} is off, here and in new sessions."),
+                    });
+                    if from_list {
+                        app.open_mcp_picker(session.mcp(), Some(&name));
+                    }
                 }
                 Err(e) => app.error(&format!("{e:#}")),
             },
@@ -279,6 +292,8 @@ async fn handle_command(
             Err(e) => app.error(&format!("{e:#}")),
         },
         "resume" => app.open_session_picker(cwd),
+        "mcp" if arg.is_empty() => app.open_mcp_picker(session.mcp(), None),
+        "mcp" => app.next_input = Some(Input::Mcp(arg.to_string(), false)),
         "model" if arg.is_empty() => app.open_model_picker(session.config()),
         "model" => app.next_input = Some(Input::Model(arg.to_string())),
         "effort" | "thinking" if arg.is_empty() => app.open_effort_picker(session.config()),
@@ -324,13 +339,12 @@ fn agent_sink(agent: &Agent) -> Sink {
 
 /// What the slash menu searches: the commands, then every skill not named like one.
 fn entries(session: &Setup) -> Vec<Entry> {
-    let taken = |name: &str| COMMANDS.iter().any(|c| c.name == name || c.aliases.contains(&name));
     let commands = COMMANDS.iter().map(|c| Entry {
         name: c.name.to_string(),
         aliases: c.aliases.iter().map(|a| a.to_string()).collect(),
         description: if c.args.is_empty() { c.about.to_string() } else { format!("{} — {}", c.args, c.about) },
     });
-    let skills = session.skills().iter().filter(|s| !taken(&s.name)).map(|s| Entry {
+    let skills = session.skills().iter().filter(|s| !is_command(&s.name)).map(|s| Entry {
         name: s.name.clone(),
         aliases: Vec::new(),
         description: s.description.clone(),
@@ -360,6 +374,8 @@ enum Input {
     Resume(PathBuf),
     Model(String),
     Effort(String),
+    /// Turns an MCP server on or off; true when picked from the /mcp list, which then reopens.
+    Mcp(String, bool),
 }
 
 enum LastEnd {
@@ -415,6 +431,7 @@ enum PickerChoice {
     Session(PathBuf),
     Model(String),
     Effort(String),
+    Mcp(String),
 }
 
 #[derive(Default)]
@@ -682,6 +699,7 @@ impl App {
                         PickerChoice::Session(path) => Input::Resume(path),
                         PickerChoice::Model(alias) => Input::Model(alias),
                         PickerChoice::Effort(effort) => Input::Effort(effort),
+                        PickerChoice::Mcp(name) => Input::Mcp(name, true),
                     });
                 }
             }
@@ -690,9 +708,9 @@ impl App {
         Idle::Continue
     }
 
-    /// Keys for the slash menu: ↑↓ choose; Tab or Enter runs a command or skill at the start
-    /// of the prompt, completes a later one and fills in an argument; Esc closes it (the `/` is
-    /// then plain text). None lets the key through.
+    /// Keys for the slash menu: ↑↓ choose; Tab or Enter runs a command at the start of the
+    /// prompt, completes a skill or a later command and fills in an argument; Esc closes it (the
+    /// `/` is then plain text). None lets the key through.
     fn on_key_menu(&mut self, key: KeyEvent, menu: &Suggestions) -> Option<Idle> {
         let count = menu.items.len();
         let selected = self.menu_selected.min(count - 1);
@@ -702,7 +720,7 @@ impl App {
             KeyCode::Esc => self.menu_closed = Some(self.editor.text().to_string()),
             KeyCode::Tab | KeyCode::Enter if !newline_key(&key) => {
                 self.choose(menu, selected);
-                if menu.command && menu.start == 0 {
+                if runs_at_once(menu, selected) {
                     return Some(self.submit());
                 }
             }
@@ -1310,6 +1328,19 @@ impl App {
         self.picker = Some(Picker::new("Switch model".into(), options, selected));
     }
 
+    fn open_mcp_picker(&mut self, mcp: &Mcp, selected: Option<&str>) {
+        if mcp.is_empty() {
+            return self.notice("No MCP servers are configured: add them to ~/.killi/mcp.json or the project's .mcp.json.");
+        }
+        let servers = mcp.list();
+        let at = servers.iter().position(|s| Some(s.name.as_str()) == selected).unwrap_or(0);
+        let options = servers
+            .into_iter()
+            .map(|s| (s.name.clone(), format!("{} · {}", if s.on { "on" } else { "off" }, s.hint), PickerChoice::Mcp(s.name)))
+            .collect();
+        self.picker = Some(Picker::new("MCP servers · Enter turns one on or off".into(), options, at));
+    }
+
     fn open_effort_picker(&mut self, config: &Config) {
         let options: Vec<_> = config
             .efforts(&self.status.model)
@@ -1500,9 +1531,9 @@ impl App {
         let options: Vec<(&str, &str)> = names.iter().zip(&menu.items).map(|(name, item)| (name.as_str(), item.description.as_str())).collect();
         let mut rows = choice_rows(&options, selected, visible, self.width, 32);
         let position = if count > visible { format!("{}/{count} · ", selected + 1) } else { String::new() };
-        let enter = match (menu.command, menu.start) {
-            (true, 0) => "runs",
-            (true, _) => "completes",
+        let enter = match (menu.command, runs_at_once(menu, selected)) {
+            (true, true) => "runs",
+            (true, false) => "completes",
             (false, _) => "fills in",
         };
         rows.push(fit(&format!("  {DIM}{position}↑↓ choose · Tab or Enter {enter} · Esc closes{RESET}"), self.width));
@@ -1809,9 +1840,21 @@ struct Command {
     about: &'static str,
 }
 
+/// Whether `name` is a built-in command or one of its aliases, not a skill.
+fn is_command(name: &str) -> bool {
+    COMMANDS.iter().any(|c| c.name == name || c.aliases.contains(&name))
+}
+
+/// Whether choosing the menu's item at `index` sends the prompt: a built-in command at the start
+/// does, a skill stays in the prompt so a request can follow it.
+fn runs_at_once(menu: &Suggestions, index: usize) -> bool {
+    menu.command && menu.start == 0 && is_command(&menu.items[index].value)
+}
+
 /// The built-in commands, in the order the menu lists them.
 const COMMANDS: &[Command] = &[
     Command { name: "model", aliases: &[], args: "[alias]", about: "Switch model" },
+    Command { name: "mcp", aliases: &[], args: "[server]", about: "Turn MCP servers on or off" },
     Command { name: "effort", aliases: &["thinking"], args: "[level]", about: "Switch thinking effort" },
     Command { name: "new", aliases: &["clear"], args: "", about: "Start a fresh session in this folder" },
     Command { name: "resume", aliases: &[], args: "", about: "Continue an earlier session in this folder" },
@@ -1874,6 +1917,16 @@ mod tests {
     fn resume_command_quotes_only_when_needed() {
         assert_eq!(resume_command(Path::new("/home/a@b.c/.killi/sessions/-src-app/1-2.jsonl")), "killi -r /home/a@b.c/.killi/sessions/-src-app/1-2.jsonl");
         assert_eq!(resume_command(Path::new("/s/-My Code-it's/1-2.jsonl")), r"killi -r '/s/-My Code-it'\''s/1-2.jsonl'");
+    }
+
+    #[test]
+    fn choosing_a_skill_leaves_it_in_the_prompt() {
+        let item = |value: &str| Item { value: value.into(), description: String::new() };
+        let menu = Suggestions { items: vec![item("usage"), item("cost"), item("pr-resolve")], start: 0, command: true };
+        assert!(runs_at_once(&menu, 0));
+        assert!(runs_at_once(&menu, 1));
+        assert!(!runs_at_once(&menu, 2));
+        assert!(!runs_at_once(&Suggestions { start: 4, ..menu }, 0));
     }
 
     #[test]

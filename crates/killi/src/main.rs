@@ -1,4 +1,5 @@
 mod agent;
+mod broker;
 mod config;
 mod hooks;
 mod llm;
@@ -68,6 +69,7 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
         Some("init") => config::init().map(|()| ExitCode::SUCCESS),
         Some("import-kimi") => config::import_kimi(args.iter().any(|a| a == "--force")).map(|()| ExitCode::SUCCESS),
         Some("update") => update::update().await.map(|()| ExitCode::SUCCESS),
+        Some("mcp-serve") => broker::serve(&broker::socket_path()).await.map(|()| ExitCode::SUCCESS),
         Some("-V" | "--version") => {
             println!("killi {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
