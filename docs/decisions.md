@@ -64,6 +64,8 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
     - Compact lines: one line per tool call with a short result, edits show a small diff, long output hidden behind a key.
     - Thinking shown as a dim one-line summary ("thinking 4s" plus the first sentence), full text behind a key.
     - Status line: model, plan mode, context used, git branch, session tokens (fresh and cached input, output).
+    - Markdown is a small streaming styler in `tui/text.rs`, not `pulldown-cmark`: it styles a line as it arrives and holds table rows until the table ends. Code is colored by a built-in keyword table, not `syntect`.
+    - Colors come from `Sgr` values that pick a dark or light shade (`[ui] theme`, else `COLORFGBG`); `NO_COLOR` strips color codes where lines are written.
     - A message typed while the agent works steers it: it's added after the current tool call finishes. This is cache-safe because it goes at the end.
 
 17. **pi (github.com/earendil-works/pi) is a second reference and a second baseline, not the base.** Checked on 2026-10-21:

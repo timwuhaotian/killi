@@ -1,19 +1,137 @@
 //! Styled terminal text: display width, wrapping, and a line-at-a-time Markdown styler that
 //! works while text is still streaming in.
 
+use std::borrow::Cow;
+use std::fmt;
+use std::sync::OnceLock;
+
 use unicode_width::UnicodeWidthChar;
 
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
 pub const DIM: &str = "\x1b[2m";
 pub const ITALIC: &str = "\x1b[3m";
-pub const RED: &str = "\x1b[31m";
-pub const GREEN: &str = "\x1b[32m";
-pub const YELLOW: &str = "\x1b[33m";
-/// Sky blue, where the banner's gradient starts; one 256-color shade on every theme.
-pub const ACCENT: &str = "\x1b[38;5;75m";
-pub const MAGENTA: &str = "\x1b[35m";
-pub const CYAN: &str = "\x1b[36m";
+pub const UNDERLINE: &str = "\x1b[4m";
+pub const STRIKE: &str = "\x1b[9m";
+
+/// The terminal's background: it decides which shade each color takes.
+#[derive(Clone, Copy, PartialEq)]
+enum Theme {
+    Dark,
+    Light,
+}
+
+static THEME: OnceLock<Theme> = OnceLock::new();
+
+/// Fixes the theme for the session: `"dark"` or `"light"`, anything else detects it from
+/// `COLORFGBG`, which most terminals that have a light background set.
+pub fn init_theme(setting: Option<&str>) {
+    let theme = match setting {
+        Some("dark") => Theme::Dark,
+        Some("light") => Theme::Light,
+        _ => detect_theme(),
+    };
+    let _ = THEME.set(theme);
+}
+
+fn detect_theme() -> Theme {
+    let background = std::env::var("COLORFGBG").ok().and_then(|v| v.rsplit(';').next().and_then(|bg| bg.parse::<u8>().ok()));
+    match background {
+        Some(7 | 9..=15) => Theme::Light,
+        _ => Theme::Dark,
+    }
+}
+
+/// A color escape that comes out in the shade for the current theme when it is printed.
+#[derive(Clone, Copy)]
+pub struct Sgr {
+    dark: &'static str,
+    light: &'static str,
+}
+
+impl fmt::Display for Sgr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match *THEME.get_or_init(detect_theme) {
+            Theme::Dark => self.dark,
+            Theme::Light => self.light,
+        })
+    }
+}
+
+pub const RED: Sgr = Sgr { dark: "\x1b[31m", light: "\x1b[31m" };
+pub const GREEN: Sgr = Sgr { dark: "\x1b[32m", light: "\x1b[38;5;28m" };
+pub const YELLOW: Sgr = Sgr { dark: "\x1b[33m", light: "\x1b[38;5;130m" };
+pub const MAGENTA: Sgr = Sgr { dark: "\x1b[35m", light: "\x1b[38;5;90m" };
+pub const CYAN: Sgr = Sgr { dark: "\x1b[36m", light: "\x1b[38;5;30m" };
+/// Sky blue, where the banner's gradient starts; one 256-color shade on dark themes.
+pub const ACCENT: Sgr = Sgr { dark: "\x1b[38;5;75m", light: "\x1b[38;5;27m" };
+/// A background a step off the terminal's own, for the selected row and your messages.
+pub const TINT: Sgr = Sgr { dark: "\x1b[48;5;237m", light: "\x1b[48;5;254m" };
+
+/// Whether `NO_COLOR` asks for no colors.
+fn no_color() -> bool {
+    static NO_COLOR: OnceLock<bool> = OnceLock::new();
+    *NO_COLOR.get_or_init(|| std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()))
+}
+
+/// `line` as it goes to the terminal: without its colors when `NO_COLOR` is set, keeping
+/// bold, dim and the other text styles.
+pub fn plain(line: &str) -> Cow<'_, str> {
+    if no_color() { strip_colors(line) } else { Cow::Borrowed(line) }
+}
+
+fn strip_colors(line: &str) -> Cow<'_, str> {
+    if !line.contains("\x1b[") {
+        return Cow::Borrowed(line);
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = rest.find("\x1b[") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find(|c: char| c.is_ascii_alphabetic()) else {
+            out.push_str(&rest[start..]);
+            return Cow::Owned(out);
+        };
+        let (params, kind) = (&after[..end], after.as_bytes()[end] as char);
+        rest = &after[end + 1..];
+        if kind != 'm' {
+            out.push_str(&format!("\x1b[{params}{kind}"));
+            continue;
+        }
+        let kept = without_colors(params);
+        if !kept.is_empty() {
+            out.push_str(&format!("\x1b[{kept}m"));
+        }
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
+/// The SGR parameters left once every foreground and background color is dropped.
+fn without_colors(params: &str) -> String {
+    if params.is_empty() {
+        return "0".into();
+    }
+    let mut kept = Vec::new();
+    let mut parts = params.split(';');
+    while let Some(part) = parts.next() {
+        match part {
+            "38" | "48" => match parts.next() {
+                Some("5") => {
+                    parts.next();
+                }
+                Some("2") => {
+                    parts.by_ref().take(3).for_each(drop);
+                }
+                _ => {}
+            },
+            _ if matches!(part.parse::<u32>(), Ok(30..=39 | 40..=49 | 90..=97 | 100..=107)) => {}
+            _ => kept.push(part),
+        }
+    }
+    kept.join(";")
+}
 
 /// The columns `text` takes on screen, skipping escape sequences.
 pub fn width(text: &str) -> usize {
@@ -188,31 +306,67 @@ pub fn hanging_indent(line: &str) -> usize {
     }
     let text = plain.trim_start_matches(' ');
     let lead = plain.len() - text.len();
-    let marker = ["• ", "│ "].iter().find(|m| text.starts_with(**m)).map(|_| 2).or_else(|| {
+    let marker = ["• ", "◦ ", "☐ ", "☑ ", "│ ", "▏ "].iter().find(|m| text.starts_with(**m)).map(|_| 2).or_else(|| {
         let digits = text.chars().take_while(char::is_ascii_digit).count();
         (digits > 0 && text[digits..].starts_with(". ")).then_some(digits + 2)
     });
     lead + marker.unwrap_or(0)
 }
 
-/// Styles complete lines of Markdown as they arrive, remembering whether a code block is open.
-#[derive(Default)]
+/// Styles complete lines of Markdown as they arrive. It remembers whether a code block is
+/// open, and holds back table rows until the table ends, so the columns can line up.
+#[derive(Default, Clone)]
 pub struct Markdown {
+    /// The terminal's width, for rules and tables; zero until the UI sets it.
+    pub width: usize,
     in_code: bool,
+    lang: Lang,
+    table: Vec<String>,
 }
 
 impl Markdown {
-    pub fn line(&mut self, line: &str) -> String {
+    pub fn new(width: usize) -> Self {
+        Self { width, ..Self::default() }
+    }
+
+    /// The rows `line` adds. A table row adds none until a line that isn't one follows.
+    pub fn line(&mut self, line: &str) -> Vec<String> {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("```") {
+        if !self.in_code && is_table_row(trimmed) {
+            self.table.push(trimmed.to_string());
+            return Vec::new();
+        }
+        let mut rows = self.finish();
+        rows.push(self.block(line, trimmed));
+        rows
+    }
+
+    /// The rows of a table still being held, at the end of the text or a blank line.
+    pub fn finish(&mut self) -> Vec<String> {
+        if self.table.is_empty() {
+            return Vec::new();
+        }
+        render_table(&std::mem::take(&mut self.table), self.width)
+    }
+
+    fn block(&mut self, line: &str, trimmed: &str) -> String {
+        if let Some(info) = trimmed.strip_prefix("```") {
+            let lang = info.trim().split(|c: char| c.is_whitespace() || c == ',').next().unwrap_or("");
             self.in_code = !self.in_code;
-            return String::new();
+            self.lang = if self.in_code { Lang::of(lang) } else { Lang::Plain };
+            let label = if self.in_code { lang } else { "" };
+            return format!("  {DIM}▏ {label}{RESET}");
         }
         if self.in_code {
-            return format!("  {CYAN}{line}{RESET}");
+            let code = match self.lang {
+                Lang::Plain => format!("{CYAN}{line}{RESET}"),
+                lang => highlight(lang, line),
+            };
+            return format!("  {DIM}▏{RESET} {code}");
         }
-        if let Some(rest) = heading(trimmed) {
-            return format!("{BOLD}{}{RESET}", inline(rest));
+        if let Some((level, rest)) = heading(trimmed) {
+            let color = if level <= 2 { ACCENT.to_string() } else { String::new() };
+            return format!("{BOLD}{color}{}{RESET}", inline(rest));
         }
         if let Some(rest) = trimmed.strip_prefix("> ") {
             return format!("{DIM}│ {}{RESET}", inline(rest));
@@ -220,22 +374,31 @@ impl Markdown {
         let indent = &line[..line.len() - trimmed.len()];
         for bullet in ["- ", "* ", "+ "] {
             if let Some(rest) = trimmed.strip_prefix(bullet) {
-                return format!("{indent}• {}", inline(rest));
+                let (mark, rest) = match rest {
+                    r if r.starts_with("[ ] ") => ("☐", &r[4..]),
+                    r if r.starts_with("[x] ") || r.starts_with("[X] ") => ("☑", &r[4..]),
+                    r => (if indent.is_empty() { "•" } else { "◦" }, r),
+                };
+                return format!("{indent}{mark} {}", inline(rest));
             }
         }
-        if trimmed == "---" || trimmed == "***" {
-            return format!("{DIM}{}{RESET}", "─".repeat(40));
+        let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+        if digits > 0 && trimmed[digits..].starts_with(". ") {
+            return format!("{indent}{DIM}{}.{RESET} {}", &trimmed[..digits], inline(&trimmed[digits + 2..]));
+        }
+        if matches!(trimmed, "---" | "***" | "___") {
+            return format!("{DIM}{}{RESET}", "─".repeat(self.width.clamp(10, 60)));
         }
         inline(line)
     }
 }
 
-fn heading(line: &str) -> Option<&str> {
+fn heading(line: &str) -> Option<(usize, &str)> {
     let hashes = line.chars().take_while(|&c| c == '#').count();
-    (1..=6).contains(&hashes).then(|| line[hashes..].strip_prefix(' ')).flatten()
+    (1..=6).contains(&hashes).then(|| line[hashes..].strip_prefix(' ')).flatten().map(|rest| (hashes, rest))
 }
 
-/// `code`, **bold** and *italic* inside a line.
+/// `code`, **bold**, *italic*, ~~struck~~ and [links](url) inside a line.
 fn inline(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 16);
     let mut rest = text;
@@ -255,9 +418,268 @@ fn inline(text: &str) -> String {
             rest = &after[end + 2..];
             continue;
         }
-        let next = rest.char_indices().skip(1).find(|(_, c)| *c == '`' || *c == '*').map_or(rest.len(), |(i, _)| i);
+        if let Some(after) = rest.strip_prefix("~~")
+            && let Some(end) = after.find("~~")
+            && end > 0
+        {
+            out.push_str(&format!("{STRIKE}{}{RESET}", &after[..end]));
+            rest = &after[end + 2..];
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix('*')
+            && !after.starts_with(['*', ' '])
+            && let Some(end) = after.find('*')
+            && end > 0
+            && !after[..end].ends_with(' ')
+        {
+            out.push_str(&format!("{ITALIC}{}{RESET}", &after[..end]));
+            rest = &after[end + 1..];
+            continue;
+        }
+        if rest.starts_with('[')
+            && let Some((label, url, used)) = link(rest)
+        {
+            if url.is_empty() || label == url {
+                out.push_str(&format!("{UNDERLINE}{label}{RESET}"));
+            } else {
+                out.push_str(&format!("{UNDERLINE}{label}{RESET} {DIM}({url}){RESET}"));
+            }
+            rest = &rest[used..];
+            continue;
+        }
+        let next = rest.char_indices().skip(1).find(|(_, c)| matches!(c, '`' | '*' | '~' | '[')).map_or(rest.len(), |(i, _)| i);
         out.push_str(&rest[..next]);
         rest = &rest[next..];
+    }
+    out
+}
+
+/// The label, the address and the bytes used by a `[label](url)` at the start of `text`.
+fn link(text: &str) -> Option<(&str, &str, usize)> {
+    let close = text.find("](")?;
+    let label = &text[1..close];
+    if label.contains('[') || label.is_empty() {
+        return None;
+    }
+    let tail = &text[close + 2..];
+    let end = tail.find(')')?;
+    Some((label, &tail[..end], close + 2 + end + 1))
+}
+
+fn is_table_row(line: &str) -> bool {
+    line.starts_with('|') && line[1..].contains('|')
+}
+
+fn cells(row: &str) -> Vec<String> {
+    let row = row.trim();
+    let row = row.strip_prefix('|').unwrap_or(row);
+    let row = row.strip_suffix('|').unwrap_or(row);
+    row.split('|').map(|cell| cell.trim().to_string()).collect()
+}
+
+fn is_separator(cells: &[String]) -> bool {
+    cells.iter().all(|c| {
+        let c = c.trim_matches(':');
+        !c.is_empty() && c.chars().all(|ch| ch == '-')
+    })
+}
+
+/// `text` cut to `max` columns with an ellipsis, keeping its styles.
+fn cut(text: &str, max: usize) -> String {
+    if width(text) <= max {
+        return text.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut row = wrap(text, max - 1).swap_remove(0);
+    row.push('…');
+    row
+}
+
+/// A table as aligned rows: a bold header over a rule, columns shrunk to fit `max_width`.
+fn render_table(rows: &[String], max_width: usize) -> Vec<String> {
+    let mut parsed: Vec<Vec<String>> = rows.iter().map(|r| cells(r)).collect();
+    let header = parsed.len() > 1 && is_separator(&parsed[1]);
+    let aligns: Vec<char> = if header {
+        parsed[1]
+            .iter()
+            .map(|c| match (c.starts_with(':'), c.ends_with(':')) {
+                (true, true) => 'c',
+                (false, true) => 'r',
+                _ => 'l',
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if header {
+        parsed.remove(1);
+    }
+    let count = parsed.iter().map(Vec::len).max().unwrap_or(0);
+    let styled: Vec<Vec<String>> = parsed
+        .iter()
+        .map(|row| (0..count).map(|i| row.get(i).map_or(String::new(), |c| inline(c))).collect())
+        .collect();
+    let mut widths: Vec<usize> = (0..count).map(|i| styled.iter().map(|row| width(&row[i])).max().unwrap_or(0)).collect();
+    let overhead = 2 + 3 * count.saturating_sub(1);
+    if max_width > 0 {
+        while widths.iter().sum::<usize>() + overhead > max_width {
+            let Some((widest, w)) = widths.iter().copied().enumerate().max_by_key(|&(_, w)| w) else { break };
+            if w <= 3 {
+                break;
+            }
+            widths[widest] -= 1;
+        }
+    }
+    let line = |row: &[String], bold: bool| {
+        let cells: Vec<String> = row
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| {
+                let cell = cut(cell, widths[i]);
+                let cell = if bold { format!("{BOLD}{cell}{RESET}") } else { cell };
+                let pad = widths[i].saturating_sub(width(&cell));
+                match aligns.get(i) {
+                    Some('r') => format!("{}{cell}", " ".repeat(pad)),
+                    Some('c') => format!("{}{cell}{}", " ".repeat(pad / 2), " ".repeat(pad - pad / 2)),
+                    _ => format!("{cell}{}", " ".repeat(pad)),
+                }
+            })
+            .collect();
+        format!("  {}", cells.join(&format!("{DIM} │ {RESET}")))
+    };
+    let mut out = Vec::new();
+    for (n, row) in styled.iter().enumerate() {
+        out.push(line(row, header && n == 0));
+        if header && n == 0 {
+            let rule: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
+            out.push(format!("  {DIM}{}{RESET}", rule.join("─┼─")));
+        }
+    }
+    out
+}
+
+/// A language whose code blocks get colors.
+#[derive(Default, Clone, Copy, PartialEq)]
+enum Lang {
+    #[default]
+    Plain,
+    Rust,
+    Js,
+    Py,
+    Sh,
+    Go,
+    Json,
+    Config,
+    Diff,
+}
+
+impl Lang {
+    fn of(info: &str) -> Lang {
+        match info.to_lowercase().as_str() {
+            "rust" | "rs" => Lang::Rust,
+            "js" | "javascript" | "jsx" | "mjs" | "ts" | "typescript" | "tsx" => Lang::Js,
+            "py" | "python" => Lang::Py,
+            "sh" | "bash" | "zsh" | "shell" | "console" => Lang::Sh,
+            "go" | "golang" => Lang::Go,
+            "json" | "jsonc" => Lang::Json,
+            "toml" | "yaml" | "yml" | "ini" => Lang::Config,
+            "diff" | "patch" => Lang::Diff,
+            _ => Lang::Plain,
+        }
+    }
+
+    fn keywords(self) -> &'static [&'static str] {
+        match self {
+            Lang::Rust => &[
+                "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod", "match", "if", "else", "for", "while", "loop", "return",
+                "self", "Self", "async", "await", "move", "const", "static", "type", "where", "crate", "super", "as", "in", "ref", "dyn", "unsafe",
+                "break", "continue", "true", "false",
+            ],
+            Lang::Js => &[
+                "function", "const", "let", "var", "return", "if", "else", "for", "while", "class", "new", "import", "export", "from", "default",
+                "async", "await", "try", "catch", "throw", "switch", "case", "break", "continue", "typeof", "interface", "type", "extends", "true",
+                "false", "null", "undefined", "this", "of", "in",
+            ],
+            Lang::Py => &[
+                "def", "class", "return", "if", "elif", "else", "for", "while", "import", "from", "as", "with", "try", "except", "finally", "raise",
+                "lambda", "pass", "break", "continue", "yield", "async", "await", "in", "not", "and", "or", "is", "None", "True", "False", "self",
+            ],
+            Lang::Sh => &["if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac", "function", "in", "echo", "cd", "export", "return", "local"],
+            Lang::Go => &[
+                "func", "var", "const", "type", "struct", "interface", "package", "import", "return", "if", "else", "for", "range", "switch", "case",
+                "default", "go", "defer", "chan", "map", "select", "nil", "true", "false", "break", "continue",
+            ],
+            Lang::Json | Lang::Config => &["true", "false", "null"],
+            Lang::Plain | Lang::Diff => &[],
+        }
+    }
+}
+
+/// One line of code with comments, strings, numbers and keywords colored.
+fn highlight(lang: Lang, line: &str) -> String {
+    if lang == Lang::Diff {
+        let color = match line.chars().next() {
+            Some('+') if !line.starts_with("+++") => format!("{GREEN}"),
+            Some('-') if !line.starts_with("---") => format!("{RED}"),
+            Some('@') => format!("{CYAN}"),
+            _ => DIM.to_string(),
+        };
+        return format!("{color}{line}{RESET}");
+    }
+    let comment = match lang {
+        Lang::Rust | Lang::Js | Lang::Go => Some("//"),
+        Lang::Py | Lang::Sh | Lang::Config => Some("#"),
+        _ => None,
+    };
+    let quotes: &[char] = match lang {
+        Lang::Rust | Lang::Json => &['"'],
+        Lang::Js | Lang::Go => &['"', '\'', '`'],
+        _ => &['"', '\''],
+    };
+    let words = lang.keywords();
+    let chars: Vec<char> = line.chars().collect();
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(marker) = comment
+            && chars[i..].iter().take(marker.len()).collect::<String>() == marker
+        {
+            out.push_str(&format!("{DIM}{}{RESET}", chars[i..].iter().collect::<String>()));
+            break;
+        }
+        if quotes.contains(&c) {
+            let mut end = i + 1;
+            while end < chars.len() && chars[end] != c {
+                end += if chars[end] == '\\' { 2 } else { 1 };
+            }
+            let end = (end + 1).min(chars.len());
+            out.push_str(&format!("{GREEN}{}{RESET}", chars[i..end].iter().collect::<String>()));
+            i = end;
+            continue;
+        }
+        if c.is_ascii_digit() && (i == 0 || !is_word(chars[i - 1])) {
+            let end = chars[i..].iter().position(|&ch| !(ch.is_alphanumeric() || ch == '.' || ch == '_')).map_or(chars.len(), |p| i + p);
+            out.push_str(&format!("{YELLOW}{}{RESET}", chars[i..end].iter().collect::<String>()));
+            i = end;
+            continue;
+        }
+        if is_word(c) {
+            let end = chars[i..].iter().position(|&ch| !is_word(ch)).map_or(chars.len(), |p| i + p);
+            let word: String = chars[i..end].iter().collect();
+            if words.contains(&word.as_str()) {
+                out.push_str(&format!("{MAGENTA}{word}{RESET}"));
+            } else {
+                out.push_str(&word);
+            }
+            i = end;
+            continue;
+        }
+        out.push(c);
+        i += 1;
     }
     out
 }
@@ -294,18 +716,74 @@ mod tests {
         let rows = wrap(&format!("{RED}abcdef{RESET}"), 4);
         assert_eq!(rows.len(), 2);
         assert_eq!(width(&rows[0]), 4);
-        assert!(rows[1].starts_with(RED));
+        assert!(rows[1].starts_with(&RED.to_string()));
         assert_eq!(wrap("中文中文", 5).len(), 2);
+    }
+
+    fn lines(md: &mut Markdown, text: &str) -> Vec<String> {
+        let mut rows: Vec<String> = text.lines().flat_map(|l| md.line(l)).collect();
+        rows.extend(md.finish());
+        rows
     }
 
     #[test]
     fn markdown_styles_lines() {
         let mut md = Markdown::default();
-        assert_eq!(md.line("## Title"), format!("{BOLD}Title{RESET}"));
-        assert_eq!(md.line("- use `cargo` **now**"), format!("• use {CYAN}cargo{RESET} {BOLD}now{RESET}"));
-        assert_eq!(md.line("```rust"), "", "a fence becomes a blank line around the block");
-        assert_eq!(md.line("let x = 1;"), format!("  {CYAN}let x = 1;{RESET}"));
+        assert_eq!(md.line("## Title"), [format!("{BOLD}{ACCENT}Title{RESET}")]);
+        assert_eq!(md.line("### Small"), [format!("{BOLD}Small{RESET}")]);
+        assert_eq!(md.line("- use `cargo` **now**"), [format!("• use {CYAN}cargo{RESET} {BOLD}now{RESET}")]);
+        assert_eq!(md.line("  - nested"), ["  ◦ nested"]);
+        assert_eq!(md.line("- [x] done"), ["☑ done"]);
+        assert_eq!(md.line("2. second"), [format!("{DIM}2.{RESET} second")]);
+        assert_eq!(md.line("```"), [format!("  {DIM}▏ {RESET}")]);
+        assert_eq!(md.line("let x = 1;"), [format!("  {DIM}▏{RESET} {CYAN}let x = 1;{RESET}")]);
         md.line("```");
-        assert_eq!(md.line("a * b"), "a * b");
+        assert_eq!(md.line("a * b"), ["a * b"]);
+        assert_eq!(md.line("some *emphasis* here"), [format!("some {ITALIC}emphasis{RESET} here")]);
+        assert_eq!(md.line("~~gone~~"), [format!("{STRIKE}gone{RESET}")]);
+    }
+
+    #[test]
+    fn markdown_links_show_their_address() {
+        let mut md = Markdown::default();
+        assert_eq!(md.line("see [docs](https://a.b/c)"), [format!("see {UNDERLINE}docs{RESET} {DIM}(https://a.b/c){RESET}")]);
+        assert_eq!(md.line("[https://a.b](https://a.b)"), [format!("{UNDERLINE}https://a.b{RESET}")]);
+        assert_eq!(md.line("[not a link] (x)"), ["[not a link] (x)"]);
+    }
+
+    #[test]
+    fn code_blocks_are_colored_by_language() {
+        let mut md = Markdown::default();
+        let rows = lines(&mut md, "```rust\nlet n = 42; // note\n```");
+        assert_eq!(rows[0], format!("  {DIM}▏ rust{RESET}"));
+        assert!(rows[1].contains(&format!("{MAGENTA}let{RESET}")));
+        assert!(rows[1].contains(&format!("{YELLOW}42{RESET}")));
+        assert!(rows[1].contains(&format!("{DIM}// note{RESET}")));
+        let rows = lines(&mut md, "```diff\n+new\n-old\n```");
+        assert!(rows[1].contains(&format!("{GREEN}+new")) && rows[2].contains(&format!("{RED}-old")));
+    }
+
+    #[test]
+    fn tables_line_up_and_shrink_to_the_width() {
+        let mut md = Markdown::new(40);
+        assert!(md.line("| a | bb |").is_empty(), "rows wait for the end of the table");
+        md.line("|---|---:|");
+        md.line("| long cell | 1 |");
+        let rows = md.line("after");
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[3], "after");
+        assert!(rows[..3].iter().all(|r| width(r) == width(&rows[0])));
+        assert!(rows[1].contains('┼'));
+        let mut narrow = Markdown::new(14);
+        narrow.line("| aaaaaaaaaa | bbbbbbbbbb |");
+        let rows = narrow.finish();
+        assert!(rows.iter().all(|r| width(r) <= 14), "{rows:?}");
+    }
+
+    #[test]
+    fn no_color_drops_colors_and_keeps_styles() {
+        let line = format!("{BOLD}{ACCENT}x{RESET}\x1b[38;2;1;2;3m\x1b[48;5;9my\x1b[1;32mz{DIM}");
+        assert_eq!(strip_colors(&line), format!("{BOLD}x{RESET}y\x1b[1mz{DIM}"));
+        assert_eq!(strip_colors("plain"), "plain");
     }
 }

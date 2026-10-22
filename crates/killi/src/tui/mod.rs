@@ -31,13 +31,16 @@ use crate::llm::{Client, Usage};
 use crate::snapshot::Snapshots;
 use editor::Editor;
 use menu::{Entry, Item, Suggestions};
-use text::{ACCENT, BOLD, DIM, GREEN, ITALIC, MAGENTA, Markdown, RED, RESET, YELLOW, wrap};
+use text::{ACCENT, BOLD, DIM, GREEN, ITALIC, MAGENTA, Markdown, RED, RESET, TINT, YELLOW, wrap};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const PROMPT: &str = "\x1b[38;5;75m›\x1b[0m ";
 const MAX_INPUT_ROWS: usize = 10;
 const MENU_ROWS: usize = 8;
 const DIFF_ROWS: usize = 16;
+/// Lines of a bash command's output shown under its line.
+const PREVIEW_ROWS: usize = 3;
+/// Tool outputs and thoughts Ctrl+O can step back through.
+const DETAIL_KEPT: usize = 10;
 
 pub struct Start {
     pub model: Option<String>,
@@ -60,6 +63,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         let _ = tx.send(event);
     });
     let controls = Controls { interactive: true, ..Controls::default() };
+    text::init_theme(config.ui.theme.as_deref());
     let session = Setup::new(config, &cwd, start.model.as_deref()).await?;
     let mut agent = match &start.resume {
         Some(log) => session.resume(log, controls.clone(), sink.clone())?,
@@ -422,8 +426,10 @@ struct App {
     /// The text the menu was closed on with Esc; it opens again when the text changes.
     menu_closed: Option<String>,
     busy: Option<Instant>,
-    /// The last tool output or thought, for Ctrl+O.
-    detail: Option<(String, String)>,
+    /// The latest tool outputs and thoughts, for Ctrl+O.
+    details: Vec<(String, String)>,
+    /// How far back Ctrl+O has gone from the newest.
+    detail_back: usize,
     status: Status,
     controls: Controls,
     spinner: usize,
@@ -451,7 +457,7 @@ impl App {
             cursor_row: 0,
             pending: Vec::new(),
             editor: Editor::with_history(agent.user_prompts()),
-            markdown: Markdown::default(),
+            markdown: Markdown::new(usize::from(columns).max(20)),
             partial: String::new(),
             held_blank: false,
             last_blank: false,
@@ -469,7 +475,8 @@ impl App {
             menu_text: String::new(),
             menu_closed: None,
             busy: None,
-            detail: None,
+            details: Vec::new(),
+            detail_back: 0,
             status: Status {
                 model: agent.model_alias().to_string(),
                 thinking: agent.thinking().label().to_string(),
@@ -853,9 +860,13 @@ impl App {
 
     fn begin_turn(&mut self, prompt: &str) {
         self.commit(String::new());
-        for (i, line) in prompt.lines().enumerate() {
-            let lead = if i == 0 { format!("{ACCENT}›{RESET} ") } else { "  ".into() };
-            self.commit(format!("{lead}{BOLD}{line}{RESET}"));
+        let mut first = true;
+        for line in prompt.lines() {
+            for row in text::wrap_words(line, self.width.saturating_sub(3), 0) {
+                let lead = if std::mem::take(&mut first) { format!("{ACCENT}›{BOLD}") } else { BOLD.to_string() };
+                let pad = " ".repeat(self.width.saturating_sub(3 + text::width(&row)));
+                self.commit(format!("{TINT} {lead} {row}{pad}{RESET}"));
+            }
         }
         self.commit(String::new());
         self.last_kind = Kind::None;
@@ -904,13 +915,16 @@ impl App {
         let cached = (after.cached - before.cached) * 100 / prompt.max(1);
         self.commit(String::new());
         let requests = after.requests - before.requests;
-        self.commit(format!(
-            "{DIM}{:.0}s · {requests} request{} · {} in, {cached}% cached · {} out{RESET}",
-            elapsed.as_secs_f32(),
-            if requests == 1 { "" } else { "s" },
-            short(prompt),
-            short(after.completion - before.completion)
-        ));
+        let quick = matches!(self.last_end, Some(LastEnd::Done)) && elapsed < Duration::from_secs(3) && requests <= 1;
+        if !quick {
+            self.commit(format!(
+                "{DIM}{:.0}s · {requests} request{} · {} in, {cached}% cached · {} out{RESET}",
+                elapsed.as_secs_f32(),
+                if requests == 1 { "" } else { "s" },
+                short(prompt),
+                short(after.completion - before.completion)
+            ));
+        }
         if elapsed >= self.notify_after {
             notify(match self.last_end {
                 Some(LastEnd::Done) => "Done",
@@ -936,6 +950,8 @@ impl App {
                     let line: String = self.partial.drain(..=end).collect();
                     let line = line.trim_end_matches('\n');
                     if line.trim().is_empty() {
+                        let table = self.markdown.finish();
+                        self.commit_markdown(table);
                         self.held_blank = true;
                         continue;
                     }
@@ -943,7 +959,7 @@ impl App {
                         self.commit(String::new());
                     }
                     let styled = self.markdown.line(line);
-                    self.commit_wrapped(styled);
+                    self.commit_markdown(styled);
                 }
             }
             Event::Reasoning(text) => match &mut self.thinking {
@@ -964,8 +980,13 @@ impl App {
                 self.running.push(Running { id, summary, label: None, started: Instant::now() });
             }
             Event::ToolEnd { id, is_error, brief, display, output } => {
-                let summary = self.take_running(&id).map(|r| r.summary).unwrap_or_default();
-                self.tool_line(None, &summary, is_error, &brief);
+                let running = self.take_running(&id);
+                let elapsed = running.as_ref().map(|r| r.started.elapsed());
+                let summary = running.map(|r| r.summary).unwrap_or_default();
+                self.tool_line(None, &summary, is_error, &brief, elapsed);
+                if display.is_none() && summary.starts_with("bash ") {
+                    self.output_preview(&output, is_error);
+                }
                 if let Some(display) = display {
                     let lines: Vec<&str> = display.lines().collect();
                     for line in lines.iter().take(DIFF_ROWS) {
@@ -976,7 +997,7 @@ impl App {
                         self.commit(format!("        {DIM}… {more} more line{}{RESET}", if more == 1 { "" } else { "s" }));
                     }
                 }
-                self.detail = Some((summary, output));
+                self.push_detail(summary, output);
             }
             Event::Usage(usage) => self.add_usage(&usage, true),
             Event::Todos(todos) => self.todos = todos,
@@ -985,9 +1006,11 @@ impl App {
                 self.end_thinking();
                 if question.plan {
                     self.commit(format!("{BOLD}{MAGENTA}Plan{RESET}"));
-                    let mut markdown = Markdown::default();
-                    for line in question.text.lines() {
-                        self.commit_wrapped(format!("  {}", markdown.line(line)));
+                    let mut markdown = Markdown::new(self.width.saturating_sub(2));
+                    let mut rows: Vec<String> = question.text.lines().flat_map(|line| markdown.line(line)).collect();
+                    rows.extend(markdown.finish());
+                    for row in rows {
+                        self.commit_wrapped(format!("  {row}"));
                     }
                     self.commit(String::new());
                 } else {
@@ -1007,8 +1030,10 @@ impl App {
                 self.running.push(Running { id, summary, label: Some(label), started: Instant::now() });
             }
             Event::ToolEnd { id, is_error, brief, .. } => {
-                let summary = self.take_running(&id).map(|r| r.summary).unwrap_or_default();
-                self.tool_line(Some(&label), &summary, is_error, &brief);
+                let running = self.take_running(&id);
+                let elapsed = running.as_ref().map(|r| r.started.elapsed());
+                let summary = running.map(|r| r.summary).unwrap_or_default();
+                self.tool_line(Some(&label), &summary, is_error, &brief, elapsed);
             }
             Event::Usage(usage) => self.add_usage(&usage, false),
             Event::Notice(text) => self.notice(&format!("{label}: {text}")),
@@ -1024,7 +1049,7 @@ impl App {
         Some(self.running.remove(index))
     }
 
-    fn tool_line(&mut self, label: Option<&str>, summary: &str, is_error: bool, brief: &str) {
+    fn tool_line(&mut self, label: Option<&str>, summary: &str, is_error: bool, brief: &str, elapsed: Option<Duration>) {
         let (bullet, note) = if is_error {
             (format!("{RED}●{RESET}"), format!(" {RED}{brief}{RESET}"))
         } else if brief.is_empty() {
@@ -1032,6 +1057,8 @@ impl App {
         } else {
             (format!("{GREEN}●{RESET}"), format!(" {DIM}· {brief}{RESET}"))
         };
+        let took = elapsed.filter(|e| e.as_secs() >= 1).map(|e| format!(" {DIM}· {:.1}s{RESET}", e.as_secs_f32()));
+        let note = format!("{note}{}", took.unwrap_or_default());
         let lead = label.map_or(0, |l| text::width(l) + 5);
         let summary = clip(summary, self.width.saturating_sub(lead + 2 + text::width(&note)).max(20));
         let line = match label {
@@ -1039,6 +1066,36 @@ impl App {
             None => format!("{bullet} {summary}{note}"),
         };
         self.commit(fit(&line, self.width));
+    }
+
+    /// The first lines of a bash command's output under its line, or the last when it failed.
+    fn output_preview(&mut self, output: &str, is_error: bool) {
+        let lines: Vec<String> = output
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with("[Command "))
+            .map(|l| l.chars().filter(|c| !c.is_control() || *c == '\t').collect::<String>().replace('\t', "    "))
+            .collect();
+        if lines.is_empty() || (lines.len() == 1 && lines[0] == "(no output)") {
+            return;
+        }
+        let skipped = lines.len().saturating_sub(PREVIEW_ROWS);
+        let shown = if is_error { &lines[skipped..] } else { &lines[..lines.len() - skipped] };
+        for (i, line) in shown.iter().enumerate() {
+            let lead = if i == 0 { "⎿ " } else { "  " };
+            self.commit(fit(&format!("  {DIM}{lead}{line}{RESET}"), self.width));
+        }
+        if skipped > 0 {
+            let which = if is_error { "earlier" } else { "more" };
+            self.commit(format!("    {DIM}… {skipped} {which} line{} · Ctrl+O{RESET}", if skipped == 1 { "" } else { "s" }));
+        }
+    }
+
+    fn push_detail(&mut self, title: String, body: String) {
+        self.details.push((title, body));
+        if self.details.len() > DETAIL_KEPT {
+            self.details.remove(0);
+        }
+        self.detail_back = 0;
     }
 
     fn add_usage(&mut self, usage: &Usage, main: bool) {
@@ -1062,16 +1119,18 @@ impl App {
         if !self.partial.trim().is_empty() {
             let line = std::mem::take(&mut self.partial);
             let styled = self.markdown.line(&line);
-            self.commit_wrapped(styled);
+            self.commit_markdown(styled);
         }
         self.partial.clear();
+        let table = self.markdown.finish();
+        self.commit_markdown(table);
     }
 
     /// Ends a thought: one dim line when it took a while, with the full text behind Ctrl+O.
     fn end_thinking(&mut self) {
         if let Some((started, text)) = self.thinking.take() {
             let seconds = started.elapsed().as_secs_f32();
-            self.detail = Some(("Thinking".into(), text.clone()));
+            self.push_detail("Thinking".into(), text.clone());
             if seconds < 2.0 {
                 return;
             }
@@ -1079,16 +1138,19 @@ impl App {
             let gist = if first.is_empty() { String::new() } else { format!(": {first}") };
             let line = fit(&format!("{DIM}{ITALIC}∴ Thought for {seconds:.0}s{gist}{RESET}"), self.width);
             self.commit(line);
-            self.detail = Some(("Thinking".into(), text));
         }
     }
 
     fn show_detail(&mut self) {
-        let Some((title, body)) = self.detail.clone() else {
+        if self.details.is_empty() {
             self.notice("Nothing to expand yet.");
             return;
-        };
-        self.commit(format!("{DIM}── {title} ──{RESET}"));
+        }
+        let back = self.detail_back % self.details.len();
+        let (title, body) = self.details[self.details.len() - 1 - back].clone();
+        self.detail_back = back + 1;
+        let place = if self.details.len() > 1 { format!(" ({}/{})", back + 1, self.details.len()) } else { String::new() };
+        self.commit(format!("{DIM}── {title}{place} ──{RESET}"));
         let lines: Vec<&str> = body.lines().collect();
         for line in lines.iter().take(400) {
             self.commit(format!("{DIM}{line}{RESET}"));
@@ -1196,6 +1258,12 @@ impl App {
         }
     }
 
+    fn commit_markdown(&mut self, rows: Vec<String>) {
+        for row in rows {
+            self.commit_wrapped(row);
+        }
+    }
+
     /// Queues a line for the scrollback, never two blank lines in a row.
     fn commit(&mut self, line: String) {
         let blank = line.is_empty();
@@ -1220,10 +1288,14 @@ impl App {
 
     fn error(&mut self, text: &str) {
         self.commit(format!("{RED}Error:{RESET} {text}"));
+        if let Some(hint) = error_hint(text) {
+            self.commit(format!("{DIM}{hint}{RESET}"));
+        }
     }
 
     fn resize(&mut self, columns: u16, rows: u16) {
         self.width = usize::from(columns).max(20);
+        self.markdown.width = self.width;
         self.height = usize::from(rows).max(5);
         if self.cursor_row > 0 {
             let _ = queue!(self.out, MoveUp(self.cursor_row as u16));
@@ -1237,8 +1309,10 @@ impl App {
         let width = self.width;
         let mut rows: Vec<String> = Vec::new();
         if !self.partial.is_empty() {
-            let mut markdown = Markdown::default();
-            let preview = wrap(&markdown.line(&self.partial), width);
+            let mut markdown = self.markdown.clone();
+            let mut styled = markdown.line(&self.partial);
+            styled.extend(markdown.finish());
+            let preview: Vec<String> = styled.iter().flat_map(|row| wrap(row, width)).collect();
             rows.extend(preview.into_iter().rev().take(6).rev());
         }
         if let Some(started) = self.busy {
@@ -1259,18 +1333,23 @@ impl App {
             }
         }
         if self.todos.iter().any(|t| t.status != "completed") {
+            let done = self.todos.iter().filter(|t| t.status == "completed").count();
+            rows.push(fit(&format!("  {DIM}tasks {done}/{}{RESET}", self.todos.len()), width));
             for todo in self.todos.iter().take(8) {
                 let (mark, style) = match todo.status.as_str() {
-                    "completed" => ("☑", DIM),
-                    "in_progress" => ("◐", YELLOW),
-                    _ => ("☐", ""),
+                    "completed" => ("☑", DIM.to_string()),
+                    "in_progress" => ("◐", YELLOW.to_string()),
+                    _ => ("☐", String::new()),
                 };
                 rows.push(fit(&format!("  {style}{mark} {}{RESET}", todo.content), width));
+            }
+            if self.todos.len() > 8 {
+                rows.push(format!("  {DIM}… {} more{RESET}", self.todos.len() - 8));
             }
         }
         let mode = self.controls.plan.get().then_some("plan mode · Shift+Tab leaves it");
         rows.push(rule(mode, width));
-        let (input, cursor_row, cursor_col) = self.editor.render(PROMPT, width);
+        let (input, cursor_row, cursor_col) = self.editor.render(&format!("{ACCENT}›{RESET} "), width);
         let first = cursor_row.saturating_sub(MAX_INPUT_ROWS - 1);
         let top = rows.len();
         rows.extend(input.into_iter().skip(first).take(MAX_INPUT_ROWS));
@@ -1285,7 +1364,8 @@ impl App {
         }
         if let Some(picker) = &self.picker {
             let count = picker.shown.len();
-            let visible = count.min(room.max(1));
+            let visible = count.min(room.saturating_sub(1).max(1));
+            rows.push(fit(&title_rule(&picker.title, width), width));
             let options: Vec<(&str, &str)> = picker.shown.iter().map(|&i| (picker.options[i].0.as_str(), picker.options[i].1.as_str())).collect();
             rows.extend(choice_rows(&options, picker.selected, visible, width, width * 3 / 5));
             let position = if count > visible { format!("{}/{count} · ", picker.selected + 1) } else { String::new() };
@@ -1294,7 +1374,7 @@ impl App {
                 (false, 0) => format!("{RESET}{}{DIM} matches nothing", picker.query),
                 (false, _) => format!("filter {RESET}{}{DIM}", picker.query),
             };
-            rows.push(fit(&format!("  {DIM}{} · {filter} · {position}↑↓ choose · Enter selects · Esc closes{RESET}", picker.title), width));
+            rows.push(fit(&format!("  {DIM}{filter} · {position}↑↓ choose · Enter selects · Esc closes{RESET}"), width));
         }
         if let Some(asking) = &self.asking {
             let names: Vec<String> = asking.question.options.iter().enumerate().map(|(i, o)| format!("{}. {o}", i + 1)).collect();
@@ -1302,7 +1382,11 @@ impl App {
             let visible = options.len().min(room.max(1));
             rows.extend(choice_rows(&options, asking.selected.min(options.len().saturating_sub(1)), visible, width, width));
             let hint = if asking.question.plan { "or type what to change" } else { "or type your own answer" };
-            let choose = if options.is_empty() { String::new() } else { "↑↓ and Enter to choose, ".into() };
+            let choose = match options.len() {
+                0 => String::new(),
+                1 => "Enter to choose, ".into(),
+                n => format!("1-{} or ↑↓ and Enter to choose, ", n.min(9)),
+            };
             rows.push(fit(&format!("  {DIM}{choose}{hint} · Esc to dismiss{RESET}"), width));
         }
         rows.push(fit(&self.status_line(), width));
@@ -1330,29 +1414,30 @@ impl App {
     }
 
     fn status_line(&self) -> String {
-        let mut parts = vec![format!("{RESET}{}{DIM}", self.status.model)];
+        let mut head = vec![format!("{RESET}{}{DIM}", self.status.model)];
         let thinking = thinking_note(&self.status.thinking);
         if !thinking.is_empty() {
-            parts.push(thinking);
+            head.push(thinking);
         }
         if self.controls.plan.get() {
-            parts.push(format!("{YELLOW}plan mode{RESET}{DIM}"));
+            head.push(format!("{YELLOW}plan mode{RESET}{DIM}"));
         }
         if self.controls.swarm.get() {
-            parts.push(format!("{MAGENTA}swarm mode{RESET}{DIM}"));
+            head.push(format!("{MAGENTA}swarm mode{RESET}{DIM}"));
         }
-        parts.push(match self.status.window {
+        let mut groups = vec![head.join(" · ")];
+        groups.push(match self.status.window {
             Some(window) => format!("ctx {} {}/{}", gauge(self.status.context, window), short(self.status.context), short(window)),
             None => format!("ctx {}", short(self.status.context)),
         });
         if self.status.prompt > 0 {
             let cached = self.status.cached * 100 / self.status.prompt.max(1);
-            parts.push(format!("{} in · {cached}% cached · {} out", short(self.status.prompt), short(self.status.completion)));
+            groups.push(format!("{} in · {cached}% cached · {} out", short(self.status.prompt), short(self.status.completion)));
         }
         if let Some(branch) = &self.status.branch {
-            parts.push(format!("⎇ {branch}"));
+            groups.push(format!("{RESET}{ACCENT}⎇ {branch}{DIM}"));
         }
-        format!("{DIM}{}{RESET}", parts.join(" · "))
+        format!("{DIM}{}{RESET}", groups.join(" │ "))
     }
 
     fn draw(&mut self) -> Result<()> {
@@ -1362,8 +1447,9 @@ impl App {
         }
         queue!(self.out, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
         for line in self.pending.drain(..) {
-            write!(self.out, "{line}{RESET}\r\n")?;
+            write!(self.out, "{}{RESET}\r\n", text::plain(&line))?;
         }
+        let rows: Vec<String> = rows.iter().map(|row| text::plain(row).into_owned()).collect();
         write!(self.out, "{}", rows.join("\r\n"))?;
         let last = rows.len().saturating_sub(1);
         if last > cursor_row {
@@ -1382,7 +1468,7 @@ impl App {
         }
         queue!(self.out, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
         for line in self.pending.drain(..) {
-            write!(self.out, "{line}{RESET}\r\n")?;
+            write!(self.out, "{}{RESET}\r\n", text::plain(&line))?;
         }
         self.out.flush()?;
         Ok(())
@@ -1413,12 +1499,13 @@ fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width:
             let name = clip(name, column);
             let pad = " ".repeat(column.saturating_sub(text::width(&name)));
             let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
-            let line = if start + i == selected {
-                format!("{ACCENT}❯ {BOLD}{name}{RESET}{pad}  {note}")
+            if start + i == selected {
+                let line = fit(&format!("{TINT}{ACCENT}❯ {BOLD}{name}{RESET}{TINT}{pad}  {note}"), width);
+                let fill = " ".repeat(width.saturating_sub(text::width(&line)));
+                format!("{line}{TINT}{fill}{RESET}")
             } else {
-                format!("  {name}{pad}  {DIM}{note}{RESET}")
-            };
-            fit(&line, width)
+                fit(&format!("  {name}{pad}  {DIM}{note}{RESET}"), width)
+            }
         })
         .collect()
 }
@@ -1433,6 +1520,12 @@ fn rule(label: Option<&str>, width: usize) -> String {
             format!("{YELLOW}── {BOLD}{label}{RESET}{YELLOW} {}{RESET}", "─".repeat(rest))
         }
     }
+}
+
+/// A full-width line with `title` on it in the accent color, above a list of choices.
+fn title_rule(title: &str, width: usize) -> String {
+    let rest = width.saturating_sub(text::width(title) + 4);
+    format!("{ACCENT}── {BOLD}{title}{RESET}{ACCENT} {}{RESET}", "─".repeat(rest))
 }
 
 /// How full the context window is, as a ten-cell bar that turns yellow, then red.
@@ -1474,6 +1567,25 @@ fn fit(line: &str, width: usize) -> String {
     wrap(line, width).into_iter().next().unwrap_or_default()
 }
 
+/// What to try for the failures people hit most, from the text of the error.
+fn error_hint(error: &str) -> Option<&'static str> {
+    let error = error.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| error.contains(w));
+    if has(&["401", "403", "unauthorized", "invalid api key", "invalid_api_key", "forbidden"]) {
+        Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml.")
+    } else if has(&["context length", "context_length", "too long", "maximum context", "prompt is too long"]) {
+        Some("The conversation no longer fits the model: /compact summarizes it, /new starts over.")
+    } else if has(&["429", "rate limit", "quota"]) {
+        Some("The provider is limiting requests: wait a moment, or pick another model with /model.")
+    } else if has(&["404", "model not found", "unknown model", "does not exist"]) {
+        Some("The provider doesn't know this model or URL: check model and base_url in ~/.killi/config.toml.")
+    } else if has(&["error sending request", "connection", "dns", "timed out", "timeout"]) {
+        Some("Can't reach the provider: check your network, proxy and base_url.")
+    } else {
+        None
+    }
+}
+
 /// An error reason with a JSON body cut down to its status and message: `HTTP 529: busy`.
 fn gist(reason: &str) -> String {
     let reason = reason.replace('\n', " ");
@@ -1494,9 +1606,9 @@ fn diff_line(line: &str) -> String {
     };
     let (sign, number) = head.split_at(1);
     let color = match sign {
-        "+" => GREEN,
-        "-" => RED,
-        _ => DIM,
+        "+" => GREEN.to_string(),
+        "-" => RED.to_string(),
+        _ => DIM.to_string(),
     };
     format!("  {DIM}{number:>5}{RESET} {color}{sign} {text}{RESET}")
 }

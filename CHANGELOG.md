@@ -5,6 +5,21 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.7 — 2026-10-22
+
+- **Richer Markdown.** Tables line up and shrink to the window, links show their address,
+  code blocks get a gutter and a language label with colors for Rust, JS/TS, Python, shell,
+  Go, JSON, TOML/YAML and diffs, and there is *italic*, ~~strikethrough~~, nested bullets,
+  task lists and numbered-list styling.
+- **Themes and `NO_COLOR`.** `[ui] theme = "dark" | "light"` picks the palette; without it
+  killi reads `COLORFGBG`. `NO_COLOR` turns colors off and keeps bold and dim.
+- **Easier to scan.** Your messages sit on a tinted band, the selected row of a menu is
+  highlighted, pickers have a titled rule, bash calls show the first lines of their output
+  (the last lines when they fail) and how long they took, `Ctrl+O` steps back through the last
+  ten outputs, the task list shows a count, the status line groups its parts, quick turns
+  skip the cost line, and common errors (key, rate limit, model, network, full context) add a
+  hint.
+
 ## 0.2.6 — 2026-10-22
 
 - **Quitting says how to come back.** When an interactive session with prompts ends, killi

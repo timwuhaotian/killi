@@ -26,6 +26,16 @@ pub struct Config {
     pub mcp: McpConfig,
     #[serde(default)]
     pub prompt: PromptConfig,
+    #[serde(default)]
+    pub ui: UiConfig,
+}
+
+/// `[ui]`: how the terminal UI looks.
+#[derive(Debug, Default, Deserialize)]
+pub struct UiConfig {
+    /// "dark" or "light", for the terminal's background. Without it killi reads `COLORFGBG`
+    /// and assumes dark when that isn't set.
+    pub theme: Option<String>,
 }
 
 /// `[prompt]`: the system prompt's guidance, kept in the config so it can be read and edited.
