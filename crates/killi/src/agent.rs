@@ -5,7 +5,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
-use std::rc::Rc;
+use std::future::Future;
+use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
@@ -64,7 +65,7 @@ pub struct Todo {
     pub status: String,
 }
 
-/// What the user can change while the agent works.
+/// What the user can change while the agent works, and the conversation they can ask about.
 #[derive(Clone, Default)]
 pub struct Controls {
     /// Messages typed during a turn, sent at the next step.
@@ -74,6 +75,58 @@ pub struct Controls {
     pub swarm: Rc<Cell<bool>>,
     /// Whether someone can answer questions; headless runs and subagents can't.
     pub interactive: bool,
+    /// The conversation as it stands, for /btw while the agent works.
+    pub aside: Rc<RefCell<Aside>>,
+}
+
+/// What a side question needs: the model, the tools (sent unchanged so the cached prefix
+/// hits) and the conversation. It holds the history weakly, so appending to it never copies it.
+#[derive(Clone, Default)]
+pub struct Aside {
+    client: Option<Rc<Client>>,
+    tools: Rc<Vec<Value>>,
+    messages: Weak<Vec<Value>>,
+    cache_key: String,
+}
+
+impl Aside {
+    /// Asks `question` about the conversation so far without adding to it. The answer and the
+    /// request's usage come back; tool calls in the reply are ignored.
+    pub fn ask(&self, question: &str) -> impl Future<Output = Result<(String, Usage)>> + 'static {
+        let request = self.messages.upgrade().map(|history| side_request(&history, question));
+        let (client, tools, cache_key) = (self.client.clone(), self.tools.clone(), self.cache_key.clone());
+        async move {
+            let (Some(client), Some(request)) = (client, request) else { bail!("there is no conversation to ask about yet") };
+            let reply = client.complete(&request, &tools, &cache_key, &mut |_| {}).await?;
+            let text = if reply.text.trim().is_empty() { "(No answer: the model tried to use tools.)".to_string() } else { reply.text };
+            Ok((text, reply.usage))
+        }
+    }
+}
+
+/// The history with a side question at the end. Tool calls still running get a placeholder
+/// result first, as providers reject a question between a call and its result.
+fn side_request(history: &[Value], question: &str) -> Vec<Value> {
+    let mut request = history.to_vec();
+    for id in unanswered(history) {
+        request.push(json!({"role": "tool", "tool_call_id": id, "content": "Still running; no result yet."}));
+    }
+    request.push(json!({"role": "user", "content": format!("{BTW_NOTE}\n\n{question}")}));
+    request
+}
+
+/// IDs of the last assistant message's tool calls that have no result yet.
+fn unanswered(messages: &[Value]) -> Vec<String> {
+    let Some(index) = messages.iter().rposition(|m| m["role"] == "assistant") else { return Vec::new() };
+    let answered: HashSet<&str> = messages[index + 1..].iter().filter_map(|m| m["tool_call_id"].as_str()).collect();
+    messages[index]["tool_calls"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c["id"].as_str())
+        .filter(|id| !answered.contains(id))
+        .map(String::from)
+        .collect()
 }
 
 #[derive(Clone, Default)]
@@ -114,7 +167,7 @@ pub struct Stats {
 pub struct Agent {
     client: Rc<Client>,
     tools: Rc<Vec<Value>>,
-    messages: Vec<Value>,
+    messages: Rc<Vec<Value>>,
     ctx: Rc<tools::Context>,
     pub session: Session,
     pub stats: Stats,
@@ -152,6 +205,7 @@ impl Agent {
             "id": agent.session.id,
             "cwd": cwd,
             "model": agent.client.model.alias,
+            "effort": agent.client.model.thinking.label(),
             "tools": *agent.tools,
         }))?;
         agent.push(json!({"role": "system", "content": system}))?;
@@ -178,8 +232,9 @@ impl Agent {
                 }
             }
         }
-        agent.messages = loaded.messages;
+        agent.messages = Rc::new(loaded.messages);
         agent.recover()?;
+        agent.share();
         Ok(agent)
     }
 
@@ -199,7 +254,7 @@ impl Agent {
         Self {
             client: Rc::new(client),
             tools: Rc::new(tools),
-            messages: Vec::new(),
+            messages: Rc::default(),
             ctx: Rc::new(ctx),
             session,
             stats: Stats::default(),
@@ -224,18 +279,43 @@ impl Agent {
         self.sink.clone()
     }
 
-    /// Continues on another model; the next request starts the cache over.
-    pub fn switch_model(&mut self, client: Client) {
+    /// Continues the conversation on another model; the next request starts the cache over.
+    /// The log notes it, so a resume continues on this model.
+    pub fn switch_model(&mut self, client: Client) -> Result<()> {
         self.ctx_images(client.model.images);
         self.client = Rc::new(client);
         self.stats.context = 0;
+        self.share();
+        self.record_model()
     }
 
     /// Reasons at another effort from the next request on, on the same model.
-    pub fn set_thinking(&mut self, thinking: Thinking) {
+    pub fn set_thinking(&mut self, thinking: Thinking) -> Result<()> {
         let mut client = (*self.client).clone();
         client.model.thinking = thinking;
         self.client = Rc::new(client);
+        self.share();
+        self.record_model()
+    }
+
+    /// Lets /btw see the conversation and model as they are now.
+    fn share(&self) {
+        *self.controls.aside.borrow_mut() = Aside {
+            client: Some(self.client.clone()),
+            tools: self.tools.clone(),
+            messages: Rc::downgrade(&self.messages),
+            cache_key: self.session.id.clone(),
+        };
+    }
+
+    fn record_model(&mut self) -> Result<()> {
+        let model = &self.client.model;
+        self.session.record(&json!({"type": "model", "model": model.alias, "effort": model.thinking.label()}))
+    }
+
+    /// The model and effort this session runs on now, for a fresh session to start on.
+    pub fn client(&self) -> Client {
+        (*self.client).clone()
     }
 
     pub fn thinking(&self) -> &Thinking {
@@ -250,8 +330,9 @@ impl Agent {
 
     /// Replaces the system prompt on purpose, for /reload; the next request is uncached.
     pub fn reload_system(&mut self, system: &str) -> Result<()> {
-        self.messages[0] = json!({"role": "system", "content": system});
-        self.session.record(&json!({"type": "compaction", "messages": self.messages}))
+        Rc::make_mut(&mut self.messages)[0] = json!({"role": "system", "content": system});
+        self.share();
+        self.session.record(&json!({"type": "compaction", "messages": *self.messages}))
     }
 
     pub fn model_alias(&self) -> &str {
@@ -746,11 +827,17 @@ impl Agent {
         Ok(Agent {
             client: self.client.clone(),
             tools: self.tools.clone(),
-            messages: history,
+            messages: Rc::new(history),
             ctx: self.ctx.clone(),
             session,
             stats: Stats::default(),
-            controls: Controls { steer: Rc::default(), plan: self.controls.plan.clone(), swarm: Rc::default(), interactive: false },
+            controls: Controls {
+                steer: Rc::default(),
+                plan: self.controls.plan.clone(),
+                swarm: Rc::default(),
+                interactive: false,
+                aside: Rc::default(),
+            },
             settings: self.settings.clone(),
             sink,
             ids: self.ids.clone(),
@@ -771,7 +858,7 @@ impl Agent {
     /// the work. The only time earlier messages change.
     pub async fn compact(&mut self, focus: Option<&str>) -> Result<()> {
         (self.sink)(Event::Notice("Compacting the conversation…".into()));
-        let mut request = self.messages.clone();
+        let mut request = self.messages.to_vec();
         let mut instruction = COMPACT_INSTRUCTION.to_string();
         if let Some(focus) = focus.filter(|f| !f.trim().is_empty()) {
             instruction.push_str(&format!("\nThe user asked the summary to focus on: {focus}"));
@@ -799,8 +886,9 @@ impl Agent {
             reply.text.trim(),
             mark = crate::session::COMPACTED_MARK,
         );
-        self.messages = vec![self.messages[0].clone(), json!({"role": "user", "content": summary})];
-        self.session.record(&json!({"type": "compaction", "messages": self.messages}))?;
+        self.messages = Rc::new(vec![self.messages[0].clone(), json!({"role": "user", "content": summary})]);
+        self.share();
+        self.session.record(&json!({"type": "compaction", "messages": *self.messages}))?;
         self.stats.context = 0;
         (self.sink)(Event::Notice("Compacted.".into()));
         Ok(())
@@ -809,18 +897,7 @@ impl Agent {
     /// After an interrupted turn, answers every tool call left without a result so the
     /// history stays valid, and notes the interruption for the next prompt.
     pub fn recover(&mut self) -> Result<()> {
-        let Some(index) = self.messages.iter().rposition(|m| m["role"] == "assistant") else { return Ok(()) };
-        let answered: HashSet<String> = self.messages[index + 1..]
-            .iter()
-            .filter_map(|m| m["tool_call_id"].as_str().map(String::from))
-            .collect();
-        let missing: Vec<String> = self.messages[index]["tool_calls"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|c| c["id"].as_str().map(String::from))
-            .filter(|id| !answered.contains(id))
-            .collect();
+        let missing = unanswered(&self.messages);
         for id in &missing {
             self.push(json!({"role": "tool", "tool_call_id": id, "content": "Interrupted by the user before this finished."}))?;
         }
@@ -867,7 +944,8 @@ impl Agent {
 
     fn push(&mut self, message: Value) -> Result<()> {
         self.session.record(&json!({"type": "message", "message": message}))?;
-        self.messages.push(message);
+        Rc::make_mut(&mut self.messages).push(message);
+        self.share();
         Ok(())
     }
 }
@@ -913,6 +991,8 @@ fn is_overflow(error: &anyhow::Error) -> bool {
         .any(|needle| text.contains(needle))
 }
 
+const BTW_NOTE: &str = "<system-reminder>A side question from the user. Answer it briefly from what this conversation already shows. Don't call tools. The question and your answer won't be kept in the conversation.</system-reminder>";
+
 const COMPACT_INSTRUCTION: &str = "<system-reminder>The conversation is about to be compacted to save space. Write a summary that lets you continue the work without the earlier messages. Don't call tools. Use these sections:
 ## Goal
 What the user wants, with their constraints and preferences.
@@ -948,5 +1028,22 @@ mod tests {
         assert!(is_overflow(&anyhow::anyhow!("HTTP 400: This model's maximum context length is 128000 tokens")));
         assert!(is_overflow(&anyhow::anyhow!("prompt is too long: 210000 tokens > 200000 maximum")));
         assert!(!is_overflow(&anyhow::anyhow!("HTTP 401: invalid key")));
+    }
+
+    #[test]
+    fn a_side_question_mid_turn_answers_running_calls_first() {
+        let history = vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "fix it"}),
+            json!({"role": "assistant", "tool_calls": [{"id": "a"}, {"id": "b"}]}),
+            json!({"role": "tool", "tool_call_id": "a", "content": "done"}),
+        ];
+        let request = side_request(&history, "what are you doing?");
+        assert_eq!(request[..4], history[..]);
+        assert_eq!(request[4], json!({"role": "tool", "tool_call_id": "b", "content": "Still running; no result yet."}));
+        assert_eq!(request[5]["role"], "user");
+        assert!(request[5]["content"].as_str().unwrap().ends_with("\n\nwhat are you doing?"));
+        assert_eq!(request.len(), 6);
+        assert_eq!(side_request(&history[..2], "q").len(), 3);
     }
 }

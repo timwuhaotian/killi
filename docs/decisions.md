@@ -219,6 +219,24 @@ matches, and after `/model ` or `/effort ` the menu offers the choices, starting
 one. `/effort` changes only a request parameter, so the cached prefix still hits: on MiMo the
 request after switching from high to low was 96% cached.
 
+Later, Tab became a second Enter in the menu and in every list, at the user's request: picking
+from a list with Tab and having nothing happen read as broken. To give a skill arguments, type
+its name and a space. A model or effort pick now outlives the session. `/model` and `/effort`
+write it to `~/.killi/last-model.json`, and a new session starts on it: `-m` first, then that
+pick, then `default_model`. Only an explicit pick is saved, so editing `default_model` still
+takes effect until the next pick. The session log notes each switch as a `model` entry, so a
+resume continues on the model and effort the conversation last ran on. The file answers "what
+should new sessions use", the log answers "what was this conversation on", and neither reads
+the other.
+
+`/btw` asks a side question, as in Claude Code. It sends the history as it stands plus the
+question, with the same tools, so the cached prefix hits. The model is told not to call tools.
+Neither the question nor the answer goes into history or the log, so the main thread's cache
+and context stay as they were. It works mid-turn, which is when it is useful. The running
+agent can't be borrowed then, so it shares its history with the TUI through `Controls` as a
+`Weak` to an `Rc<Vec>`. Appending never copies, and the question copies the history once. Tool
+calls still running get a placeholder result in that one request only.
+
 Seen in testing, left as they are:
 - MiMo now and then writes its native tool-call markup (`<tool_call><function=…>`) into the
   reply text and sends a broken call; the invalid-arguments error lets it recover on the next

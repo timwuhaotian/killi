@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config::killi_home;
@@ -22,7 +23,15 @@ pub struct Session {
 /// What a log holds, replayed.
 pub struct Loaded {
     pub messages: Vec<Value>,
+    /// The model and effort the session last ran on.
+    pub choice: Choice,
+}
+
+/// A model alias and thinking effort, as `Thinking::label` names it.
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Choice {
     pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 pub struct Listed {
@@ -81,11 +90,16 @@ impl Session {
 /// Replays a log: messages in order, restarting from the summary at each compaction.
 pub fn load(path: &Path) -> Result<Loaded> {
     let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
-    let mut loaded = Loaded { messages: Vec::new(), model: None };
+    let mut loaded = Loaded { messages: Vec::new(), choice: Choice::default() };
     for line in text.lines() {
         let Ok(entry) = serde_json::from_str::<Value>(line) else { continue };
         match entry["type"].as_str() {
-            Some("session") => loaded.model = entry["model"].as_str().map(String::from),
+            Some("session" | "model") => {
+                loaded.choice = Choice {
+                    model: entry["model"].as_str().map(String::from),
+                    effort: entry["effort"].as_str().map(String::from),
+                };
+            }
             Some("message") => loaded.messages.push(entry["message"].clone()),
             Some("compaction") => {
                 loaded.messages = entry["messages"].as_array().cloned().unwrap_or_default();
@@ -97,6 +111,29 @@ pub fn load(path: &Path) -> Result<Loaded> {
         bail!("{} has no system prompt; it isn't a killi session", path.display());
     }
     Ok(loaded)
+}
+
+fn choice_path() -> PathBuf {
+    killi_home().join("last-model.json")
+}
+
+/// The model and effort last picked with /model or /effort, which new sessions start on.
+/// Nothing when none was picked or the file can't be read.
+pub fn last_choice() -> Choice {
+    read_choice(&choice_path())
+}
+
+/// Remembers a pick from /model or /effort for the sessions started after it.
+pub fn save_choice(choice: &Choice) -> Result<()> {
+    write_choice(&choice_path(), choice)
+}
+
+fn read_choice(path: &Path) -> Choice {
+    fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+fn write_choice(path: &Path, choice: &Choice) -> Result<()> {
+    fs::write(path, serde_json::to_string(choice)?).with_context(|| format!("could not write {}", path.display()))
 }
 
 pub const COMPACTED_MARK: &str = "<system-reminder>This conversation was compacted";
@@ -177,9 +214,37 @@ mod tests {
         ];
         fs::write(&path, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.model.as_deref(), Some("m/x"));
+        assert_eq!(loaded.choice, Choice { model: Some("m/x".into()), effort: None });
         let contents: Vec<_> = loaded.messages.iter().map(|m| m["content"].as_str().unwrap()).collect();
         assert_eq!(contents, ["sys", "summary", "next"]);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_switch_in_the_log_is_what_a_resume_runs_on() {
+        let dir = std::env::temp_dir().join(format!("killi-switch-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("1-1.jsonl");
+        let lines = [
+            json!({"type": "session", "model": "m/x", "effort": "high"}),
+            json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+            json!({"type": "model", "model": "m/y", "effort": "medium"}),
+            json!({"type": "model", "model": "m/y", "effort": "low"}),
+        ];
+        fs::write(&path, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+        assert_eq!(load(&path).unwrap().choice, Choice { model: Some("m/y".into()), effort: Some("low".into()) });
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_saved_choice_reads_back_and_a_missing_one_is_empty() {
+        let path = std::env::temp_dir().join(format!("killi-choice-{}.json", std::process::id()));
+        assert_eq!(read_choice(&path), Choice::default());
+        let choice = Choice { model: Some("m/y".into()), effort: Some("low".into()) };
+        write_choice(&path, &choice).unwrap();
+        assert_eq!(read_choice(&path), choice);
+        fs::write(&path, "not json").unwrap();
+        assert_eq!(read_choice(&path), Choice::default());
+        fs::remove_file(path).unwrap();
     }
 }

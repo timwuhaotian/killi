@@ -5,6 +5,21 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.12 — 2026-10-22
+
+- **`/btw <question>`** asks a side question about the conversation, also while the agent
+  works: type it and press Enter mid-turn. The answer shows in the transcript, and neither the
+  question nor the answer is added to the conversation.
+- **New sessions start on your last pick.** The model and effort last chosen with `/model` or
+  `/effort` are remembered in `~/.killi/last-model.json`, and a new session starts on them
+  unless `-m` names a model. `/new` keeps the model and effort in use, and a resumed session
+  continues on the model and effort it last ran on, as the log now records each switch.
+- **The status line shows the model the agent runs on**, also after `/new` and `/resume`,
+  which used to go back to the startup model while it showed the switched one. `/model` now
+  says that the conversation carries over.
+- **Tab selects like Enter** in the slash menu, the model, effort and session lists, and the
+  agent's questions.
+
 ## 0.2.11 — 2026-10-22
 
 - **The logo as the spinner.** While the agent thinks, runs a tool or works, a `killi`

@@ -8,10 +8,11 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::agent::{Agent, Controls, Settings, Sink};
-use crate::config::Config;
+use crate::config::{Config, Thinking};
 use crate::llm::Client;
 use crate::mcp::Mcp;
 use crate::prompt::{self, SystemPrompt};
+use crate::session::{self, Choice};
 use crate::skills::Skills;
 use crate::tools;
 
@@ -21,7 +22,10 @@ const DEFAULT_SWARM_PARALLEL: usize = 8;
 pub struct Setup {
     config: Config,
     cwd: PathBuf,
+    /// The model chosen with -m.
     model: Option<String>,
+    /// The last pick from /model or /effort, which a new session starts on without -m.
+    last: Choice,
     prompt: SystemPrompt,
     tools: Vec<Value>,
     settings: Settings,
@@ -32,7 +36,8 @@ pub struct Setup {
 
 impl Setup {
     pub async fn new(config: Config, cwd: &Path, model: Option<&str>) -> Result<Self> {
-        config.resolve(model)?;
+        let last = if model.is_none() { session::last_choice() } else { Choice::default() };
+        config.resolve(model.or(known(&config, &last)))?;
         let skills = Skills::discover(cwd, &config.skills.dirs);
         let prompt = prompt::build(cwd, &skills, config.guidance());
         let mut tools = tools::definitions();
@@ -69,24 +74,38 @@ impl Setup {
             mcp: Rc::new(mcp),
             instruction_files: prompt.instruction_files.clone(),
         };
-        Ok(Self { config, cwd: cwd.to_path_buf(), model: model.map(String::from), prompt, tools, settings, skills, notes })
+        Ok(Self { config, cwd: cwd.to_path_buf(), model: model.map(String::from), last, prompt, tools, settings, skills, notes })
     }
 
     pub fn config(&self) -> &Config {
         &self.config
     }
 
+    /// A new session: on the -m model, else the last /model or /effort pick, else the default.
     pub fn start(&self, controls: Controls, sink: Sink) -> Result<Agent> {
-        let client = Client::new(self.config.resolve(self.model.as_deref())?)?;
+        self.start_on(self.client(&self.last)?, controls, sink)
+    }
+
+    /// A new session on `client`, as /new keeps the model and effort in use.
+    pub fn start_on(&self, client: Client, controls: Controls, sink: Sink) -> Result<Agent> {
         Agent::new(client, &self.cwd, &self.prompt.text, self.tools.clone(), self.settings.clone(), controls, sink)
     }
 
-    /// Continues a logged session, on the model it used unless one was chosen with -m.
+    /// Continues a logged session, on the model and effort it last used unless -m chose one.
     pub fn resume(&self, log: &Path, controls: Controls, sink: Sink) -> Result<Agent> {
-        let logged = crate::session::load(log)?.model;
-        let alias = self.model.clone().or(logged.filter(|alias| self.config.models.contains_key(alias)));
-        let client = Client::new(self.config.resolve(alias.as_deref())?)?;
+        let client = self.client(&session::load(log)?.choice)?;
         Agent::resume(client, &self.cwd, log, self.tools.clone(), self.settings.clone(), controls, sink)
+    }
+
+    /// The -m model at its default effort, else `choice` when the config still has that model,
+    /// at its effort when the model offers it, else the default model.
+    fn client(&self, choice: &Choice) -> Result<Client> {
+        let chosen = known(&self.config, choice).filter(|_| self.model.is_none());
+        let mut model = self.config.resolve(self.model.as_deref().or(chosen))?;
+        if let Some(effort) = choice.effort.as_ref().filter(|e| chosen.is_some() && self.config.efforts(&model.alias).contains(e)) {
+            model.thinking = Thinking::parse(effort);
+        }
+        Client::new(model)
     }
 
     /// The system prompt rebuilt from the files as they are now, `[prompt]` in the config
@@ -138,6 +157,11 @@ impl Setup {
     pub fn skill_prompt(&self, name: &str, args: &str) -> Option<String> {
         self.skills.invocation(name, args)
     }
+}
+
+/// The model `choice` names, when the config still has it.
+fn known<'a>(config: &Config, choice: &'a Choice) -> Option<&'a str> {
+    choice.model.as_deref().filter(|alias| config.models.contains_key(*alias))
 }
 
 /// `[mcp] eager` from the project's `.killi/config.toml`.

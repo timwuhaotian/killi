@@ -9,6 +9,7 @@ mod text;
 
 use std::io::{Stdout, Write, stdout};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -28,6 +29,7 @@ use crate::agent::{Agent, Controls, Event, Question, Sink, Stop, Todo};
 use crate::config::{Config, Thinking};
 use crate::setup::Setup;
 use crate::llm::{Client, Usage};
+use crate::session::Choice;
 use crate::snapshot::Snapshots;
 use editor::Editor;
 use menu::{Entry, Item, Suggestions};
@@ -48,6 +50,9 @@ pub struct Start {
     /// Open the session picker first.
     pub pick_session: bool,
 }
+
+/// A /btw question and its answer on the way.
+type PendingAside = (String, Pin<Box<dyn Future<Output = Result<(String, Usage)>>>>);
 
 /// What `run_turn` ended with.
 enum Ended {
@@ -103,6 +108,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             Input::Resume(path) => match session.resume(&path, controls.clone(), sink.clone()) {
                 Ok(resumed) => {
                     agent = resumed;
+                    app.show_model(&agent, session.config());
                     app.notice(&format!("Resumed the session started with “{}”.", agent.user_prompts().first().map_or("", |s| s.as_str())));
                     app.editor = Editor::with_history(agent.user_prompts());
                 }
@@ -110,22 +116,24 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             },
             Input::Model(alias) => match session.config().resolve(Some(&alias)).and_then(Client::new) {
                 Ok(client) => {
-                    app.status.model = alias.clone();
-                    app.status.window = client.model.context_window;
-                    app.status.thinking = client.model.thinking.label().to_string();
-                    agent.switch_model(client);
-                    app.refresh_choices(session.config());
-                    app.notice(&format!("Switched to {alias}. The cache starts over with the new model."));
+                    if let Err(e) = agent.switch_model(client) {
+                        app.error(&format!("{e:#}"));
+                    }
+                    app.show_model(&agent, session.config());
+                    app.save_choice(&agent);
+                    app.notice(&format!("Switched to {alias}, keeping the conversation so far. The cache starts over with the new model."));
                 }
                 Err(e) => app.error(&format!("{e:#}")),
             },
             Input::Effort(effort) => {
                 let efforts = session.config().efforts(agent.model_alias());
                 if efforts.contains(&effort) {
-                    agent.set_thinking(Thinking::parse(&effort));
-                    app.status.thinking = effort.clone();
-                    app.refresh_choices(session.config());
-                    app.notice(&format!("Thinking effort {effort} for this session. To keep it, set [thinking] effort in ~/.killi/config.toml."));
+                    if let Err(e) = agent.set_thinking(Thinking::parse(&effort)) {
+                        app.error(&format!("{e:#}"));
+                    }
+                    app.show_model(&agent, session.config());
+                    app.save_choice(&agent);
+                    app.notice(&format!("Thinking effort {effort}. New sessions start on it too."));
                 } else {
                     app.error(&format!("{} has no effort “{effort}”; choose one of {}.", agent.model_alias(), efforts.join(", ")));
                 }
@@ -161,17 +169,38 @@ where
 {
     let mut future = Box::pin(future);
     let mut tick = tokio::time::interval(Duration::from_millis(100));
+    // A /btw question asked meanwhile; the turn waits for its answer before it ends.
+    let mut aside: Option<PendingAside> = None;
+    let mut done = None;
     let ended = loop {
+        if let Some(question) = app.aside_asked.take() {
+            if aside.is_some() {
+                app.notice("Still answering the last /btw question.");
+            } else {
+                app.notice(&format!("Asking on the side: {question}"));
+                let ask = app.controls.aside.borrow().ask(&question);
+                aside = Some((question, Box::pin(ask)));
+            }
+        }
         tokio::select! {
             biased;
             Some(event) = rx.recv() => app.on_agent(event),
             Some(Ok(event)) = keys.next() => {
                 if app.on_key_busy(event) {
-                    break Ended::Interrupted;
+                    break done.take().map_or(Ended::Interrupted, Ended::Done);
                 }
             }
-            result = &mut future => break Ended::Done(result),
+            result = &mut future, if done.is_none() => done = Some(result),
+            answer = async { aside.as_mut().expect("a question is asked").1.as_mut().await }, if aside.is_some() => {
+                let (question, _) = aside.take().expect("a question is asked");
+                app.show_aside(&question, answer);
+            }
             _ = tick.tick() => app.spinner += 1,
+        }
+        if aside.is_none()
+            && let Some(result) = done.take()
+        {
+            break Ended::Done(result);
         }
         app.draw()?;
     };
@@ -197,6 +226,13 @@ async fn handle_command(
     match command {
         "exit" | "quit" | "q" => return Ok(false),
         "help" | "h" | "?" => app.help(),
+        "btw" if arg.is_empty() => app.error("Ask with /btw <question>."),
+        "btw" => {
+            app.aside_asked = Some(arg.to_string());
+            app.begin_busy();
+            run_turn(app, keys, rx, std::future::ready(Ok((String::new(), Stop::Completed)))).await?;
+            app.end_busy();
+        }
         "plan" => app.toggle_plan(),
         "swarm" => match arg {
             "" => app.set_swarm(!app.controls.swarm.get()),
@@ -229,10 +265,11 @@ async fn handle_command(
                 app.error(&format!("Compaction failed: {e:#}"));
             }
         }
-        "clear" | "new" => match session.start(agent.controls.clone(), agent_sink(agent)) {
+        "clear" | "new" => match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
             Ok(fresh) => {
                 let saved = !agent.user_prompts().is_empty();
                 *agent = fresh;
+                app.show_model(agent, session.config());
                 app.todos.clear();
                 app.reset_usage();
                 app.wipe_screen();
@@ -436,6 +473,8 @@ struct App {
     spinner: usize,
     exit_armed: Option<Instant>,
     queued: Vec<String>,
+    /// A /btw question for the running turn to send.
+    aside_asked: Option<String>,
     last_end: Option<LastEnd>,
     cwd: PathBuf,
     notify_after: Duration,
@@ -488,6 +527,7 @@ impl App {
             spinner: 0,
             exit_armed: None,
             queued: Vec::new(),
+            aside_asked: None,
             last_end: None,
             cwd: cwd.to_path_buf(),
             notify_after: Duration::from_secs(10),
@@ -598,20 +638,25 @@ impl App {
                     self.editor.insert("\n");
                     return Idle::Continue;
                 }
-                let text = self.editor.take();
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    return Idle::Continue;
-                }
-                if let Some(command) = trimmed.strip_prefix('/') {
-                    let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
-                    return Idle::Input(Input::Command(name.to_string(), arg.trim().to_string()));
-                }
-                return Idle::Input(Input::Prompt(text));
+                return self.submit();
             }
             _ => self.edit_key(key),
         }
         Idle::Continue
+    }
+
+    /// Sends the prompt: a command when it starts with `/`, else a message to the model.
+    fn submit(&mut self) -> Idle {
+        let text = self.editor.take();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Idle::Continue;
+        }
+        if let Some(command) = trimmed.strip_prefix('/') {
+            let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
+            return Idle::Input(Input::Command(name.to_string(), arg.trim().to_string()));
+        }
+        Idle::Input(Input::Prompt(text))
     }
 
     fn on_key_picker(&mut self, key: KeyEvent) -> Idle {
@@ -630,7 +675,7 @@ impl App {
                 let query = format!("{}{c}", picker.query);
                 picker.filter(query);
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 if let Some(choice) = picker.choice().cloned() {
                     self.picker = None;
                     return Idle::Input(match choice {
@@ -645,9 +690,9 @@ impl App {
         Idle::Continue
     }
 
-    /// Keys for the slash menu: ↑↓ choose, Tab completes, Enter runs a command or fills in an
-    /// argument, Esc closes it (the `/` is then plain text). None lets the key through, as
-    /// Enter is after a command at the start of the prompt; a later `/` only completes.
+    /// Keys for the slash menu: ↑↓ choose; Tab or Enter runs a command or skill at the start
+    /// of the prompt, completes a later one and fills in an argument; Esc closes it (the `/` is
+    /// then plain text). None lets the key through.
     fn on_key_menu(&mut self, key: KeyEvent, menu: &Suggestions) -> Option<Idle> {
         let count = menu.items.len();
         let selected = self.menu_selected.min(count - 1);
@@ -655,10 +700,11 @@ impl App {
             KeyCode::Up => self.menu_selected = (selected + count - 1) % count,
             KeyCode::Down => self.menu_selected = (selected + 1) % count,
             KeyCode::Esc => self.menu_closed = Some(self.editor.text().to_string()),
-            KeyCode::Tab => self.choose(menu, selected),
-            KeyCode::Enter if !newline_key(&key) => {
+            KeyCode::Tab | KeyCode::Enter if !newline_key(&key) => {
                 self.choose(menu, selected);
-                return if menu.command && menu.start == 0 { None } else { Some(Idle::Continue) };
+                if menu.command && menu.start == 0 {
+                    return Some(self.submit());
+                }
             }
             _ => return None,
         }
@@ -695,6 +741,22 @@ impl App {
         self.menu_text = self.editor.text().to_string();
         let current = |item: &Item| item.value == self.status.model || item.value == self.status.thinking;
         self.menu_selected = self.suggestions().filter(|m| !m.command).and_then(|m| m.items.iter().position(current)).unwrap_or(0);
+    }
+
+    /// Shows the model and effort the agent runs on in the status line and the slash menu.
+    fn show_model(&mut self, agent: &Agent, config: &Config) {
+        self.status.model = agent.model_alias().to_string();
+        self.status.thinking = agent.thinking().label().to_string();
+        self.status.window = agent.context_window();
+        self.refresh_choices(config);
+    }
+
+    /// Remembers the model and effort just picked for the sessions started after this one.
+    fn save_choice(&mut self, agent: &Agent) {
+        let choice = Choice { model: Some(agent.model_alias().to_string()), effort: Some(agent.thinking().label().to_string()) };
+        if let Err(e) = crate::session::save_choice(&choice) {
+            self.error(&format!("{e:#}"));
+        }
     }
 
     fn refresh_choices(&mut self, config: &Config) {
@@ -745,8 +807,13 @@ impl App {
             KeyCode::Esc => return true,
             KeyCode::Char('c') if ctrl => return true,
             KeyCode::Enter if !newline_key(&key) => {
+                if let Some(question) = aside_question(self.editor.text()) {
+                    self.aside_asked = Some(question);
+                    self.editor.take();
+                    return false;
+                }
                 if self.editor.text().trim_start().starts_with('/') {
-                    self.notice("Commands run when the agent is idle: wait for this turn to finish, or press Esc.");
+                    self.notice("Commands run when the agent is idle, except /btw: wait for this turn to finish, or press Esc.");
                     return false;
                 }
                 let text = self.editor.take();
@@ -764,6 +831,7 @@ impl App {
         let asking = self.asking.as_mut().expect("a question is open");
         let count = asking.question.options.len();
         match key.code {
+            KeyCode::Tab if self.editor.is_empty() => self.answer(None),
             KeyCode::Up if self.editor.is_empty() => asking.selected = asking.selected.saturating_sub(1),
             KeyCode::Down if self.editor.is_empty() => asking.selected = (asking.selected + 1).min(count.saturating_sub(1)),
             KeyCode::Char(c) if self.editor.is_empty() && c.is_ascii_digit() && (1..=count).contains(&(c as usize - '0' as usize)) => {
@@ -1180,6 +1248,25 @@ impl App {
         }
     }
 
+    /// A /btw answer, with the question it answers; it isn't part of the conversation.
+    fn show_aside(&mut self, question: &str, answer: Result<(String, Usage)>) {
+        let (text, usage) = match answer {
+            Ok(answer) => answer,
+            Err(e) => return self.error(&format!("/btw: {e:#}")),
+        };
+        self.commit(String::new());
+        self.commit_wrapped(format!("{BOLD}{MAGENTA}btw{RESET} {BOLD}{question}{RESET}"));
+        let mut markdown = Markdown::new(self.width.saturating_sub(2));
+        let mut rows: Vec<String> = text.lines().flat_map(|line| markdown.line(line)).collect();
+        rows.extend(markdown.finish());
+        for row in rows {
+            self.commit_wrapped(format!("  {row}"));
+        }
+        let cached = usage.cached * 100 / usage.prompt.max(1);
+        self.commit(format!("  {DIM}Not kept in the conversation · {} input tokens, {cached}% cached{RESET}", short(usage.prompt)));
+        self.commit(String::new());
+    }
+
     fn usage_report(&mut self, agent: &Agent) {
         let usage = &agent.stats.usage;
         let cached = usage.cached * 100 / usage.prompt.max(1);
@@ -1379,7 +1466,7 @@ impl App {
                 (false, 0) => format!("{RESET}{}{DIM} matches nothing", picker.query),
                 (false, _) => format!("filter {RESET}{}{DIM}", picker.query),
             };
-            rows.push(fit(&format!("  {DIM}{filter} · {position}↑↓ choose · Enter selects · Esc closes{RESET}"), width));
+            rows.push(fit(&format!("  {DIM}{filter} · {position}↑↓ choose · Tab or Enter selects · Esc closes{RESET}"), width));
         }
         if let Some(asking) = &self.asking {
             let names: Vec<String> = asking.question.options.iter().enumerate().map(|(i, o)| format!("{}. {o}", i + 1)).collect();
@@ -1389,8 +1476,8 @@ impl App {
             let hint = if asking.question.plan { "or type what to change" } else { "or type your own answer" };
             let choose = match options.len() {
                 0 => String::new(),
-                1 => "Enter to choose, ".into(),
-                n => format!("1-{} or ↑↓ and Enter to choose, ", n.min(9)),
+                1 => "Tab or Enter to choose, ".into(),
+                n => format!("1-{} or ↑↓ and Tab or Enter to choose, ", n.min(9)),
             };
             rows.push(fit(&format!("  {DIM}{choose}{hint} · Esc to dismiss{RESET}"), width));
         }
@@ -1413,8 +1500,12 @@ impl App {
         let options: Vec<(&str, &str)> = names.iter().zip(&menu.items).map(|(name, item)| (name.as_str(), item.description.as_str())).collect();
         let mut rows = choice_rows(&options, selected, visible, self.width, 32);
         let position = if count > visible { format!("{}/{count} · ", selected + 1) } else { String::new() };
-        let enter = if menu.command { "Enter runs" } else { "Enter fills in" };
-        rows.push(fit(&format!("  {DIM}{position}↑↓ choose · Tab completes · {enter} · Esc closes{RESET}"), self.width));
+        let enter = match (menu.command, menu.start) {
+            (true, 0) => "runs",
+            (true, _) => "completes",
+            (false, _) => "fills in",
+        };
+        rows.push(fit(&format!("  {DIM}{position}↑↓ choose · Tab or Enter {enter} · Esc closes{RESET}"), self.width));
         rows
     }
 
@@ -1673,6 +1764,12 @@ fn precise_clock(elapsed: Duration) -> String {
     }
 }
 
+/// The question in `/btw <question>`, if that is what `text` is.
+fn aside_question(text: &str) -> Option<String> {
+    let rest = text.trim().strip_prefix("/btw")?;
+    rest.starts_with(char::is_whitespace).then(|| rest.trim().to_string()).filter(|q| !q.is_empty())
+}
+
 fn short(n: u64) -> String {
     match n {
         0..1_000 => n.to_string(),
@@ -1718,6 +1815,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "effort", aliases: &["thinking"], args: "[level]", about: "Switch thinking effort" },
     Command { name: "new", aliases: &["clear"], args: "", about: "Start a fresh session in this folder" },
     Command { name: "resume", aliases: &[], args: "", about: "Continue an earlier session in this folder" },
+    Command { name: "btw", aliases: &[], args: "<question>", about: "Ask a side question, also while the agent works; not kept" },
     Command { name: "compact", aliases: &[], args: "[focus]", about: "Summarize the conversation to free context" },
     Command { name: "undo", aliases: &[], args: "", about: "Put files back as they were before the last turn" },
     Command { name: "plan", aliases: &[], args: "", about: "Toggle plan mode (also Shift+Tab)" },
@@ -1785,6 +1883,20 @@ mod tests {
         assert_eq!(gist("connection reset"), "connection reset");
     }
 
+    /// `line` without escape codes, whatever colors the theme picked.
+    fn unstyled(line: &str) -> String {
+        let mut out = String::new();
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                chars.by_ref().find(char::is_ascii_alphabetic);
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
     #[test]
     fn the_status_line_drops_detail_before_the_model_as_it_narrows() {
         let status = Status {
@@ -1796,7 +1908,7 @@ mod tests {
             branch: Some("main".into()),
             ..Status::default()
         };
-        let line = |width| text::plain(&status_layout("qwen3.7-plus", &status, width)).replace('\x1b', "").replace("[2m", "").replace("[0m", "");
+        let line = |width| unstyled(&status_layout("qwen3.7-plus", &status, width));
         let wide = line(120);
         assert!(wide.contains("cached") && wide.contains("⎇ main"));
         for width in 12..120 {
@@ -1819,6 +1931,15 @@ mod tests {
         assert_eq!(clock(secs(3_725)), "1h02m");
         assert_eq!(precise_clock(Duration::from_millis(2_400)), "2.4s");
         assert_eq!(precise_clock(secs(70)), "1m10s");
+    }
+
+    #[test]
+    fn btw_takes_the_rest_of_the_line() {
+        assert_eq!(aside_question("/btw what is this?").as_deref(), Some("what is this?"));
+        assert_eq!(aside_question("  /btw  two\nlines ").as_deref(), Some("two\nlines"));
+        assert_eq!(aside_question("/btw"), None);
+        assert_eq!(aside_question("/btwx y"), None);
+        assert_eq!(aside_question("ask /btw y"), None);
     }
 
     #[test]
