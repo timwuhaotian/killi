@@ -5,6 +5,19 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.35 — 2026-10-23
+
+- **Memory and waits, from an audit.** The session log is written a line at a time, not a
+  fragment at a time (200 tool results: 3.7 s to 41 ms). `read` refuses a text file over
+  10 MB and `fetch_url` stops at 10 MB and checks the type before downloading, where each took
+  hundreds of MB. `bash` keeps the tail of a huge output in 22 MB, not 166 MB, and finished
+  background tasks give their output back. `cmd &` without a redirect returns at once instead
+  of at the timeout. A hook's timeout covers its input and ends what it started, an
+  interrupted page render removes its browser profile, and `edit` with `replace_all` over
+  100,000 matches takes 68 ms, not 32 s. A conversation too long to summarize is cut down and
+  summarized instead of failing every turn; the repeat breaker starts over with each prompt.
+  Details in `docs/decisions.md`, item 35.
+
 ## 0.2.34 — 2026-10-23
 
 - **The size and memory chart compares opencode 2.** killi is 6.4 MB and runs a prompt in

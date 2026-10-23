@@ -5,6 +5,10 @@ use serde_json::Value;
 use super::files::TextFile;
 use super::{Context, Output, is_binary, resolve};
 
+/// Changes shown in the terminal's diff; a `replace_all` over thousands of matches would
+/// otherwise build a diff of megabytes that nobody scrolls.
+const MAX_HUNKS: usize = 100;
+
 struct Edit {
     old: String,
     new: String,
@@ -126,23 +130,32 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
             ));
         }
     }
-    let mut out = text.to_string();
+    // One pass over the sorted ranges: the new text, the line each range starts on, and its hunk.
+    let news: Vec<String> = edits.iter().map(|edit| edit.new.replace("\r\n", "\n")).collect();
+    let mut out = String::with_capacity(text.len());
     let mut diff = String::new();
     let (mut added, mut removed) = (0, 0);
+    let (mut copied, mut line, mut hunks) = (0, 1, 0);
     for &(start, end, i) in &ranges {
-        let new = edits[i].new.replace("\r\n", "\n");
-        let line = text[..start].matches('\n').count() + 1;
+        line += text[copied..start].matches('\n').count();
+        out.push_str(&text[copied..start]);
+        out.push_str(&news[i]);
+        copied = end;
         let shift = added as isize - removed as isize;
-        if !diff.is_empty() {
-            diff.push_str("⋮\n");
+        let (hunk, plus, minus) = line_diff(&text[start..end], &news[i], line, line.saturating_add_signed(shift));
+        if hunks < MAX_HUNKS {
+            if hunks > 0 {
+                diff.push_str("⋮\n");
+            }
+            diff.push_str(&hunk);
+            hunks += 1;
         }
-        let (hunk, plus, minus) = line_diff(&text[start..end], &new, line, line.saturating_add_signed(shift));
-        diff.push_str(&hunk);
         added += plus;
         removed += minus;
     }
-    for &(start, end, i) in ranges.iter().rev() {
-        out.replace_range(start..end, &edits[i].new.replace("\r\n", "\n"));
+    out.push_str(&text[copied..]);
+    if ranges.len() > hunks {
+        diff.push_str(&format!("⋮\n{} more changes not shown\n", ranges.len() - hunks));
     }
     if out == text {
         return Err(format!("No changes made to {path}: the replacement produced identical content."));
@@ -274,6 +287,27 @@ mod tests {
         assert!(run("x x", json!({"old_string": "x", "new_string": "y"})).unwrap_err().contains("Found 2 matches"));
         assert_eq!(run("x x", json!({"old_string": "x", "new_string": "y", "replace_all": true})).unwrap(), "y y");
         assert!(run("abc", json!({"old_string": "zzz", "new_string": "y"})).unwrap_err().contains("Could not find"));
+    }
+
+    #[test]
+    fn each_change_in_the_diff_carries_its_own_line_number() {
+        let edits = [Edit { old: "foo".into(), new: "bar".into(), all: true }];
+        let applied = apply("a\nfoo\nb\nfoo\n", &edits, "f").unwrap();
+        assert_eq!(applied.text, "a\nbar\nb\nbar\n");
+        assert_eq!(applied.diff, "-2\tfoo\n+2\tbar\n⋮\n-4\tfoo\n+4\tbar\n");
+    }
+
+    #[test]
+    fn replace_all_over_many_matches_is_one_pass_and_its_diff_is_short() {
+        let text = "let foo = 1;\n".repeat(100_000);
+        let edits = [Edit { old: "foo".into(), new: "bar".into(), all: true }];
+        let started = std::time::Instant::now();
+        let applied = apply(&text, &edits, "f").unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+        assert_eq!(applied.text, text.replace("foo", "bar"));
+        assert_eq!((applied.count, applied.added, applied.removed), (100_000, 100_000, 100_000));
+        assert!(applied.diff.ends_with("⋮\n99900 more changes not shown\n"));
+        assert!(applied.diff.len() < 20_000, "{} bytes", applied.diff.len());
     }
 
     #[test]

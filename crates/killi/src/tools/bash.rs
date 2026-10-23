@@ -24,6 +24,11 @@ const MAX_TIMEOUT: u64 = 300;
 const MAX_SLEEP: f64 = 30.0;
 /// Output beyond this is dropped from memory, oldest first; the model only ever sees the tail.
 const MAX_CAPTURE: usize = 16 * 1024 * 1024;
+/// What a finished task keeps of output the model hasn't read; what it has read is let go.
+const FINISHED_KEEP: usize = 1024 * 1024;
+/// How long to read what a command wrote before it exited, once its shell is gone but a job it
+/// started still holds the pipe.
+const DRAIN: Duration = Duration::from_millis(20);
 /// What a command that printed nothing returns.
 const NO_OUTPUT: &str = "(no output)";
 /// The same for a foreground command that exited 0, so an empty result isn't mistaken for a failure to run.
@@ -60,6 +65,27 @@ struct Captured {
     dropped: usize,
     /// When the last output arrived.
     last: Option<Instant>,
+}
+
+impl Captured {
+    fn append(&mut self, chunk: &[u8]) {
+        self.bytes.extend_from_slice(chunk);
+        self.last = Some(Instant::now());
+        if self.bytes.len() > MAX_CAPTURE {
+            self.trim(MAX_CAPTURE);
+        }
+    }
+
+    /// Drops the oldest bytes to leave at most `keep`.
+    fn trim(&mut self, keep: usize) {
+        if let Some(excess) = self.bytes.len().checked_sub(keep).filter(|&n| n > 0) {
+            self.bytes.drain(..excess);
+            self.dropped += excess;
+        }
+        if self.bytes.capacity() > 2 * self.bytes.len().max(keep) {
+            self.bytes.shrink_to_fit();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -126,28 +152,36 @@ impl Process {
         let output = Arc::new(Mutex::new(Captured::default()));
         let (tx, exit) = watch::channel(None);
         let sink = output.clone();
+        // One task reads and waits, so the exit is known when the shell ends even if a job it
+        // started keeps the pipe open (`server &`), and that job's output is still captured.
         tokio::spawn(async move {
             let mut buf = [0u8; 16 * 1024];
-            loop {
-                match stdout.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let mut captured = sink.lock().expect("output lock");
-                        captured.bytes.extend_from_slice(&buf[..n]);
-                        captured.last = Some(Instant::now());
-                        if captured.bytes.len() > MAX_CAPTURE {
-                            let excess = captured.bytes.len() - MAX_CAPTURE;
-                            captured.bytes.drain(..excess);
-                            captured.dropped += excess;
+            let mut reading = true;
+            let mut ended = false;
+            while reading || !ended {
+                tokio::select! {
+                    n = stdout.read(&mut buf), if reading => match n {
+                        Ok(0) | Err(_) => reading = false,
+                        Ok(n) => sink.lock().expect("output lock").append(&buf[..n]),
+                    },
+                    status = child.wait(), if !ended => {
+                        ended = true;
+                        // What the shell wrote before it ended is in the pipe: take it before
+                        // announcing the exit, so a finished command's output is all there.
+                        while reading {
+                            match tokio::time::timeout(DRAIN, stdout.read(&mut buf)).await {
+                                Ok(Ok(n)) if n > 0 => sink.lock().expect("output lock").append(&buf[..n]),
+                                Ok(_) => reading = false,
+                                Err(_) => break,
+                            }
                         }
+                        let _ = tx.send(Some(match status.ok().and_then(|s| s.code()) {
+                            Some(code) => Exit::Code(code),
+                            None => Exit::Signal,
+                        }));
                     }
                 }
             }
-            let status = child.wait().await.ok();
-            let _ = tx.send(Some(match status.and_then(|s| s.code()) {
-                Some(code) => Exit::Code(code),
-                None => Exit::Signal,
-            }));
         });
         groups().insert(pgid, exit.clone());
         Ok(Self { pgid, output, exit })
@@ -347,9 +381,22 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
 fn take_output(ctx: &Context, process: &Process, from: usize) -> (String, usize) {
     let captured = process.output.lock().expect("output lock");
     let start = from.saturating_sub(captured.dropped).min(captured.bytes.len());
-    let text = String::from_utf8_lossy(&captured.bytes[start..]).into_owned();
+    let text = String::from_utf8_lossy(&captured.bytes[start..]);
     let lost = captured.dropped.saturating_sub(from);
     (tail(ctx, &text, lost), captured.dropped + captured.bytes.len())
+}
+
+impl Task {
+    /// Lets go of a finished task's output: all of it once the model has read it, else the last
+    /// megabyte. A task that ran for hours would otherwise hold up to 16 MB until the session ends.
+    fn release(&mut self) {
+        if self.process.exit().is_none() || self.process.running() {
+            return;
+        }
+        let mut captured = self.process.output.lock().expect("output lock");
+        let keep = if self.read_to >= captured.dropped + captured.bytes.len() { 0 } else { FINISHED_KEEP };
+        captured.trim(keep);
+    }
 }
 
 impl Tasks {
@@ -392,6 +439,7 @@ impl Tasks {
     pub fn newly_finished(&mut self) -> Vec<String> {
         let mut lines = Vec::new();
         for (id, task) in &mut self.list {
+            task.release();
             if let Some(exit) = task.process.exit().filter(|_| !task.reported) {
                 task.reported = true;
                 lines.push(format!("Background task {id} (`{}`) {}.", first_line(&task.command), exit.describe()));
@@ -422,6 +470,7 @@ pub async fn task_output(ctx: &Context, args: &Value) -> Output {
     let task = tasks.list.get_mut(&id).expect("task exists");
     let (text, read_to) = take_output(ctx, &task.process, task.read_to);
     task.read_to = read_to;
+    task.release();
     let status = match task.process.exit() {
         Some(exit) => {
             task.reported = true;
@@ -458,29 +507,29 @@ fn first_line(text: &str) -> &str {
     crate::llm::truncate(text.lines().next().unwrap_or_default(), 80)
 }
 
-/// Keeps the last 2000 lines within 50KB, saving the full output to a file when cut.
+/// Keeps the last 2000 lines within 50KB, saving the full output to a file when cut. Lines
+/// are walked from the end, so a huge output of short lines costs no more than a small one.
 fn tail(ctx: &Context, output: &str, dropped: usize) -> String {
     let output = output.trim_end_matches('\n');
     if output.is_empty() {
         return NO_OUTPUT.into();
     }
-    let lines: Vec<&str> = output.split('\n').collect();
-    let total = lines.len();
-    let mut start = total;
-    let mut bytes = 0;
-    while start > 0 && total - start < MAX_LINES {
-        let next = lines[start - 1].len() + 1;
-        if bytes + next > MAX_BYTES && start < total {
+    let total = output.bytes().filter(|&b| b == b'\n').count() + 1;
+    let (mut kept, mut bytes) = (0, 0);
+    for line in output.rsplit('\n') {
+        let next = line.len() + 1;
+        if kept == MAX_LINES || (bytes + next > MAX_BYTES && kept > 0) {
             break;
         }
         bytes += next;
-        start -= 1;
+        kept += 1;
     }
+    let start = total - kept;
     if start == 0 && dropped == 0 {
         return output.to_string();
     }
-    let shown = lines[start..].join("\n");
-    let shown = if shown.len() > MAX_BYTES { &shown[shown.len() - floor_boundary(&shown, MAX_BYTES)..] } else { &shown };
+    let shown = &output[output.len() - (bytes - 1)..];
+    let shown = if shown.len() > MAX_BYTES { &shown[shown.len() - floor_boundary(shown, MAX_BYTES)..] } else { shown };
     let saved = match spill(ctx, "bash", output) {
         Some(path) => format!(" Full output: {}", path.display()),
         None => String::new(),
@@ -599,7 +648,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn a_command_that_leaves_nothing_running_is_not_kept() {
         let ctx = ctx();
-        let out = bash(&ctx, &json!({"command": "(sleep 0.1 &) ; echo hi"})).await;
+        let out = bash(&ctx, &json!({"command": "sleep 0.1 & wait; echo hi"})).await;
         assert_eq!(out.text, "hi");
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(ctx.tasks.borrow_mut().left_running().is_empty());
@@ -679,8 +728,68 @@ mod tests {
     #[test]
     fn long_output_keeps_the_tail() {
         let output: String = (1..=3000).map(|n| format!("{n}\n")).collect();
-        let text = tail(&ctx(), &output, 0);
+        let ctx = ctx();
+        let text = tail(&ctx, &output, 0);
         assert!(text.starts_with("[Showing lines 1001-3000 of 3000. Full output: "));
         assert!(text.ends_with("\n3000"));
+        let _ = fs::remove_dir_all(&ctx.spill_dir);
+    }
+
+    #[test]
+    fn the_tail_is_cut_by_lines_or_by_bytes_whichever_comes_first() {
+        let ctx = ctx();
+        let short = "y\n".repeat(1_000_000);
+        let text = tail(&ctx, &short, 0);
+        assert!(text.starts_with("[Showing lines 998001-1000000 of 1000000. Full output: "), "{}", &text[..80]);
+        assert_eq!(text.lines().count(), 2001);
+        let wide = format!("{}\n", "x".repeat(99)).repeat(1000);
+        let text = tail(&ctx, &wide, 0);
+        assert!(text.starts_with("[Showing lines 489-1000 of 1000. Full output: "), "{}", &text[..80]);
+        assert_eq!(text.lines().count(), 513);
+        assert_eq!(tail(&ctx, "a\nb\n", 0), "a\nb");
+        let _ = fs::remove_dir_all(&ctx.spill_dir);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_job_holding_the_pipe_does_not_hold_the_command() {
+        let ctx = ctx();
+        let started = Instant::now();
+        let out = bash(&ctx, &json!({"command": "echo started; (sleep 1; echo late) &", "timeout": 20})).await;
+        assert!(started.elapsed() < Duration::from_secs(5), "waited for the job's pipe: {:?}", started.elapsed());
+        assert!(out.text.starts_with("started\n[What it started is still running, as background task 1"), "{}", out.text);
+        let mut seen = String::new();
+        for _ in 0..100 {
+            seen.push_str(&task_output(&ctx, &json!({"id": 1})).await.text);
+            if seen.contains("late") {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("the job's later output was not captured: {seen}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_finished_task_keeps_only_what_the_model_has_not_read() {
+        let ctx = ctx();
+        for _ in 0..2 {
+            bash(&ctx, &json!({"command": "head -c 3000000 /dev/zero | tr '\\0' a", "run_in_background": true})).await;
+        }
+        let out = task_output(&ctx, &json!({"id": 1, "wait": 30})).await;
+        assert!(out.text.starts_with("Task 1 exited with code 0."), "{}", out.text);
+        let mut exit = ctx.tasks.borrow().list[&2].process.exit.clone();
+        exit.wait_for(Option::is_some).await.unwrap();
+        ctx.tasks.borrow_mut().newly_finished();
+        let held = |id: u32| {
+            let tasks = ctx.tasks.borrow();
+            let captured = tasks.list[&id].process.output.lock().unwrap();
+            (captured.bytes.len(), captured.dropped)
+        };
+        assert_eq!(held(1), (0, 3_000_000), "read output is let go");
+        assert_eq!(held(2), (FINISHED_KEEP, 3_000_000 - FINISHED_KEEP), "unread output keeps its last megabyte");
+        let out = task_output(&ctx, &json!({"id": 2})).await;
+        assert!(out.text.contains(&format!("The first {} bytes were not kept.", 3_000_000 - FINISHED_KEEP)), "{}", &out.text[..120]);
+        assert_eq!(held(2).0, 0);
+        assert_eq!(task_output(&ctx, &json!({"id": 1})).await.text, "Task 1 exited with code 0.\n(no new output)");
+        let _ = fs::remove_dir_all(&ctx.spill_dir);
     }
 }

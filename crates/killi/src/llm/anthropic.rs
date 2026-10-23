@@ -238,6 +238,15 @@ fn assistant_blocks(message: &Value, claude: bool) -> Vec<Value> {
     blocks
 }
 
+/// Appends `text` to the string in `field` in place, starting one if there is none yet. Building
+/// a new string per delta copies all the thinking so far each time.
+fn append(field: &mut Value, text: &str) {
+    match field {
+        Value::String(current) => current.push_str(text),
+        other => *other = text.into(),
+    }
+}
+
 /// Routes streamed deltas to the content block they belong to.
 #[derive(Default)]
 pub(super) struct Parser {
@@ -320,14 +329,11 @@ impl StreamParser for Parser {
                     (Some(Block::Thinking(i)), Some("thinking_delta")) => {
                         let text = delta["thinking"].as_str().unwrap_or_default();
                         reply.reasoning.push_str(text);
-                        let item = &mut reply.reasoning_items[*i];
-                        item["thinking"] = format!("{}{text}", item["thinking"].as_str().unwrap_or_default()).into();
+                        append(&mut reply.reasoning_items[*i]["thinking"], text);
                         on_delta(Delta::Reasoning(text));
                     }
                     (Some(Block::Thinking(i)), Some("signature_delta")) => {
-                        let item = &mut reply.reasoning_items[*i];
-                        let signature = format!("{}{}", item["signature"].as_str().unwrap_or_default(), delta["signature"].as_str().unwrap_or_default());
-                        item["signature"] = signature.into();
+                        append(&mut reply.reasoning_items[*i]["signature"], delta["signature"].as_str().unwrap_or_default());
                     }
                     (Some(Block::Tool(i)), Some("input_json_delta")) => {
                         reply.tool_calls[*i].arguments.push_str(delta["partial_json"].as_str().unwrap_or_default());
@@ -461,6 +467,20 @@ mod tests {
         assert_eq!(reply.tool_calls[0].arguments, "{\"path\":\"a\"}");
         assert_eq!(reply.finish_reason.as_deref(), Some("tool_calls"));
         assert_eq!((reply.usage.prompt, reply.usage.cached, reply.usage.completion), (105, 100, 9));
+    }
+
+    #[test]
+    fn thinking_and_signature_deltas_add_up() {
+        let mut parser = Parser::default();
+        let mut reply = Reply::default();
+        let mut sink = |_: Delta| {};
+        parser.event(&json!({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}), &mut reply, &mut sink).ok().unwrap();
+        for part in ["a", "b", "c"] {
+            parser.event(&json!({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": part}}), &mut reply, &mut sink).ok().unwrap();
+            parser.event(&json!({"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": part.to_uppercase()}}), &mut reply, &mut sink).ok().unwrap();
+        }
+        assert_eq!(reply.reasoning_items[0], json!({"type": "thinking", "thinking": "abc", "signature": "ABC"}));
+        assert_eq!(reply.reasoning, "abc");
     }
 
     #[test]

@@ -103,14 +103,27 @@ impl Session {
 
     /// Appends an entry, stamped with the time in milliseconds (`ts`), so a log shows when
     /// things happened. The stamp sits beside the entry's data and is never sent to a model.
+    /// The line is built first and written once: formatting straight into the file costs a
+    /// `write` per JSON fragment.
     pub fn record(&mut self, entry: &Value) -> Result<()> {
-        let mut entry = entry.clone();
-        if let Some(fields) = entry.as_object_mut() {
-            let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
-            fields.insert("ts".into(), Value::from(u64::try_from(ts).unwrap_or(u64::MAX)));
-        }
-        writeln!(self.file, "{entry}").with_context(|| format!("could not write {}", self.log_path.display()))
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+        let line = stamped(entry, u64::try_from(ts).unwrap_or(u64::MAX));
+        self.file.write_all(line.as_bytes()).with_context(|| format!("could not write {}", self.log_path.display()))
     }
+}
+
+/// `entry` as one log line ending in a newline, with `ts` added to an object.
+fn stamped(entry: &Value, ts: u64) -> String {
+    let mut line = entry.to_string();
+    if entry.as_object().is_some() {
+        line.pop();
+        if line.len() > 1 {
+            line.push(',');
+        }
+        line.push_str(&format!("\"ts\":{ts}}}"));
+    }
+    line.push('\n');
+    line
 }
 
 /// Replays a log: messages in order, restarting from the summary at each compaction.
@@ -504,6 +517,31 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.context, 1200);
         assert_eq!(loaded.tools["c1"], ToolEnd { is_error: true, brief: "exit 1".into() });
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_entry_is_one_stamped_line() {
+        let entry = json!({"type": "message", "message": {"role": "user", "content": "a \"quoted\"\nline"}});
+        let line = stamped(&entry, 7);
+        assert!(line.ends_with("}\n") && line.matches('\n').count() == 1, "{line}");
+        let back: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(back["ts"], 7);
+        assert_eq!(back["message"], entry["message"]);
+        assert_eq!(serde_json::from_str::<Value>(&stamped(&json!({}), 3)).unwrap(), json!({"ts": 3}));
+        assert_eq!(stamped(&json!("not an object"), 3), "\"not an object\"\n");
+    }
+
+    #[test]
+    fn recorded_entries_load_back() {
+        let dir = std::env::temp_dir().join(format!("killi-record-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut session = Session::open_new(dir.join("1-1.jsonl")).unwrap();
+        session.record(&json!({"type": "message", "message": {"role": "system", "content": "sys"}})).unwrap();
+        session.record(&json!({"type": "message", "message": {"role": "user", "content": "hi\nthere"}})).unwrap();
+        let loaded = load(&session.log_path).unwrap();
+        let contents: Vec<_> = loaded.messages.iter().map(|m| m["content"].as_str().unwrap()).collect();
+        assert_eq!(contents, ["sys", "hi\nthere"]);
         fs::remove_dir_all(dir).unwrap();
     }
 

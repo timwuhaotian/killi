@@ -228,7 +228,23 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn tree() -> PathBuf {
+    /// A small tree of files, removed when it goes out of scope.
+    struct Tree(PathBuf);
+
+    impl std::ops::Deref for Tree {
+        type Target = PathBuf;
+        fn deref(&self) -> &PathBuf {
+            &self.0
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tree() -> Tree {
         let dir = std::env::temp_dir().join(format!("killi-search-{}-{:?}", std::process::id(), std::thread::current().id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -236,7 +252,7 @@ mod tests {
         std::fs::write(dir.join("src/a.rs"), "fn alpha() {}\nfn beta() {}\n").unwrap();
         std::fs::write(dir.join("notes.txt"), "alpha notes\n").unwrap();
         std::fs::write(dir.join(".git/config"), "alpha\n").unwrap();
-        dir
+        Tree(dir)
     }
 
     #[test]

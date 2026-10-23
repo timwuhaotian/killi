@@ -98,6 +98,19 @@ fn matches(matcher: Option<&str>, tool: Option<&str>) -> bool {
     regex::RegexBuilder::new(&format!("^(?:{matcher})$")).case_insensitive(true).build().is_ok_and(|re| re.is_match(tool))
 }
 
+/// Ends a hook's whole process group when dropped, unless it finished: a timeout or an
+/// interrupted turn would otherwise kill only the shell and leave what it started running.
+struct Group(Option<u32>);
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        if let Some(pgid) = self.0 {
+            // SAFETY: killpg only signals the process group this hook was started in.
+            unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
 async fn execute(command: &str, cwd: &Path, input: &str, timeout: Duration) -> Option<(i32, String, String)> {
     let command = match command.strip_prefix("~/") {
         Some(rest) => format!("{}/{rest}", crate::config::home().display()),
@@ -112,13 +125,22 @@ async fn execute(command: &str, cwd: &Path, input: &str, timeout: Duration) -> O
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .kill_on_drop(true)
         .spawn()
         .ok()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input.as_bytes()).await;
-    }
-    let output = tokio::time::timeout(timeout, child.wait_with_output()).await.ok()?.ok()?;
+    let mut group = Group(child.id());
+    let mut stdin = child.stdin.take();
+    // The input is written beside the wait, under the same timeout: a hook that never reads it
+    // would otherwise block the write, and the agent, for as long as the hook runs.
+    let feed = async move {
+        if let Some(stdin) = stdin.as_mut() {
+            let _ = stdin.write_all(input.as_bytes()).await;
+        }
+    };
+    let (_, output) = tokio::time::timeout(timeout, async { tokio::join!(feed, child.wait_with_output()) }).await.ok()?;
+    let output = output.ok()?;
+    group.0 = None;
     Some((
         output.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -157,6 +179,23 @@ mod tests {
         assert!(allowed.block.is_none());
         let other = hooks.run("PreToolUse", Some("read"), &cwd, "s", tool_payload("read", &json!({}), None)).await;
         assert!(other.block.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_hook_that_ignores_a_large_input_still_times_out_and_leaves_nothing_running() {
+        let marker = std::env::temp_dir().join(format!("killi-hook-orphan-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let hooks = config(&format!(
+            "[[hooks.PostToolUse]]\ncommand = \"(sleep 2; touch {}) & sleep 30\"\ntimeout = 1\n",
+            marker.display()
+        ));
+        let big = "x".repeat(300_000);
+        let cwd = std::env::temp_dir();
+        let started = std::time::Instant::now();
+        hooks.run("PostToolUse", Some("bash"), &cwd, "s", tool_payload("bash", &json!({}), Some(&big))).await;
+        assert!(started.elapsed() < Duration::from_secs(5), "the timeout did not apply: {:?}", started.elapsed());
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(!marker.exists(), "a process the hook started outlived its timeout");
     }
 
     #[tokio::test(flavor = "current_thread")]

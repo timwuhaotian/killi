@@ -209,7 +209,8 @@ pub struct Agent {
     settings: Rc<Settings>,
     sink: Sink,
     ids: HashSet<String>,
-    repeats: HashMap<String, Repeat>,
+    /// Identical tool calls made in the current turn, by a hash of the call.
+    repeats: HashMap<u64, Repeat>,
     /// The log already says that the provider hides its reasoning.
     reasoning_noted: bool,
     todos: Vec<Todo>,
@@ -410,6 +411,8 @@ impl Agent {
 
     /// Runs one user turn to completion and returns the final reply text.
     pub async fn run(&mut self, user: &str, images: &[Image]) -> Result<(String, Stop)> {
+        // The breaker is for a loop inside one turn; a call the user asks for again is not one.
+        self.repeats.clear();
         let mut notes = Vec::new();
         if std::mem::take(&mut self.interrupted) {
             notes.push("The user interrupted your previous turn.".to_string());
@@ -760,7 +763,7 @@ impl Agent {
             output.text = self.shorten(&output.text);
         }
         let result = hash_text(&output.text);
-        let (count, same) = self.repeats.entry(format!("{}\0{}", call.name, call.arguments)).or_default().note(result);
+        let (count, same) = self.repeats.entry(hash_call(call)).or_default().note(result);
         if REPEAT_WARNINGS.contains(&count) {
             let same = if same { " and got the same result" } else { "" };
             output.text.push_str(&format!(
@@ -919,28 +922,30 @@ impl Agent {
                 Ok((_, stop)) => tools::Output::error(format!("The subagent stopped without a final report ({stop:?}).")),
                 Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
             };
-            (index, output, Some(agent))
+            // Only its counts outlive it: its conversation and log file are freed here, not
+            // when the slowest sibling of a swarm finishes.
+            (index, output, Some(std::mem::take(&mut agent.stats)))
         });
         let mut finished: Vec<_> = futures_util::stream::iter(runs).buffer_unordered(limit.max(1)).collect().await;
         finished.sort_by_key(|(index, ..)| *index);
         let mut outputs = Vec::new();
-        for (_, output, agent) in finished {
-            let Some(agent) = agent else {
+        for (_, output, stats) in finished {
+            let Some(stats) = stats else {
                 outputs.push(output);
                 continue;
             };
-            let usage = &agent.stats.usage;
+            let usage = &stats.usage;
             let total = &mut self.stats.usage;
             total.prompt += usage.prompt;
             total.cached += usage.cached;
             total.completion += usage.completion;
             total.reasoning += usage.reasoning;
-            self.stats.requests += agent.stats.requests;
-            self.stats.tool_calls += agent.stats.tool_calls;
+            self.stats.requests += stats.requests;
+            self.stats.tool_calls += stats.tool_calls;
             outputs.push(if output.is_error {
                 output
             } else {
-                output.brief(format!("{} requests, {} tool calls", agent.stats.requests, agent.stats.tool_calls))
+                output.brief(format!("{} requests, {} tool calls", stats.requests, stats.tool_calls))
             });
         }
         outputs
@@ -1005,8 +1010,17 @@ impl Agent {
         if let Some(focus) = focus.filter(|f| !f.trim().is_empty()) {
             instruction.push_str(&format!("\nThe user asked the summary to focus on: {focus}"));
         }
-        request.push(json!({"role": "user", "content": instruction}));
-        let reply = self.client.complete(&request, &self.tools, &self.session.id, &mut |_| {}).await?;
+        let instruction = json!({"role": "user", "content": instruction});
+        request.push(instruction.clone());
+        let reply = match self.client.complete(&request, &self.tools, &self.session.id, &mut |_| {}).await {
+            // Too long to be read even to summarize it: summarize it with its bulk cut.
+            Err(error) if is_overflow(&error) => {
+                request = reduced(&self.messages);
+                request.push(instruction);
+                self.client.complete(&request, &self.tools, &self.session.id, &mut |_| {}).await?
+            }
+            reply => reply?,
+        };
         self.stats.requests += 1;
         self.account(&reply.usage, None, None)?;
         if reply.text.trim().is_empty() {
@@ -1102,6 +1116,28 @@ impl Agent {
     }
 }
 
+/// Characters of a tool result kept in a conversation cut down to be summarized.
+const REDUCED_RESULT_CHARS: usize = 2_000;
+
+/// `messages` with their bulk cut, for a summary request that must fit a window the whole
+/// conversation overflowed: long tool results are shortened and images dropped.
+fn reduced(messages: &[Value]) -> Vec<Value> {
+    messages
+        .iter()
+        .map(|message| {
+            let mut message = message.clone();
+            if message["role"] == "tool" {
+                if let Some(text) = message["content"].as_str().filter(|t| t.len() > REDUCED_RESULT_CHARS) {
+                    message["content"] = format!("{}\n[… cut to fit the context window]", truncate(text, REDUCED_RESULT_CHARS)).into();
+                }
+            } else if let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) {
+                parts.retain(|part| part["type"] != "image_url");
+            }
+            message
+        })
+        .collect()
+}
+
 /// Whether a reply was billed for reasoning that never came back.
 fn hides_reasoning(reply: &Reply) -> bool {
     reply.usage.reasoning > 0 && reply.reasoning.is_empty() && reply.reasoning_items.is_empty()
@@ -1115,6 +1151,14 @@ fn hash_text(text: &str) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Identifies a tool call by its name and exact arguments, without keeping the arguments.
+fn hash_call(call: &ToolCall) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    (&call.name, &call.arguments).hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1271,6 +1315,36 @@ mod tests {
         assert!(open_tasks_note(&[todo("a", "completed")]).is_none());
         let note = open_tasks_note(&[todo("a", "completed"), todo("b", "in_progress"), todo("c", "pending")]).unwrap();
         assert!(note.contains("2 open: b; c") && note.starts_with("<system-reminder>"));
+    }
+
+    #[test]
+    fn a_conversation_cut_down_to_be_summarized_keeps_its_shape() {
+        let long = "x".repeat(10_000);
+        let history = vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "fix it"}),
+            json!({"role": "assistant", "tool_calls": [{"id": "a"}]}),
+            json!({"role": "tool", "tool_call_id": "a", "content": long}),
+            json!({"role": "tool", "tool_call_id": "b", "content": "short"}),
+            json!({"role": "user", "content": image_parts("Image from a.png:", "data:image/png;base64,AAAA")}),
+        ];
+        let cut = reduced(&history);
+        assert_eq!(cut.len(), history.len());
+        assert_eq!(cut[..3], history[..3]);
+        assert_eq!(cut[3]["tool_call_id"], "a");
+        let text = cut[3]["content"].as_str().unwrap();
+        assert!(text.starts_with(&"x".repeat(REDUCED_RESULT_CHARS)) && text.ends_with("[… cut to fit the context window]"), "{}", text.len());
+        assert_eq!(cut[4], history[4]);
+        assert_eq!(cut[5]["content"], json!([{"type": "text", "text": "Image from a.png:"}]));
+    }
+
+    #[test]
+    fn identical_calls_share_a_key_and_others_do_not() {
+        let call = |name: &str, arguments: &str| ToolCall { id: "c".into(), name: name.into(), arguments: arguments.into() };
+        assert_eq!(hash_call(&call("read", "{\"path\":\"a\"}")), hash_call(&call("read", "{\"path\":\"a\"}")));
+        assert_ne!(hash_call(&call("read", "{\"path\":\"a\"}")), hash_call(&call("read", "{\"path\":\"b\"}")));
+        assert_ne!(hash_call(&call("read", "x")), hash_call(&call("write", "x")));
+        assert_ne!(hash_call(&call("ab", "c")), hash_call(&call("a", "bc")));
     }
 
     #[test]

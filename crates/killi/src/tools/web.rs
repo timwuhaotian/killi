@@ -54,16 +54,19 @@ pub async fn fetch_url(ctx: &Context, args: &Value) -> Output {
         .unwrap_or_default()
         .to_ascii_lowercase();
     let final_url = response.url().to_string();
-    let bytes = match response.bytes().await {
+    // A body that can't be shown is not downloaded at all.
+    if status.is_success() && !kind.is_empty() && !is_text(&kind) {
+        return Output::error(format!("{url} is `{kind}`, not text."));
+    }
+    let bytes = match capped_body(response).await {
         Ok(bytes) => bytes,
         Err(e) => return Output::error(format!("Could not read {url}: {e}")),
     };
     if !status.is_success() {
         return Output::error(format!("{url} answered HTTP {status}: {}", truncate(&String::from_utf8_lossy(&bytes), 500)));
     }
-    let bytes = &bytes[..bytes.len().min(MAX_DOWNLOAD)];
-    let text = String::from_utf8_lossy(bytes).into_owned();
-    if kind.contains("html") || (kind.is_empty() && looks_like_html(bytes)) {
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if kind.contains("html") || (kind.is_empty() && looks_like_html(&bytes)) {
         if raw {
             return shown(&text);
         }
@@ -77,10 +80,28 @@ pub async fn fetch_url(ctx: &Context, args: &Value) -> Output {
             Err(_) => Output::error(format!("Could not find readable text in {url}. It may need JavaScript; try render.")),
         };
     }
-    if kind.starts_with("text/") || kind.contains("json") || kind.contains("xml") || kind.is_empty() {
+    if kind.is_empty() || is_text(&kind) {
         return shown(&text);
     }
     Output::error(format!("{url} is `{kind}`, not text."))
+}
+
+/// Whether a content type is one `fetch_url` can show.
+fn is_text(kind: &str) -> bool {
+    kind.contains("html") || kind.starts_with("text/") || kind.contains("json") || kind.contains("xml")
+}
+
+/// The response body up to `MAX_DOWNLOAD` bytes; the rest is never read.
+async fn capped_body(mut response: reqwest::Response) -> reqwest::Result<Vec<u8>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        let room = MAX_DOWNLOAD - body.len();
+        body.extend_from_slice(&chunk[..chunk.len().min(room)]);
+        if body.len() >= MAX_DOWNLOAD {
+            break;
+        }
+    }
+    Ok(body)
 }
 
 /// A GitHub `blob` page URL becomes its raw file URL.
@@ -151,14 +172,28 @@ fn browser(url: &str, extra: &[String]) -> Result<(Command, PathBuf), String> {
     Ok((command, profile))
 }
 
-/// Kills the browser and the helpers it started, then reaps it.
-async fn stop(child: &mut tokio::process::Child, profile: &std::path::Path) {
-    if let Some(pid) = child.id() {
-        // SAFETY: the child leads its own process group, so this reaches only the browser.
-        unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+/// A running browser and its profile folder. Dropping it, also when the call is interrupted
+/// and its future dropped, kills the browser and the helpers it started and removes the profile.
+struct Running {
+    child: tokio::process::Child,
+    profile: PathBuf,
+}
+
+impl Running {
+    fn start(command: &mut Command, profile: PathBuf) -> Result<Self, String> {
+        let child = command.spawn().map_err(|e| format!("Could not run the browser: {e}"))?;
+        Ok(Self { child, profile })
     }
-    let _ = child.wait().await;
-    let _ = std::fs::remove_dir_all(profile);
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Some(pid) = self.child.id() {
+            // SAFETY: the child leads its own process group, so this reaches only the browser.
+            unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+        }
+        let _ = std::fs::remove_dir_all(&self.profile);
+    }
 }
 
 /// The page's DOM after its scripts have run. Chrome prints the DOM but often doesn't exit
@@ -166,8 +201,8 @@ async fn stop(child: &mut tokio::process::Child, profile: &std::path::Path) {
 async fn render(url: &str) -> Result<String, String> {
     use tokio::io::AsyncReadExt;
     let (mut command, profile) = browser(url, &["--dump-dom".to_string()])?;
-    let mut child = command.stdout(Stdio::piped()).spawn().map_err(|e| format!("Could not run the browser: {e}"))?;
-    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut browser = Running::start(command.stdout(Stdio::piped()), profile)?;
+    let mut stdout = browser.child.stdout.take().expect("piped stdout");
     let mut dom = Vec::new();
     let read = async {
         let mut chunk = [0u8; 64 * 1024];
@@ -182,7 +217,7 @@ async fn render(url: &str) -> Result<String, String> {
         }
     };
     let timed_out = tokio::time::timeout(BROWSER_TIMEOUT, read).await.is_err();
-    stop(&mut child, &profile).await;
+    drop(browser);
     let dom = String::from_utf8_lossy(&dom).into_owned();
     match (dom.trim().is_empty(), timed_out) {
         (true, true) => Err(format!("The browser took more than {} s on {url}.", BROWSER_TIMEOUT.as_secs())),
@@ -196,25 +231,32 @@ async fn render(url: &str) -> Result<String, String> {
 async fn capture(url: &str, file: &std::path::Path) -> Result<(), String> {
     let extra = [format!("--screenshot={}", file.display()), "--window-size=1280,900".to_string()];
     let (mut command, profile) = browser(url, &extra)?;
-    let mut child = command.spawn().map_err(|e| format!("Could not run the browser: {e}"))?;
+    let mut browser = Running::start(&mut command, profile)?;
     let started = std::time::Instant::now();
     let mut last = 0;
-    let outcome = loop {
+    loop {
         tokio::time::sleep(Duration::from_millis(250)).await;
         let size = std::fs::metadata(file).map_or(0, |m| m.len());
         if size > 0 && size == last {
             break Ok(());
         }
         last = size;
-        if child.try_wait().is_ok_and(|status| status.is_some()) {
+        if browser.child.try_wait().is_ok_and(|status| status.is_some()) {
             break if file.exists() { Ok(()) } else { Err(format!("The browser made no screenshot of {url}.")) };
         }
         if started.elapsed() > BROWSER_TIMEOUT {
             break Err(format!("The browser took more than {} s on {url}.", BROWSER_TIMEOUT.as_secs()));
         }
-    };
-    stop(&mut child, &profile).await;
-    outcome
+    }
+}
+
+/// A file removed when it goes out of scope, also if the call that made it is interrupted.
+struct Temp(PathBuf);
+
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 async fn screenshot(ctx: &Context, url: &str) -> Output {
@@ -222,19 +264,17 @@ async fn screenshot(ctx: &Context, url: &str) -> Output {
         return Output::error("This model can't see images, so a screenshot is no use.");
     }
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    let file = std::env::temp_dir().join(format!("killi-shot-{}-{nanos}.png", std::process::id()));
-    let output = match capture(url, &file).await {
+    let file = Temp(std::env::temp_dir().join(format!("killi-shot-{}-{nanos}.png", std::process::id())));
+    match capture(url, &file.0).await {
         Ok(()) => {
-            let mut output = files::read_image(ctx, url, &file, "image/png");
+            let mut output = files::read_image(ctx, url, &file.0, "image/png");
             if !output.is_error {
                 output.text = format!("Screenshot of {url} (1280x900, top of the page); it is attached below.");
             }
             output
         }
         Err(e) => Output::error(e),
-    };
-    let _ = std::fs::remove_file(&file);
-    output
+    }
 }
 
 pub async fn web_search(ctx: &Context, args: &Value) -> Output {
@@ -388,6 +428,79 @@ fn readable(html: &str, url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// Serves one response: `head` (status line and headers), then `body_len` bytes of `a`, then
+    /// holds the connection open for `hold`.
+    async fn serve_once(head: &'static str, body_len: usize, hold: std::time::Duration) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = socket.read(&mut [0u8; 1024]).await;
+            let _ = socket.write_all(head.as_bytes()).await;
+            let chunk = vec![b'a'; 64 * 1024];
+            let mut sent = 0;
+            while sent < body_len {
+                let n = chunk.len().min(body_len - sent);
+                if socket.write_all(&chunk[..n]).await.is_err() {
+                    return;
+                }
+                sent += n;
+            }
+            tokio::time::sleep(hold).await;
+        });
+        url
+    }
+
+    fn ctx() -> super::Context {
+        super::Context::new(std::env::temp_dir(), std::env::temp_dir().join("killi-fetch-spill"))
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_body_that_is_not_text_is_not_downloaded() {
+        let head = "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: 1000000000\r\n\r\n";
+        let url = serve_once(head, 0, std::time::Duration::from_secs(20)).await;
+        let args = serde_json::json!({"url": url});
+        let out = tokio::time::timeout(std::time::Duration::from_secs(5), super::fetch_url(&ctx(), &args)).await.expect("waited for the body");
+        assert!(out.is_error && out.text.contains("`application/octet-stream`, not text"), "{}", out.text);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_text_body_is_read_only_up_to_the_cap() {
+        let size = super::MAX_DOWNLOAD + 5 * 1024 * 1024;
+        let head = "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\n\r\n";
+        let url = serve_once(head, size, std::time::Duration::from_secs(20)).await;
+        let args = serde_json::json!({"url": url});
+        let out = tokio::time::timeout(std::time::Duration::from_secs(10), super::fetch_url(&ctx(), &args)).await.expect("waited for a body with no end");
+        let more = super::MAX_DOWNLOAD - super::MAX_BYTES;
+        assert!(out.text.ends_with(&format!("[Truncated: {more} more characters.]")), "{}", &out.text[out.text.len() - 60..]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropping_a_browser_kills_its_group_and_removes_its_profile() {
+        let profile = std::env::temp_dir().join(format!("killi-chrome-test-{}", std::process::id()));
+        std::fs::create_dir_all(profile.join("Default")).unwrap();
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 30 & sleep 30"]).process_group(0).kill_on_drop(true);
+        let browser = super::Running::start(&mut command, profile.clone()).unwrap();
+        let pgid = browser.child.id().unwrap() as libc::pid_t;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // SAFETY: signal 0 only checks that the group exists.
+        assert_eq!(unsafe { libc::killpg(pgid, 0) }, 0);
+        drop(browser);
+        assert!(!profile.exists());
+        for _ in 0..50 {
+            // SAFETY: as above.
+            if unsafe { libc::killpg(pgid, 0) } != 0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the browser's process group is still running");
+    }
+
     #[test]
     fn extracts_the_article() {
         let html = r#"<html><head><title>Notes</title></head><body>

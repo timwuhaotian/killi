@@ -8,6 +8,9 @@ use super::{Context, MAX_BYTES, MAX_LINES, Output, is_binary, resolve};
 use crate::llm::truncate;
 
 const MAX_LINE_CHARS: usize = 2000;
+/// Larger text files are not read whole: the file, its decoded copy and its lines would take
+/// several times its size in memory. `bash` can read part of one (`sed -n`, `tail`).
+const MAX_READ: u64 = 10 * 1024 * 1024;
 
 pub fn read(ctx: &Context, args: &Value) -> Output {
     let Some(path) = args.get("path").and_then(Value::as_str) else {
@@ -19,6 +22,14 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
     }
     if let Some(media_type) = image_type(&full) {
         return read_image(ctx, path, &full, media_type);
+    }
+    if let Ok(meta) = fs::metadata(&full)
+        && meta.len() > MAX_READ
+    {
+        return Output::error(format!(
+            "{path} is {} MB, too large to read whole. Search it with grep, or read part of it with bash (`sed -n '1000,1100p'`, `head`, `tail`).",
+            meta.len() / (1024 * 1024)
+        ));
     }
     let bytes = match fs::read(&full) {
         Ok(bytes) => bytes,
@@ -32,8 +43,8 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
         return Output::ok("(empty file)");
     }
 
-    let lines: Vec<&str> = text.split_terminator('\n').collect();
-    let total = lines.len();
+    let lines = || text.split_terminator('\n');
+    let total = lines().count();
     let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
     if offset > total {
         return Output::error(format!("Offset {offset} is beyond the end of {path} ({total} lines)."));
@@ -43,7 +54,7 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
     let mut out = String::new();
     let mut last = offset - 1;
     let mut hit_bytes = false;
-    for (i, line) in lines.iter().enumerate().skip(offset - 1).take(limit) {
+    for (i, line) in lines().enumerate().skip(offset - 1).take(limit) {
         let entry = if line.len() > MAX_LINE_CHARS {
             format!("{}\t{}… [line truncated: {} chars]\n", i + 1, truncate(line, MAX_LINE_CHARS), line.len())
         } else {
@@ -214,6 +225,20 @@ mod tests {
         fs::write(dir.join("a.txt"), body).unwrap();
         let out = read(&ctx(&dir), &json!({"path": "a.txt", "offset": 2, "limit": 2}));
         assert_eq!(out.text, "2\tline 2\n3\tline 3\n[Showing lines 2-3 of 5. Use offset=4 to continue.]");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_too_large_to_read_whole_is_not_read() {
+        let dir = std::env::temp_dir().join(format!("killi-bigread-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = fs::File::create(dir.join("big.log")).unwrap();
+        file.set_len(MAX_READ + 1).unwrap();
+        let out = read(&ctx(&dir), &json!({"path": "big.log"}));
+        assert!(out.is_error && out.text.contains("too large to read whole"), "{}", out.text);
+        fs::write(dir.join("ok.txt"), "a\nb\n").unwrap();
+        assert_eq!(read(&ctx(&dir), &json!({"path": "ok.txt", "offset": 2})).text, "2\tb\n");
+        assert!(read(&ctx(&dir), &json!({"path": "ok.txt", "offset": 3})).is_error);
         fs::remove_dir_all(dir).unwrap();
     }
 
