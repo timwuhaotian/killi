@@ -1,7 +1,7 @@
 //! The start-up banner: killi in block letters with a sky-to-violet gradient, and a few lines
 //! about the session beside it.
 
-use super::text::{DIM, RESET, truecolor, width};
+use super::text::{DIM, FAINT, RESET, truecolor, width};
 
 const LOGO: [&str; 6] = [
     "██╗  ██╗██╗██╗     ██╗     ██╗",
@@ -76,6 +76,24 @@ pub fn working(frame: usize) -> String {
         out.push(c);
         out.push_str(RESET);
     }
+    out
+}
+
+/// A progress bar `cells` wide with `fraction` of it filled: heavy strokes taking the logo's
+/// gradient from the left, then a faint rule for what is left.
+pub fn bar(fraction: f32, cells: usize) -> String {
+    let truecolor = truecolor();
+    let filled = (fraction.clamp(0.0, 1.0) * cells as f32).round() as usize;
+    let mut out = String::new();
+    for i in 0..filled {
+        let (r, g, b) = gradient(i as f32 / (cells - 1).max(1) as f32);
+        out.push_str(&color(r, g, b, truecolor));
+        out.push('━');
+    }
+    if filled < cells {
+        out.push_str(&format!("{FAINT}{}", "─".repeat(cells - filled)));
+    }
+    out.push_str(RESET);
     out
 }
 
@@ -165,6 +183,19 @@ mod tests {
             assert!(dots.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1), "frame {frame} jumps: {dots:?}");
         }
         assert_eq!(rows.len(), 3, "the ribbon uses every height");
+    }
+
+    #[test]
+    fn the_bar_fills_from_the_left_and_keeps_its_width() {
+        for cells in [1, 8, 24] {
+            for step in 0..=10 {
+                assert_eq!(width(&bar(step as f32 / 10.0, cells)), cells);
+            }
+        }
+        assert_eq!(bar(0.0, 4).matches('─').count(), 4);
+        assert_eq!(bar(1.0, 4).matches('━').count(), 4);
+        assert_eq!((bar(0.5, 4).matches('━').count(), bar(0.5, 4).matches('─').count()), (2, 2));
+        assert_eq!(bar(7.0, 4), bar(1.0, 4), "past full is full");
     }
 
     #[test]

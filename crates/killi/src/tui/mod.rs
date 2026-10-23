@@ -7,12 +7,12 @@
 //! (wheel, PageUp and PageDown) and is laid out again whenever the window changes size. It is
 //! kept in `history`, and printed to the terminal once more when killi quits.
 
-mod banner;
+pub(crate) mod banner;
 mod editor;
 mod history;
 mod menu;
 mod paste;
-mod text;
+pub(crate) mod text;
 
 use std::io::{Stdout, Write, stdout};
 use std::path::{Path, PathBuf};
@@ -2607,7 +2607,7 @@ fn prune_choices(others: usize) -> Vec<usize> {
 }
 
 /// Bytes for the eye: `312 KB`, `4.2 MB`.
-fn megabytes(bytes: u64) -> String {
+pub(crate) fn megabytes(bytes: u64) -> String {
     match bytes {
         0..1_000_000 => format!("{} KB", bytes / 1_000),
         _ => format!("{:.1} MB", bytes as f64 / 1e6),

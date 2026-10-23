@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.31 — 2026-10-23
+
+- **`killi update` shows what it is doing.** On a terminal it draws a live row while it checks
+  for a release and downloads it: the working row's braille wave and wordmark, then the version
+  being fetched with a gradient bar, the size so far and the speed, dropping the speed and then
+  the sizes on a narrow terminal. It ends with a check mark, and Ctrl-C clears the row and
+  restores the cursor. Piped output and `NO_COLOR` get the same plain lines as before.
+
 ## 0.2.30 — 2026-10-23
 
 - **A new working animation.** The `killi` wordmark alone was too quiet to notice. The working
