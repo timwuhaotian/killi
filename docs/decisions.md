@@ -64,6 +64,7 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
 
 16. **TUI:**
     - Compact lines: one line per tool call with a short result, edits show a small diff, long output hidden behind a key.
+      - A bash call is drawn as a dim `$` and the command, not the word `bash`: most rows are bash, so the word was the same first column on every line. The other tools keep their bold name, so they stand out among the shell rows. This is display only (`tool_text` in `tui/mod.rs`); the summary string the agent sends keeps `bash`, because the output preview and Ctrl+O titles key on it.
     - Thinking shown as a dim one-line summary ("thinking 4s" plus the first sentence), full text behind a key.
     - Status line: model, plan mode, context used, git branch, session tokens (fresh and cached input, output).
     - Markdown is a small streaming styler in `tui/text.rs`, not `pulldown-cmark`: it styles a line as it arrives and holds table rows until the table ends. Code is colored by a built-in keyword table, not `syntect`.

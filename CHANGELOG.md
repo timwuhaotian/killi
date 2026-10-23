@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.33 — 2026-10-23
+
+- **Bash rows start with `$`, not the word `bash`.** Most tool rows are shell commands, so the
+  same word opened nearly every line. They now read `✓ $ cargo test · 12 passed`, with a dim
+  `$`; the other tools keep their bold name, so they stand out among the shell rows.
+
 ## 0.2.32 — 2026-10-23
 
 - **Ctrl+S sends your message now.** While the agent works, Enter queues a message for its

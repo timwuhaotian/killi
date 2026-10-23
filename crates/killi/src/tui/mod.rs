@@ -1552,7 +1552,7 @@ impl App {
         self.begin(Kind::Tool);
         self.emit(Line::block(move |width| {
             let lead = label.as_ref().map_or(0, |l| text::width(l) + 5);
-            let summary = clip(&summary, width.saturating_sub(lead + 2 + text::width(&note)).max(20));
+            let summary = clip(&tool_text(&summary), width.saturating_sub(lead + 2 + text::width(&note)).max(20));
             let line = match &label {
                 Some(label) => format!("  {DIM}↳ {label}:{RESET} {glyph} {DIM}{summary}{RESET}{note}"),
                 None => format!("{glyph} {}{note}", tool_summary(&summary)),
@@ -2023,8 +2023,8 @@ impl App {
             for running in self.running.iter().filter(|r| !waiting_on_you(r)).take(5) {
                 let took = format!(" {DIM}· {}{RESET}", clock(running.started.elapsed()));
                 let line = match &running.label {
-                    Some(label) => format!("  {DIM}↳ {label}:{RESET} {LAGOON}{frame}{RESET} {DIM}{}{RESET}{took}", running.summary),
-                    None => format!("{LAGOON}{frame}{RESET} {}{took}", tool_summary(&running.summary)),
+                    Some(label) => format!("  {DIM}↳ {label}:{RESET} {LAGOON}{frame}{RESET} {DIM}{}{RESET}{took}", tool_text(&running.summary)),
+                    None => format!("{LAGOON}{frame}{RESET} {}{took}", tool_summary(&tool_text(&running.summary))),
                 };
                 rows.push(fit(&line, width));
             }
@@ -2567,12 +2567,23 @@ fn diff_line(line: &str) -> String {
     format!("  {FAINT}│{RESET} {DIM}{number:>4}{RESET} {color}{sign} {text}{RESET}")
 }
 
-/// A tool call's summary with the tool's name in bold: `read src/lib.rs`.
-fn tool_summary(summary: &str) -> String {
-    match summary.split_once(' ') {
-        Some((name, args)) => format!("{BOLD}{name}{RESET} {args}"),
-        None => format!("{BOLD}{summary}{RESET}"),
+/// A tool call's summary as its row draws it. The shell is the `$` of a prompt, because most
+/// rows are bash calls and would all start with the same word.
+fn tool_text(summary: &str) -> String {
+    match summary.strip_prefix("bash") {
+        Some(rest) if rest.is_empty() || rest.starts_with(' ') => format!("${rest}"),
+        _ => summary.to_string(),
     }
+}
+
+/// `tool_text` with the tool's name in bold, `read src/lib.rs`, or the `$` dim.
+fn tool_summary(summary: &str) -> String {
+    let (name, rest) = match summary.split_once(' ') {
+        Some((name, args)) => (name, format!(" {args}")),
+        None => (summary, String::new()),
+    };
+    let style = if name == "$" { DIM } else { BOLD };
+    format!("{style}{name}{RESET}{rest}")
 }
 
 fn first_sentence(text: &str) -> String {
@@ -3188,6 +3199,17 @@ mod tests {
         assert_eq!(unstyled(&diff_line("+12\tlet x = 1;")), "  │   12 + let x = 1;");
         assert!(diff_line("-3\told").contains(&format!("{DANGER}- old")));
         assert_eq!(unstyled(&diff_line("@@ hunk")), "  │ @@ hunk");
+    }
+
+    #[test]
+    fn bash_rows_lead_with_a_dim_dollar_instead_of_the_word() {
+        assert_eq!(tool_text("bash cargo test"), "$ cargo test");
+        assert_eq!(tool_text("bash [src] ls"), "$ [src] ls");
+        assert_eq!(tool_text("bash"), "$");
+        assert_eq!(tool_text("bashful x"), "bashful x");
+        assert_eq!(tool_text("read src/lib.rs"), "read src/lib.rs");
+        assert_eq!(tool_summary(&tool_text("bash cargo test")), format!("{DIM}${RESET} cargo test"));
+        assert_eq!(tool_summary(&tool_text("bash")), format!("{DIM}${RESET}"));
     }
 
     #[test]
