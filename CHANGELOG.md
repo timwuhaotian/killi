@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.34 — 2026-10-23
+
+- **The size and memory chart compares opencode 2.** killi is 6.4 MB and runs a prompt in
+  15.3 MB; opencode 2.1.3 is 204.4 MB and 332 MB, and sends 15,014 tokens before you type to
+  killi's 3,564. killi's own row is re-measured on 0.2.33. `scripts/bench.py` takes
+  `--tools killi,opencode` to measure some tools and keep the others' rows. The binary itself
+  is unchanged apart from its version.
+
 ## 0.2.33 — 2026-10-23
 
 - **Bash rows start with `$`, not the word `bash`.** Most tool rows are shell commands, so the
