@@ -7,9 +7,10 @@ use std::sync::OnceLock;
 
 use unicode_width::UnicodeWidthChar;
 
+use super::palette::{self, Ground, Role};
+
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
-pub const DIM: &str = "\x1b[2m";
 pub const ITALIC: &str = "\x1b[3m";
 pub const UNDERLINE: &str = "\x1b[4m";
 pub const STRIKE: &str = "\x1b[9m";
@@ -24,15 +25,19 @@ enum Theme {
 static THEME: OnceLock<Theme> = OnceLock::new();
 
 /// Fixes the theme for the session: `"dark"` or `"light"`, anything else goes by the
-/// terminal's `background` when it answered the color query, else by `COLORFGBG`, which
-/// most terminals that have a light background set.
-pub fn init_theme(setting: Option<&str>, background: Option<(u8, u8, u8)>) {
+/// terminal's `ground` when it answered the color queries, else by `COLORFGBG`, which most
+/// terminals that have a light background set. A ground also gives the grays, tints and stripes
+/// their shades (see `palette`); a pinned theme has none, and keeps the fixed shades.
+pub fn init_theme(setting: Option<&str>, ground: Option<Ground>) {
+    let pinned = matches!(setting, Some("dark" | "light"));
+    let ground = ground.filter(|_| !pinned);
     let theme = match setting {
         Some("dark") => Theme::Dark,
         Some("light") => Theme::Light,
-        _ => background.map_or_else(detect_theme, theme_for),
+        _ => ground.map_or_else(detect_theme, |ground| theme_for(ground.background)),
     };
     let _ = THEME.set(theme);
+    palette::init(ground);
 }
 
 /// The theme for a background color: light when it reflects more than half the light.
@@ -49,6 +54,11 @@ fn detect_theme() -> Theme {
     }
 }
 
+/// Whether the session runs on a light terminal.
+pub fn is_light() -> bool {
+    *THEME.get_or_init(detect_theme) == Theme::Light
+}
+
 /// Whether the terminal takes 24-bit colors, as `COLORTERM` announces.
 pub fn truecolor() -> bool {
     static TRUECOLOR: OnceLock<bool> = OnceLock::new();
@@ -56,16 +66,27 @@ pub fn truecolor() -> bool {
 }
 
 /// A color escape that comes out in the shade for the current theme when it is printed: the
-/// design token itself on a truecolor terminal, else its nearest 256-color shade.
+/// design token itself on a truecolor terminal, else its nearest 256-color shade. A derived
+/// role takes the shade `palette` made from the terminal's ground when there is one.
 #[derive(Clone, Copy)]
 pub struct Sgr {
     dark: &'static str,
     light: &'static str,
     dark_true: &'static str,
     light_true: &'static str,
+    derived: Option<Role>,
 }
 
 impl Sgr {
+    const fn fixed(dark: &'static str, light: &'static str, dark_true: &'static str, light_true: &'static str) -> Sgr {
+        Sgr { dark, light, dark_true, light_true, derived: None }
+    }
+
+    /// A role that follows the ground; the fixed shades are for when the terminal gave none.
+    const fn derived(role: Role, dark: &'static str, light: &'static str, dark_true: &'static str, light_true: &'static str) -> Sgr {
+        Sgr { dark, light, dark_true, light_true, derived: Some(role) }
+    }
+
     fn shade(&self, theme: Theme, truecolor: bool) -> &'static str {
         match (theme, truecolor) {
             (Theme::Dark, true) => self.dark_true,
@@ -78,6 +99,18 @@ impl Sgr {
 
 impl fmt::Display for Sgr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.derived {
+            // Colors are about to be stripped; what recedes keeps receding, as dim.
+            Some(Role::Faint | Role::Rule | Role::Muted) if no_color() => return f.write_str("\x1b[2m"),
+            Some(role) if !no_color() => {
+                if let Some(palette) = palette::get()
+                    && let Some(written) = palette.write(f, role, truecolor())
+                {
+                    return written;
+                }
+            }
+            _ => {}
+        }
         f.write_str(self.shade(*THEME.get_or_init(detect_theme), truecolor()))
     }
 }
@@ -85,32 +118,45 @@ impl fmt::Display for Sgr {
 // The roles of the design system (`docs/killi-design-system.html`): each token's exact color
 // where the terminal shows 24-bit color, else its nearest 256-color shade.
 
-/// Killi: the prompt caret, running and finished work, the active mode, commands and links.
-pub const LAGOON: Sgr = Sgr { dark: "\x1b[38;5;80m", light: "\x1b[38;5;30m", dark_true: "\x1b[38;2;79;209;197m", light_true: "\x1b[38;2;10;110;101m" };
-/// The human: your messages, questions and anything else waiting on you.
-pub const FIN: Sgr = Sgr { dark: "\x1b[38;5;209m", light: "\x1b[38;5;130m", dark_true: "\x1b[38;2;255;140;90m", light_true: "\x1b[38;2;173;63;20m" };
+/// Killi: running work, the active mode, commands, links and the selected row's mark.
+pub const LAGOON: Sgr = Sgr::fixed("\x1b[38;5;80m", "\x1b[38;5;30m", "\x1b[38;2;79;209;197m", "\x1b[38;2;10;110;101m");
+/// The human: your messages, the prompt, questions and anything else waiting on you.
+pub const FIN: Sgr = Sgr::fixed("\x1b[38;5;209m", "\x1b[38;5;130m", "\x1b[38;2;255;140;90m", "\x1b[38;2;173;63;20m");
 /// Retries, a context window nearly full, an interrupted turn.
-pub const WARN: Sgr = Sgr { dark: "\x1b[38;5;221m", light: "\x1b[38;5;136m", dark_true: "\x1b[38;2;242;193;78m", light_true: "\x1b[38;2;138;90;0m" };
+pub const WARN: Sgr = Sgr::fixed("\x1b[38;5;221m", "\x1b[38;5;136m", "\x1b[38;2;242;193;78m", "\x1b[38;2;138;90;0m");
 /// Failed tool calls, errors and removed lines.
-pub const DANGER: Sgr = Sgr { dark: "\x1b[38;5;204m", light: "\x1b[38;5;124m", dark_true: "\x1b[38;2;255;111;125m", light_true: "\x1b[38;2;179;38;30m" };
-/// Marks the eye may skip: gutters, rules, the empty part of a meter.
-pub const FAINT: Sgr = Sgr { dark: "\x1b[38;5;242m", light: "\x1b[38;5;245m", dark_true: "\x1b[38;2;92;107;122m", light_true: "\x1b[38;2;117;131;138m" };
+pub const DANGER: Sgr = Sgr::fixed("\x1b[38;5;204m", "\x1b[38;5;124m", "\x1b[38;2;255;111;125m", "\x1b[38;2;179;38;30m");
+/// Marks the eye may skip: a finished call's tick, gutters, hints, the empty part of a meter.
+pub const FAINT: Sgr = Sgr::derived(Role::Faint, "\x1b[38;5;242m", "\x1b[38;5;245m", "\x1b[38;2;92;107;122m", "\x1b[38;2;117;131;138m");
+/// Hairlines: the rules around the prompt. As faint as a mark until the ground is known.
+pub const RULE: Sgr = Sgr::derived(Role::Rule, "\x1b[38;5;242m", "\x1b[38;5;245m", "\x1b[38;2;92;107;122m", "\x1b[38;2;117;131;138m");
+/// Secondary text. SGR dim is the fallback, not the design: Kil and Alacritty scale each
+/// channel to two thirds, which makes dim text darker than body text on a light theme.
+pub const DIM: Sgr = Sgr::derived(Role::Muted, "\x1b[2m", "\x1b[2m", "\x1b[2m", "\x1b[2m");
 /// The thinking effort in the status line and the banner.
-pub const EFFORT: Sgr = Sgr { dark: "\x1b[38;5;105m", light: "\x1b[38;5;61m", dark_true: "\x1b[38;2;135;135;255m", light_true: "\x1b[38;2;95;95;175m" };
+pub const EFFORT: Sgr = Sgr::fixed("\x1b[38;5;147m", "\x1b[38;5;60m", "\x1b[38;2;170;169;235m", "\x1b[38;2;94;90;154m");
 /// Token counts and the cache hit rate in the status line.
-pub const TOKENS: Sgr = Sgr { dark: "\x1b[38;5;75m", light: "\x1b[38;5;25m", dark_true: "\x1b[38;2;95;175;255m", light_true: "\x1b[38;2;0;95;175m" };
+pub const TOKENS: Sgr = Sgr::fixed("\x1b[38;5;110m", "\x1b[38;5;24m", "\x1b[38;2;129;188;229m", "\x1b[38;2;43;105;145m");
 /// The git branch in the status line.
-pub const BRANCH: Sgr = Sgr { dark: "\x1b[38;5;176m", light: "\x1b[38;5;127m", dark_true: "\x1b[38;2;215;135;215m", light_true: "\x1b[38;2;175;0;175m" };
-/// A background a step off the terminal's own, for the selected row and your messages.
-pub const TINT: Sgr = Sgr { dark: "\x1b[48;5;237m", light: "\x1b[48;5;254m", dark_true: "\x1b[48;2;23;49;61m", light_true: "\x1b[48;2;214;233;238m" };
+pub const BRANCH: Sgr = Sgr::fixed("\x1b[38;5;182m", "\x1b[38;5;96m", "\x1b[38;2;215;160;202m", "\x1b[38;2;134;76;122m");
+/// A background a step off the terminal's own, for your messages.
+pub const TINT: Sgr = Sgr::derived(Role::Tint, "\x1b[48;5;237m", "\x1b[48;5;254m", "\x1b[48;2;23;30;35m", "\x1b[48;2;223;229;226m");
+/// The selected row of a list: a little more than a tint, with more lagoon in it.
+pub const SELECT: Sgr = Sgr::derived(Role::Select, "\x1b[48;5;237m", "\x1b[48;5;254m", "\x1b[48;2;27;41;45m", "\x1b[48;2;210;220;217m");
+/// Behind an added line of a diff. Only drawn in 24-bit color, where it can be this soft.
+pub const ADD: Sgr = Sgr::derived(Role::Add, "\x1b[49m", "\x1b[49m", "\x1b[48;2;21;35;37m", "\x1b[48;2;224;239;231m");
+/// Behind a removed line of a diff.
+pub const DEL: Sgr = Sgr::derived(Role::Del, "\x1b[49m", "\x1b[49m", "\x1b[48;2;41;30;35m", "\x1b[48;2;248;229;226m");
+/// Behind inline code, in 24-bit color.
+pub const CHIP: Sgr = Sgr::derived(Role::Chip, "\x1b[49m", "\x1b[49m", "\x1b[48;2;30;35;40m", "\x1b[48;2;217;219;218m");
 
 // Syntax colors for code blocks only; they carry no meaning in the rest of the UI.
-const STRING: Sgr = Sgr { dark: "\x1b[32m", light: "\x1b[38;5;28m", dark_true: "\x1b[32m", light_true: "\x1b[38;5;28m" };
-const NUMBER: Sgr = Sgr { dark: "\x1b[33m", light: "\x1b[38;5;130m", dark_true: "\x1b[33m", light_true: "\x1b[38;5;130m" };
-const KEYWORD: Sgr = Sgr { dark: "\x1b[35m", light: "\x1b[38;5;90m", dark_true: "\x1b[35m", light_true: "\x1b[38;5;90m" };
+const STRING: Sgr = Sgr::fixed("\x1b[32m", "\x1b[38;5;28m", "\x1b[32m", "\x1b[38;5;28m");
+const NUMBER: Sgr = Sgr::fixed("\x1b[33m", "\x1b[38;5;130m", "\x1b[33m", "\x1b[38;5;130m");
+const KEYWORD: Sgr = Sgr::fixed("\x1b[35m", "\x1b[38;5;90m", "\x1b[35m", "\x1b[38;5;90m");
 
 /// Whether `NO_COLOR` asks for no colors.
-fn no_color() -> bool {
+pub fn no_color() -> bool {
     static NO_COLOR: OnceLock<bool> = OnceLock::new();
     *NO_COLOR.get_or_init(|| std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()))
 }
@@ -385,7 +431,7 @@ impl Markdown {
             return Vec::new();
         }
         let mut parts = self.finish_parts();
-        parts.push(Part::Row(self.block(line, trimmed)));
+        parts.extend(self.block(line, trimmed).map(Part::Row));
         parts
     }
 
@@ -419,27 +465,29 @@ impl Markdown {
             .collect()
     }
 
-    fn block(&mut self, line: &str, trimmed: &str) -> String {
+    /// The row a line becomes; None for a code fence with nothing to say (no language, or the
+    /// one that closes the block), so the block starts and ends on its code.
+    fn block(&mut self, line: &str, trimmed: &str) -> Option<String> {
         if let Some(info) = trimmed.strip_prefix("```") {
             let lang = info.trim().split(|c: char| c.is_whitespace() || c == ',').next().unwrap_or("");
             self.in_code = !self.in_code;
             self.lang = if self.in_code { Lang::of(lang) } else { Lang::Plain };
             let label = if self.in_code { lang } else { "" };
-            return format!("  {FAINT}▏{RESET} {DIM}{label}{RESET}");
+            return (!label.is_empty()).then(|| format!("  {FAINT}▏{RESET} {DIM}{label}{RESET}"));
         }
         if self.in_code {
             let code = match self.lang {
                 Lang::Plain => line.to_string(),
                 lang => highlight(lang, line),
             };
-            return format!("  {FAINT}▏{RESET} {code}");
+            return Some(format!("  {FAINT}▏{RESET} {code}"));
         }
         if let Some((level, rest)) = heading(trimmed) {
             let color = if level <= 2 { LAGOON.to_string() } else { String::new() };
-            return format!("{BOLD}{color}{}{RESET}", inline(rest));
+            return Some(format!("{BOLD}{color}{}{RESET}", inline(rest)));
         }
         if let Some(rest) = trimmed.strip_prefix("> ") {
-            return format!("{FAINT}│{RESET} {DIM}{}{RESET}", inline(rest));
+            return Some(format!("{FAINT}│{RESET} {DIM}{}{RESET}", inline(rest)));
         }
         let indent = &line[..line.len() - trimmed.len()];
         for bullet in ["- ", "* ", "+ "] {
@@ -449,17 +497,17 @@ impl Markdown {
                     r if r.starts_with("[x] ") || r.starts_with("[X] ") => ("☑", &r[4..]),
                     r => (if indent.is_empty() { "•" } else { "◦" }, r),
                 };
-                return format!("{indent}{mark} {}", inline(rest));
+                return Some(format!("{indent}{mark} {}", inline(rest)));
             }
         }
         let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
         if digits > 0 && trimmed[digits..].starts_with(". ") {
-            return format!("{indent}{DIM}{}.{RESET} {}", &trimmed[..digits], inline(&trimmed[digits + 2..]));
+            return Some(format!("{indent}{DIM}{}.{RESET} {}", &trimmed[..digits], inline(&trimmed[digits + 2..])));
         }
         if matches!(trimmed, "---" | "***" | "___") {
-            return format!("{FAINT}{}{RESET}", "─".repeat(self.width.clamp(10, 60)));
+            return Some(format!("{RULE}{}{RESET}", "─".repeat(self.width.clamp(10, 60))));
         }
-        inline(line)
+        Some(inline(line))
     }
 }
 
@@ -476,7 +524,7 @@ fn inline(text: &str) -> String {
         if let Some(after) = rest.strip_prefix('`')
             && let Some(end) = after.find('`')
         {
-            out.push_str(&format!("{LAGOON}{}{RESET}", &after[..end]));
+            out.push_str(&code(&after[..end]));
             rest = &after[end + 1..];
             continue;
         }
@@ -524,6 +572,11 @@ fn inline(text: &str) -> String {
     out
 }
 
+/// Inline code: text on a chip where 24-bit color can draw one softly, else in lagoon.
+fn code(span: &str) -> String {
+    if truecolor() { format!("{CHIP}{span}{RESET}") } else { format!("{LAGOON}{span}{RESET}") }
+}
+
 /// The label, the address and the bytes used by a `[label](url)` at the start of `text`.
 fn link(text: &str) -> Option<(&str, &str, usize)> {
     let close = text.find("](")?;
@@ -554,17 +607,44 @@ fn is_separator(cells: &[String]) -> bool {
     })
 }
 
-/// `text` cut to `max` columns with an ellipsis, keeping its styles.
-fn cut(text: &str, max: usize) -> String {
+/// `text` on one row of at most `max` columns: cut with an ellipsis where it runs out, the
+/// ellipsis in the style the text had there, so a tinted row stays tinted to its end.
+pub fn ellipsize(text: &str, max: usize) -> String {
     if width(text) <= max {
         return text.to_string();
     }
     if max == 0 {
         return String::new();
     }
-    let mut row = wrap(text, max - 1).swap_remove(0);
-    row.push('…');
-    row
+    let mut out = String::new();
+    let mut used = 0;
+    let mut styled = false;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            let mut seq = String::from(c);
+            for c in chars.by_ref() {
+                seq.push(c);
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            styled = seq != RESET;
+            out.push_str(&seq);
+            continue;
+        }
+        let w = c.width().unwrap_or(0);
+        if used + w > max - 1 {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    if styled {
+        out.push_str(RESET);
+    }
+    out
 }
 
 /// A table as aligned rows: a bold header over a rule, columns shrunk to fit `max_width`.
@@ -607,7 +687,7 @@ pub fn render_table(rows: &[String], max_width: usize) -> Vec<String> {
             .iter()
             .enumerate()
             .map(|(i, cell)| {
-                let cell = cut(cell, widths[i]);
+                let cell = ellipsize(cell, widths[i]);
                 let cell = if bold { format!("{BOLD}{cell}{RESET}") } else { cell };
                 let pad = widths[i].saturating_sub(width(&cell));
                 match aligns.get(i) {
@@ -800,13 +880,13 @@ mod tests {
         let mut md = Markdown::default();
         assert_eq!(md.line("## Title"), [format!("{BOLD}{LAGOON}Title{RESET}")]);
         assert_eq!(md.line("### Small"), [format!("{BOLD}Small{RESET}")]);
-        assert_eq!(md.line("- use `cargo` **now**"), [format!("• use {LAGOON}cargo{RESET} {BOLD}now{RESET}")]);
+        assert_eq!(md.line("- use `cargo` **now**"), [format!("• use {} {BOLD}now{RESET}", code("cargo"))]);
         assert_eq!(md.line("  - nested"), ["  ◦ nested"]);
         assert_eq!(md.line("- [x] done"), ["☑ done"]);
         assert_eq!(md.line("2. second"), [format!("{DIM}2.{RESET} second")]);
-        assert_eq!(md.line("```"), [format!("  {FAINT}▏{RESET} {DIM}{RESET}")]);
+        assert!(md.line("```").is_empty(), "a fence with no language has nothing to say");
         assert_eq!(md.line("let x = 1;"), [format!("  {FAINT}▏{RESET} let x = 1;")]);
-        md.line("```");
+        assert!(md.line("```").is_empty(), "nor does the one that closes the block");
         assert_eq!(md.line("a * b"), ["a * b"]);
         assert_eq!(md.line("some *emphasis* here"), [format!("some {ITALIC}emphasis{RESET} here")]);
         assert_eq!(md.line("~~gone~~"), [format!("{STRIKE}gone{RESET}")]);
@@ -861,12 +941,65 @@ mod tests {
     fn roles_print_their_tokens_exactly_on_truecolor_terminals() {
         assert_eq!(LAGOON.shade(Theme::Dark, true), "\x1b[38;2;79;209;197m");
         assert_eq!(LAGOON.shade(Theme::Dark, false), "\x1b[38;5;80m");
-        assert_eq!(TINT.shade(Theme::Light, true), "\x1b[48;2;214;233;238m");
+        assert_eq!(TINT.shade(Theme::Light, true), "\x1b[48;2;223;229;226m");
         assert_eq!(TINT.shade(Theme::Light, false), "\x1b[48;5;254m");
-        for role in [LAGOON, FIN, WARN, DANGER, FAINT, TINT] {
-            assert!(role.dark_true.contains(";2;") && role.light_true.contains(";2;"));
-            assert!(role.dark.contains(";5;") && role.light.contains(";5;"));
+        assert_eq!(EFFORT.shade(Theme::Dark, true), "\x1b[38;2;170;169;235m");
+        assert_eq!(TOKENS.shade(Theme::Dark, true), "\x1b[38;2;129;188;229m");
+        assert_eq!(BRANCH.shade(Theme::Dark, true), "\x1b[38;2;215;160;202m");
+        for role in [LAGOON, FIN, WARN, DANGER, FAINT, RULE, EFFORT, TOKENS, BRANCH] {
+            assert!(role.dark_true.starts_with("\x1b[38;2;") && role.light_true.starts_with("\x1b[38;2;"));
+            assert!(role.dark.starts_with("\x1b[38;5;") && role.light.starts_with("\x1b[38;5;"));
         }
+        for ground in [TINT, SELECT, ADD, DEL, CHIP] {
+            assert!(ground.dark_true.starts_with("\x1b[48;2;") && ground.light_true.starts_with("\x1b[48;2;"));
+        }
+        for ground in [ADD, DEL, CHIP] {
+            assert_eq!((ground.dark, ground.light), ("\x1b[49m", "\x1b[49m"), "no stripe or chip without 24-bit color");
+        }
+        assert_eq!((DIM.dark, DIM.light_true), ("\x1b[2m", "\x1b[2m"), "without a ground, dim is SGR dim");
+    }
+
+    #[test]
+    fn the_fixed_grounds_are_what_the_palette_derives_for_the_design_systems_own_ground() {
+        let digits = |shade: &str| -> Vec<u8> { shade.trim_start_matches("\x1b[48;2;").trim_end_matches('m').split(';').map(|n| n.parse().unwrap()).collect() };
+        let dark = palette::derive(Ground { background: (11, 15, 20), foreground: Some((232, 238, 242)) });
+        let light = palette::derive(Ground { background: (245, 247, 244), foreground: Some((19, 26, 32)) });
+        for (role, sgr) in [(Role::Tint, TINT), (Role::Select, SELECT), (Role::Add, ADD), (Role::Del, DEL), (Role::Chip, CHIP)] {
+            for (derived, shade) in [(dark.rgb(role), sgr.dark_true), (light.rgb(role), sgr.light_true)] {
+                let fixed = digits(shade);
+                assert!([derived.0, derived.1, derived.2].iter().zip(&fixed).all(|(a, b)| a.abs_diff(*b) <= 1), "{role:?}: {derived:?} against {fixed:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_ellipsis_ends_a_row_that_runs_out_in_the_style_it_was_in() {
+        assert_eq!(ellipsize("short", 10), "short");
+        assert_eq!(ellipsize("exactly ten", 11), "exactly ten");
+        assert_eq!(ellipsize("one two three", 8), "one two…");
+        assert_eq!(width(&ellipsize("one two three", 8)), 8);
+        assert_eq!(ellipsize("anything", 0), "");
+        assert_eq!(ellipsize("中文中文", 5), "中文…", "a wide character is never split");
+        let tinted = ellipsize(&format!("{TINT}{BOLD}a long selected row{RESET}"), 10);
+        assert_eq!(tinted, format!("{TINT}{BOLD}a long se…{RESET}"), "the ellipsis keeps the band");
+        assert_eq!(width(&tinted), 10);
+        let closed = ellipsize(&format!("{BOLD}bold{RESET} and plain text"), 12);
+        assert_eq!(closed, format!("{BOLD}bold{RESET} and pl…"), "after a reset the ellipsis is plain");
+    }
+
+    #[test]
+    fn inline_code_is_a_chip_in_24_bit_color_and_lagoon_elsewhere() {
+        assert!(inline("a `b` c").contains(&code("b")));
+        let expected = if truecolor() { format!("{CHIP}b{RESET}") } else { format!("{LAGOON}b{RESET}") };
+        assert_eq!(code("b"), expected);
+    }
+
+    #[test]
+    fn a_code_block_starts_and_ends_on_its_code() {
+        let mut md = Markdown::default();
+        assert_eq!(lines(&mut md, "```\nx\n```").len(), 1);
+        assert_eq!(lines(&mut md, "```rust\nlet a = 1;\nlet b = 2;\n```").len(), 3, "the label and two lines");
+        assert_eq!(lines(&mut md, "after").len(), 1);
     }
 
     #[test]

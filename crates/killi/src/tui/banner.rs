@@ -1,7 +1,7 @@
 //! The start-up banner: killi in block letters with a sky-to-violet gradient, and a few lines
 //! about the session beside it.
 
-use super::text::{DIM, FAINT, RESET, truecolor, width};
+use super::text::{BOLD, DIM, FAINT, RESET, is_light, truecolor, width};
 
 const LOGO: [&str; 6] = [
     "██╗  ██╗██╗██╗     ██╗     ██╗",
@@ -13,8 +13,35 @@ const LOGO: [&str; 6] = [
 ];
 const LOGO_WIDTH: usize = 30;
 const GAP: &str = "    ";
-/// Sky, indigo and violet.
-const STOPS: [(f32, f32, f32); 3] = [(56.0, 189.0, 248.0), (129.0, 140.0, 248.0), (192.0, 132.0, 252.0)];
+type Stops = [(f32, f32, f32); 3];
+/// Lagoon, sky and periwinkle: the gradient starts where the brand's own color does, and its
+/// other stops are the hues of the status line's figures.
+const STOPS_DARK: Stops = [(79.0, 209.0, 197.0), (100.0, 188.0, 237.0), (157.0, 152.0, 242.0)];
+/// The same hues, deeper, for a light terminal.
+const STOPS_LIGHT: Stops = [(4.0, 121.0, 114.0), (1.0, 114.0, 159.0), (93.0, 83.0, 174.0)];
+
+/// Rows a terminal needs before the block-letter logo is worth its six; with fewer the banner
+/// is the wordmark and the setup lines.
+pub const COMPACT_ROWS: usize = 30;
+/// Columns below which the logo has no room beside the setup lines.
+const COMPACT_COLUMNS: usize = 70;
+
+/// Whether the banner is the wordmark alone: a narrow window, or one too short (`tall` false)
+/// to give the logo its rows.
+pub fn compact(columns: usize, tall: bool) -> bool {
+    columns < COMPACT_COLUMNS || !tall
+}
+
+/// `killi` bold in the logo's gradient, with the version after it.
+pub fn wordmark(version: &str) -> String {
+    let truecolor = truecolor();
+    let mut out = String::new();
+    for (i, c) in WORD.chars().enumerate() {
+        let (r, g, b) = gradient(i as f32 / (WORD.len() - 1) as f32);
+        out.push_str(&format!("{BOLD}{}{c}", color(r, g, b, truecolor)));
+    }
+    format!("{out}{RESET} {DIM}{version}{RESET}")
+}
 
 /// The wordmark that stands in for a spinner.
 const WORD: &str = "killi";
@@ -138,10 +165,15 @@ fn paint(row: &str, y: usize, truecolor: bool) -> String {
 }
 
 fn gradient(t: f32) -> (f32, f32, f32) {
-    let t = t.clamp(0.0, 1.0) * (STOPS.len() - 1) as f32;
-    let i = (t.floor() as usize).min(STOPS.len() - 2);
+    blend(if is_light() { &STOPS_LIGHT } else { &STOPS_DARK }, t)
+}
+
+/// The color `t` of the way, from 0 to 1, along `stops`.
+fn blend(stops: &Stops, t: f32) -> (f32, f32, f32) {
+    let t = t.clamp(0.0, 1.0) * (stops.len() - 1) as f32;
+    let i = (t.floor() as usize).min(stops.len() - 2);
     let f = t - i as f32;
-    let (a, b) = (STOPS[i], STOPS[i + 1]);
+    let (a, b) = (stops[i], stops[i + 1]);
     (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f, a.2 + (b.2 - a.2) * f)
 }
 
@@ -196,6 +228,27 @@ mod tests {
         assert_eq!(bar(1.0, 4).matches('━').count(), 4);
         assert_eq!((bar(0.5, 4).matches('━').count(), bar(0.5, 4).matches('─').count()), (2, 2));
         assert_eq!(bar(7.0, 4), bar(1.0, 4), "past full is full");
+    }
+
+    #[test]
+    fn the_logo_gives_way_to_the_wordmark_in_a_small_window() {
+        assert!(!compact(118, true));
+        assert!(compact(118, false), "too few rows for six of logo");
+        assert!(compact(69, true), "too narrow for the setup lines beside it");
+        assert!(!compact(70, true));
+        let mark = wordmark("0.3.0");
+        assert_eq!(width(&mark), WORD.len() + 1 + 5);
+        assert!(mark.contains(BOLD) && mark.ends_with(RESET));
+    }
+
+    #[test]
+    fn the_gradient_starts_at_lagoon_and_deepens_for_a_light_terminal() {
+        assert_eq!(blend(&STOPS_DARK, 0.0), (79.0, 209.0, 197.0), "lagoon's own color");
+        assert_eq!(blend(&STOPS_DARK, 1.0), STOPS_DARK[2]);
+        assert_eq!(blend(&STOPS_DARK, 0.5), STOPS_DARK[1]);
+        assert_eq!(blend(&STOPS_LIGHT, 7.0), STOPS_LIGHT[2], "past the end is the end");
+        let brightness = |(r, g, b): (f32, f32, f32)| r + g + b;
+        assert!(STOPS_LIGHT.iter().zip(STOPS_DARK).all(|(light, dark)| brightness(*light) < brightness(dark)));
     }
 
     #[test]

@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(history.rows(), ["one two three four five six"; 3]);
         history.set_width(12);
         let plain: Vec<String> = history.rows().iter().map(|row| row.replace("\x1b[0m", "")).collect();
-        assert_eq!(plain, ["one two", "  three four", "  five six", "one two thre", "one two", "three four", "five six"]);
+        assert_eq!(plain, ["one two", "  three four", "  five six", "one two thr…", "one two", "three four", "five six"]);
         history.set_width(80);
         assert_eq!(history.rows(), ["one two three four five six"; 3]);
     }

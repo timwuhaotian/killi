@@ -11,6 +11,7 @@ pub(crate) mod banner;
 mod editor;
 mod history;
 mod menu;
+mod palette;
 mod paste;
 pub(crate) mod text;
 
@@ -46,7 +47,8 @@ use crate::snapshot::Snapshots;
 use editor::Editor;
 use history::{Entry as Line, History};
 use menu::{Entry, Item, Suggestions};
-use text::{BOLD, BRANCH, DANGER, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, TINT, TOKENS, WARN, wrap, wrap_words};
+use palette::Ground;
+use text::{ADD, BOLD, BRANCH, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, RULE, SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_words};
 
 const MAX_INPUT_ROWS: usize = 10;
 const MENU_ROWS: usize = 8;
@@ -92,8 +94,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     });
     let controls = Controls { interactive: true, ..Controls::default() };
     let fullscreen = wants_fullscreen(config.ui.fullscreen, &std::env::var("TERM_PROGRAM").unwrap_or_default());
-    let background = if config.ui.theme.is_none() { query_background() } else { None };
-    text::init_theme(config.ui.theme.as_deref(), background);
+    let ground = if config.ui.theme.is_none() { query_ground() } else { None };
+    text::init_theme(config.ui.theme.as_deref(), ground);
     let mut session = Setup::new(config, &cwd, start.model.as_deref()).await?;
     // Only once killi has a model to start on: a broken config ends on the reason instead.
     crate::config::command_guide_if_first()?;
@@ -220,10 +222,17 @@ fn wants_fullscreen(setting: Option<bool>, terminal: &str) -> bool {
     setting.unwrap_or(terminal == "kil")
 }
 
-/// Asks the terminal for its background color (OSC 11) and waits up to 200 ms for the answer,
-/// so a light terminal gets the light palette without `COLORFGBG` or `[ui] theme`. Nothing
-/// when stdin isn't a terminal or it doesn't answer; `[ui] theme` skips the question.
-fn query_background() -> Option<(u8, u8, u8)> {
+/// Asks the terminal for its background and foreground colors (OSC 11 and OSC 10) and waits up
+/// to 200 ms for the answers, so a light terminal gets the light palette and every theme gets
+/// grays, tints and stripes that match it, without `COLORFGBG` or `[ui] theme`. Nothing when
+/// stdin isn't a terminal or it doesn't answer for the background; `[ui] theme` skips the
+/// question. A terminal that answers the background but not the foreground costs 40 ms more.
+///
+/// A sentinel question after these, such as the primary device attributes, would end the wait
+/// sooner on a terminal that knows no colors, but not every terminal answers in order: Kil
+/// writes its answer to that one first and the colors after, which would leave them to be typed
+/// into the prompt.
+fn query_ground() -> Option<Ground> {
     use std::io::{IsTerminal, Read};
     if !std::io::stdin().is_terminal() || !stdout().is_terminal() {
         return None;
@@ -231,12 +240,13 @@ fn query_background() -> Option<(u8, u8, u8)> {
     terminal::enable_raw_mode().ok()?;
     let answer = (|| {
         let mut out = stdout();
-        write!(out, "\x1b]11;?\x1b\\").ok()?;
+        write!(out, "\x1b]11;?\x1b\\\x1b]10;?\x1b\\").ok()?;
         out.flush().ok()?;
         let mut reply = Vec::new();
-        let deadline = Instant::now() + Duration::from_millis(200);
+        let mut limit = Instant::now() + Duration::from_millis(200);
+        let mut waited_for_foreground = false;
         loop {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let left = limit.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
             }
@@ -251,21 +261,43 @@ fn query_background() -> Option<(u8, u8, u8)> {
                 break;
             }
             reply.extend_from_slice(&bytes[..n]);
-            if reply.ends_with(b"\x07") || reply.ends_with(b"\x1b\\") {
-                break;
+            let seen = String::from_utf8_lossy(&reply);
+            if parse_background(&seen).is_some() {
+                if parse_foreground(&seen).is_some() {
+                    break;
+                }
+                if !std::mem::replace(&mut waited_for_foreground, true) {
+                    limit = limit.min(Instant::now() + Duration::from_millis(40));
+                }
             }
         }
-        parse_background(&String::from_utf8_lossy(&reply))
+        parse_ground(&String::from_utf8_lossy(&reply))
     })();
     let _ = terminal::disable_raw_mode();
     answer
 }
 
-/// The color in a terminal's OSC 11 answer, `rgb:rrrr/gggg/bbbb` with 1 to 4 hex digits
-/// per channel, scaled to 8 bits.
+/// The terminal's answers to the color queries, the background being the one that must be there.
+fn parse_ground(reply: &str) -> Option<Ground> {
+    Some(Ground { background: parse_background(reply)?, foreground: parse_foreground(reply) })
+}
+
+/// The color in a terminal's OSC 11 answer, `rgb:rrrr/gggg/bbbb` with 1 to 4 hex digits per
+/// channel, scaled to 8 bits; None until its terminator has arrived.
 fn parse_background(reply: &str) -> Option<(u8, u8, u8)> {
-    let start = reply.find("rgb:")? + 4;
-    let end = reply[start..].find(['\x07', '\x1b']).map_or(reply.len(), |i| start + i);
+    parse_osc_color(reply, 11)
+}
+
+/// The color in a terminal's OSC 10 answer, in the same form.
+fn parse_foreground(reply: &str) -> Option<(u8, u8, u8)> {
+    parse_osc_color(reply, 10)
+}
+
+fn parse_osc_color(reply: &str, code: u8) -> Option<(u8, u8, u8)> {
+    let marker = format!("\x1b]{code};");
+    let start = reply.find(&marker)? + marker.len();
+    let body = reply[start..].strip_prefix("rgb:")?;
+    let end = body.find(['\x07', '\x1b'])?;
     let channel = |hex: &str| {
         let value = u32::from_str_radix(hex, 16).ok()?;
         Some(match hex.len() {
@@ -274,7 +306,7 @@ fn parse_background(reply: &str) -> Option<(u8, u8, u8)> {
             _ => return None,
         })
     };
-    let mut channels = reply[start..end].split('/').map(channel);
+    let mut channels = body[..end].split('/').map(channel);
     let (r, g, b) = (channels.next()??, channels.next()??, channels.next()??);
     Some((r, g, b))
 }
@@ -660,6 +692,8 @@ struct App {
     details: Vec<(String, String)>,
     /// How far back Ctrl+O has gone from the newest.
     detail_back: usize,
+    /// The first row that left output out has said how to read it; the rest don't repeat it.
+    ctrl_o_taught: bool,
     status: Status,
     controls: Controls,
     spinner: usize,
@@ -752,6 +786,7 @@ impl App {
             busy: None,
             details: Vec::new(),
             detail_back: 0,
+            ctrl_o_taught: false,
             status: Status {
                 model: agent.model_alias().to_string(),
                 thinking: agent.thinking().label().to_string(),
@@ -805,11 +840,19 @@ impl App {
         self.since_banner = self.pending.is_empty().then(|| SinceBanner { resumed, ..SinceBanner::default() });
         self.history.banner_starts();
         self.commit(String::new());
+        let tall = self.height >= banner::COMPACT_ROWS;
         self.emit(Line::block(move |width| {
+            let version = env!("CARGO_PKG_VERSION");
+            if banner::compact(width, tall) {
+                let cwd = shorten_path(&cwd, width.saturating_sub(7).max(20));
+                let mut rows = vec![banner::wordmark(version), model.clone(), format!("{}{cwd}", label("folder"))];
+                rows.extend(setup.iter().cloned());
+                return rows.iter().map(|row| fit(row, width)).collect();
+            }
             let room = width.saturating_sub(41).max(20);
             let cwd = shorten_path(&cwd, room);
             let mut side = vec![
-                format!("{BOLD}killi{RESET} {DIM}{}{RESET}", env!("CARGO_PKG_VERSION")),
+                format!("{BOLD}killi{RESET} {DIM}{version}{RESET}"),
                 format!("{DIM}a coding agent for the terminal{RESET}"),
                 String::new(),
                 model.clone(),
@@ -829,7 +872,7 @@ impl App {
             let prompts = agent.user_prompts();
             self.commit(format!("{DIM}Resumed a session with {} prompt{}; the last was “{}”.{RESET}", prompts.len(), if prompts.len() == 1 { "" } else { "s" }, prompts.last().map_or("", |s| s.lines().next().unwrap_or(""))));
         }
-        self.commit(keys_hint());
+        self.emit(Line::block(|width| wrap_items(&key_hints(), width)));
         self.commit(String::new());
         self.last_kind = Kind::None;
         self.history.banner_ends();
@@ -1470,7 +1513,7 @@ impl App {
         let spent = prompt > 0 || after.completion > before.completion;
         if spent && !quick {
             self.commit(format!(
-                "{DIM}{} · {requests} request{} · {} in, {cached}% cached · {} out{RESET}",
+                "{DIM}{} · {requests} request{} · {} in · {cached}% cached · {} out{RESET}",
                 clock(elapsed),
                 if requests == 1 { "" } else { "s" },
                 short(prompt),
@@ -1535,19 +1578,17 @@ impl App {
                 let running = self.take_running(&id);
                 let elapsed = running.as_ref().map(|r| r.started.elapsed());
                 let summary = running.map(|r| r.summary).unwrap_or_default();
+                if is_bookkeeping(&summary, is_error) {
+                    return;
+                }
                 self.tool_line(None, &summary, is_error, &brief, elapsed);
                 if display.is_none() && summary.starts_with("bash ") {
                     self.output_preview(&output, is_error);
                 }
                 if let Some(display) = display {
-                    let lines: Vec<&str> = display.lines().collect();
-                    for line in lines.iter().take(DIFF_ROWS) {
-                        self.emit(Line::Fit(diff_line(line)));
-                    }
-                    if lines.len() > DIFF_ROWS {
-                        let more = lines.len() - DIFF_ROWS;
-                        self.commit(format!("  {FAINT}│{RESET} {DIM}… {more} more line{} · Ctrl+O{RESET}", if more == 1 { "" } else { "s" }));
-                    }
+                    let shown: Vec<String> = display.lines().take(DIFF_ROWS).map(str::to_string).collect();
+                    self.emit(Line::block(move |width| diff_rows(&shown, width)));
+                    self.hidden_note(display.lines().count().saturating_sub(DIFF_ROWS), "more");
                     self.push_detail(summary, display);
                 } else {
                     self.push_detail(summary, output);
@@ -1594,7 +1635,9 @@ impl App {
                 let running = self.take_running(&id);
                 let elapsed = running.as_ref().map(|r| r.started.elapsed());
                 let summary = running.map(|r| r.summary).unwrap_or_default();
-                self.tool_line(Some(&label), &summary, is_error, &brief, elapsed);
+                if !is_bookkeeping(&summary, is_error) {
+                    self.tool_line(Some(&label), &summary, is_error, &brief, elapsed);
+                }
             }
             Event::Usage(usage) => self.add_usage(&usage, false),
             Event::Notice(text) => self.notice(&format!("{label}: {text}")),
@@ -1614,9 +1657,9 @@ impl App {
         let (glyph, note) = if is_error {
             (format!("{DANGER}✗{RESET}"), format!(" {DANGER}{brief}{RESET}"))
         } else if brief.is_empty() {
-            (format!("{LAGOON}✓{RESET}"), String::new())
+            (format!("{FAINT}✓{RESET}"), String::new())
         } else {
-            (format!("{LAGOON}✓{RESET}"), format!(" {DIM}· {brief}{RESET}"))
+            (format!("{FAINT}✓{RESET}"), format!(" {DIM}· {brief}{RESET}"))
         };
         let took = elapsed.filter(|e| e.as_secs() >= 1).map(|e| format!(" {DIM}· {}{RESET}", precise_clock(e)));
         let note = format!("{note}{}", took.unwrap_or_default());
@@ -1648,10 +1691,18 @@ impl App {
         for line in shown {
             self.emit(Line::Fit(format!("  {FAINT}│{RESET} {DIM}{line}{RESET}")));
         }
-        if skipped > 0 {
-            let which = if is_error { "earlier" } else { "more" };
-            self.commit(format!("  {FAINT}│{RESET} {DIM}… {skipped} {which} line{} · Ctrl+O{RESET}", if skipped == 1 { "" } else { "s" }));
+        self.hidden_note(skipped, if is_error { "earlier" } else { "more" });
+    }
+
+    /// The row under a call's output that says `count` lines were left out, and, the first time
+    /// in a session, that Ctrl+O shows them: only the newest call's key does anything, so the
+    /// rows after it would just repeat themselves.
+    fn hidden_note(&mut self, count: usize, which: &str) {
+        if count == 0 {
+            return;
         }
+        let teach = !std::mem::replace(&mut self.ctrl_o_taught, true);
+        self.commit(hidden_row(count, which, teach));
     }
 
     fn push_detail(&mut self, title: String, body: String) {
@@ -1769,7 +1820,7 @@ impl App {
             Err(e) => return self.error(&format!("/btw: {e:#}")),
         };
         let cached = usage.cached * 100 / usage.prompt.max(1);
-        let note = format!("Not kept in the conversation · {} in, {cached}% cached", short(usage.prompt));
+        let note = format!("Not kept in the conversation · {} in · {cached}% cached", short(usage.prompt));
         let question = question.to_string();
         self.held_asides.push(Line::block(move |width| aside_rows(&question, &text, &note, width)));
         self.release_asides(false);
@@ -1778,7 +1829,7 @@ impl App {
     /// A recap, printed as a block of its own with what asking for it cost.
     fn show_recap(&mut self, text: &str, usage: &Usage) {
         let cached = usage.cached * 100 / usage.prompt.max(1);
-        let note = format!("{} in, {cached}% cached", short(usage.prompt));
+        let note = format!("{} in · {cached}% cached", short(usage.prompt));
         let text = text.to_string();
         self.held_asides.push(Line::block(move |width| recap_rows(&text, &note, width)));
         self.release_asides(true);
@@ -1989,6 +2040,7 @@ impl App {
         self.pending.clear();
         self.last_blank = false;
         self.last_kind = Kind::None;
+        self.ctrl_o_taught = false;
         if self.fullscreen {
             self.history.clear();
             self.shown.clear();
@@ -2122,9 +2174,9 @@ impl App {
         space(&mut rows);
         rows.push(rule(mode, width));
         let known = |name: &str| self.entries.iter().any(|e| e.name == name || e.aliases.iter().any(|a| a == name));
-        let (mut input, cursor_row, cursor_col) = self.editor.render(&format!("{LAGOON}❯{RESET} "), width, &known);
+        let (mut input, cursor_row, cursor_col) = self.editor.render(&format!("{FIN}❯{RESET} "), width, &known);
         if let Some(hint) = self.placeholder() {
-            input[0] = fit(&format!("{LAGOON}❯{RESET} {FAINT}{hint}{RESET}"), width);
+            input[0] = fit(&format!("{FIN}❯{RESET} {FAINT}{hint}{RESET}"), width);
         }
         let first = cursor_row.saturating_sub(MAX_INPUT_ROWS - 1);
         let top = rows.len();
@@ -2132,7 +2184,8 @@ impl App {
         let mut cursor = (top + cursor_row - first, cursor_col);
         rows.push(rule(mode.map(|_| ""), width));
         let modal = self.picker.is_some() || self.asking.is_some();
-        let room = (self.height - 1).saturating_sub(rows.len() - top + 3 + usize::from(modal)).min(MENU_ROWS);
+        let room = (self.height - 1).saturating_sub(rows.len() - top + 4 + usize::from(modal)).min(MENU_ROWS);
+        let listed = rows.len();
         if modal {
             rows.push(String::new());
         }
@@ -2148,26 +2201,31 @@ impl App {
             rows.push(fit(&title_rule(&picker.title, width), width));
             let options: Vec<(&str, &str)> = picker.shown.iter().map(|&i| (picker.options[i].0.as_str(), picker.options[i].1.as_str())).collect();
             rows.extend(choice_rows(&options, picker.selected, visible, width, width * 3 / 5));
-            let position = if count > visible { format!("{}/{count} · ", picker.selected + 1) } else { String::new() };
+            let position = if count > visible { format!("{}/{count}", picker.selected + 1) } else { String::new() };
             let filter = match (picker.query.is_empty(), count) {
                 (true, _) => "type to filter".to_string(),
                 (false, 0) => format!("{RESET}{}{DIM} matches nothing", picker.query),
                 (false, _) => format!("filter {RESET}{}{DIM}", picker.query),
             };
-            rows.push(fit(&format!("  {DIM}{filter} · {position}↑↓ choose · Tab or Enter selects · Esc closes{RESET}"), width));
+            let hints = [(2, filter), (1, position), (4, "↑↓ choose".into()), (5, "Tab or Enter selects".into()), (3, "Esc closes".into())];
+            rows.push(hint_row(&hints, width));
         }
         if let Some(asking) = &self.asking {
             let names: Vec<String> = asking.question.options.iter().enumerate().map(|(i, o)| format!("{}. {o}", i + 1)).collect();
             let options: Vec<(&str, &str)> = names.iter().map(|name| (name.as_str(), "")).collect();
             let visible = options.len().min(room.max(1));
             rows.extend(choice_rows(&options, asking.selected.min(options.len().saturating_sub(1)), visible, width, width));
-            let hint = if asking.question.plan { "or type what to change" } else { "or type your own answer" };
-            let choose = match options.len() {
-                0 => String::new(),
-                1 => "Tab or Enter to choose, ".into(),
-                n => format!("1-{} or ↑↓ and Tab or Enter to choose, ", n.min(9)),
+            let own = if asking.question.plan { "or type a change" } else { "or type an answer" };
+            let mut hints: Vec<(u8, String)> = match options.len() {
+                0 => Vec::new(),
+                1 => vec![(5, "Tab or Enter chooses".into())],
+                n => vec![(4, format!("1-{} or ↑↓ choose", n.min(9))), (5, "Tab or Enter confirms".into())],
             };
-            rows.push(fit(&format!("  {DIM}{choose}{hint} · Esc to dismiss{RESET}"), width));
+            hints.extend([(3, own.to_string()), (2, "Esc dismisses".to_string())]);
+            rows.push(hint_row(&hints, width));
+        }
+        if rows.len() > listed + usize::from(modal) {
+            rows.push(String::new());
         }
         rows.push(self.status_line(width));
         let excess = rows.len().saturating_sub(self.height - 1);
@@ -2193,13 +2251,14 @@ impl App {
         let names: Vec<String> = menu.items.iter().map(|i| format!("{lead}{}", i.value)).collect();
         let options: Vec<(&str, &str)> = names.iter().zip(&menu.items).map(|(name, item)| (name.as_str(), item.description.as_str())).collect();
         let mut rows = choice_rows(&options, selected, visible, self.width, 32);
-        let position = if count > visible { format!("{}/{count} · ", selected + 1) } else { String::new() };
+        let position = if count > visible { format!("{}/{count}", selected + 1) } else { String::new() };
         let enter = match (menu.command, runs_at_once(menu, selected)) {
             (true, true) => "runs",
             (true, false) => "completes",
             (false, _) => "fills in",
         };
-        rows.push(fit(&format!("  {DIM}{position}↑↓ choose · Tab or Enter {enter} · Esc closes{RESET}"), self.width));
+        let hints = [(1, position), (4, "↑↓ choose".into()), (5, format!("Tab or Enter {enter}")), (3, "Esc closes".into())];
+        rows.push(hint_row(&hints, self.width));
         rows
     }
 
@@ -2207,7 +2266,7 @@ impl App {
     /// the terminal narrows: the cache and token detail, the context bar, the branch, and last
     /// the context figure, so the model and mode stay on screen at any width.
     fn status_line(&self, width: usize) -> String {
-        let mut head = vec![format!("{RESET}{}{DIM}", self.status.model)];
+        let mut head = vec![self.status.model.clone()];
         if let Some((word, value)) = thinking_parts(&self.status.thinking) {
             head.push(format!("{word} {}", tint(EFFORT, value)));
         }
@@ -2217,7 +2276,7 @@ impl App {
         if self.controls.swarm.get() {
             head.push(format!("{LAGOON}swarm mode{RESET}{DIM}"));
         }
-        status_layout(&head.join(" · "), &self.status, width)
+        status_layout(&head.join(&dot()), &self.status, width)
     }
 
     /// Paints the live area, in one write inside a synchronized update so no half-drawn frame
@@ -2376,9 +2435,9 @@ fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width:
             let pad = " ".repeat(column.saturating_sub(text::width(&name)));
             let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
             if start + i == selected {
-                let line = fit(&format!("{TINT}{LAGOON}❯ {RESET}{TINT}{BOLD}{name}{RESET}{TINT}{pad}  {note}"), width);
+                let line = fit(&format!("{SELECT}{LAGOON}❯ {RESET}{SELECT}{BOLD}{name}{RESET}{SELECT}{pad}  {note}"), width);
                 let fill = " ".repeat(width.saturating_sub(text::width(&line)));
-                format!("{line}{TINT}{fill}{RESET}")
+                format!("{line}{SELECT}{fill}{RESET}")
             } else {
                 fit(&format!("  {name}{pad}  {DIM}{note}{RESET}"), width)
             }
@@ -2390,11 +2449,13 @@ fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width:
 fn prompt_rows(prompt: &str, width: usize) -> Vec<String> {
     let mut rows = Vec::new();
     let mut first = true;
+    // The band is what sets the message apart; with no colors the words are bold instead.
+    let weight = if text::no_color() { BOLD } else { "" };
     for line in prompt.lines() {
         for row in text::wrap_words(line, width.saturating_sub(3), 0) {
-            let lead = if std::mem::take(&mut first) { format!("{FIN}❯{RESET}{TINT}{BOLD}") } else { format!(" {BOLD}") };
+            let lead = if std::mem::take(&mut first) { format!("{FIN}{BOLD}❯{RESET}{TINT}") } else { " ".to_string() };
             let pad = " ".repeat(width.saturating_sub(3 + text::width(&row)));
-            rows.push(format!("{TINT} {lead} {row}{pad}{RESET}"));
+            rows.push(format!("{TINT} {lead} {weight}{row}{pad}{RESET}"));
         }
     }
     rows
@@ -2471,7 +2532,7 @@ fn placeholder(empty: bool, busy: bool, waits: bool) -> Option<&'static str> {
 /// A full-width line around the prompt, in lagoon with `label` on it in plan mode.
 fn rule(label: Option<&str>, width: usize) -> String {
     match label {
-        None => format!("{FAINT}{}{RESET}", "─".repeat(width)),
+        None => format!("{RULE}{}{RESET}", "─".repeat(width)),
         Some("") => format!("{LAGOON}{}{RESET}", "─".repeat(width)),
         Some(label) => {
             let rest = width.saturating_sub(text::width(label) + 4);
@@ -2486,8 +2547,15 @@ fn title_rule(title: &str, width: usize) -> String {
     format!("{LAGOON}── {BOLD}{title}{RESET}{LAGOON} {}{RESET}", "─".repeat(rest))
 }
 
-/// The status line's parts fitted to `width`; see `App::status_line`. Each kind of figure has
-/// its own color: the effort, the tokens and the branch; the meter is lagoon, and warn from 80%.
+/// A faint dot between two pieces of a muted line, which goes back to muted after it.
+fn dot() -> String {
+    format!(" {FAINT}·{RESET}{DIM} ")
+}
+
+/// The status line's parts fitted to `width`; see `App::status_line`. The model and mode stand
+/// at the left and the figures at the right edge, in groups three spaces apart. Each kind of
+/// figure has its own color: the effort, the tokens and the branch; the meter is lagoon, and
+/// warn from 80%.
 fn status_layout(head: &str, status: &Status, width: usize) -> String {
     let warn = status.window.is_some_and(|window| near_full(status.context, window));
     let figure = |text: String| if warn { tint(WARN, &text) } else { text };
@@ -2507,8 +2575,8 @@ fn status_layout(head: &str, status: &Status, width: usize) -> String {
         let count = |n: String| tint(TOKENS, &n);
         let cached = status.cached * 100 / status.prompt.max(1);
         Some(match cache {
-            true => format!("{} in · {} cached · {} out", count(short(status.prompt)), count(format!("{cached}%")), count(short(status.completion))),
-            false => format!("{} in · {} out", count(short(status.prompt)), count(short(status.completion))),
+            true => format!("{} in{dot}{} cached{dot}{} out", count(short(status.prompt)), count(format!("{cached}%")), count(short(status.completion)), dot = dot()),
+            false => format!("{} in{dot}{} out", count(short(status.prompt)), count(short(status.completion)), dot = dot()),
         })
     };
     let branch = |max: usize| {
@@ -2528,12 +2596,12 @@ fn status_layout(head: &str, status: &Status, width: usize) -> String {
         (percent.clone(), None, branch(16)),
         (percent.clone(), None, None),
     ];
-    let divider = format!(" {} ", tint(FAINT, "│"));
     for (context, tokens, branch) in layouts {
-        let groups: Vec<String> = [Some(head.to_string()), Some(context), tokens, branch].into_iter().flatten().collect();
-        let line = groups.join(&divider);
-        if text::width(&line) <= width {
-            return format!("{DIM}{line}{RESET}");
+        let figures: Vec<String> = [Some(context), tokens, branch].into_iter().flatten().collect();
+        let right = figures.join("   ");
+        let used = text::width(head) + text::width(&right);
+        if used + 3 <= width {
+            return format!("{DIM}{head}{}{right}{RESET}", " ".repeat(width - used));
         }
     }
     format!("{DIM}{}{RESET}", fit(head, width))
@@ -2581,8 +2649,40 @@ fn thinking_parts(thinking: &str) -> Option<(&'static str, &str)> {
     }
 }
 
+/// `line` on one row: cut with an ellipsis where the window ends.
 fn fit(line: &str, width: usize) -> String {
-    wrap(line, width).into_iter().next().unwrap_or_default()
+    ellipsize(line, width)
+}
+
+/// A row of key hints under a list: each `(rank, hint)` in its place, the lowest ranks left out
+/// first when the window is too narrow, so what stays reads whole.
+fn hint_row(hints: &[(u8, String)], width: usize) -> String {
+    let mut keep: Vec<&(u8, String)> = hints.iter().filter(|(_, hint)| !hint.is_empty()).collect();
+    let line = |keep: &[&(u8, String)]| format!("  {DIM}{}{RESET}", keep.iter().map(|(_, hint)| hint.as_str()).collect::<Vec<_>>().join(&dot()));
+    while keep.len() > 1 && text::width(&line(&keep)) > width {
+        let lowest = keep.iter().map(|(rank, _)| *rank).min().unwrap_or(0);
+        let at = keep.iter().position(|(rank, _)| *rank == lowest).unwrap_or(0);
+        keep.remove(at);
+    }
+    fit(&line(&keep), width)
+}
+
+/// `items` in rows of at most `width` columns, a faint dot between them and never one split
+/// across two rows.
+fn wrap_items(items: &[String], width: usize) -> Vec<String> {
+    let dot = format!(" {FAINT}·{RESET} ");
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    for item in items {
+        let joined = if row.is_empty() { item.clone() } else { format!("{row}{dot}{item}") };
+        if row.is_empty() || text::width(&joined) <= width {
+            row = joined;
+        } else {
+            rows.push(std::mem::replace(&mut row, item.clone()));
+        }
+    }
+    rows.push(row);
+    rows.iter().map(|row| fit(row, width)).collect()
 }
 
 /// The indexes of the rows that differ from those on screen, or None when the area changed size
@@ -2644,19 +2744,46 @@ fn gist(reason: &str) -> String {
     }
 }
 
-/// A row of the edit tool's diff behind the output gutter: the line number, then the sign and
-/// text in lagoon for an added line, danger for a removed one, muted for context.
-fn diff_line(line: &str) -> String {
+/// The rows of an edit's diff behind the output gutter: the line number, the sign, the text.
+fn diff_rows(lines: &[String], width: usize) -> Vec<String> {
+    lines.iter().map(|line| diff_row(line, width, text::truecolor())).collect()
+}
+
+/// One row of a diff. With `stripes` an added or removed line sits on a soft stripe that runs to
+/// the window's edge, its sign in lagoon or danger and its text left as it is; without, the sign
+/// and the text take those colors. Context lines are muted either way.
+fn diff_row(line: &str, width: usize, stripes: bool) -> String {
     let Some((head, text)) = line.split_once('\t').filter(|(head, _)| head.len() > 1 && head.is_char_boundary(1)) else {
-        return format!("  {FAINT}│{RESET} {DIM}{line}{RESET}");
+        return fit(&format!("  {FAINT}│{RESET} {DIM}{line}{RESET}"), width);
     };
     let (sign, number) = head.split_at(1);
-    let color = match sign {
+    let ink = match sign {
         "+" => LAGOON.to_string(),
         "-" => DANGER.to_string(),
         _ => DIM.to_string(),
     };
-    format!("  {FAINT}│{RESET} {DIM}{number:>4}{RESET} {color}{sign} {text}{RESET}")
+    let ground = match sign {
+        "+" if stripes => Some(ADD.to_string()),
+        "-" if stripes => Some(DEL.to_string()),
+        _ => None,
+    };
+    let Some(ground) = ground else {
+        return fit(&format!("  {FAINT}│{RESET} {DIM}{number:>4}{RESET} {ink}{sign} {text}{RESET}"), width);
+    };
+    let row = fit(&format!("  {FAINT}│{RESET}{ground} {DIM}{number:>4}{RESET}{ground} {ink}{sign}{RESET}{ground} {text}"), width);
+    format!("{row}{ground}{}{RESET}", " ".repeat(width.saturating_sub(text::width(&row))))
+}
+
+/// The row under a call's output that counts what was left out, naming Ctrl+O when `teach`.
+fn hidden_row(count: usize, which: &str, teach: bool) -> String {
+    let key = if teach { " · Ctrl+O" } else { "" };
+    format!("  {FAINT}│ … {count} {which} line{}{key}{RESET}", if count == 1 { "" } else { "s" })
+}
+
+/// A call that only keeps the task list, which is on screen already, gets no row of its own
+/// unless it failed.
+fn is_bookkeeping(summary: &str, is_error: bool) -> bool {
+    !is_error && (summary == "todo_write" || summary.starts_with("todo_write "))
 }
 
 /// A tool call's summary as its row draws it. The shell is the `$` of a prompt, because most
@@ -2668,14 +2795,26 @@ fn tool_text(summary: &str) -> String {
     }
 }
 
-/// `tool_text` with the tool's name in bold, `read src/lib.rs`, or the `$` dim.
+/// `tool_text` with the tool's name in bold, `read src/lib.rs`, or the `$` faint.
 fn tool_summary(summary: &str) -> String {
     let (name, rest) = match summary.split_once(' ') {
         Some((name, args)) => (name, format!(" {args}")),
         None => (summary, String::new()),
     };
-    let style = if name == "$" { DIM } else { BOLD };
-    format!("{style}{name}{RESET}{rest}")
+    match name {
+        "$" => format!("{FAINT}${RESET}{rest}"),
+        "read" | "write" | "edit" => format!("{BOLD}{name}{RESET}{}", path_style(&rest)),
+        _ => format!("{BOLD}{name}{RESET}{rest}"),
+    }
+}
+
+/// A path with its folders muted and its file name as it is, so the eye lands on the file.
+fn path_style(rest: &str) -> String {
+    let (space, path) = rest.split_at(rest.len() - rest.trim_start().len());
+    match path.rsplit_once('/') {
+        Some((dir, file)) if !file.is_empty() => format!("{space}{DIM}{dir}/{RESET}{file}"),
+        _ => rest.to_string(),
+    }
 }
 
 fn first_sentence(text: &str) -> String {
@@ -2776,9 +2915,11 @@ fn overview_rows(overview: &Overview) -> Vec<String> {
 }
 
 /// The keys worth knowing, each in lagoon with what it does dimmed beside it.
-fn keys_hint() -> String {
-    let keys = [("/", "commands and skills"), ("Shift+Enter", "new line"), ("Shift+Tab", "plan mode"), ("Esc", "interrupts")];
-    keys.iter().map(|(key, what)| format!("{LAGOON}{key}{RESET} {DIM}{what}{RESET}")).collect::<Vec<_>>().join(&format!(" {DIM}·{RESET} "))
+fn key_hints() -> Vec<String> {
+    [("/", "commands and skills"), ("Shift+Enter", "new line"), ("Shift+Tab", "plan mode"), ("Esc", "interrupts")]
+        .iter()
+        .map(|(key, what)| format!("{LAGOON}{key}{RESET} {DIM}{what}{RESET}"))
+        .collect()
 }
 
 /// The rows a printed line takes on a screen `width` columns wide, wrapping included.
@@ -3193,7 +3334,8 @@ mod tests {
             "later  2 noted · /later",
         ]);
         assert!(overview_rows(&Overview::default()).is_empty());
-        assert_eq!(unstyled(&keys_hint()), "/ commands and skills · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts");
+        let hints: Vec<String> = key_hints().iter().map(|hint| unstyled(hint)).collect();
+        assert_eq!(hints.join(" · "), "/ commands and skills · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts");
     }
 
     #[test]
@@ -3245,6 +3387,17 @@ mod tests {
         assert_eq!(parse_background("\x1b]11;rgb:f/f/f\x07"), Some((255, 255, 255)));
         assert_eq!(parse_background("\x1b]11;rgb:ffff/ffff\x07"), None);
         assert_eq!(parse_background(""), None);
+    }
+
+    #[test]
+    fn the_terminals_foreground_and_background_answers_are_read_together() {
+        let both = "\x1b]11;rgb:1111/1313/1616\x1b\\\x1b]10;rgb:d7d7/dada/e0e0\x1b\\";
+        assert_eq!(parse_ground(both), Some(Ground { background: (17, 19, 22), foreground: Some((215, 218, 224)) }));
+        let swapped = "\x1b]10;rgb:ff/ff/ff\x07\x1b]11;rgb:00/00/00\x07";
+        assert_eq!(parse_ground(swapped), Some(Ground { background: (0, 0, 0), foreground: Some((255, 255, 255)) }));
+        assert_eq!(parse_ground("\x1b]11;rgb:0b/0f/14\x07"), Some(Ground { background: (11, 15, 20), foreground: None }));
+        assert_eq!(parse_ground("\x1b]10;rgb:ff/ff/ff\x07"), None, "the background is the one that must be there");
+        assert_eq!(parse_ground("\x1b]11;rgb:1111/1313/16"), None, "an answer isn't read before it is complete");
     }
 
     #[test]
@@ -3355,23 +3508,107 @@ mod tests {
     }
 
     #[test]
-    fn tool_rows_bold_the_name_and_hang_output_off_a_gutter() {
-        assert_eq!(tool_summary("read src/lib.rs"), format!("{BOLD}read{RESET} src/lib.rs"));
+    fn tool_rows_bold_the_name_mute_the_folders_and_hang_output_off_a_gutter() {
+        assert_eq!(tool_summary("read src/lib.rs"), format!("{BOLD}read{RESET} {DIM}src/{RESET}lib.rs"));
+        assert_eq!(tool_summary("edit Cargo.toml"), format!("{BOLD}edit{RESET} Cargo.toml"));
+        assert_eq!(tool_summary("write crates/a/b.rs"), format!("{BOLD}write{RESET} {DIM}crates/a/{RESET}b.rs"));
+        assert_eq!(tool_summary("grep \"x\" src/"), format!("{BOLD}grep{RESET} \"x\" src/"), "only a path argument is split");
         assert_eq!(tool_summary("todo"), format!("{BOLD}todo{RESET}"));
-        assert_eq!(unstyled(&diff_line("+12\tlet x = 1;")), "  │   12 + let x = 1;");
-        assert!(diff_line("-3\told").contains(&format!("{DANGER}- old")));
-        assert_eq!(unstyled(&diff_line("@@ hunk")), "  │ @@ hunk");
+        assert_eq!(unstyled(&diff_row("+12\tlet x = 1;", 40, false)), "  │   12 + let x = 1;");
+        assert!(diff_row("-3\told", 40, false).contains(&format!("{DANGER}- old")));
+        assert_eq!(unstyled(&diff_row("@@ hunk", 40, true)), "  │ @@ hunk");
     }
 
     #[test]
-    fn bash_rows_lead_with_a_dim_dollar_instead_of_the_word() {
+    fn an_added_or_removed_line_sits_on_a_stripe_to_the_edge_of_the_window() {
+        let added = diff_row("+12\tlet x = 1;", 30, true);
+        assert!(added.contains(&ADD.to_string()) && added.ends_with(RESET));
+        assert_eq!(text::width(&added), 30);
+        assert_eq!(unstyled(&added), format!("  │   12 + let x = 1;{}", " ".repeat(30 - 21)));
+        let removed = diff_row("-3\told", 30, true);
+        assert!(removed.contains(&DEL.to_string()) && removed.contains(&format!("{DANGER}-")));
+        assert!(!removed.contains(&format!("{DANGER}- old")), "the text keeps its own color");
+        let context = diff_row(" 4\tkept", 30, true);
+        assert!(!context.contains(&ADD.to_string()) && !context.contains(&DEL.to_string()), "context has no stripe");
+        assert_eq!(text::width(&diff_row("+1\t", 30, false)), 11, "without stripes the row ends with its text");
+        let long = diff_row(&format!("+1\t{}", "x".repeat(80)), 30, true);
+        assert_eq!(text::width(&long), 30);
+        assert!(unstyled(&long).ends_with('…'), "a long line is cut with an ellipsis, on its stripe to the end");
+        assert!(long.contains(&ADD.to_string()));
+    }
+
+    #[test]
+    fn only_the_first_row_that_hides_output_names_the_key() {
+        assert_eq!(unstyled(&hidden_row(14, "more", true)), "  │ … 14 more lines · Ctrl+O");
+        assert_eq!(unstyled(&hidden_row(1, "earlier", false)), "  │ … 1 earlier line");
+        assert_eq!(text::hanging_indent(&unstyled(&hidden_row(3, "more", false))), 4, "a wrapped row hangs under its text");
+    }
+
+    #[test]
+    fn hints_leave_out_the_least_useful_first_and_stay_in_their_order() {
+        let hints = [(2, "type to filter".to_string()), (1, String::new()), (4, "↑↓ choose".into()), (5, "Tab or Enter selects".into()), (3, "Esc closes".into())];
+        assert_eq!(unstyled(&hint_row(&hints, 80)), "  type to filter · ↑↓ choose · Tab or Enter selects · Esc closes");
+        assert_eq!(unstyled(&hint_row(&hints, 52)), "  ↑↓ choose · Tab or Enter selects · Esc closes");
+        assert_eq!(unstyled(&hint_row(&hints, 34)), "  ↑↓ choose · Tab or Enter selects");
+        let narrow = unstyled(&hint_row(&hints, 12));
+        assert!(text::width(&narrow) <= 12 && narrow.ends_with('…'), "{narrow:?}: the last one left is cut with an ellipsis");
+        for width in 5..90 {
+            assert!(text::width(&hint_row(&hints, width)) <= width, "{width}");
+        }
+    }
+
+    #[test]
+    fn items_wrap_between_themselves_never_inside_one() {
+        let items: Vec<String> = ["/ commands and skills", "Shift+Enter new line", "Shift+Tab plan mode", "Esc interrupts"].map(String::from).to_vec();
+        let rows: Vec<String> = wrap_items(&items, 80).iter().map(|row| unstyled(row)).collect();
+        assert_eq!(rows, ["/ commands and skills · Shift+Enter new line · Shift+Tab plan mode", "Esc interrupts"]);
+        assert_eq!(wrap_items(&items, 118).len(), 1);
+        for width in 8..120 {
+            let rows = wrap_items(&items, width);
+            assert!(rows.iter().all(|row| text::width(row) <= width), "{width}");
+            let joined = rows.iter().map(|row| unstyled(row)).collect::<Vec<_>>().join(" · ");
+            if width >= 22 {
+                assert!(items.iter().all(|item| joined.contains(&unstyled(item))), "{width}: {joined}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_status_line_keeps_the_model_at_the_left_and_the_figures_at_the_right_edge() {
+        let status = Status {
+            window: Some(200_000),
+            context: 38_000,
+            prompt: 38_000,
+            cached: 30_000,
+            completion: 2_000,
+            branch: Some("main".into()),
+            ..Status::default()
+        };
+        let wide = unstyled(&status_layout("qwen3.7-plus", &status, 120));
+        assert_eq!(text::width(&wide), 120);
+        assert!(wide.starts_with("qwen3.7-plus  ") && wide.ends_with("⎇ main"));
+        assert!(wide.contains("   ctx ") && wide.contains("   38k in · 78% cached · 2k out   "), "{wide}");
+        let tight = unstyled(&status_layout("qwen3.7-plus", &status, 62));
+        assert!(text::width(&tight) <= 62 && tight.ends_with("main") && !tight.contains("cached"), "{tight}");
+    }
+
+    #[test]
+    fn a_task_list_update_gets_no_row_unless_it_failed() {
+        assert!(is_bookkeeping("todo_write", false));
+        assert!(!is_bookkeeping("todo_write", true));
+        assert!(!is_bookkeeping("todo", false));
+        assert!(!is_bookkeeping("bash cargo test", false));
+    }
+
+    #[test]
+    fn bash_rows_lead_with_a_faint_dollar_instead_of_the_word() {
         assert_eq!(tool_text("bash cargo test"), "$ cargo test");
         assert_eq!(tool_text("bash [src] ls"), "$ [src] ls");
         assert_eq!(tool_text("bash"), "$");
         assert_eq!(tool_text("bashful x"), "bashful x");
         assert_eq!(tool_text("read src/lib.rs"), "read src/lib.rs");
-        assert_eq!(tool_summary(&tool_text("bash cargo test")), format!("{DIM}${RESET} cargo test"));
-        assert_eq!(tool_summary(&tool_text("bash")), format!("{DIM}${RESET}"));
+        assert_eq!(tool_summary(&tool_text("bash cargo test")), format!("{FAINT}${RESET} cargo test"));
+        assert_eq!(tool_summary(&tool_text("bash")), format!("{FAINT}${RESET}"));
     }
 
     #[test]
@@ -3497,7 +3734,7 @@ mod tests {
         assert!(line.contains(&format!("{EFFORT}high")));
         assert!(line.contains(&format!("{TOKENS}38k")) && line.contains(&format!("{TOKENS}78%")) && line.contains(&format!("{TOKENS}2k")));
         assert!(line.contains(&format!("{BRANCH}⎇ main")) && line.contains(&format!("{WARN}*")));
-        assert!(line.contains(&format!("{FAINT}│")));
+        assert!(!line.contains('│'), "groups are told apart by space, not by rules");
         assert!(!line.contains(&format!("{WARN}38k/200k")));
         let full = status_layout("model", &Status { context: 170_000, ..status }, 140);
         assert!(full.contains(&format!("{WARN}170k/200k")));

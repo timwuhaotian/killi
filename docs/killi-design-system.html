@@ -12,7 +12,10 @@
   --bg: #0b0f14;
   --bg-raised: #121a22;
   --bg-sunken: #070a0e;
-  --bg-selected: #17313d;
+  --bg-selected: #1b292d;
+  --bg-tint: #171e23;
+  --bg-chip: #1e2328;
+  --rule: #2a2f34;
   --fg: #e8eef2;
   --fg-muted: #8e9cab;
   --fg-faint: #5c6b7a;
@@ -27,17 +30,20 @@
   --ok: var(--lagoon);
   --warn: #f2c14e;
   --danger: #ff6f7d;
-  --effort: #8787ff;
-  --tokens: #5fafff;
-  --branch: #d787d7;
-  --diff-add: #0f2a22;
-  --diff-del: #331a1f;
+  --effort: #aaa9eb;
+  --tokens: #81bce5;
+  --branch: #d7a0ca;
+  --diff-add: #152325;
+  --diff-del: #291e23;
 }
 [data-theme="light"] {
   --bg: #f5f7f4;
   --bg-raised: #ffffff;
   --bg-sunken: #eaeeea;
-  --bg-selected: #d6e9ee;
+  --bg-selected: #d2dcd9;
+  --bg-tint: #dfe5e2;
+  --bg-chip: #d9dbda;
+  --rule: #ced2d0;
   --fg: #131a20;
   --fg-muted: #56636f;
   --fg-faint: #75838a;
@@ -52,11 +58,11 @@
   --ok: var(--lagoon);
   --warn: #8a5a00;
   --danger: #b3261e;
-  --effort: #5f5faf;
-  --tokens: #005faf;
-  --branch: #af00af;
-  --diff-add: #dcf2e4;
-  --diff-del: #fbe1e3;
+  --effort: #5e5a9a;
+  --tokens: #2b6991;
+  --branch: #864c7a;
+  --diff-add: #e0efe7;
+  --diff-del: #f8e5e2;
 }
 :root {
   --cell-1: 8px;
@@ -115,31 +121,34 @@ body { font-family: var(--font-mono); font-size: 13px; line-height: var(--row-1)
 
 /* Banner */
 .ki-banner { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--cell-4); row-gap: var(--row-half); }
-.ki-banner-logo { margin: 0; font: inherit; line-height: 1; white-space: pre; background: linear-gradient(110deg, #38bdf8, #818cf8 50%, #c084fc); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.ki-banner-logo { margin: 0; font: inherit; line-height: 1; white-space: pre; background: linear-gradient(110deg, #4fd1c5, #64bced 50%, #9d98f2); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .ki-banner-side > div { white-space: nowrap; min-height: var(--row-1); }
 .ki-notes { margin-top: var(--row-1); color: var(--fg-muted); }
 
 /* Prompt */
-.ki-rule { color: var(--fg-faint); white-space: nowrap; overflow: hidden; }
+.ki-rule { color: var(--rule); white-space: nowrap; overflow: hidden; }
 .ki-rule[data-mode="plan"] { color: var(--lagoon); }
 .ki-prompt-text { white-space: pre-wrap; word-break: break-word; }
-.ki-prompt .ki-caret { color: var(--lagoon); }
+.ki-prompt .ki-caret { color: var(--fin); }
 .ki-cmd { color: var(--lagoon); }
 .ki-cursor { color: var(--fg); }
 
 /* Turn */
 .ki-turn + .ki-turn { margin-top: var(--row-1); }
-.ki-turn[data-role="user"] { background: var(--bg-selected); font-weight: 700; padding: 0 var(--cell-1); white-space: pre-wrap; word-break: break-word; }
-.ki-turn[data-role="user"] .ki-glyph { color: var(--fin); }
+.ki-turn[data-role="user"] { background: var(--bg-tint); padding: 0 var(--cell-1); white-space: pre-wrap; word-break: break-word; }
+.ki-turn[data-role="user"] .ki-glyph { color: var(--fin); font-weight: 700; }
 .ki-turn-body p { margin: 0; }
 .ki-turn-body p + p { margin-top: var(--row-1); }
-.ki-turn-body code { color: var(--lagoon); }
+.ki-turn-body code { color: var(--fg); background: var(--bg-chip); }
 .ki-thought { color: var(--fg-muted); }
 
 /* ToolCall */
 .ki-tool-name { font-weight: 700; }
 .ki-tool-note { color: var(--fg-muted); }
 .ki-tool[data-status="failed"] .ki-tool-brief { color: var(--danger); }
+.ki-tool[data-status="done"] .ki-ok { color: var(--fg-faint); }
+.ki-tool-dollar { color: var(--fg-faint); }
+.ki-tool-dir { color: var(--fg-muted); }
 .ki-tool[data-sub="true"] .ki-tool-name, .ki-tool[data-sub="true"] .ki-tool-args { font-weight: 400; color: var(--fg-muted); }
 
 /* TaskList */
@@ -161,8 +170,8 @@ body { font-family: var(--font-mono); font-size: 13px; line-height: var(--row-1)
 .ki-hint { color: var(--fg-muted); padding-left: var(--cell-2); }
 
 /* StatusBar */
-.ki-status { color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ki-status .ki-fg { color: var(--fg); }
+.ki-status { display: flex; justify-content: space-between; gap: var(--cell-3); color: var(--fg-muted); white-space: nowrap; overflow: hidden; }
+.ki-status-figures { display: flex; gap: var(--cell-3); }
 .ki-status .ki-mode { color: var(--lagoon); }
 .ki-status .ki-effort { color: var(--effort); }
 .ki-status .ki-tokens { color: var(--tokens); }
@@ -177,8 +186,11 @@ body { font-family: var(--font-mono); font-size: 13px; line-height: var(--row-1)
 /* Diff */
 .ki-diff .ki-pre { color: var(--fg); }
 .ki-diff-num { color: var(--fg-muted); }
-.ki-diff-line[data-kind="add"] .ki-diff-text { color: var(--lagoon); }
-.ki-diff-line[data-kind="del"] .ki-diff-text { color: var(--danger); }
+.ki-diff-line > span:last-child { display: block; }
+.ki-diff-line[data-kind="add"] > span:last-child { background: var(--diff-add); }
+.ki-diff-line[data-kind="del"] > span:last-child { background: var(--diff-del); }
+.ki-diff-line[data-kind="add"] .ki-diff-sign { color: var(--lagoon); }
+.ki-diff-line[data-kind="del"] .ki-diff-sign { color: var(--danger); }
 .ki-diff-line[data-kind="ctx"] .ki-diff-text { color: var(--fg-muted); }
 
 /* Spinner */
@@ -279,10 +291,10 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
   <div class="book"><p>Killi is a coding agent for the terminal. The interface is a conversation printed into the terminal's own scrollback, with a small live area redrawn at the bottom: what is running now, the task list, the prompt and a status line. It is set in one monospace style, on the terminal's own ground, with two colors that each mean one thing. Use this file as the rule book when you render anything that is Killi — the TUI itself (<code>crates/killi/src/tui</code>), the docs, a screenshot. Where the TUI and this file disagree, one of them has a bug.</p>
 <h2>Principles</h2>
 <ol>
-<li><strong>Quiet by default.</strong> The ground is the terminal's, the text is <code>fg</code>, and most lines carry no color at all. Color is spent only where something is live or waiting.</li>
-<li><strong>Two colors, two meanings.</strong> <code>lagoon</code> is Killi — the caret, running and finished work, the active mode, commands. <code>fin</code> is the human — your messages, questions waiting on you, your answers. Never swap them; never use both on one element. The status line alone adds a hue per kind of figure (<code>effort</code>, <code>tokens</code>, <code>branch</code>) and they mean nothing else.</li>
+<li><strong>Quiet by default.</strong> The ground is the terminal's, the text is <code>fg</code>, and most lines carry no color at all. Hierarchy is tone, not hue: text, <code>fg-muted</code>, <code>fg-faint</code>, a hairline. Color is spent only where something is live or waiting.</li>
+<li><strong>Two colors, two meanings.</strong> <code>lagoon</code> is Killi at work — running calls, the active mode, commands, the selected row. <code>fin</code> is the human — the prompt's caret, your messages, questions waiting on you, your answers. Never swap them; never use both on one element. The status line alone adds a hue per kind of figure (<code>effort</code>, <code>tokens</code>, <code>branch</code>) and they mean nothing else.</li>
 <li><strong>The grid is the layout.</strong> Everything aligns to character cells and rows. A status glyph sits in column 0 and its text in column 2; output hangs off a <code>│</code> gutter in column 2. Separate with blank rows, never with boxes.</li>
-<li><strong>Compact and durable.</strong> One row per tool call, long output behind <code>Ctrl+O</code>, never two blank rows in a row. Every state has a glyph and a word, not just a color, so it still reads with <code>NO_COLOR</code>.</li>
+<li><strong>Compact and durable.</strong> One row per tool call, long output behind <code>Ctrl+O</code>, never two blank rows in a row. Every state has a glyph and a word, not just a color, so it still reads with <code>NO_COLOR</code>. Success is quiet: a finished call's <code>✓</code> is <code>fg-faint</code>, so what is running or wrong is what the eye finds.</li>
 </ol>
 <h2>Voice</h2>
 <ul>
@@ -312,27 +324,27 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <tr>
 <td>Pane, code</td>
 <td><code>bg-raised</code>, <code>bg-sunken</code></td>
-<td>web only; the TUI paints no panes and hangs code off a <code>▏</code> gutter</td>
+<td>web only; the TUI paints no panes and hangs code blocks off a <code>▏</code> gutter</td>
 </tr>
 <tr>
 <td>Tint</td>
-<td><code>bg-selected</code></td>
-<td>the selected row of a picker or question, and the band behind your own messages</td>
+<td><code>bg-tint</code>, <code>bg-selected</code>, <code>bg-chip</code></td>
+<td>the band behind your own messages / the selected row of a picker or question / behind inline code (24-bit color)</td>
 </tr>
 <tr>
 <td>Text</td>
-<td><code>fg</code>, <code>fg-muted</code>, <code>fg-faint</code></td>
-<td>prose / notes, metrics, hints / gutters, rules, empty meter cells</td>
+<td><code>fg</code>, <code>fg-muted</code>, <code>fg-faint</code>, <code>rule</code></td>
+<td>prose / results, output, notes, metrics / a finished call's ✓, gutters, hints, empty meter cells / the rules around the prompt</td>
 </tr>
 <tr>
 <td>Killi</td>
 <td><code>lagoon</code></td>
-<td>prompt caret <code>❯</code>, running <code>◐</code>, done <code>✓</code>, plan and swarm mode, commands, inline code, links, h1–h2</td>
+<td>running <code>◐</code>, plan and swarm mode, commands, links, the selected row's <code>❯</code>, h1–h2</td>
 </tr>
 <tr>
 <td>Human</td>
 <td><code>fin</code></td>
-<td>your messages <code>❯</code>, questions <code>?</code>, your answers <code>↳</code>, messages queued for the next step</td>
+<td>the prompt's caret <code>❯</code>, your messages <code>❯</code>, questions <code>?</code>, your answers <code>↳</code>, messages queued for the next step</td>
 </tr>
 <tr>
 <td>Signals</td>
@@ -347,19 +359,21 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <tr>
 <td>Diff</td>
 <td><code>diff-add</code>, <code>diff-del</code></td>
-<td>web only; the TUI sets the sign and text of a changed line in <code>lagoon</code> / <code>danger</code></td>
+<td>a stripe behind an added or removed line, to the window's edge, in 24-bit color; the sign is <code>lagoon</code> / <code>danger</code> and the text stays <code>fg</code></td>
 </tr>
 </tbody>
 </table>
 <p>Rules:</p>
 <ul>
 <li><code>fin</code> is never used for success and <code>lagoon</code> never for a warning. When in doubt, who is it waiting on? Human → <code>fin</code>. Killi → <code>lagoon</code>.</li>
-<li><code>fg-faint</code> is for marks the user can afford to miss (the gutter <code>│</code>, the rules around the prompt, the empty part of a meter). Any text that must be read is <code>fg-muted</code> or <code>fg</code>.</li>
-<li>Success has no green of its own: a finished call is a <code>lagoon</code> <code>✓</code>. Green, yellow and magenta exist only as syntax colors inside code blocks, where they mean nothing about state.</li>
+<li><code>fg-faint</code> is for marks the user can afford to miss (a finished call's <code>✓</code>, the gutter <code>│</code>, hints, the empty part of a meter); the rules around the prompt are the fainter <code>rule</code>. Any text that must be read is <code>fg-muted</code> or <code>fg</code>.</li>
+<li>Success has no green of its own, and it is quiet: a finished call's <code>✓</code> is <code>fg-faint</code>, and <code>lagoon</code> marks work that is live. Green, yellow and magenta exist only as syntax colors inside code blocks, where they mean nothing about state.</li>
 <li>Solid fills (<code>lagoon</code>, <code>fin</code> as backgrounds) are for keycaps and mode badges on the web; the TUI has none.</li>
 </ul>
 <h3>Terminal colors</h3>
-<p>The TUI prints each role as its token's exact color where the terminal announces 24-bit color (<code>COLORTERM=truecolor</code>), and elsewhere as the nearest 256-color shade (dark / light): <code>lagoon</code> 80 / 30, <code>fin</code> 209 / 130, <code>warn</code> 221 / 136, <code>danger</code> 204 / 124, <code>fg-faint</code> 242 / 245, <code>bg-selected</code> 237 / 254 (the 256-color cube has no dark teal, so there the tint is a neutral grey). <code>fg-muted</code> is SGR dim, which follows any foreground. <code>NO_COLOR</code> drops every color and keeps bold, dim and the glyphs. The role constants live in <code>tui/text.rs</code>.</p>
+<p>The TUI prints each role as its token's exact color where the terminal announces 24-bit color (<code>COLORTERM=truecolor</code>), and elsewhere as the nearest 256-color shade (dark / light): <code>lagoon</code> 80 / 30, <code>fin</code> 209 / 130, <code>warn</code> 221 / 136, <code>danger</code> 204 / 124, <code>fg-faint</code> 242 / 245, <code>effort</code> 147 / 60, <code>tokens</code> 110 / 24, <code>branch</code> 182 / 96, and a neutral grey, 237 / 254, for the tints (the 256-color cube has no soft tint, so there are no stripes or chips: inline code is <code>lagoon</code> text and a changed line takes the sign's color). <code>NO_COLOR</code> drops every color and keeps bold, dim and the glyphs. The role constants live in <code>tui/text.rs</code>.</p>
+<p>The neutrals follow the terminal. At start the TUI asks it for its background and foreground (OSC 11 and OSC 10) and derives the grays, the tints and the stripes by contrast with that ground (<code>tui/palette.rs</code>), so they match Kil's Night, Fjord, Ember, Dusk and Paper, or any other theme: <code>rule</code> is 1.4:1 against the ground, <code>fg-faint</code> 3:1 and <code>fg-muted</code> 5.8:1, scaled down when the theme's own text has little contrast, so muted text is never brighter than body text; <code>bg-tint</code>, <code>bg-selected</code>, <code>bg-chip</code>, <code>diff-add</code> and <code>diff-del</code> are small lifts of the ground with a cast of lagoon, green or red. The values in this file are what that derivation gives for this file's own ground, and what the TUI uses when the terminal doesn't answer or <code>[ui] theme</code> is set (except <code>fg-muted</code>, which is then SGR dim).</p>
+<p><code>fg-muted</code> is not SGR dim in general: Kil and Alacritty dim by scaling each channel to two thirds, toward black, which makes dim text darker than body text on a light theme. SGR dim is the fallback when no ground is known, and what <code>NO_COLOR</code> keeps for <code>fg-muted</code>, <code>fg-faint</code> and <code>rule</code>.</p>
 <h2>Typography</h2>
 <p>One family, <code>mono</code> (JetBrains Mono, falling back to the platform monospace). In the terminal there is exactly one size; hierarchy comes from weight and color:</p>
 <ul>
@@ -377,11 +391,11 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <li>A status row is a glyph in column 0, a space, then its text in column 2 (<code>✓ read src/lib.rs</code>). Output under it hangs off a <code>│</code> in <code>fg-faint</code> in column 2, its text in column 4.</li>
 <li>Killi's prose and Markdown start in column 0 with no marker; list items wrap under their text, code blocks hang off <code>▏</code>.</li>
 <li>Blank rows do the separating, never two in a row: one before and after your message, one between a run of tool calls and the prose next to it, one before the working row, one before and after anything that is neither (a notice, an error, a question, <code>/help</code>, a <code>/btw</code> answer, <code>Ctrl+O</code> output). Consecutive notices stay together, and so do consecutive tool calls and the thought above them.</li>
-<li>Width: prose wraps between words at the terminal width; status rows are cut with <code>…</code>, never wrapped. Tables shrink their widest column to fit.</li>
-<li>The live area, bottom up: the status line, the prompt between two rules, the task list, then the rows of work in flight with the working spinner nearest the prompt. A blank row sits above the prompt's top rule and above the task list, so the conversation, the work and the prompt never touch. A picker or the choices of a question open under the prompt after a blank row too.</li>
+<li>Width: prose wraps between words at the terminal width; status rows are cut with <code>…</code>, never wrapped, and a cut always says so. Key hints drop their least useful items before they cut one; the banner's hints wrap between items, never inside one. Tables shrink their widest column to fit.</li>
+<li>The live area, bottom up: the status line, the prompt between two rules, the task list, then the rows of work in flight with the working spinner nearest the prompt. A blank row sits above the prompt's top rule and above the task list, so the conversation, the work and the prompt never touch. A picker or the choices of a question open under the prompt after a blank row too, and a list's key hints are set off from the status line by a blank row.</li>
 </ul>
 <h2>Borders &amp; boxes</h2>
-<p>Prefer no box. The prompt sits between two full-width rules in <code>fg-faint</code>; in plan mode both turn <code>lagoon</code> and the top one carries the label:</p>
+<p>Prefer no box. The prompt sits between two full-width rules in <code>rule</code>; in plan mode both turn <code>lagoon</code> and the top one carries the label:</p>
 <pre><code>── plan mode · Shift+Tab leaves it ─────────────
 ❯ add a --json flag to the export command
 ────────────────────────────────────────────────
@@ -399,11 +413,11 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 </tr>
 </thead>
 <tbody>
-<tr><td>Prompt caret</td><td><code>❯</code></td><td><code>lagoon</code></td><td>—</td></tr>
-<tr><td>Your message</td><td><code>❯</code> on the tint</td><td><code>fin</code></td><td>—</td></tr>
+<tr><td>Prompt caret</td><td><code>❯</code></td><td><code>fin</code></td><td>—</td></tr>
+<tr><td>Your message</td><td><code>❯</code> (bold) on the tint</td><td><code>fin</code></td><td>—</td></tr>
 <tr><td>Running tool call</td><td><code>◐ ◓ ◑ ◒</code> (frames)</td><td><code>lagoon</code></td><td>the elapsed time</td></tr>
 <tr><td>Working</td><td>the braille wave and <code>killi</code> wordmark</td><td>banner gradient</td><td><code>working</code></td></tr>
-<tr><td>Done</td><td><code>✓</code></td><td><code>ok</code></td><td>the result: <code>24 lines</code></td></tr>
+<tr><td>Done</td><td><code>✓</code></td><td><code>fg-faint</code></td><td>the result: <code>24 lines</code></td></tr>
 <tr><td>Failed</td><td><code>✗</code></td><td><code>danger</code></td><td>the reason</td></tr>
 <tr><td>Warning, retry</td><td><code>⚠</code></td><td><code>warn</code></td><td><code>retry</code></td></tr>
 <tr><td>Question for you</td><td><code>?</code></td><td><code>fin</code></td><td>the question</td></tr>
@@ -418,11 +432,11 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 </tbody>
 </table>
 <h2>States</h2>
-<p>A tool call is <code>running</code> in the live area, then <code>done</code> or <code>failed</code> in the scrollback, in the same column. Render the glyph in column 0, the tool's name in <code>body-strong</code>, its arguments in <code>fg</code>, then <code>· result · time</code> in <code>fg-muted</code> (time only from a second up). A failure puts its reason in <code>danger</code> and, for <code>bash</code>, shows the last lines of output under the gutter instead of the first.</p>
+<p>A tool call is <code>running</code> in the live area, then <code>done</code> or <code>failed</code> in the scrollback, in the same column. Render the glyph in column 0 (<code>fg-faint</code> once done, <code>danger</code> when failed), the tool's name in <code>body-strong</code>, its arguments in <code>fg</code> — a path keeps its folders in <code>fg-muted</code> so the file stands out, and a <code>bash</code> call is a faint <code>$</code> and the command — then <code>· result · time</code> in <code>fg-muted</code> (time only from a second up). A failure puts its reason in <code>danger</code> and, for <code>bash</code>, shows the last lines of output under the gutter instead of the first. A call that only keeps the task list prints no row unless it failed. The first row of a session that leaves output out says <code>Ctrl+O</code> shows it; the rows after it only count.</p>
 <h2>Motion</h2>
 <p>Only four things move, on one 100ms tick: the wave and wordmark on the working row, the quarter glyph of each running tool call, the elapsed timers, and the stream of tokens as they arrive. No fades, no slides, no blinking. The terminal's own cursor marks where you type. On the web, <code>prefers-reduced-motion</code> holds every animation on its first frame.</p>
 <h2>Logo</h2>
-<p><code>assets/Logos/killi-mark.svg</code> is the mark for the docs and icons: a prompt caret <code>❯</code> in <code>lagoon</code> with a cursor bar in <code>fin</code>. It never appears in the terminal. There the banner is the block-letter <code>KILLI</code> in its sky-to-violet gradient (<code>tui/banner.rs</code>), and the same gradient flows through a braille wave and the <code>killi</code> wordmark while Killi works.</p>
+<p><code>assets/Logos/killi-mark.svg</code> is the mark for the docs and icons: a prompt caret <code>❯</code> in <code>lagoon</code> with a cursor bar in <code>fin</code>. It never appears in the terminal. There the banner is the block-letter <code>KILLI</code> in its lagoon-to-periwinkle gradient (<code>tui/banner.rs</code>; the three stops are lagoon and the hues of the status line's figures, deeper on a light terminal), and the same gradient flows through a braille wave and the <code>killi</code> wordmark while Killi works. In a window narrower than 70 columns or shorter than 30 rows the banner is the wordmark and the setup lines alone.</p>
 <h2>Components</h2>
 <p>Nine families, each with a live preview and guidelines below: <code>Banner</code>, <code>Prompt</code>, <code>Turn</code>, <code>ToolCall</code>, <code>TaskList</code>, <code>Question</code>, <code>StatusBar</code>, <code>Diff</code>, <code>Spinner</code>. The React bundle (<code>window.Killi</code>) renders them for the web from the same glyphs, colors and spacing the TUI prints.</p></div>
 
@@ -433,7 +447,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
   </div>
 
   <h2 id="colors">Colors</h2>
-  <table><thead><tr><th>Token</th><th>Dark (terminal)</th><th>Light</th><th>Usage</th></tr></thead><tbody><tr><td><span class="sw" style="background:var(--bg)"></span><code>bg</code></td><td><code>#0b0f14</code></td><td><code>#f5f7f4</code></td><td class="usage">Terminal ground. Everything sits on it; never paint a second full-width ground. ANSI fallback: terminal default background.</td></tr><tr><td><span class="sw" style="background:var(--bg-raised)"></span><code>bg-raised</code></td><td><code>#121a22</code></td><td><code>#ffffff</code></td><td class="usage">Panes on the web and in the docs. One step up from `bg`; never nest two raised panes. The TUI paints no panes.</td></tr><tr><td><span class="sw" style="background:var(--bg-sunken)"></span><code>bg-sunken</code></td><td><code>#070a0e</code></td><td><code>#eaeeea</code></td><td class="usage">Code blocks inside a raised pane on the web. The TUI hangs code off a `▏` gutter instead.</td></tr><tr><td><span class="sw" style="background:var(--bg-selected)"></span><code>bg-selected</code></td><td><code>#17313d</code></td><td><code>#d6e9ee</code></td><td class="usage">The selected row of a picker or question, and the band behind your own messages. `fg`, `fg-muted` and every signal color read on it (≥4.5:1). TUI: the token on truecolor terminals, else 256-color 237 / 254.</td></tr><tr><td><span class="sw" style="background:var(--fg)"></span><code>fg</code></td><td><code>#e8eef2</code></td><td><code>#131a20</code></td><td class="usage">Primary text on `bg`, `bg-raised`, `bg-sunken` and `bg-selected`. Assistant prose, file names, command output. ANSI: default foreground.</td></tr><tr><td><span class="sw" style="background:var(--fg-muted)"></span><code>fg-muted</code></td><td><code>#8e9cab</code></td><td><code>#56636f</code></td><td class="usage">Secondary text on every surface: timestamps, token counts, tool arguments, help hints. ≥4.5:1 everywhere. ANSI: bright black (90).</td></tr><tr><td><span class="sw" style="background:var(--fg-faint)"></span><code>fg-faint</code></td><td><code>#5c6b7a</code></td><td><code>#75838a</code></td><td class="usage">Non-essential marks only: the empty prompt's placeholder, disabled items, gutter glyphs, the unfilled part of a progress meter. 3:1 on `bg` and `bg-raised`; never for text the user must read.</td></tr><tr><td><span class="sw" style="background:var(--line)"></span><code>line</code></td><td><code>#1f2b37</code></td><td><code>#d8dedb</code></td><td class="usage">Decorative hairlines on the web: pane separators and section rules. Carries no meaning on its own; in the TUI rules and gutters are `fg-faint`.</td></tr><tr><td><span class="sw" style="background:var(--line-strong)"></span><code>line-strong</code></td><td><code>#5a6e84</code></td><td><code>#75838a</code></td><td class="usage">Borders that mean something on the web: a focused field, a framed card. ≥3:1 on `bg` and `bg-raised`.</td></tr><tr><td><span class="sw" style="background:var(--lagoon)"></span><code>lagoon</code></td><td><code>#4fd1c5</code></td><td><code>#0a6e65</code></td><td class="usage">The accent. The prompt caret `❯`, running `◐` and done `✓`, plan and swarm mode, commands, inline code, links, the filled part of meters. Text-safe on every surface in both themes (≥4.5:1). ANSI: cyan (36 / 96).</td></tr><tr><td><span class="sw" style="background:var(--lagoon-dim)"></span><code>lagoon-dim</code></td><td><code>#0e2b2b</code></td><td><code>#d4f0ec</code></td><td class="usage">Tinted ground behind a lagoon chip on the web. Text on it: `fg`, `fg-muted` or `lagoon`. Not used in the TUI.</td></tr><tr><td><span class="sw" style="background:var(--on-lagoon)"></span><code>on-lagoon</code></td><td><code>#062321</code></td><td><code>#ffffff</code></td><td class="usage">Text and glyphs on a solid `lagoon` fill (the active mode badge, a primary key hint). Never white on dark — the dark theme lightens the accent.</td></tr><tr><td><span class="sw" style="background:var(--fin)"></span><code>fin</code></td><td><code>#ff8c5a</code></td><td><code>#ad3f14</code></td><td class="usage">The warm counterpart. Your own messages, questions waiting on you `?`, your answers `↳`, messages queued for the next step. Text-safe on every surface in both themes. ANSI: yellow (33 / 93).</td></tr><tr><td><span class="sw" style="background:var(--fin-dim)"></span><code>fin-dim</code></td><td><code>#3a1d12</code></td><td><code>#fbe3d8</code></td><td class="usage">Tinted ground behind a waiting card on the web. Text on it: `fg`, `fg-muted` or `fin`. Not used in the TUI.</td></tr><tr><td><span class="sw" style="background:var(--on-fin)"></span><code>on-fin</code></td><td><code>#2a1208</code></td><td><code>#ffffff</code></td><td class="usage">Text and glyphs on a solid `fin` fill (keycaps on the web).</td></tr><tr><td><span class="sw" style="background:var(--ok)"></span><code>ok</code></td><td><code>{lagoon}</code></td><td><code>{lagoon}</code></td><td class="usage">Alias of `lagoon`. Finished tool calls `✓`, passed checks, a done task. Success never gets its own green: one accent means one thing is &#x27;live&#x27;.</td></tr><tr><td><span class="sw" style="background:var(--warn)"></span><code>warn</code></td><td><code>#f2c14e</code></td><td><code>#8a5a00</code></td><td class="usage">Retries, context nearing its limit (≥80 %), a tool that returned with a warning. Always paired with a word or `⚠`, never color alone. ANSI: bright yellow (93) dark / yellow (33) light.</td></tr><tr><td><span class="sw" style="background:var(--danger)"></span><code>danger</code></td><td><code>#ff6f7d</code></td><td><code>#b3261e</code></td><td class="usage">Failed tool calls `✗`, a cancelled run, destructive confirmations, removed diff lines. Differs from `ok` by hue family (teal vs coral) and by glyph, never by color alone. ANSI: red (31 / 91).</td></tr><tr><td><span class="sw" style="background:var(--effort)"></span><code>effort</code></td><td><code>#8787ff</code></td><td><code>#5f5faf</code></td><td class="usage">The thinking effort in the status line and the banner (`high`, `off`). Status data only; never for prose, marks or state. TUI: the token on truecolor terminals, else 256-color 105 / 61.</td></tr><tr><td><span class="sw" style="background:var(--tokens)"></span><code>tokens</code></td><td><code>#5fafff</code></td><td><code>#005faf</code></td><td class="usage">Token counts and the cache hit rate in the status line (`18.8k in · 78% cached · 922 out`). TUI: the token on truecolor terminals, else 256-color 75 / 25.</td></tr><tr><td><span class="sw" style="background:var(--branch)"></span><code>branch</code></td><td><code>#d787d7</code></td><td><code>#af00af</code></td><td class="usage">The git branch in the status line; a dirty `*` is `warn`. TUI: the token on truecolor terminals, else 256-color 176 / 127.</td></tr><tr><td><span class="sw" style="background:var(--diff-add)"></span><code>diff-add</code></td><td><code>#0f2a22</code></td><td><code>#dcf2e4</code></td><td class="usage">Ground of an added diff line on the web. The TUI has no grounds: the sign and text are `lagoon`.</td></tr><tr><td><span class="sw" style="background:var(--diff-del)"></span><code>diff-del</code></td><td><code>#331a1f</code></td><td><code>#fbe1e3</code></td><td class="usage">Ground of a removed diff line on the web. The TUI has no grounds: the sign and text are `danger`.</td></tr></tbody></table>
+  <table><thead><tr><th>Token</th><th>Dark (terminal)</th><th>Light</th><th>Usage</th></tr></thead><tbody><tr><td><span class="sw" style="background:var(--bg)"></span><code>bg</code></td><td><code>#0b0f14</code></td><td><code>#f5f7f4</code></td><td class="usage">Terminal ground. Everything sits on it; never paint a second full-width ground. ANSI fallback: terminal default background.</td></tr><tr><td><span class="sw" style="background:var(--bg-raised)"></span><code>bg-raised</code></td><td><code>#121a22</code></td><td><code>#ffffff</code></td><td class="usage">Panes on the web and in the docs. One step up from `bg`; never nest two raised panes. The TUI paints no panes.</td></tr><tr><td><span class="sw" style="background:var(--bg-sunken)"></span><code>bg-sunken</code></td><td><code>#070a0e</code></td><td><code>#eaeeea</code></td><td class="usage">Code blocks inside a raised pane on the web. The TUI hangs code off a `▏` gutter instead.</td></tr><tr><td><span class="sw" style="background:var(--bg-selected)"></span><code>bg-selected</code></td><td><code>#1b292d</code></td><td><code>#d2dcd9</code></td><td class="usage">The selected row of a picker or question. A little more than `bg-tint`, with more lagoon in it. `fg`, `fg-muted` and every signal color read on it (≥4.5:1). TUI: derived from the terminal's ground, this token when none is known, else 256-color 237 / 254.</td></tr><tr><td><span class="sw" style="background:var(--bg-tint)"></span><code>bg-tint</code></td><td><code>#171e23</code></td><td><code>#dfe5e2</code></td><td class="usage">The band behind your own messages: the ground lifted 7.5% toward the text with a hint of lagoon, so it belongs to any theme. TUI: derived from the terminal's ground, this token when none is known, else 256-color 237 / 254.</td></tr><tr><td><span class="sw" style="background:var(--bg-chip)"></span><code>bg-chip</code></td><td><code>#1e2328</code></td><td><code>#d9dbda</code></td><td class="usage">Behind inline code, in 24-bit color only; the text on it stays `fg`. TUI: derived from the terminal's ground.</td></tr><tr><td><span class="sw" style="background:var(--fg)"></span><code>fg</code></td><td><code>#e8eef2</code></td><td><code>#131a20</code></td><td class="usage">Primary text on `bg`, `bg-raised`, `bg-sunken` and `bg-selected`. Assistant prose, file names, command output. ANSI: default foreground.</td></tr><tr><td><span class="sw" style="background:var(--fg-muted)"></span><code>fg-muted</code></td><td><code>#8e9cab</code></td><td><code>#56636f</code></td><td class="usage">Secondary text on every surface: timestamps, token counts, tool arguments, help hints. ≥4.5:1 everywhere. ANSI: bright black (90).</td></tr><tr><td><span class="sw" style="background:var(--fg-faint)"></span><code>fg-faint</code></td><td><code>#5c6b7a</code></td><td><code>#75838a</code></td><td class="usage">Non-essential marks only: the empty prompt's placeholder, a finished call's `✓`, disabled items, gutter glyphs, hints, the unfilled part of a progress meter. 3:1 on `bg` and `bg-raised`; never for text the user must read. TUI: derived from the terminal's ground for a 3:1 step (`#5a5f65` on this file's dark ground, `#8b9092` on its light one); these values are the fallback.</td></tr><tr><td><span class="sw" style="background:var(--line)"></span><code>line</code></td><td><code>#1f2b37</code></td><td><code>#d8dedb</code></td><td class="usage">Decorative hairlines on the web: pane separators and section rules. Carries no meaning on its own; in the TUI the rules around the prompt are `rule` and gutters `fg-faint`.</td></tr><tr><td><span class="sw" style="background:var(--rule)"></span><code>rule</code></td><td><code>#2a2f34</code></td><td><code>#ced2d0</code></td><td class="usage">The rules around the prompt and a Markdown rule: 1.4:1 against the ground, so they frame without drawing the eye. TUI: derived from the terminal's ground; before it is known they are `fg-faint`.</td></tr><tr><td><span class="sw" style="background:var(--line-strong)"></span><code>line-strong</code></td><td><code>#5a6e84</code></td><td><code>#75838a</code></td><td class="usage">Borders that mean something on the web: a focused field, a framed card. ≥3:1 on `bg` and `bg-raised`.</td></tr><tr><td><span class="sw" style="background:var(--lagoon)"></span><code>lagoon</code></td><td><code>#4fd1c5</code></td><td><code>#0a6e65</code></td><td class="usage">The accent: Killi at work. Running `◐`, plan and swarm mode, commands, links, the selected row's `❯`, the filled part of meters, h1–h2, the start of the banner's gradient. Text-safe on every surface in both themes (≥4.5:1). ANSI: cyan (36 / 96).</td></tr><tr><td><span class="sw" style="background:var(--lagoon-dim)"></span><code>lagoon-dim</code></td><td><code>#0e2b2b</code></td><td><code>#d4f0ec</code></td><td class="usage">Tinted ground behind a lagoon chip on the web. Text on it: `fg`, `fg-muted` or `lagoon`. Not used in the TUI.</td></tr><tr><td><span class="sw" style="background:var(--on-lagoon)"></span><code>on-lagoon</code></td><td><code>#062321</code></td><td><code>#ffffff</code></td><td class="usage">Text and glyphs on a solid `lagoon` fill (the active mode badge, a primary key hint). Never white on dark — the dark theme lightens the accent.</td></tr><tr><td><span class="sw" style="background:var(--fin)"></span><code>fin</code></td><td><code>#ff8c5a</code></td><td><code>#ad3f14</code></td><td class="usage">The warm counterpart: the human. The prompt's caret `❯`, your own messages, questions waiting on you `?`, your answers `↳`, messages queued for the next step. Text-safe on every surface in both themes. ANSI: yellow (33 / 93).</td></tr><tr><td><span class="sw" style="background:var(--fin-dim)"></span><code>fin-dim</code></td><td><code>#3a1d12</code></td><td><code>#fbe3d8</code></td><td class="usage">Tinted ground behind a waiting card on the web. Text on it: `fg`, `fg-muted` or `fin`. Not used in the TUI.</td></tr><tr><td><span class="sw" style="background:var(--on-fin)"></span><code>on-fin</code></td><td><code>#2a1208</code></td><td><code>#ffffff</code></td><td class="usage">Text and glyphs on a solid `fin` fill (keycaps on the web).</td></tr><tr><td><span class="sw" style="background:var(--ok)"></span><code>ok</code></td><td><code>{lagoon}</code></td><td><code>{lagoon}</code></td><td class="usage">Alias of `lagoon`. Passed checks and a done task, on the web and in the task list. A finished tool call's `✓` in the TUI is `fg-faint`: success is quiet, so the accent and `danger` mark what is live or wrong. Success never gets its own green.</td></tr><tr><td><span class="sw" style="background:var(--warn)"></span><code>warn</code></td><td><code>#f2c14e</code></td><td><code>#8a5a00</code></td><td class="usage">Retries, context nearing its limit (≥80 %), a tool that returned with a warning. Always paired with a word or `⚠`, never color alone. ANSI: bright yellow (93) dark / yellow (33) light.</td></tr><tr><td><span class="sw" style="background:var(--danger)"></span><code>danger</code></td><td><code>#ff6f7d</code></td><td><code>#b3261e</code></td><td class="usage">Failed tool calls `✗`, a cancelled run, destructive confirmations, removed diff lines. Differs from `ok` by hue family (teal vs coral) and by glyph, never by color alone. ANSI: red (31 / 91).</td></tr><tr><td><span class="sw" style="background:var(--effort)"></span><code>effort</code></td><td><code>#aaa9eb</code></td><td><code>#5e5a9a</code></td><td class="usage">The thinking effort in the status line and the banner (`high`, `off`). Status data only; never for prose, marks or state. The three status hues share one lightness and chroma (OKLCH L .77, C .08–.09, hues 285 / 240 / 335), and the banner's gradient passes through them. TUI: the token on truecolor terminals, else 256-color 147 / 60.</td></tr><tr><td><span class="sw" style="background:var(--tokens)"></span><code>tokens</code></td><td><code>#81bce5</code></td><td><code>#2b6991</code></td><td class="usage">Token counts and the cache hit rate in the status line (`18.8k in · 78% cached · 922 out`). TUI: the token on truecolor terminals, else 256-color 110 / 24.</td></tr><tr><td><span class="sw" style="background:var(--branch)"></span><code>branch</code></td><td><code>#d7a0ca</code></td><td><code>#864c7a</code></td><td class="usage">The git branch in the status line; a dirty `*` is `warn`. TUI: the token on truecolor terminals, else 256-color 182 / 96.</td></tr><tr><td><span class="sw" style="background:var(--diff-add)"></span><code>diff-add</code></td><td><code>#152325</code></td><td><code>#e0efe7</code></td><td class="usage">Stripe behind an added diff line, to the window's edge; the sign is `lagoon` and the text stays `fg`. TUI: in 24-bit color only, derived from the terminal's ground with a cast of green; in 256 colors the sign and text are `lagoon`.</td></tr><tr><td><span class="sw" style="background:var(--diff-del)"></span><code>diff-del</code></td><td><code>#291e23</code></td><td><code>#f8e5e2</code></td><td class="usage">Stripe behind a removed diff line; the sign is `danger` and the text stays `fg`. TUI: in 24-bit color only, derived from the terminal's ground with a cast of red; in 256 colors the sign and text are `danger`.</td></tr></tbody></table>
 
   <h2 id="type">Typography — <code>mono</code>: &quot;JetBrains Mono&quot;, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;, monospace</h2>
   <table><tbody><tr><td><code>display</code><div class="muted">56px / 56px · 700</div></td><td><span style="font-size:56px;line-height:56px;font-weight:700;letter-spacing:-0.02em">Killi</span></td><td class="usage">The wordmark on the cover and in docs. Never inside the terminal: the TUI banner is the block-letter wordmark.</td></tr><tr><td><code>title</code><div class="muted">20px / 28px · 700</div></td><td><span style="font-size:20px;line-height:28px;font-weight:700;letter-spacing:0">killi 0.4.2</span></td><td class="usage">Docs page titles. The terminal banner is the block-letter wordmark instead.</td></tr><tr><td><code>heading</code><div class="muted">13px / 20px · 700</div></td><td><span style="font-size:13px;line-height:20px;font-weight:700;letter-spacing:0.08em">TASKS</span></td><td class="usage">Section labels inside panes, uppercase, in `fg-muted`. In a terminal: bold + uppercase.</td></tr><tr><td><code>body</code><div class="muted">13px / 20px · 400</div></td><td><span style="font-size:13px;line-height:20px;font-weight:400;letter-spacing:0">Reading src/harness/loop.ts</span></td><td class="usage">Everything the terminal says: prose, tool output, file names. One cell wide, one row tall — the whole UI is set in this style.</td></tr><tr><td><code>body-strong</code><div class="muted">13px / 20px · 700</div></td><td><span style="font-size:13px;line-height:20px;font-weight:700;letter-spacing:0">edit_file</span></td><td class="usage">Tool names, the user&#x27;s turn label, key terms the eye should land on first.</td></tr><tr><td><code>caption</code><div class="muted">12px / 18px · 400</div></td><td><span style="font-size:12px;line-height:18px;font-weight:400;letter-spacing:0">12.4k tokens · 00:42</span></td><td class="usage">Metrics in docs and web renderings. In a terminal there is no smaller size: use `body` in `fg-muted`.</td></tr><tr><td><code>key</code><div class="muted">12px / 16px · 700</div></td><td><span style="font-size:12px;line-height:16px;font-weight:700;letter-spacing:0.04em">⏎  ESC  ^C</span></td><td class="usage">Keycaps and key hints. Uppercase, inside a one-cell chip on `bg-raised` or a solid `fin` / `lagoon` fill.</td></tr></tbody></table>
@@ -453,10 +467,12 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <section class="comp" id="c-Banner">
   <div class="comp-head"><h3>Banner</h3><span class="muted">Shell</span></div>
   <div class="stage ki-stage" id="stage-Banner"></div>
-  <div class="guide"><p>The first thing a session prints: <code>KILLI</code> in block letters with a sky-to-violet gradient, and beside it the name and version, the tagline, the model and the folder. Under it, in <code>fg-muted</code>: what the session loaded, a resumed session's last prompt, and the four keys a new user needs.</p>
+  <div class="guide"><p>The first thing a session prints: <code>KILLI</code> in block letters with a lagoon-to-periwinkle gradient, and beside it the name and version, the tagline, the model and the folder. Under it, in <code>fg-muted</code>: what the session loaded, a resumed session's last prompt, and the four keys a new user needs.</p>
 <p><strong>Provide:</strong> <code>version</code>, <code>model</code>, <code>effort</code> (left out for the provider's default), <code>cwd</code> (shortened with <code>~</code>, cut from the left with <code>…</code>), <code>notes</code>.</p>
 <ul>
 <li>Do move the side lines under the logo when the terminal is narrow, and drop the logo when even it does not fit.</li>
+<li>Do show only the gradient <code>killi</code> wordmark, its version and the setup lines in a window under 70 columns or 30 rows; the tagline goes with the logo.</li>
+<li>Do wrap the key hints between items, never inside one.</li>
 <li>Do keep the gradient to the logo and the working spinner; it is the one place Killi is decorative.</li>
 <li>Don't use the SVG mark or the <code>lagoon</code>/<code>fin</code> pair in the banner.</li>
 </ul></div>
@@ -464,7 +480,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <section class="comp" id="c-Prompt">
   <div class="comp-head"><h3>Prompt</h3><span class="muted">Shell</span></div>
   <div class="stage ki-stage" id="stage-Prompt"></div>
-  <div class="guide"><p>The composer: the <code>lagoon</code> caret <code>❯</code> and the typed text between two full-width rules in <code>fg-faint</code>. Known <code>/commands</code> and skills light up in <code>lagoon</code> as you type. The slash menu and pickers open under the bottom rule.</p>
+  <div class="guide"><p>The composer: the <code>fin</code> caret <code>❯</code> — the prompt is the human's — and the typed text between two full-width rules in <code>rule</code>. Known <code>/commands</code> and skills light up in <code>lagoon</code> as you type. The slash menu and pickers open under the bottom rule.</p>
 <p><strong>Provide:</strong> <code>value</code>, <code>plan</code> (turns both rules <code>lagoon</code> and labels the top one).</p>
 <ul>
 <li>Do grow with the text up to ten rows, then scroll within them.</li>
@@ -475,25 +491,26 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <section class="comp" id="c-Turn">
   <div class="comp-head"><h3>Turn</h3><span class="muted">Conversation</span></div>
   <div class="stage ki-stage" id="stage-Turn"></div>
-  <div class="guide"><p>Your message is a full-width band on the tint, a <code>fin</code> <code>❯</code> and the text in bold, with a blank row on each side, so you can find your own turns while scrolling back. Killi's reply is Markdown styled as it streams, in column 0 with no marker.</p>
-<p><strong>Provide:</strong> <code>role</code> (<code>user</code> or <code>killi</code>) and the body as children; <code>&lt;code&gt;</code> renders in <code>lagoon</code>. <code>Thought</code> renders a finished thought.</p>
+  <div class="guide"><p>Your message is a full-width band on <code>bg-tint</code>, a bold <code>fin</code> <code>❯</code> and the text in regular weight, with a blank row on each side, so you can find your own turns while scrolling back. Killi's reply is Markdown styled as it streams, in column 0 with no marker.</p>
+<p><strong>Provide:</strong> <code>role</code> (<code>user</code> or <code>killi</code>) and the body as children; <code>&lt;code&gt;</code> renders on a <code>bg-chip</code>. <code>Thought</code> renders a finished thought.</p>
 <ul>
-<li>Do keep prose <code>fg</code>. Inline <code>lagoon</code> is for code, commands and links; h1–h2 are <code>lagoon</code> bold, smaller headings bold.</li>
+<li>Do keep prose <code>fg</code>. Inline code sits on a <code>bg-chip</code> (lagoon text where the terminal has no 24-bit color); <code>lagoon</code> is for commands and links; h1–h2 are <code>lagoon</code> bold, smaller headings bold.</li>
 <li>Do show a thought that took two seconds or more as one <code>fg-muted</code> row, <code>∴ Thought for 5s: </code> and its first sentence; the full text is behind <code>Ctrl+O</code>.</li>
-<li>Do end a turn that took a while with one <code>fg-muted</code> row: <code>1m06s · 6 requests · 18.8k in, 78% cached · 922 out</code>.</li>
-<li>Do print a <code>/btw</code> answer as one block: a bold <code>fin</code> <code>btw</code> and the question, the answer hung off the <code>│</code> gutter, and a last muted row, <code>Not kept in the conversation · 4.2k in, 92% cached</code>. While it is answered it is a running row, <code>◐ btw question · 2s</code>; if the model is mid-paragraph the block waits for the paragraph's end.</li>
+<li>Do end a turn that took a while with one <code>fg-muted</code> row: <code>1m06s · 6 requests · 18.8k in · 78% cached · 922 out</code>.</li>
+<li>Do print a <code>/btw</code> answer as one block: a bold <code>fin</code> <code>btw</code> and the question, the answer hung off the <code>│</code> gutter, and a last muted row, <code>Not kept in the conversation · 4.2k in · 92% cached</code>. While it is answered it is a running row, <code>◐ btw question · 2s</code>; if the model is mid-paragraph the block waits for the paragraph's end.</li>
 <li>Don't put cards, bubbles or labels around Killi's prose.</li>
 </ul></div>
 </section>
 <section class="comp" id="c-ToolCall">
   <div class="comp-head"><h3>ToolCall</h3><span class="muted">Conversation</span></div>
   <div class="stage ki-stage" id="stage-ToolCall"></div>
-  <div class="guide"><p>One tool call is one row: the status glyph, the tool's name in <code>body-strong</code>, its arguments, then <code>· result · time</code> in <code>fg-muted</code>. While it runs it lives in the live area with a turning <code>◐</code>; when it ends it is printed to the scrollback as <code>✓</code> or <code>✗</code> in the same column.</p>
+  <div class="guide"><p>One tool call is one row: the status glyph, the tool's name in <code>body-strong</code>, its arguments (a path with its folders in <code>fg-muted</code>; a <code>bash</code> call as a faint <code>$</code> and the command), then <code>· result · time</code> in <code>fg-muted</code>. While it runs it lives in the live area with a turning <code>◐</code>; when it ends it is printed to the scrollback as a faint <code>✓</code> or a <code>danger</code> <code>✗</code> in the same column.</p>
 <p><strong>Provide:</strong> <code>name</code>, <code>args</code>, <code>status</code> (<code>running</code> · <code>done</code> · <code>failed</code>), <code>brief</code> (<code>24 lines</code>, <code>+9 −1</code>, or the failure), <code>duration</code>, optional <code>label</code> for a subagent's call, output as children.</p>
 <ul>
-<li>Do show up to three lines of a <code>bash</code> call's output under the <code>│</code> gutter: the first when it passed, the last when it failed, then <code>… n more lines · Ctrl+O</code>.</li>
+<li>Do show up to three lines of a <code>bash</code> call's output under the <code>│</code> gutter: the first when it passed, the last when it failed, then <code>… n more lines</code>; the first such row of a session adds <code> · Ctrl+O</code>, since only the newest call's key does anything.</li>
+<li>Don't print a row for a call that only updates the task list, unless it failed: the list is on screen.</li>
 <li>Do show an edit's diff under the same gutter (see <code>Diff</code>).</li>
-<li>Do mute a subagent's calls whole, after <code>↳ label:</code> — only the glyph keeps its color.</li>
+<li>Do mute a subagent's calls whole, after <code>↳ label:</code>.</li>
 <li>Don't wrap a call's row; cut its arguments with <code>…</code>.</li>
 </ul></div>
 </section>
@@ -514,7 +531,8 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
   <div class="guide"><p>When Killi needs you: a <code>fin</code> <code>?</code> and the question in bold in the scrollback (or <code>? Plan</code> and the plan, in plan mode), the numbered choices under the prompt, and the keys in <code>fg-muted</code>. Your answer is printed after a <code>fin</code> <code>↳</code>.</p>
 <p><strong>Provide:</strong> <code>question</code>, <code>options</code>, <code>selected</code>, optional <code>answer</code>.</p>
 <ul>
-<li>Do put the selected choice on the tint with a <code>lagoon</code> <code>❯</code> and its label in bold.</li>
+<li>Do put the selected choice on <code>bg-selected</code> with a <code>lagoon</code> <code>❯</code> and its label in bold.</li>
+<li>Do keep the hints whole: <code>1-3 or ↑↓ choose · Tab or Enter confirms · or type an answer · Esc dismisses</code>, the least useful dropped first as the window narrows.</li>
 <li>Do let a digit choose at once, and typing give your own answer instead.</li>
 <li>Don't time it out: the turn waits, and a desktop notification says so.</li>
 </ul></div>
@@ -522,7 +540,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <section class="comp" id="c-StatusBar">
   <div class="comp-head"><h3>StatusBar</h3><span class="muted">Shell</span></div>
   <div class="stage ki-stage" id="stage-StatusBar"></div>
-  <div class="guide"><p>The last row, in groups split by a <code>fg-faint</code> <code>│</code>: the model in <code>fg</code>, the effort in <code>effort</code>, the active mode in <code>lagoon</code>, the context meter with used/window, the session's tokens in <code>tokens</code> and the branch in <code>branch</code>. Labels (<code>effort</code>, <code>ctx</code>, <code>in</code>, <code>cached</code>, <code>out</code>) stay <code>fg-muted</code>; the figure carries the color.</p>
+  <div class="guide"><p>The last row. The model in <code>fg-muted</code>, the effort in <code>effort</code> and the active mode in <code>lagoon</code> stand at the left; the context meter with used/window, the session's tokens in <code>tokens</code> and the branch in <code>branch</code> at the right edge, in groups three spaces apart, with a faint <code>·</code> inside a group. Labels (<code>effort</code>, <code>ctx</code>, <code>in</code>, <code>cached</code>, <code>out</code>) stay <code>fg-muted</code>; the figure carries the color.</p>
 <p><strong>Provide:</strong> <code>model</code>, <code>effort</code>, <code>mode</code>, <code>context</code>, <code>window</code>, <code>input</code>, <code>cached</code>, <code>output</code>, <code>branch</code>.</p>
 <ul>
 <li>Do turn the meter and the context figures <code>warn</code> from 80 % of the window, and a dirty branch's <code>*</code>; those are the only signal colors this row uses.</li>
@@ -534,18 +552,18 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <section class="comp" id="c-Diff">
   <div class="comp-head"><h3>Diff</h3><span class="muted">Conversation</span></div>
   <div class="stage ki-stage" id="stage-Diff"></div>
-  <div class="guide"><p>An edit as Killi made it, under its <code>✓ edit</code> row: behind the <code>│</code> gutter, the line number in <code>fg-muted</code>, then the sign and the text — <code>lagoon</code> for an added line, <code>danger</code> for a removed one, <code>fg-muted</code> for context.</p>
+  <div class="guide"><p>An edit as Killi made it, under its <code>✓ edit</code> row: behind the <code>│</code> gutter, the line number in <code>fg-muted</code>, then the sign and the text. An added line sits on a <code>diff-add</code> stripe and a removed one on <code>diff-del</code>, each running to the window's edge, the sign in <code>lagoon</code> or <code>danger</code> and the text left as it is; context is <code>fg-muted</code>.</p>
 <p><strong>Provide:</strong> <code>lines</code> (<code>kind</code>: <code>add</code> · <code>del</code> · <code>ctx</code>, <code>n</code>, <code>text</code>).</p>
 <ul>
 <li>Do show at most sixteen rows, then <code>… n more lines</code>.</li>
 <li>Do cut long lines rather than wrap them; code keeps its columns.</li>
-<li>Don't add line grounds in the terminal: 256 colors have no tint dark enough, so the sign and color carry the meaning.</li>
+<li>Do draw the stripes only in 24-bit color, where they can be this soft: in 256 colors the sign and the text take <code>lagoon</code> or <code>danger</code> instead.</li>
 </ul></div>
 </section>
 <section class="comp" id="c-Spinner">
   <div class="comp-head"><h3>Spinner</h3><span class="muted">Signals</span></div>
   <div class="stage ki-stage" id="stage-Spinner"></div>
-  <div class="guide"><p>The working row, nearest the prompt while Killi works: a braille ribbon that rises from a flat line into a wave rolling to the right, then the <code>killi</code> wordmark fading in letter by letter, the banner's sky-to-violet gradient flowing through both — followed by <code>working</code> in <code>fg-muted</code>, the elapsed time in <code>fg-strong</code>, then <code>·</code> in <code>fg-faint</code> and <code>Esc</code> in <code>lagoon</code> with <code>to interrupt</code> in <code>fg-muted</code>, like every other key hint. A running tool call turns the quarter glyph <code>◐ ◓ ◑ ◒</code> instead.</p>
+  <div class="guide"><p>The working row, nearest the prompt while Killi works: a braille ribbon that rises from a flat line into a wave rolling to the right, then the <code>killi</code> wordmark fading in letter by letter, the banner's lagoon-to-periwinkle gradient flowing through both — followed by <code>working</code> in <code>fg-muted</code>, the elapsed time in <code>fg-strong</code>, then <code>·</code> in <code>fg-faint</code> and <code>Esc</code> in <code>lagoon</code> with <code>to interrupt</code> in <code>fg-muted</code>, like every other key hint. A running tool call turns the quarter glyph <code>◐ ◓ ◑ ◒</code> instead.</p>
 <p><strong>Provide:</strong> <code>elapsed</code>; <code>Quarter</code> for a tool row.</p>
 <ul>
 <li>Do keep exactly one wordmark on screen; tool rows above it carry their own glyph.</li>
@@ -577,7 +595,7 @@ export interface BannerProps {
 export declare function Banner(props: BannerProps): JSX.Element;
 
 export interface PromptProps {
-  /** The typed text; known /commands render in lagoon. */
+  /** The typed text, after a fin `❯`; known /commands render in lagoon. */
   value?: string;
   /** Plan mode: both rules turn lagoon and the top one carries the label. */
   plan?: boolean;
@@ -585,9 +603,9 @@ export interface PromptProps {
 export declare function Prompt(props: PromptProps): JSX.Element;
 
 export interface TurnProps {
-  /** user → a band on the tint with a fin `❯`; killi → prose in column 0, no marker. */
+  /** user → a band on bg-tint with a bold fin `❯` and regular text; killi → prose in column 0, no marker. */
   role: &#x27;user&#x27; | &#x27;killi&#x27;;
-  /** Prose. Paragraphs as &lt;p&gt;; &lt;code&gt; renders in lagoon. */
+  /** Prose. Paragraphs as &lt;p&gt;; &lt;code&gt; renders on a bg-chip. */
   children?: ReactNode;
 }
 export declare function Turn(props: TurnProps): JSX.Element;
@@ -596,9 +614,9 @@ export declare function Turn(props: TurnProps): JSX.Element;
 export declare function Thought(props: { duration: number; gist?: string }): JSX.Element;
 
 export interface ToolCallProps {
-  /** Tool name in body-strong: &quot;bash&quot;, &quot;edit&quot;. */
+  /** Tool name in body-strong: &quot;edit&quot;. &quot;bash&quot; is drawn as a faint `$`. */
   name: string;
-  /** One line, cut with an ellipsis. */
+  /** One line, cut with an ellipsis. A path to read, write or edit keeps its folders fg-muted. */
   args?: string;
   status?: &#x27;running&#x27; | &#x27;done&#x27; | &#x27;failed&#x27;;
   /** &quot;24 lines&quot;, &quot;+9 −1&quot;; for a failure, the reason, in danger. */
@@ -609,7 +627,7 @@ export interface ToolCallProps {
   duration?: number;
   /** A subagent&#x27;s label: the row is muted after `↳ label:`. */
   label?: string;
-  /** Output rows behind the `│` gutter, already cut to three plus a `… n more lines` row. */
+  /** Output rows behind the `│` gutter, already cut to three plus a `… n more lines` row (the first such row of a session adds ` · Ctrl+O`). */
   children?: string;
 }
 export declare function ToolCall(props: ToolCallProps): JSX.Element;
@@ -626,7 +644,7 @@ export interface QuestionProps {
   /** Plan approval: the head reads `? Plan`. */
   plan?: boolean;
   options?: { label: string; note?: string }[];
-  /** Index of the selected choice (tint + lagoon `❯`). */
+  /** Index of the selected choice (bg-selected + lagoon `❯`). */
   selected?: number;
   /** Once answered: the head and a fin `↳` row instead of the choices. */
   answer?: string;
@@ -991,8 +1009,8 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   var GLYPH = { running: '◐', done: '✓', failed: '✗', queued: '○', warning: '⚠', question: '?', answer: '↳', thought: '∴' };
   var QUARTER = ['◐', '◓', '◑', '◒'];
   var CLASS = { running: 'ki-lagoon', done: 'ki-ok', failed: 'ki-danger', queued: 'ki-faint', warning: 'ki-warn' };
-  /* The banner's sky, indigo and violet, as tui/banner.rs has them. */
-  var STOPS = [[56, 189, 248], [129, 140, 248], [192, 132, 252]];
+  /* The banner's lagoon, sky and periwinkle, as tui/banner.rs has them. */
+  var STOPS = [[79, 209, 197], [100, 188, 237], [157, 152, 242]];
   var LOGO = [
     '██╗  ██╗██╗██╗     ██╗     ██╗',
     '██║ ██╔╝██║██║     ██║     ██║',
@@ -1129,6 +1147,15 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     return h('div', { className: 'ki-thought ki-cut' }, '∴ Thought for ' + clock(props.duration) + (props.gist ? ': ' + props.gist : ''));
   }
 
+  /* A bash call is drawn as the `$` of a prompt; a path keeps its folders muted so the file stands out. */
+  function callHead(props) {
+    var args = props.args || '';
+    if (props.name === 'bash') return [h('span', { key: 'n', className: 'ki-tool-dollar' }, '$'), args ? ' ' + args : ''];
+    var path = /^(read|write|edit)$/.test(props.name) ? args.match(/^(.*\/)([^\/]+)$/) : null;
+    return [h('span', { key: 'n', className: 'ki-tool-name' }, props.name),
+      path ? [' ', h('span', { key: 'd', className: 'ki-tool-dir' }, path[1]), path[2]] : args ? ' ' + args : ''];
+  }
+
   /* ToolCall */
   function ToolCall(props) {
     var status = props.status || 'done';
@@ -1146,7 +1173,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
           h('span', { className: 'ki-tool-name' }, props.name), h('span', { className: 'ki-tool-args' }, props.args ? ' ' + props.args : ''), tail)
       : h('div', { className: 'ki-line' },
           h('span', { className: cx('ki-glyph', CLASS[status]) }, glyph),
-          h('div', { className: 'ki-cut' }, h('span', { className: 'ki-tool-name' }, props.name), props.args ? ' ' + props.args : '', tail));
+          h('div', { className: 'ki-cut' }, callHead(props), tail));
     return h('div', { className: 'ki-tool', 'data-status': status, 'data-sub': props.label ? 'true' : null },
       head, props.children ? h(Output, { text: props.children }) : null);
   }
@@ -1174,7 +1201,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     if (props.answer != null) {
       return h('div', { className: 'ki-question' }, head, h('div', { className: 'ki-answer ki-line' }, h('span', { className: 'ki-glyph' }, '↳'), h('span', null, props.answer)));
     }
-    var choose = opts.length > 1 ? '1-' + Math.min(opts.length, 9) + ' or ↑↓ and Tab or Enter to choose, ' : 'Tab or Enter to choose, ';
+    var choose = opts.length > 1 ? '1-' + Math.min(opts.length, 9) + ' or ↑↓ choose · Tab or Enter confirms · ' : 'Tab or Enter chooses · ';
     return h('div', { className: 'ki-question' }, head,
       h('div', { className: 'ki-choices' }, opts.map(function (o, i) {
         var on = i === sel;
@@ -1182,27 +1209,28 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
           h('span', { className: 'ki-glyph' }, on ? '❯' : ' '),
           h('span', null, h('span', { className: 'ki-choice-label' }, (i + 1) + '. ' + o.label), o.note ? h('span', { className: 'ki-choice-note' }, o.note) : null));
       })),
-      h('div', { className: 'ki-hint' }, choose + (props.plan ? 'or type what to change' : 'or type your own answer') + ' · Esc to dismiss'));
+      h('div', { className: 'ki-hint' }, choose + (props.plan ? 'or type a change' : 'or type an answer') + ' · Esc dismisses'));
   }
 
-  /* StatusBar */
+  /* StatusBar: the model and mode at the left, the figures at the right edge. */
   function StatusBar(props) {
-    var head = [h('span', { key: 'm', className: 'ki-fg' }, props.model)];
-    if (props.effort) head.push(' · effort ', h('span', { key: 'ef', className: 'ki-effort' }, props.effort));
-    if (props.mode) head.push(' · ', h('span', { key: 'mo', className: 'ki-mode' }, props.mode + ' mode'));
+    var dot = function (k) { return h('span', { key: k, className: 'ki-faint' }, ' · '); };
+    var head = [h('span', { key: 'm' }, props.model)];
+    if (props.effort) head.push(dot('d1'), 'effort ', h('span', { key: 'ef', className: 'ki-effort' }, props.effort));
+    if (props.mode) head.push(dot('d2'), h('span', { key: 'mo', className: 'ki-mode' }, props.mode + ' mode'));
     var ctx = props.window
       ? ['ctx ', h(Meter, { key: 'me', value: props.context / props.window }), ' ', h('span', { key: 'cf', className: props.context / props.window >= 0.8 ? 'ki-dirty' : null }, short(props.context) + '/' + short(props.window))]
       : ['ctx ' + short(props.context || 0)];
-    var groups = [head, ctx];
+    var groups = [ctx];
     var tok = function (k, v) { return h('span', { key: k, className: 'ki-tokens' }, v); };
-    if (props.input) groups.push([tok('i', short(props.input)), ' in · ', tok('c', Math.floor((props.cached || 0) * 100 / props.input) + '%'), ' cached · ', tok('o', short(props.output || 0)), ' out']);
+    if (props.input) groups.push([tok('i', short(props.input)), ' in', dot('a'), tok('c', Math.floor((props.cached || 0) * 100 / props.input) + '%'), ' cached', dot('b'), tok('o', short(props.output || 0)), ' out']);
     if (props.branch) {
       var dirty = props.branch.slice(-1) === '*';
       groups.push([h('span', { key: 'b', className: 'ki-branch' }, '⎇ ' + (dirty ? props.branch.slice(0, -1) : props.branch)), dirty ? h('span', { key: 'd', className: 'ki-dirty' }, '*') : null]);
     }
-    var out = [];
-    groups.forEach(function (g, i) { if (i) out.push(' ', h('span', { key: 's' + i, className: 'ki-sep' }, '│'), ' '); out.push(h('span', { key: i }, g)); });
-    return h('div', { className: 'ki-status', role: 'status' }, out);
+    return h('div', { className: 'ki-status', role: 'status' },
+      h('span', null, head),
+      h('span', { className: 'ki-status-figures' }, groups.map(function (g, i) { return h('span', { key: i }, g); })));
   }
 
   /* Diff */
@@ -1215,7 +1243,8 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
         return h('div', { key: i, className: 'ki-diff-line ki-out', 'data-kind': l.kind || 'ctx', style: { whiteSpace: 'pre' } },
           h('span', { className: 'ki-gutter' }, '│'),
           h('span', null, h('span', { className: 'ki-diff-num' }, new Array(Math.max(0, 4 - n.length) + 1).join(' ') + n), ' ',
-            h('span', { className: 'ki-diff-text' }, (sign[l.kind] || ' ') + ' ' + l.text)));
+            h('span', { className: 'ki-diff-sign' }, sign[l.kind] || ' '), ' ',
+            h('span', { className: 'ki-diff-text' }, l.text)));
       }),
       props.more ? h('div', { className: 'ki-out' }, h('span', { className: 'ki-gutter' }, '│'), h('span', { className: 'ki-muted' }, '… ' + props.more + ' more line' + (props.more === 1 ? '' : 's'))) : null);
   }
@@ -1258,7 +1287,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   }
   window.addEventListener('resize', scaleCover); scaleCover();
 ReactDOM.createRoot(document.getElementById('stage-Banner')).render(
-h(K.Banner, { version: '0.2.14', model: 'minimax/MiniMax-M3.1-Flash', effort: 'high', cwd: '~/code/slug',
+h(K.Banner, { version: '0.3.0', model: 'minimax/MiniMax-M3.1-Flash', effort: 'high', cwd: '~/code/slug',
       notes: ['6 skills', '/ commands and skills · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts'] })
 );
 ReactDOM.createRoot(document.getElementById('stage-Prompt')).render(
@@ -1281,7 +1310,7 @@ h('div', null,
         h('p', null, 'Fixed ', h('code', null, 'slugify'), ' in ', h('code', null, 'src/lib.rs'), ': it now drops punctuation and collapses whitespace into a single ', h('code', null, '-'), '.'),
         h('p', null, h('code', null, 'cargo test'), ' passes: 1 passed, 0 failed.')),
       h(K.Blank),
-      h('div', { className: 'ki-muted' }, '1m06s · 6 requests · 18.8k in, 78% cached · 922 out'))
+      h('div', { className: 'ki-muted' }, '1m06s · 6 requests · 18.8k in · 78% cached · 922 out'))
 );
 ReactDOM.createRoot(document.getElementById('stage-ToolCall')).render(
 h('div', null,
@@ -1289,7 +1318,7 @@ h('div', null,
       h(K.ToolCall, { name: 'bash', args: 'cargo test -p harness', status: 'done', brief: '24 lines', duration: 4200 },
         'running 12 tests\ntest loop::resumes ... ok\ntest loop::stops_on_esc ... ok\n… 21 more lines · Ctrl+O'),
       h(K.ToolCall, { name: 'bash', args: 'cargo build', status: 'failed', brief: 'exited with code 101', duration: 2300 },
-        '… 18 earlier lines · Ctrl+O\nerror[E0308]: mismatched types\nerror: could not compile `harness`'),
+        '… 18 earlier lines\nerror[E0308]: mismatched types\nerror: could not compile `harness`'),
       h(K.ToolCall, { name: 'grep', args: 'fn resume', status: 'done', brief: '3 matches', label: 'explore' }),
       h(K.ToolCall, { name: 'bash', args: 'cargo clippy --all-targets', status: 'running', elapsed: 3000 }))
 );

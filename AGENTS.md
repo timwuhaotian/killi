@@ -9,6 +9,9 @@ behind it are in `docs/decisions.md`.
 - Capability tasks: `python3 scripts/eval.py verify` (each task fails as given and passes with
   its solution); `run` and `report` compare tools and need models configured.
 - Release: see `RELEASING.md`. `scripts/release.sh` builds `releases/killi-arm64`.
+- See the TUI without a model: `scripts/frames.py out/` draws every screen at 118, 80 and 60 columns
+  on Kil's themes, from a scripted provider and a pty (`--png`, `--inline`, `--colors 256`; needs `pyte`).
+  Use it after any change to `tui/`; a layout is only checked once it has been drawn at 80x24 and 60 columns.
 - Re-measure size, memory and tokens and redraw the charts and README numbers: the
   `refresh-metrics` skill; it also says how `scripts/screenshot.py` redraws the README's
   screenshots from a real run. Find bugs and optimizations from real use: the `review-sessions`

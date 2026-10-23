@@ -5,6 +5,36 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- **Finished calls are quiet.** Every tool row began with a lagoon tick, which marked nothing.
+  A finished call's `✓` is now faint, so what is running or has failed is what the eye finds;
+  the `$` of a bash row is faint too, and a path keeps its folders muted so the file stands
+  out. Lagoon is left for work in progress, modes, commands and the selected row, and the
+  prompt's caret is coral, like the messages it becomes.
+- **Diffs on stripes, code on chips.** In 24-bit color an added or removed line sits on a
+  soft green or red stripe to the window's edge, its sign colored and its text left alone;
+  inline code sits on a chip instead of being teal. 256 colors keep the colored text. A code
+  block no longer ends in an empty gutter row.
+- **Colors follow your terminal.** killi asks the terminal for its background and foreground
+  and derives its grays, tints and stripes from them, so they belong to any theme: before, the
+  band behind your messages was a blue-green slab on Kil's Ember and Dusk, and on a light theme
+  Kil's dim made secondary text darker than body text. With no answer, or `[ui] theme` set, the
+  fixed shades stay.
+- **One palette.** The banner's gradient now starts at lagoon, and the status line's three
+  hues (effort, tokens, branch) share one lightness and chroma instead of being the most
+  saturated thing on screen. The status line keeps the model and mode at the left and the
+  figures at the right edge, with the model muted.
+- **A cut always says so.** Menu descriptions, the banner's lines and the hints under a list
+  were cut at the window's edge without a mark (`effort hig`, `Esc cl`); they end in `…` now.
+  Hints drop their least useful items before cutting one, the banner's hints wrap between
+  items, and a blank row sets a list's hints off from the status line.
+- **A compact banner.** In a window narrower than 70 columns or shorter than 30 rows the
+  banner is the gradient `killi` and the setup lines: 4 rows instead of 10 at 80x24.
+- **Fewer rows that repeat.** A task-list update prints no row unless it failed, since the
+  list is on screen; `Ctrl+O` is named once per session, by the first row that leaves output
+  out; the turn's trailer reads `18.8k in · 78% cached · 922 out`, like the status line.
+- **`scripts/frames.py`** draws killi's screens at any size and on any of Kil's themes from a
+  scripted provider, with no model and none of your config.
+
 ## 0.2.41 — 2026-10-23
 
 - **The prompt wraps at spaces.** A long message broke in the middle of a word; now rows
