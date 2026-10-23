@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.39 — 2026-10-23
+
+- **A message typed mid-turn comes before the next command, not after the batch.** It
+  already waited only for the tool call running, in the docs; in the code it waited for every
+  call in the reply. Now the calls after the running one are answered as not run, so the
+  message reaches the model as soon as that call ends and the model runs them again if they're
+  still needed. Ctrl+S still cuts the running call itself.
+
 ## 0.2.38 — 2026-10-23
 
 - **A first run that starts from the agent you already use.** Without a config, `killi`
