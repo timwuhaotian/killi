@@ -24,7 +24,8 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 ## Features
 
 - **Small and quick.** One 6 MB binary with no runtime to install. It starts in under 20 ms and
-  uses about 15 MB of memory running a prompt, where Kimi Code uses 408 MB and Claude Code 324 MB.
+  uses about 15 MB of memory running a prompt, where Kimi Code uses 408 MB, Claude Code 324 MB
+  and opencode 2 332 MB.
 - **Few tokens.** The system prompt and every tool together come to about 2,600 tokens, plus
   your `AGENTS.md` files and about 4 tokens per installed skill. In the
   [capability tests](#capability-tests) killi passed every task Kimi Code passed, on the same
@@ -57,13 +58,16 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/bench-dark.svg">
-  <img src="docs/bench-light.svg" width="960" alt="Installed size, peak memory for one prompt, and tokens sent before you type, for killi, Kimi Code and Claude Code">
+  <img src="docs/bench-light.svg" width="960" alt="Installed size, peak memory for one prompt, and tokens sent before you type, for killi, Kimi Code, Claude Code and opencode 2">
 </picture>
 
 Measured with [`scripts/bench.py`](scripts/bench.py); the versions and models are in
-[`docs/bench.json`](docs/bench.json). killi and Kimi Code ran the same model, MiMo-V2.6-Pro;
-Claude Code ran its default, Claude Sonnet 5.5. All three loaded this machine's skills, global
-instructions and MCP servers.
+[`docs/bench.json`](docs/bench.json). killi, Kimi Code and opencode 2 ran the same model,
+MiMo-V2.6-Pro; Claude Code ran its default, Claude Sonnet 5.5. killi, Kimi Code and Claude Code
+loaded this machine's skills, global instructions and MCP servers; opencode 2 ran with a fresh
+config holding only the model, so it loaded the skills but no MCP servers, and with `--standalone`
+so that it is one process. killi and opencode 2 (2.1.3) were measured on 2026-10-23, Kimi Code and
+Claude Code the day before, on the same machine.
 
 ## Capability tests
 

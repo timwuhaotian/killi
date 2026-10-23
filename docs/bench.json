@@ -1,19 +1,21 @@
 {
-  "measured": "2026-10-22",
+  "measured": "2026-10-23",
   "machine": "Apple M1 Pro, macOS 26.6.2",
   "prompt": "Reply with the single word OK.",
   "tools": [
     {
+      "measured": "2026-10-23",
       "name": "killi",
-      "version": "0.2.16",
+      "version": "0.2.33",
       "runtime": "Rust",
       "model": "mimo-v2.6-pro",
-      "size_mb": 6.3,
-      "startup_ms": 17,
-      "memory_mb": 15.2,
-      "tokens": 3064
+      "size_mb": 6.4,
+      "startup_ms": 18,
+      "memory_mb": 15.3,
+      "tokens": 3564
     },
     {
+      "measured": "2026-10-22",
       "name": "Kimi Code",
       "version": "2.3.0",
       "runtime": "Node.js",
@@ -24,6 +26,7 @@
       "tokens": 44306
     },
     {
+      "measured": "2026-10-22",
       "name": "Claude Code",
       "version": "2.1.308",
       "runtime": "Bun",
@@ -32,6 +35,17 @@
       "startup_ms": 28,
       "memory_mb": 324.4,
       "tokens": 29984
+    },
+    {
+      "name": "opencode 2",
+      "version": "2.1.3",
+      "runtime": "Bun",
+      "model": "mimo-v2.6-pro",
+      "size_mb": 204.4,
+      "startup_ms": 77,
+      "memory_mb": 331.7,
+      "tokens": 15014,
+      "measured": "2026-10-23"
     }
   ]
 }

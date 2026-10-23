@@ -14,6 +14,12 @@ The README quotes numbers from all of them, so it is the last thing to edit.
 
 - Apple silicon Mac, `kimi` and `claude` installed and signed in, and `mimo/mimo-v2.6-pro`
   configured in `~/.killi/config.toml` (`BENCH_MODEL` and `EVAL_MODEL` change it).
+- opencode 2 is optional for `bench.py`: `OPENCODE_BIN` is the compiled binary, e.g. `npm install
+  --prefix <dir> --ignore-scripts @opencode/cli` and
+  `<dir>/node_modules/@opencode/cli-darwin-arm64/bin/opencode` (the npm launcher would hide the
+  real process's memory). `bench.py` builds its config from killi's provider, runs it with
+  `--standalone` (one process, no background service) and reads tokens from its sqlite database,
+  because `--format json` carries no usage.
 - Measure the binary people install: `releases/killi-arm64`, built by `scripts/release.sh`
   (or `cargo build --release`). `~/.local/bin/killi` can be a release behind. Pass it as
   `KILLI_BIN="$PWD/releases/killi-arm64"`.
@@ -26,7 +32,8 @@ The README quotes numbers from all of them, so it is the last thing to edit.
 KILLI_BIN="$PWD/releases/killi-arm64" python3 scripts/bench.py
 ```
 
-It runs each tool in an empty folder: startup (`--version`, median of 5), peak memory (maximum
+`--tools killi,opencode` measures only those and keeps the other rows (each row records the date
+it was measured). It runs each tool in an empty folder: startup (`--version`, median of 5), peak memory (maximum
 resident set size of a one-prompt run, median of 3) and the first request's input tokens. Run
 it **at least twice**. Size, memory and tokens agree within a few percent between runs; if
 they don't, something else was running. Quote startup as a round "under N ms" unless the load

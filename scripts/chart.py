@@ -66,10 +66,13 @@ def render(data, c):
             out.append(f'<text x="{BAR_X + width + 10:.1f}" y="{y + 24}" font-size="14" font-weight="{weight}" fill="{c["text"]}">{escape(fmt(tool[key]))}{extra}</text>')
             y += ROW
         y += 34
+    when = " and ".join(sorted({t.get("measured", data["measured"]) for t in tools}))
     notes = [
-        f'Measured {data["measured"]} on {data["machine"]} with scripts/bench.py, each tool given “{data["prompt"]}” in an empty folder.',
+        f'Measured {when} on {data["machine"]} with scripts/bench.py, prompt “{data["prompt"]}” in an empty folder.',
         "Size is the installed binary (Kimi Code’s includes its bundled rg and fd). Memory is the median maximum resident set size of 3 runs.",
-        "Tokens are the first request’s input as each tool reports it, with this machine’s skills, instructions and MCP servers loaded.",
+        "Tokens are the first request’s input as each tool reports it, with this machine’s skills, instructions and MCP servers loaded;",
+        "opencode 2 ran with a fresh config holding only the model, so it loaded this machine’s skills but none of its MCP servers.",
+        "By default opencode 2 uses a background service; it was measured with --standalone, so everything is in one process.",
     ]
     y -= 8
     for note in notes:
