@@ -18,17 +18,34 @@ const STOPS: [(f32, f32, f32); 3] = [(56.0, 189.0, 248.0), (129.0, 140.0, 248.0)
 
 /// The wordmark that stands in for a spinner.
 const WORD: &str = "killi";
-/// Frames (a tenth of a second each) one pass of the light across the wordmark takes.
-const SWEEP: usize = 28;
+/// Frames (a tenth of a second each) from the start of one glint to the start of the next,
+/// and how many of them the glint spends crossing the word. The rest is a pause.
+const GLINT_EVERY: usize = 40;
+const GLINT_CROSSING: usize = 18;
+/// How far the glint reaches ahead of its head and behind it, in letters: a sharp front and a
+/// long tail, like a comet.
+const GLINT_AHEAD: f32 = 0.9;
+const GLINT_BEHIND: f32 = 2.4;
+/// The cool white the glint brightens the letters toward.
+const GLINT_WHITE: (f32, f32, f32) = (236.0, 246.0, 255.0);
+
+/// How much of the glint is on `letter` `frame` tenths of a second in, from 0 to 1. The head
+/// starts and ends out of reach of every letter, so the pause between glints is still.
+fn glow(letter: usize, frame: usize) -> f32 {
+    let cross = ((frame % GLINT_EVERY) as f32 / GLINT_CROSSING as f32).min(1.0);
+    let (from, to) = (-GLINT_AHEAD, WORD.len() as f32 - 1.0 + GLINT_BEHIND);
+    let ahead = letter as f32 - (from + (to - from) * cross);
+    let reach = if ahead > 0.0 { GLINT_AHEAD } else { GLINT_BEHIND };
+    ((ahead.abs() / reach).min(1.0) * std::f32::consts::PI).cos() * 0.5 + 0.5
+}
 
 /// The wordmark as a spinner, `frame` tenths of a second after work began. The letters fade in
-/// one after another, then the logo's gradient drifts through them while a bright spot sweeps
-/// from left to right. Always `WORD.len()` columns wide.
+/// one after another, then the logo's whole gradient flows through them and, every few
+/// seconds, a soft glint crosses from left to right. Always `WORD.len()` columns wide.
 pub fn working(frame: usize) -> String {
     let truecolor = truecolor();
     let letters = WORD.len();
-    let spot = (frame % SWEEP) as f32 / SWEEP as f32 * (letters + 3) as f32 - 1.5;
-    let drift = frame as f32 * 0.03;
+    let drift = frame as f32 * 0.035;
     let mut out = String::new();
     for (i, c) in WORD.chars().enumerate() {
         let appeared = (frame as f32 - 2.0 * i as f32 + 1.0) / 3.0;
@@ -36,15 +53,12 @@ pub fn working(frame: usize) -> String {
             out.push_str(&format!("{DIM}·{RESET}"));
             continue;
         }
-        let wave = (i as f32 / (letters - 1) as f32 * 0.7 + drift) % 2.0;
+        let wave = (i as f32 / (letters - 1) as f32 + drift) % 2.0;
         let (r, g, b) = gradient(if wave > 1.0 { 2.0 - wave } else { wave });
-        let glow = (1.0 - (i as f32 - spot).abs() / 1.6).max(0.0);
+        let glow = glow(i, frame);
         let fade = appeared.clamp(0.0, 1.0) * 0.75 + 0.25;
-        let mix = |v: f32| (v + (255.0 - v) * glow * 0.7) * fade;
-        out.push_str(&color(mix(r), mix(g), mix(b), truecolor));
-        if glow > 0.5 {
-            out.push_str("\x1b[1m");
-        }
+        let mix = |v: f32, white: f32| (v + (white - v) * glow * 0.9) * fade;
+        out.push_str(&color(mix(r, GLINT_WHITE.0), mix(g, GLINT_WHITE.1), mix(b, GLINT_WHITE.2), truecolor));
         out.push(c);
         out.push_str(RESET);
     }
@@ -124,6 +138,18 @@ mod tests {
         }
         assert!(working(0).contains('·'));
         assert!(!working(20).contains('·'));
+    }
+
+    #[test]
+    fn the_glint_crosses_the_word_left_to_right_then_rests() {
+        let peak = |letter: usize| (0..GLINT_EVERY).max_by(|&a, &b| glow(letter, a).total_cmp(&glow(letter, b))).unwrap();
+        for letter in 0..WORD.len() {
+            assert!(glow(letter, peak(letter)) > 0.9, "letter {letter}");
+        }
+        assert!((1..WORD.len()).all(|letter| peak(letter) > peak(letter - 1)));
+        for frame in [0, GLINT_CROSSING, GLINT_EVERY - 1, GLINT_EVERY, GLINT_EVERY + GLINT_CROSSING + 3] {
+            assert!((0..WORD.len()).all(|letter| glow(letter, frame) < 0.01), "frame {frame}");
+        }
     }
 
     #[test]

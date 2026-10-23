@@ -2011,6 +2011,8 @@ impl App {
                 rows.push(fit(&format!("{LAGOON}{frame}{RESET} {BOLD}{FIN}btw{RESET} {question}{DIM} · {}{RESET}", clock(since.elapsed())), width));
             }
             if self.asking.is_none() {
+                // Tool rows keep their list together, but the wordmark never touches them or the conversation.
+                space(&mut rows);
                 let spin = banner::working(self.spinner);
                 rows.push(fit(&format!("{spin} {DIM}working{RESET} {BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}", clock(started.elapsed())), width));
             }

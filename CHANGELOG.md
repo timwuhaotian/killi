@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.29 — 2026-10-23
+
+- **The working row has room, and a livelier wordmark.** A blank row now separates the
+  `killi working` row from the tool output or prose above it (running tool calls still follow
+  their finished ones directly). The wordmark shows the logo's whole sky-to-violet gradient,
+  not a slice of it, flowing through the letters; a soft glint with a long tail crosses every
+  few seconds and the word rests in between, with no bold flicker.
+
 ## 0.2.28 — 2026-10-23
 
 - **The working row has some presence.** Elapsed time is bold, `Esc` follows the key-hint
