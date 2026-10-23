@@ -402,7 +402,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <tr><td>Prompt caret</td><td><code>❯</code></td><td><code>lagoon</code></td><td>—</td></tr>
 <tr><td>Your message</td><td><code>❯</code> on the tint</td><td><code>fin</code></td><td>—</td></tr>
 <tr><td>Running tool call</td><td><code>◐ ◓ ◑ ◒</code> (frames)</td><td><code>lagoon</code></td><td>the elapsed time</td></tr>
-<tr><td>Working</td><td>the <code>killi</code> wordmark sweep</td><td>banner gradient</td><td><code>working</code></td></tr>
+<tr><td>Working</td><td>the braille wave and <code>killi</code> wordmark</td><td>banner gradient</td><td><code>working</code></td></tr>
 <tr><td>Done</td><td><code>✓</code></td><td><code>ok</code></td><td>the result: <code>24 lines</code></td></tr>
 <tr><td>Failed</td><td><code>✗</code></td><td><code>danger</code></td><td>the reason</td></tr>
 <tr><td>Warning, retry</td><td><code>⚠</code></td><td><code>warn</code></td><td><code>retry</code></td></tr>
@@ -420,9 +420,9 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <h2>States</h2>
 <p>A tool call is <code>running</code> in the live area, then <code>done</code> or <code>failed</code> in the scrollback, in the same column. Render the glyph in column 0, the tool's name in <code>body-strong</code>, its arguments in <code>fg</code>, then <code>· result · time</code> in <code>fg-muted</code> (time only from a second up). A failure puts its reason in <code>danger</code> and, for <code>bash</code>, shows the last lines of output under the gutter instead of the first.</p>
 <h2>Motion</h2>
-<p>Only four things move, on one 100ms tick: the wordmark sweep on the working row, the quarter glyph of each running tool call, the elapsed timers, and the stream of tokens as they arrive. No fades, no slides, no blinking. The terminal's own cursor marks where you type. On the web, <code>prefers-reduced-motion</code> holds every animation on its first frame.</p>
+<p>Only four things move, on one 100ms tick: the wave and wordmark on the working row, the quarter glyph of each running tool call, the elapsed timers, and the stream of tokens as they arrive. No fades, no slides, no blinking. The terminal's own cursor marks where you type. On the web, <code>prefers-reduced-motion</code> holds every animation on its first frame.</p>
 <h2>Logo</h2>
-<p><code>assets/Logos/killi-mark.svg</code> is the mark for the docs and icons: a prompt caret <code>❯</code> in <code>lagoon</code> with a cursor bar in <code>fin</code>. It never appears in the terminal. There the banner is the block-letter <code>KILLI</code> in its sky-to-violet gradient (<code>tui/banner.rs</code>), and the same gradient sweeps through the <code>killi</code> wordmark while Killi works.</p>
+<p><code>assets/Logos/killi-mark.svg</code> is the mark for the docs and icons: a prompt caret <code>❯</code> in <code>lagoon</code> with a cursor bar in <code>fin</code>. It never appears in the terminal. There the banner is the block-letter <code>KILLI</code> in its sky-to-violet gradient (<code>tui/banner.rs</code>), and the same gradient flows through a braille wave and the <code>killi</code> wordmark while Killi works.</p>
 <h2>Components</h2>
 <p>Nine families, each with a live preview and guidelines below: <code>Banner</code>, <code>Prompt</code>, <code>Turn</code>, <code>ToolCall</code>, <code>TaskList</code>, <code>Question</code>, <code>StatusBar</code>, <code>Diff</code>, <code>Spinner</code>. The React bundle (<code>window.Killi</code>) renders them for the web from the same glyphs, colors and spacing the TUI prints.</p></div>
 
@@ -545,7 +545,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <section class="comp" id="c-Spinner">
   <div class="comp-head"><h3>Spinner</h3><span class="muted">Signals</span></div>
   <div class="stage ki-stage" id="stage-Spinner"></div>
-  <div class="guide"><p>The working row, nearest the prompt while Killi works: the <code>killi</code> wordmark — its letters fade in, then the banner's whole sky-to-violet gradient flows through them and, every few seconds, a soft glint crosses from left to right, sharp at its head and trailing off behind it, with a pause before the next — followed by <code>working</code> in <code>fg-muted</code>, the elapsed time in <code>fg-strong</code>, then <code>·</code> in <code>fg-faint</code> and <code>Esc</code> in <code>lagoon</code> with <code>to interrupt</code> in <code>fg-muted</code>, like every other key hint. A running tool call turns the quarter glyph <code>◐ ◓ ◑ ◒</code> instead.</p>
+  <div class="guide"><p>The working row, nearest the prompt while Killi works: a braille ribbon that rises from a flat line into a wave rolling to the right, then the <code>killi</code> wordmark fading in letter by letter, the banner's sky-to-violet gradient flowing through both — followed by <code>working</code> in <code>fg-muted</code>, the elapsed time in <code>fg-strong</code>, then <code>·</code> in <code>fg-faint</code> and <code>Esc</code> in <code>lagoon</code> with <code>to interrupt</code> in <code>fg-muted</code>, like every other key hint. A running tool call turns the quarter glyph <code>◐ ◓ ◑ ◒</code> instead.</p>
 <p><strong>Provide:</strong> <code>elapsed</code>; <code>Quarter</code> for a tool row.</p>
 <ul>
 <li>Do keep exactly one wordmark on screen; tool rows above it carry their own glyph.</li>
@@ -658,7 +658,7 @@ export interface DiffLine {
 }
 export declare function Diff(props: { lines: DiffLine[]; more?: number }): JSX.Element;
 
-/** The working row: the wordmark sweep and `working 12s · Esc to interrupt`. */
+/** The working row: the wave, the wordmark and `working 12s · Esc to interrupt`. */
 export declare function Working(props: { elapsed?: number }): JSX.Element;
 /** The turning glyph of a running tool call. */
 export declare function Quarter(): JSX.Element;
@@ -1038,22 +1038,31 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     return [0, 1, 2].map(function (k) { return a[k] + (b[k] - a[k]) * f; });
   }
 
-  /* The wordmark spinner, `frame` tenths of a second in — the same sums as banner::working. */
+  /* The spinner, `frame` tenths of a second in — the same sums as banner::working. */
   function wordmark(frame) {
-    var word = 'killi', n = word.length, drift = frame * 0.035, white = [236, 246, 255];
-    /* The glint's head crosses in 18 frames of every 40; before and after it is out of reach. */
-    var cross = Math.min(1, (frame % 40) / 18), head = -0.9 + (n - 1 + 2.4 + 0.9) * cross;
-    return word.split('').map(function (c, i) {
-      var appeared = (frame - 2 * i + 1) / 3;
-      if (appeared <= 0) return h('span', { key: i, className: 'ki-muted' }, '·');
-      var wave = (i / (n - 1) + drift) % 2;
-      var rgb = gradient(wave > 1 ? 2 - wave : wave);
-      var ahead = i - head, reach = ahead > 0 ? 0.9 : 2.4;
-      var glow = Math.cos(Math.min(1, Math.abs(ahead) / reach) * Math.PI) * 0.5 + 0.5;
-      var fade = Math.min(1, appeared) * 0.75 + 0.25;
-      var mix = function (v, k) { return Math.round((v + (white[k] - v) * glow * 0.9) * fade); };
-      return h('span', { key: i, style: { color: 'rgb(' + rgb.map(mix).join(',') + ')' } }, c);
+    var word = 'killi', cells = 6, drift = frame * 0.035;
+    var rise = Math.min(1, frame / 8), height = rise * (0.86 + 0.14 * Math.sin(frame * 0.16));
+    var LEFT = [0x01, 0x02, 0x04, 0x40], RIGHT = [0x08, 0x10, 0x20, 0x80];
+    var tint = function (across, shift, fade) {
+      var t = (across + shift + drift) % 2, rgb = gradient(t > 1 ? 2 - t : t);
+      return 'rgb(' + rgb.map(function (v) { return Math.round(v * fade); }).join(',') + ')';
+    };
+    var dots = [], out = [], x, i;
+    for (x = 0; x < cells * 2; x++) {
+      dots.push(Math.max(0, Math.min(2, Math.round(1 - height * Math.sin((x - frame) / (cells * 2) * 2 * Math.PI)))));
+    }
+    for (i = 0; i < cells; i++) {
+      var l = dots[2 * i], r = dots[2 * i + 1];
+      out.push(h('span', { key: 'w' + i, style: { color: tint(i / (cells - 1), 0, 0.5 + 0.5 * rise) } },
+        String.fromCharCode(0x2800 + (LEFT[l] | LEFT[l + 1] | RIGHT[r] | RIGHT[r + 1]))));
+    }
+    out.push(h('span', { key: 'gap' }, ' '));
+    word.split('').forEach(function (c, k) {
+      var appeared = (frame - 2 * k + 1) / 3;
+      if (appeared <= 0) return out.push(h('span', { key: k, className: 'ki-muted' }, '·'));
+      out.push(h('span', { key: k, style: { color: tint(k / (word.length - 1), 0.5, Math.min(1, appeared) * 0.75 + 0.25) } }, c));
     });
+    return out;
   }
 
   function Blank() { return h('div', { style: { height: 'var(--row-1)' } }); }

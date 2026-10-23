@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.30 — 2026-10-23
+
+- **A new working animation.** The `killi` wordmark alone was too quiet to notice. The working
+  row now starts with a braille ribbon that rises from a flat line into a wave rolling to the
+  right a dot column per tick, then the wordmark fading in, the logo's gradient flowing through
+  both. It replaces the glint that crossed the wordmark.
+
 ## 0.2.29 — 2026-10-23
 
 - **The working row has room, and a livelier wordmark.** A blank row now separates the

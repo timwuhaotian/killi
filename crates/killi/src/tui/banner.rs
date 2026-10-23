@@ -18,47 +18,61 @@ const STOPS: [(f32, f32, f32); 3] = [(56.0, 189.0, 248.0), (129.0, 140.0, 248.0)
 
 /// The wordmark that stands in for a spinner.
 const WORD: &str = "killi";
-/// Frames (a tenth of a second each) from the start of one glint to the start of the next,
-/// and how many of them the glint spends crossing the word. The rest is a pause.
-const GLINT_EVERY: usize = 40;
-const GLINT_CROSSING: usize = 18;
-/// How far the glint reaches ahead of its head and behind it, in letters: a sharp front and a
-/// long tail, like a comet.
-const GLINT_AHEAD: f32 = 0.9;
-const GLINT_BEHIND: f32 = 2.4;
-/// The cool white the glint brightens the letters toward.
-const GLINT_WHITE: (f32, f32, f32) = (236.0, 246.0, 255.0);
+/// Braille cells in the wave drawn before the word; each is two dots wide and four tall.
+const WAVE: usize = 6;
+/// Frames (a tenth of a second each) the wave takes to rise from a flat line.
+const RISE: f32 = 8.0;
 
-/// How much of the glint is on `letter` `frame` tenths of a second in, from 0 to 1. The head
-/// starts and ends out of reach of every letter, so the pause between glints is still.
-fn glow(letter: usize, frame: usize) -> f32 {
-    let cross = ((frame % GLINT_EVERY) as f32 / GLINT_CROSSING as f32).min(1.0);
-    let (from, to) = (-GLINT_AHEAD, WORD.len() as f32 - 1.0 + GLINT_BEHIND);
-    let ahead = letter as f32 - (from + (to - from) * cross);
-    let reach = if ahead > 0.0 { GLINT_AHEAD } else { GLINT_BEHIND };
-    ((ahead.abs() / reach).min(1.0) * std::f32::consts::PI).cos() * 0.5 + 0.5
+/// The top dot row of the wave's two-dot-thick ribbon in each dot column `frame` tenths of a
+/// second in, 0 on top. A flat line at first, it rises into a wave that travels to the right a
+/// dot column per frame, swelling and easing a little.
+fn wave(frame: usize) -> [usize; WAVE * 2] {
+    let t = frame as f32;
+    let height = (t / RISE).min(1.0) * (0.86 + 0.14 * (t * 0.16).sin());
+    std::array::from_fn(|x| {
+        let phase = (x as f32 - t) / (WAVE * 2) as f32 * std::f32::consts::TAU;
+        (1.0 - height * phase.sin()).round().clamp(0.0, 2.0) as usize
+    })
 }
 
-/// The wordmark as a spinner, `frame` tenths of a second after work began. The letters fade in
-/// one after another, then the logo's whole gradient flows through them and, every few
-/// seconds, a soft glint crosses from left to right. Always `WORD.len()` columns wide.
+/// The braille cell whose left column has the dots at `left` and `left + 1` lit, and whose
+/// right column those at `right` and `right + 1`.
+fn cell(left: usize, right: usize) -> char {
+    const LEFT: [u32; 4] = [0x01, 0x02, 0x04, 0x40];
+    const RIGHT: [u32; 4] = [0x08, 0x10, 0x20, 0x80];
+    let bits = LEFT[left] | LEFT[left + 1] | RIGHT[right] | RIGHT[right + 1];
+    char::from_u32(0x2800 + bits).expect("braille patterns are characters")
+}
+
+/// The spinner, `frame` tenths of a second after work began: a braille ribbon that rises from
+/// a flat line and rolls on, then the `killi` wordmark fading in letter by letter, each with
+/// the logo's gradient flowing through it. Always as wide as the wave, a space and the word.
 pub fn working(frame: usize) -> String {
     let truecolor = truecolor();
-    let letters = WORD.len();
     let drift = frame as f32 * 0.035;
+    // `across` is how far along its own piece a cell is, from 0 to 1; the word's gradient starts
+    // half way round so the two never match.
+    let paint = |across: f32, shift: f32, fade: f32| {
+        let t = (across + shift + drift) % 2.0;
+        let (r, g, b) = gradient(if t > 1.0 { 2.0 - t } else { t });
+        color(r * fade, g * fade, b * fade, truecolor)
+    };
+    let dots = wave(frame);
+    let rise = (frame as f32 / RISE).min(1.0);
     let mut out = String::new();
+    for i in 0..WAVE {
+        out.push_str(&paint(i as f32 / (WAVE - 1) as f32, 0.0, 0.5 + 0.5 * rise));
+        out.push(cell(dots[2 * i], dots[2 * i + 1]));
+    }
+    out.push_str(RESET);
+    out.push(' ');
     for (i, c) in WORD.chars().enumerate() {
         let appeared = (frame as f32 - 2.0 * i as f32 + 1.0) / 3.0;
         if appeared <= 0.0 {
             out.push_str(&format!("{DIM}·{RESET}"));
             continue;
         }
-        let wave = (i as f32 / (letters - 1) as f32 + drift) % 2.0;
-        let (r, g, b) = gradient(if wave > 1.0 { 2.0 - wave } else { wave });
-        let glow = glow(i, frame);
-        let fade = appeared.clamp(0.0, 1.0) * 0.75 + 0.25;
-        let mix = |v: f32, white: f32| (v + (white - v) * glow * 0.9) * fade;
-        out.push_str(&color(mix(r, GLINT_WHITE.0), mix(g, GLINT_WHITE.1), mix(b, GLINT_WHITE.2), truecolor));
+        out.push_str(&paint(i as f32 / (WORD.len() - 1) as f32, 0.5, appeared.clamp(0.0, 1.0) * 0.75 + 0.25));
         out.push(c);
         out.push_str(RESET);
     }
@@ -132,24 +146,25 @@ mod tests {
     }
 
     #[test]
-    fn the_spinner_is_always_as_wide_as_the_word() {
+    fn the_spinner_is_always_the_same_width() {
         for frame in 0..200 {
-            assert_eq!(width(&working(frame)), WORD.len(), "frame {frame}");
+            assert_eq!(width(&working(frame)), WAVE + 1 + WORD.len(), "frame {frame}");
         }
         assert!(working(0).contains('·'));
         assert!(!working(20).contains('·'));
     }
 
     #[test]
-    fn the_glint_crosses_the_word_left_to_right_then_rests() {
-        let peak = |letter: usize| (0..GLINT_EVERY).max_by(|&a, &b| glow(letter, a).total_cmp(&glow(letter, b))).unwrap();
-        for letter in 0..WORD.len() {
-            assert!(glow(letter, peak(letter)) > 0.9, "letter {letter}");
+    fn the_wave_rises_from_a_flat_line_and_rolls_on_as_one_unbroken_line() {
+        assert!(wave(0).iter().all(|&row| row == wave(0)[0]));
+        let mut rows = std::collections::HashSet::new();
+        for frame in 8..120 {
+            let dots = wave(frame);
+            rows.extend(dots);
+            assert_ne!(dots, wave(frame + 1), "frame {frame} stands still");
+            assert!(dots.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1), "frame {frame} jumps: {dots:?}");
         }
-        assert!((1..WORD.len()).all(|letter| peak(letter) > peak(letter - 1)));
-        for frame in [0, GLINT_CROSSING, GLINT_EVERY - 1, GLINT_EVERY, GLINT_EVERY + GLINT_CROSSING + 3] {
-            assert!((0..WORD.len()).all(|letter| glow(letter, frame) < 0.01), "frame {frame}");
-        }
+        assert_eq!(rows.len(), 3, "the ribbon uses every height");
     }
 
     #[test]
