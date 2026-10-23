@@ -5,6 +5,21 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.26 — 2026-10-23
+
+- **Waiting on a job ends when the job ends.** `task_output` with `wait` now waits for what a
+  command left running too, not only its shell: after `nohup job &` it used to return at once,
+  so the agent fell back on `sleep 270; tail log` and slept the full time, even on a job that
+  had failed in a second (one session lost 3,045 s that way). A foreground command that opens
+  with `sleep` of 30 s or more is not run; the error points to `task_output` with `wait`, or an
+  `until <check>; do sleep 5; done` loop. `run_in_background` is not affected.
+- **`/btw` says what the agent is waiting on.** While a `bash` or `task_output` call is in
+  flight, the side question is told how long it has run, how long since its last output and its
+  last five lines, so "is it stuck?" gets an answer from facts. Before, it only knew "Still
+  running".
+- `scripts/sessions.py` flags sessions that spent 120 s or more in commands that open with a
+  fixed `sleep`.
+
 ## 0.2.25 — 2026-10-23
 
 - **Fullscreen mode** (`[ui] fullscreen = true`; on by default in Kil, off elsewhere). killi

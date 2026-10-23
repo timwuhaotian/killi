@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-pub use bash::{Tasks, kill_all};
+pub use bash::{Running, Tasks, kill_all};
 pub use files::{image_type, image_url};
 
 pub const MAX_LINES: usize = 2000;
@@ -31,6 +31,8 @@ pub struct Context {
     /// Where full outputs go when a result is truncated.
     pub spill_dir: PathBuf,
     pub tasks: RefCell<Tasks>,
+    /// The calls waiting on a command now.
+    pub running: RefCell<Running>,
     /// Whether the model can see images.
     pub images: bool,
     pub search: SearchSettings,
@@ -38,7 +40,14 @@ pub struct Context {
 
 impl Context {
     pub fn new(cwd: PathBuf, spill_dir: PathBuf) -> Self {
-        Self { cwd, spill_dir, tasks: RefCell::new(Tasks::default()), images: true, search: SearchSettings::default() }
+        Self {
+            cwd,
+            spill_dir,
+            tasks: RefCell::new(Tasks::default()),
+            running: RefCell::default(),
+            images: true,
+            search: SearchSettings::default(),
+        }
     }
 }
 

@@ -3,6 +3,7 @@
 //! command left running in its process group, such as `nohup server &`. A `Process` kills its
 //! group when dropped, so an interrupted turn or a closed session leaves nothing behind.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -18,6 +19,9 @@ use super::{Context, MAX_BYTES, MAX_LINES, Output, spill};
 
 const DEFAULT_TIMEOUT: u64 = 60;
 const MAX_TIMEOUT: u64 = 300;
+/// A command that starts with a `sleep` this many seconds long is refused: it waits the whole
+/// time however soon the job it waits for ends.
+const MAX_SLEEP: f64 = 30.0;
 /// Output beyond this is dropped from memory, oldest first; the model only ever sees the tail.
 const MAX_CAPTURE: usize = 16 * 1024 * 1024;
 /// What a command that printed nothing returns.
@@ -54,6 +58,8 @@ struct Captured {
     bytes: Vec<u8>,
     /// Bytes dropped from the front to stay under MAX_CAPTURE.
     dropped: usize,
+    /// When the last output arrived.
+    last: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -128,6 +134,7 @@ impl Process {
                     Ok(n) => {
                         let mut captured = sink.lock().expect("output lock");
                         captured.bytes.extend_from_slice(&buf[..n]);
+                        captured.last = Some(Instant::now());
                         if captured.bytes.len() > MAX_CAPTURE {
                             let excess = captured.bytes.len() - MAX_CAPTURE;
                             captured.bytes.drain(..excess);
@@ -176,6 +183,92 @@ impl Drop for Process {
     }
 }
 
+/// Foreground calls that haven't returned: a `bash` waiting for its command and a `task_output`
+/// waiting for a task. `/btw` tells the model what they are and for how long, so a long wait
+/// can be told from a hang.
+#[derive(Default)]
+pub struct Running {
+    next: u32,
+    list: BTreeMap<u32, Wait>,
+}
+
+struct Wait {
+    what: String,
+    started: Instant,
+    output: Arc<Mutex<Captured>>,
+}
+
+/// Takes its call out of `Running` when the call returns or an interrupt drops it.
+pub struct Waiting<'a> {
+    running: &'a RefCell<Running>,
+    id: u32,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.running.borrow_mut().list.remove(&self.id);
+    }
+}
+
+fn waiting<'a>(ctx: &'a Context, what: String, output: Arc<Mutex<Captured>>) -> Waiting<'a> {
+    let mut running = ctx.running.borrow_mut();
+    running.next += 1;
+    let id = running.next;
+    running.list.insert(id, Wait { what, started: Instant::now(), output });
+    Waiting { running: &ctx.running, id }
+}
+
+impl Running {
+    /// What is in flight, one entry per call with how long it has run, how long it has been
+    /// quiet and its last lines; `None` when nothing is.
+    pub fn describe(&self) -> Option<String> {
+        let entries: Vec<String> = self.list.values().map(Wait::describe).collect();
+        (!entries.is_empty()).then(|| entries.join("\n"))
+    }
+}
+
+impl Wait {
+    fn describe(&self) -> String {
+        let captured = self.output.lock().expect("output lock");
+        let quiet = match captured.last {
+            Some(at) => format!("last output {} ago", span(at.elapsed())),
+            None => "no output yet".to_string(),
+        };
+        let from = captured.bytes.len().saturating_sub(2048);
+        let recent = String::from_utf8_lossy(&captured.bytes[from..]);
+        let mut lines: Vec<&str> = recent.trim_end().lines().rev().take(5).collect();
+        lines.reverse();
+        let lines: String = lines.iter().map(|line| format!("\n  {}", crate::llm::truncate(line, 160))).collect();
+        format!("{} has run {}, {quiet}.{lines}", self.what, span(self.started.elapsed()))
+    }
+}
+
+fn span(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 { format!("{secs}s") } else { format!("{}m{:02}s", secs / 60, secs % 60) }
+}
+
+/// Waits up to `limit` for a command and what it left running: its shell's exit, then until
+/// its process group is empty. `nohup job &` exits at once while the job runs on, so waiting
+/// for the shell alone would return at once too.
+async fn wait_for_group(pgid: u32, mut exit: watch::Receiver<Option<Exit>>, limit: Duration) {
+    let deadline = Instant::now() + limit;
+    let _ = tokio::time::timeout(limit, exit.wait_for(Option::is_some)).await;
+    while exit.borrow().is_some() && group_running(pgid, true) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// The seconds of a `sleep N` that opens `command`.
+fn leading_sleep(command: &str) -> Option<f64> {
+    let rest = command.trim_start().strip_prefix("sleep")?;
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let number: String = rest.trim_start().chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    number.parse().ok()
+}
+
 /// Where a command runs: the working directory, or `cwd` when given (absolute, `~/…`, or
 /// relative to the working directory), which must exist.
 fn run_dir(ctx: &Context, cwd: Option<&str>) -> Result<PathBuf, String> {
@@ -193,6 +286,11 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
     };
     let timeout = args.get("timeout").and_then(Value::as_u64).unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT);
     let background = args.get("run_in_background").and_then(Value::as_bool).unwrap_or(false);
+    if let Some(secs) = leading_sleep(command).filter(|&secs| !background && secs >= MAX_SLEEP) {
+        return Output::error(format!(
+            "Not run: `sleep {secs}` waits the whole time even if the job ends in a second. To wait for a background task, call task_output with `wait`: it returns the moment the task ends. For anything else, loop on the condition: `until <check>; do sleep 5; done`, with a `timeout`."
+        ));
+    }
     let dir = match run_dir(ctx, args.get("cwd").and_then(Value::as_str)) {
         Ok(dir) => dir,
         Err(e) => return Output::error(e),
@@ -207,6 +305,7 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
             .brief(format!("task {id}"));
     }
 
+    let _waiting = waiting(ctx, format!("bash `{}`", first_line(command)), process.output.clone());
     let exit = match process.wait(Duration::from_secs(timeout)).await {
         Some(exit) => exit,
         None => {
@@ -238,7 +337,7 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
         }
     };
     if let Some(id) = left {
-        output.text.push_str(&format!("\n[What it started is still running, as background task {id}; task_stop ends it.]"));
+        output.text.push_str(&format!("\n[What it started is still running, as background task {id}; task_output with `wait` returns when it ends, task_stop ends it.]"));
         output.brief.push_str(&format!(" · left task {id}"));
     }
     output
@@ -307,15 +406,17 @@ pub async fn task_output(ctx: &Context, args: &Value) -> Output {
         return Output::error("task_output needs `id`.");
     };
     let wait = args.get("wait").and_then(Value::as_u64).unwrap_or(0).min(MAX_TIMEOUT);
-    let (mut exit_rx, started) = {
+    let (exit_rx, started, pgid, what, output) = {
         let tasks = ctx.tasks.borrow();
         let Some(task) = tasks.list.get(&id) else {
             return Output::error(format!("No background task {id}."));
         };
-        (task.process.exit.clone(), task.started)
+        let what = format!("task_output on task {id} `{}`", first_line(&task.command));
+        (task.process.exit.clone(), task.started, task.process.pgid, what, task.process.output.clone())
     };
     if wait > 0 {
-        let _ = tokio::time::timeout(Duration::from_secs(wait), exit_rx.wait_for(Option::is_some)).await;
+        let _waiting = waiting(ctx, what, output);
+        wait_for_group(pgid, exit_rx, Duration::from_secs(wait)).await;
     }
     let mut tasks = ctx.tasks.borrow_mut();
     let task = tasks.list.get_mut(&id).expect("task exists");
@@ -324,7 +425,11 @@ pub async fn task_output(ctx: &Context, args: &Value) -> Output {
     let status = match task.process.exit() {
         Some(exit) => {
             task.reported = true;
-            let left = if task.process.running() { "; what it started is still running" } else { "" };
+            let left = if task.process.running() {
+                format!("; what it started is still running ({}s)", started.elapsed().as_secs())
+            } else {
+                String::new()
+            };
             format!("Task {id} {}{left}.", exit.describe())
         }
         None => format!("Task {id} is still running ({}s).", started.elapsed().as_secs()),
@@ -477,11 +582,11 @@ mod tests {
     async fn what_a_finished_command_leaves_running_becomes_a_task_raised_once() {
         let ctx = ctx();
         let out = bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"})).await;
-        assert_eq!(out.text, "(no output, exit code 0)\n[What it started is still running, as background task 1; task_stop ends it.]");
+        assert_eq!(out.text, "(no output, exit code 0)\n[What it started is still running, as background task 1; task_output with `wait` returns when it ends, task_stop ends it.]");
         assert_eq!(out.brief, "no output · left task 1");
         assert!(ctx.tasks.borrow_mut().newly_finished().is_empty());
         let out = task_output(&ctx, &json!({"id": 1})).await;
-        assert!(out.text.starts_with("Task 1 exited with code 0; what it started is still running."), "{}", out.text);
+        assert!(out.text.starts_with("Task 1 exited with code 0; what it started is still running ("), "{}", out.text);
         let left = ctx.tasks.borrow_mut().left_running();
         assert_eq!(left.len(), 1);
         assert!(left[0].starts_with("task 1 `nohup sleep 30 >/dev/null 2>&1 &` ("), "{left:?}");
@@ -510,6 +615,65 @@ mod tests {
         assert!(until_stopped(&ctx, 1).await && until_stopped(&ctx, 2).await);
         drop(ctx);
         assert!(pgids.iter().all(|pgid| !groups().contains_key(pgid)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn waiting_on_a_task_waits_for_what_it_left_running() {
+        let ctx = ctx();
+        bash(&ctx, &json!({"command": "nohup sleep 1 >/dev/null 2>&1 &"})).await;
+        let started = Instant::now();
+        let out = task_output(&ctx, &json!({"id": 1, "wait": 20})).await;
+        assert!(out.text.starts_with("Task 1 exited with code 0.\n"), "{}", out.text);
+        assert!(started.elapsed() >= Duration::from_millis(800), "returned before the job ended");
+        assert!(started.elapsed() < Duration::from_secs(10), "waited past the job's end");
+        assert!(!ctx.tasks.borrow().list[&1].process.running());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn waiting_on_a_task_gives_up_at_its_limit() {
+        let ctx = ctx();
+        bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"})).await;
+        let out = task_output(&ctx, &json!({"id": 1, "wait": 1})).await;
+        assert!(out.text.starts_with("Task 1 exited with code 0; what it started is still running ("), "{}", out.text);
+        ctx.tasks.borrow_mut().stop_all();
+    }
+
+    #[test]
+    fn only_a_long_leading_sleep_is_refused() {
+        assert_eq!(leading_sleep("sleep 270; tail log"), Some(270.0));
+        assert_eq!(leading_sleep("  sleep 45&&echo done"), Some(45.0));
+        assert_eq!(leading_sleep("sleep 0.5"), Some(0.5));
+        assert_eq!(leading_sleep("echo start; sleep 40"), None);
+        assert_eq!(leading_sleep("sleepy 40"), None);
+        assert_eq!(leading_sleep("sleep"), None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_long_fixed_sleep_does_not_run() {
+        let out = bash(&ctx(), &json!({"command": "sleep 270; tail /tmp/log"})).await;
+        assert!(out.is_error);
+        assert!(out.text.starts_with("Not run: `sleep 270` waits the whole time"), "{}", out.text);
+        assert!(out.text.contains("task_output"), "{}", out.text);
+        let out = bash(&ctx(), &json!({"command": "sleep 0.1; echo ok"})).await;
+        assert_eq!(out.text, "ok");
+        let ctx = ctx();
+        let out = bash(&ctx, &json!({"command": "sleep 30", "run_in_background": true})).await;
+        assert!(!out.is_error, "{}", out.text);
+        ctx.tasks.borrow_mut().stop_all();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_call_in_flight_says_how_long_it_ran_and_what_it_printed() {
+        let ctx = ctx();
+        assert_eq!(ctx.running.borrow().describe(), None);
+        let command = json!({"command": "echo one; echo two; sleep 2", "timeout": 10});
+        let (_, seen) = tokio::join!(bash(&ctx, &command), async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            ctx.running.borrow().describe()
+        });
+        let seen = seen.expect("the command is still running");
+        assert!(seen.starts_with("bash `echo one; echo two; sleep 2` has run 0s, last output 0s ago.\n  one\n  two"), "{seen}");
+        assert_eq!(ctx.running.borrow().describe(), None);
     }
 
     #[test]

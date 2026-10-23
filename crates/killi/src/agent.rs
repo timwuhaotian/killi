@@ -97,6 +97,8 @@ pub struct Aside {
     client: Option<Rc<Client>>,
     tools: Rc<Vec<Value>>,
     messages: Weak<Vec<Value>>,
+    /// What the tools are waiting on, for the question to mention.
+    ctx: Weak<tools::Context>,
     cache_key: String,
 }
 
@@ -104,7 +106,8 @@ impl Aside {
     /// Asks `question` about the conversation so far without adding to it. The answer and the
     /// request's usage come back; tool calls in the reply are ignored.
     pub fn ask(&self, question: &str) -> impl Future<Output = Result<(String, Usage)>> + 'static {
-        let request = self.messages.upgrade().map(|history| side_request(&history, question));
+        let running = self.ctx.upgrade().and_then(|ctx| ctx.running.borrow().describe());
+        let request = self.messages.upgrade().map(|history| side_request(&history, question, running.as_deref()));
         let (client, tools, cache_key) = (self.client.clone(), self.tools.clone(), self.cache_key.clone());
         async move {
             let (Some(client), Some(request)) = (client, request) else { bail!("there is no conversation to ask about yet") };
@@ -116,13 +119,15 @@ impl Aside {
 }
 
 /// The history with a side question at the end. Tool calls still running get a placeholder
-/// result first, as providers reject a question between a call and its result.
-fn side_request(history: &[Value], question: &str) -> Vec<Value> {
+/// result first, as providers reject a question between a call and its result; `running` says
+/// what they are waiting on and for how long, so "is it stuck?" has facts to go on.
+fn side_request(history: &[Value], question: &str, running: Option<&str>) -> Vec<Value> {
     let mut request = history.to_vec();
     for id in unanswered(history) {
         request.push(json!({"role": "tool", "tool_call_id": id, "content": "Still running; no result yet."}));
     }
-    request.push(json!({"role": "user", "content": format!("{BTW_NOTE}\n\n{question}")}));
+    let running = running.map(|r| format!("<system-reminder>Waiting on right now:\n{r}</system-reminder>\n\n")).unwrap_or_default();
+    request.push(json!({"role": "user", "content": format!("{BTW_NOTE}\n\n{running}{question}")}));
     request
 }
 
@@ -337,6 +342,7 @@ impl Agent {
             client: Some(self.client.clone()),
             tools: self.tools.clone(),
             messages: Rc::downgrade(&self.messages),
+            ctx: Rc::downgrade(&self.ctx),
             cache_key: self.session.id.clone(),
         };
     }
@@ -1282,12 +1288,21 @@ mod tests {
             json!({"role": "assistant", "tool_calls": [{"id": "a"}, {"id": "b"}]}),
             json!({"role": "tool", "tool_call_id": "a", "content": "done"}),
         ];
-        let request = side_request(&history, "what are you doing?");
+        let request = side_request(&history, "what are you doing?", None);
         assert_eq!(request[..4], history[..]);
         assert_eq!(request[4], json!({"role": "tool", "tool_call_id": "b", "content": "Still running; no result yet."}));
         assert_eq!(request[5]["role"], "user");
         assert!(request[5]["content"].as_str().unwrap().ends_with("\n\nwhat are you doing?"));
         assert_eq!(request.len(), 6);
-        assert_eq!(side_request(&history[..2], "q").len(), 3);
+        assert_eq!(side_request(&history[..2], "q", None).len(), 3);
+    }
+
+    #[test]
+    fn a_side_question_is_told_what_the_running_call_waits_on() {
+        let history = vec![json!({"role": "user", "content": "wait for ci"})];
+        let request = side_request(&history, "stuck?", Some("bash `sleep 5` has run 4m12s, no output yet."));
+        let note = request[1]["content"].as_str().unwrap();
+        assert!(note.contains("Waiting on right now:\nbash `sleep 5` has run 4m12s, no output yet.</system-reminder>"), "{note}");
+        assert!(note.ends_with("\n\nstuck?"));
     }
 }

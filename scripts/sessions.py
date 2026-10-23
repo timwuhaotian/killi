@@ -21,7 +21,9 @@ from datetime import datetime
 from pathlib import Path
 
 REPEATED = 3  # identical tool calls in one session before it is reported
+SLEPT = 120  # seconds in commands that open with `sleep N` before a session is reported
 LOW_CACHE = 0.5  # share of input tokens from the cache below which a model is flagged
+FIXED_SLEEP = re.compile(r"\s*sleep\s+(\d+(?:\.\d+)?)")  # a command's opening `sleep N`
 MEASURING = re.compile(r"-T-(bench|eval-)")  # where bench.py and eval.py run killi: a temporary folder
 
 
@@ -39,12 +41,20 @@ def looks_failed(output):
     return last[0].startswith("[Command ") or output.startswith(("Interrupted by the user", "Could not "))
 
 
+def parse_args(arguments):
+    try:
+        args = json.loads(arguments)
+    except json.JSONDecodeError:
+        return {}
+    return args if isinstance(args, dict) else {}
+
+
 def analyze(path):
     s = {"path": str(path), "project": path.parent.name, "id": path.stem, "models": [], "turns": 0, "prompt": 0,
          "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0,
          "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [],
-         "tool_ms": [], "per_model": collections.defaultdict(lambda: collections.Counter())}
-    model, pending, calls, answered = None, None, {}, set()
+         "tool_ms": [], "slept": [0, 0], "per_model": collections.defaultdict(lambda: collections.Counter())}
+    model, pending, calls, answered, sleeping = None, None, {}, set(), set()
     for entry in read(path):
         kind = entry.get("type")
         message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
@@ -63,6 +73,10 @@ def analyze(path):
                 for call in message.get("tool_calls") or []:
                     name = call["function"]["name"]
                     calls[call["id"]] = name
+                    if name == "bash":
+                        command = parse_args(call["function"]["arguments"]).get("command")
+                        if isinstance(command, str) and (wait := FIXED_SLEEP.match(command)) and float(wait[1]) >= 30:
+                            sleeping.add(call["id"])
                     s["tools"][name] += 1
                     s["repeats"][(name, call["function"]["arguments"])] += 1
             if role == "tool":
@@ -72,6 +86,9 @@ def analyze(path):
                 s["tool_errors"] += bool(failed)
                 if meta and meta.get("ms") is not None:
                     s["tool_ms"].append((meta["ms"], calls.get(message.get("tool_call_id"), "?")))
+                    if message.get("tool_call_id") in sleeping and not failed:
+                        s["slept"][0] += 1
+                        s["slept"][1] += meta["ms"]
             s["ended"] = role or ""
         elif kind == "usage":
             s["turns"] += 1
@@ -126,6 +143,10 @@ def findings(sessions, models):
         name = f"{s['project'][-24:]}/{s['id']}"
         for call, count in s["repeats"].items():
             found.append(f"`{name}` made `{call}` {count} times.")
+        count, ms = s["slept"]
+        if ms >= SLEPT * 1000:
+            found.append(f"`{name}` spent {ms / 1000:.0f}s in {count} commands that open with a fixed `sleep`: it waits the full time "
+                         "however soon the job ends. `task_output` with `wait` or an `until <check>; do sleep 5; done` loop ends with the job.")
         if s["ended"] in ("tool", "unanswered tool call"):
             found.append(f"`{name}` stopped right after a tool call ({s['ended']}): interrupted, killed or stopped by the repeat breaker.")
         for error in sorted(set(s["errors"])):
