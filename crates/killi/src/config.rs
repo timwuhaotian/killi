@@ -53,6 +53,9 @@ pub struct UiConfig {
     /// changes size. Without it that is so in Kil only; other terminals keep the conversation
     /// in their own scrollback.
     pub fullscreen: Option<bool>,
+    /// A 100-character recap of the session after each turn that used tools (on unless
+    /// `false`). `/recap` asks for one at any time either way.
+    pub recap: Option<bool>,
 }
 
 /// `[prompt]`: the system prompt's guidance, kept in the config so it can be read and edited.

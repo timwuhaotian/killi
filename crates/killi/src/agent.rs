@@ -107,27 +107,59 @@ impl Aside {
     /// request's usage come back; tool calls in the reply are ignored.
     pub fn ask(&self, question: &str) -> impl Future<Output = Result<(String, Usage)>> + 'static {
         let running = self.ctx.upgrade().and_then(|ctx| ctx.running.borrow().describe());
-        let request = self.messages.upgrade().map(|history| side_request(&history, question, running.as_deref()));
+        let answer = self.side(BTW_NOTE, question, running.as_deref());
+        async move {
+            let (text, usage) = answer.await?;
+            Ok((if text.trim().is_empty() { "(No answer: the model tried to use tools.)".to_string() } else { text }, usage))
+        }
+    }
+
+    /// A recap of the conversation so far, cut to `RECAP_CHARS`, asked the same way as a side
+    /// question so it adds nothing to the conversation and the cached prefix still hits.
+    pub fn recap(&self) -> impl Future<Output = Result<(String, Usage)>> + 'static {
+        let answer = self.side(RECAP_NOTE, "", None);
+        async move {
+            let (text, usage) = answer.await?;
+            let text = fit_recap(&text);
+            if text.is_empty() {
+                bail!("the model sent no recap");
+            }
+            Ok((text, usage))
+        }
+    }
+
+    fn side(&self, note: &str, question: &str, running: Option<&str>) -> impl Future<Output = Result<(String, Usage)>> + 'static + use<> {
+        let request = self.messages.upgrade().map(|history| side_request(&history, note, question, running));
         let (client, tools, cache_key) = (self.client.clone(), self.tools.clone(), self.cache_key.clone());
         async move {
             let (Some(client), Some(request)) = (client, request) else { bail!("there is no conversation to ask about yet") };
             let reply = client.complete(&request, &tools, &cache_key, &mut |_| {}).await?;
-            let text = if reply.text.trim().is_empty() { "(No answer: the model tried to use tools.)".to_string() } else { reply.text };
-            Ok((text, reply.usage))
+            Ok((reply.text, reply.usage))
         }
     }
+}
+
+/// A recap on one line of whitespace-collapsed text, at most `RECAP_CHARS` characters: the
+/// limit holds whatever the model sent, so a long one is cut with an ellipsis.
+fn fit_recap(text: &str) -> String {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= RECAP_CHARS {
+        return text;
+    }
+    let cut: String = text.chars().take(RECAP_CHARS - 1).collect();
+    format!("{}…", cut.trim_end())
 }
 
 /// The history with a side question at the end. Tool calls still running get a placeholder
 /// result first, as providers reject a question between a call and its result; `running` says
 /// what they are waiting on and for how long, so "is it stuck?" has facts to go on.
-fn side_request(history: &[Value], question: &str, running: Option<&str>) -> Vec<Value> {
+fn side_request(history: &[Value], note: &str, question: &str, running: Option<&str>) -> Vec<Value> {
     let mut request = history.to_vec();
     for id in unanswered(history) {
         request.push(json!({"role": "tool", "tool_call_id": id, "content": "Still running; no result yet."}));
     }
     let running = running.map(|r| format!("<system-reminder>Waiting on right now:\n{r}</system-reminder>\n\n")).unwrap_or_default();
-    request.push(json!({"role": "user", "content": format!("{BTW_NOTE}\n\n{running}{question}")}));
+    request.push(json!({"role": "user", "content": format!("{note}\n\n{running}{question}").trim_end()}));
     request
 }
 
@@ -763,7 +795,7 @@ impl Agent {
             output.text = self.shorten(&output.text);
         }
         let result = hash_text(&output.text);
-        let (count, same) = self.repeats.entry(hash_call(call)).or_default().note(result);
+        let (count, same) = self.repeats.entry(repeat_key(call, result)).or_default().note(result);
         if REPEAT_WARNINGS.contains(&count) {
             let same = if same { " and got the same result" } else { "" };
             output.text.push_str(&format!(
@@ -1162,6 +1194,19 @@ fn hash_call(call: &ToolCall) -> u64 {
     hasher.finish()
 }
 
+/// What the repeat breaker counts as the same call. A wait on a background task is a poll:
+/// asking again is the point, and its result says how long the task has run, so it only repeats
+/// when the result does too. Every other call repeats whatever it returns.
+fn repeat_key(call: &ToolCall, result: u64) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    if call.name != "task_output" {
+        return hash_call(call);
+    }
+    let mut hasher = DefaultHasher::new();
+    (hash_call(call), result).hash(&mut hasher);
+    hasher.finish()
+}
+
 /// An image in a user message: a line of text that says what it is, then the image.
 fn image_parts(label: &str, url: &str) -> [Value; 2] {
     [json!({"type": "text", "text": label}), json!({"type": "image_url", "image_url": {"url": url}})]
@@ -1201,11 +1246,24 @@ fn question_args(args: &Value) -> Result<(String, Vec<String>), String> {
         return Err(format!("`question` is missing or empty. {SHAPE}"));
     }
     let items = args["options"].as_array().map(Vec::as_slice).unwrap_or_default();
-    let options: Vec<String> = items.iter().filter_map(|o| o.as_str().map(String::from)).collect();
+    let options: Vec<String> = items.iter().filter_map(option_text).collect();
     if options.len() < items.len() {
-        return Err(format!("Every option must be a plain string, not an object. {SHAPE}"));
+        return Err(format!("Every option must be a string, or an object with a `label`. {SHAPE}"));
     }
     Ok((text.to_string(), options))
+}
+
+/// An option as the user sees it: a string, or the `label` of an object with its `description`
+/// after it, which is the shape other agents' question tools take.
+fn option_text(option: &Value) -> Option<String> {
+    if let Some(text) = option.as_str() {
+        return Some(text.to_string());
+    }
+    let label = option["label"].as_str().map(str::trim).filter(|l| !l.is_empty())?;
+    Some(match option["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) {
+        Some(description) => format!("{label} — {description}"),
+        None => label.to_string(),
+    })
 }
 
 /// Told to the agent when it ends a turn with its task list unfinished, which shows on the
@@ -1242,6 +1300,11 @@ fn is_overflow(error: &anyhow::Error) -> bool {
 
 /// Told at the end of a turn that leaves commands running, after the list of them.
 const LEFT_RUNNING: &str = "Stop with task_stop what nothing needs anymore, such as a server or watcher started for a test or a check. If one should keep running, say so in your reply.";
+
+/// Longest recap, in characters.
+pub const RECAP_CHARS: usize = 100;
+
+const RECAP_NOTE: &str = "<system-reminder>The user is back at this session and wants a recap. Reply with the recap only: what they are after, what was done, and the latest result or what is left. Use their language, at most 100 characters, one or two plain sentences, no markdown. Don't call tools. This request and your reply won't be kept in the conversation.</system-reminder>";
 
 const BTW_NOTE: &str = "<system-reminder>A side question from the user. Answer it briefly from what this conversation already shows. Don't call tools. The question and your answer won't be kept in the conversation.</system-reminder>";
 
@@ -1298,14 +1361,51 @@ mod tests {
     }
 
     #[test]
-    fn a_question_without_text_or_with_object_options_is_not_asked() {
+    fn a_question_without_text_or_with_unusable_options_is_not_asked() {
         let (text, options) = question_args(&json!({"question": " Which? ", "options": ["a", "b"]})).unwrap();
         assert_eq!((text.as_str(), options), ("Which?", vec!["a".to_string(), "b".to_string()]));
         assert!(question_args(&json!({"question": "Which?"})).unwrap().1.is_empty());
         assert!(question_args(&json!({"options": ["a", "b"]})).is_err());
         assert!(question_args(&json!({"question": "  ", "options": ["a"]})).is_err());
-        let objects = json!({"question": "Which?", "options": [{"description": "a", "question": "b"}]});
-        assert!(question_args(&objects).unwrap_err().contains("plain string"));
+        let unusable = json!({"question": "Which?", "options": [{"description": "a", "question": "b"}, "c"]});
+        assert!(question_args(&unusable).unwrap_err().contains("`label`"));
+        assert!(question_args(&json!({"question": "Which?", "options": [{"label": " "}, "c"]})).is_err());
+    }
+
+    #[test]
+    fn options_given_as_labelled_objects_keep_their_description() {
+        let options = json!([{"label": "Banner", "description": "smallest change"}, {"label": "Status line"}, "Both"]);
+        let (_, options) = question_args(&json!({"question": "Which?", "options": options})).unwrap();
+        assert_eq!(options, ["Banner — smallest change", "Status line", "Both"]);
+    }
+
+    #[test]
+    fn a_poll_repeats_only_when_its_result_does() {
+        let wait = ToolCall { id: "a".into(), name: "task_output".into(), arguments: r#"{"id":3,"wait":300}"#.into() };
+        assert_ne!(repeat_key(&wait, 1), repeat_key(&wait, 2));
+        assert_eq!(repeat_key(&wait, 1), repeat_key(&wait, 1));
+        let read = call(r#"{"path":"a"}"#);
+        assert_eq!(repeat_key(&read, 1), repeat_key(&read, 2));
+    }
+
+    #[test]
+    fn a_recap_is_one_line_within_the_limit() {
+        assert_eq!(fit_recap("  Fixed it.\n\nTests pass. "), "Fixed it. Tests pass.");
+        let long = "字".repeat(RECAP_CHARS + 30);
+        let cut = fit_recap(&long);
+        assert_eq!(cut.chars().count(), RECAP_CHARS);
+        assert!(cut.ends_with('…'));
+        assert_eq!(fit_recap(&"字".repeat(RECAP_CHARS)).chars().count(), RECAP_CHARS);
+        assert!(RECAP_NOTE.contains(&format!("{RECAP_CHARS} characters")));
+    }
+
+    #[test]
+    fn a_recap_request_ends_with_its_note_alone() {
+        let history = vec![json!({"role": "user", "content": "fix it"}), json!({"role": "assistant", "content": "done"})];
+        let request = side_request(&history, RECAP_NOTE, "", None);
+        assert_eq!(request[..2], history[..]);
+        assert_eq!(request[2]["content"], RECAP_NOTE);
+        assert_eq!(request.len(), 3);
     }
 
     #[test]
@@ -1362,19 +1462,19 @@ mod tests {
             json!({"role": "assistant", "tool_calls": [{"id": "a"}, {"id": "b"}]}),
             json!({"role": "tool", "tool_call_id": "a", "content": "done"}),
         ];
-        let request = side_request(&history, "what are you doing?", None);
+        let request = side_request(&history, BTW_NOTE, "what are you doing?", None);
         assert_eq!(request[..4], history[..]);
         assert_eq!(request[4], json!({"role": "tool", "tool_call_id": "b", "content": "Still running; no result yet."}));
         assert_eq!(request[5]["role"], "user");
         assert!(request[5]["content"].as_str().unwrap().ends_with("\n\nwhat are you doing?"));
         assert_eq!(request.len(), 6);
-        assert_eq!(side_request(&history[..2], "q", None).len(), 3);
+        assert_eq!(side_request(&history[..2], BTW_NOTE, "q", None).len(), 3);
     }
 
     #[test]
     fn a_side_question_is_told_what_the_running_call_waits_on() {
         let history = vec![json!({"role": "user", "content": "wait for ci"})];
-        let request = side_request(&history, "stuck?", Some("bash `sleep 5` has run 4m12s, no output yet."));
+        let request = side_request(&history, BTW_NOTE, "stuck?", Some("bash `sleep 5` has run 4m12s, no output yet."));
         let note = request[1]["content"].as_str().unwrap();
         assert!(note.contains("Waiting on right now:\nbash `sleep 5` has run 4m12s, no output yet.</system-reminder>"), "{note}");
         assert!(note.ends_with("\n\nstuck?"));

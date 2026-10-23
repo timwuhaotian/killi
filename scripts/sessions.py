@@ -54,7 +54,7 @@ def analyze(path):
          "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0,
          "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [],
          "tool_ms": [], "slept": [0, 0], "per_model": collections.defaultdict(lambda: collections.Counter())}
-    model, pending, calls, answered, sleeping = None, None, {}, set(), set()
+    model, awaiting, calls, answered, sleeping = None, None, {}, set(), set()
     for entry in read(path):
         kind = entry.get("type")
         message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
@@ -69,7 +69,9 @@ def analyze(path):
             if role == "assistant":
                 kept = bool(message.get("reasoning_content") or message.get("reasoning") or message.get("reasoning_details")
                             or message.get("reasoning_items"))
-                pending = (model, kept)
+                if awaiting:  # a request's `usage` is logged just before its assistant message
+                    s["per_model"][awaiting]["reasoning_lost"] += not kept
+                    awaiting = None
                 for call in message.get("tool_calls") or []:
                     name = call["function"]["name"]
                     calls[call["id"]] = name
@@ -78,7 +80,8 @@ def analyze(path):
                         if isinstance(command, str) and (wait := FIXED_SLEEP.match(command)) and float(wait[1]) >= 30:
                             sleeping.add(call["id"])
                     s["tools"][name] += 1
-                    s["repeats"][(name, call["function"]["arguments"])] += 1
+                    if name != "task_output":  # asking again is how a wait on a task works
+                        s["repeats"][(name, call["function"]["arguments"])] += 1
             if role == "tool":
                 answered.add(message.get("tool_call_id"))
                 meta = entry.get("tool")
@@ -98,15 +101,14 @@ def analyze(path):
             s["max_context"] = max(s["max_context"], entry.get("prompt", 0))
             if entry.get("ms") is not None:
                 s["request_ms"].append(entry["ms"])
-            if pending:
-                m, kept = pending
-                stats = s["per_model"][m]
-                stats["turns"] += 1
-                stats["prompt"] += entry.get("prompt", 0)
-                stats["cached"] += entry.get("cached", 0)
-                if entry.get("reasoning", 0) > 0:
-                    stats["billed_reasoning"] += 1
-                    stats["reasoning_lost"] += not kept
+            stats = s["per_model"][model or "unknown"]
+            stats["turns"] += 1
+            stats["prompt"] += entry.get("prompt", 0)
+            stats["cached"] += entry.get("cached", 0)
+            awaiting = None
+            if entry.get("reasoning", 0) > 0:
+                stats["billed_reasoning"] += 1
+                awaiting = model or "unknown"
         elif kind == "error":
             s["errors"].append(str(entry.get("message"))[:160])
             s["ended"] = "error"

@@ -5,6 +5,24 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.37 — 2026-10-23
+
+- **A recap after each turn, and `/recap`.** A turn that completed and used tools is followed
+  by a recap of the session in 100 characters or fewer, in your language, printed under the
+  turn's totals; `/recap` asks for one at any time and `[ui] recap = false` turns the automatic
+  one off. It is asked like `/btw`: neither the request nor the reply enters the conversation or
+  the log, the cached prefix still hits, sending anything else cancels it, and the limit is cut
+  in code when the model writes more. Details in `docs/decisions.md`, item 36.
+- **Waiting on a task is no longer a repeat.** The repeat breaker counted a `task_output` wait
+  as the same call each time, so the third wait on a long CI job was told "try a different
+  approach" and the eighth ended the turn. A wait now repeats only when its result does.
+- **`ask_user_question` takes labelled options.** An option given as `{label, description}`
+  shows as "label — description" instead of being refused.
+- **`scripts/sessions.py` paired reasoning with the wrong request.** A request's `usage` is
+  logged just before its assistant message; the script matched each message to the next
+  request's usage, so it reported about a third of the reasoning as lost (Muse: 417 of 634
+  kept; really 632 of 660). It also no longer lists `task_output` waits as repeated calls.
+
 ## 0.2.36 — 2026-10-23
 
 - **First-launch command guide.** The first interactive start asks for another command to

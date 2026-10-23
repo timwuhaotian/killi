@@ -18,6 +18,7 @@ use std::io::{Stdout, Write, stdout};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::ExitCode;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -73,6 +74,10 @@ pub struct Start {
 /// A /btw question and its answer on the way.
 type PendingAside = (String, Pin<Box<dyn Future<Output = Result<(String, Usage)>>>>);
 
+/// A recap on its way after a turn that used tools; dropped, which stops the request, when the
+/// user sends anything else.
+type PendingRecap = Pin<Box<dyn Future<Output = Result<(String, Usage)>>>>;
+
 /// What `run_turn` ended with.
 enum Ended {
     Done(Result<(String, Stop)>),
@@ -99,6 +104,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     app.entries = entries(&session);
     app.refresh_choices(session.config());
     app.notify_after = Duration::from_secs(session.config().agent.notify_after.unwrap_or(10));
+    app.auto_recap = session.config().ui.recap.unwrap_or(true);
     let terminal = TerminalGuard::enter(fullscreen)?;
     app.fullscreen = fullscreen;
     if !fullscreen {
@@ -118,15 +124,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         let Some(input) = app.read_input(&mut keys).await? else { break };
         match input {
             Input::Prompt(prompt, images) => {
-                app.begin_turn(&prompt);
-                app.draw()?;
-                snapshots.take();
-                let before = Totals::of(&agent);
-                let ended = run_turn(&mut app, &mut keys, &mut rx, agent.run(&prompt, &images)).await?;
-                app.finish_turn(ended, before, Totals::of(&agent));
-                if matches!(app.last_end, Some(LastEnd::Interrupted)) {
-                    agent.recover()?;
-                }
+                prompt_turn(&mut app, &mut agent, &mut snapshots, &mut keys, &mut rx, &prompt, &prompt, &images).await?;
             }
             Input::Command(command, arg, images) => {
                 if !handle_command(&mut app, &mut agent, &mut session, &mut snapshots, &mut keys, &mut rx, &cwd, &command, &arg, &images).await? {
@@ -364,6 +362,25 @@ async fn handle_command(
             run_turn(app, keys, rx, std::future::ready(Ok((String::new(), Stop::Completed)))).await?;
             app.end_busy();
         }
+        "recap" if agent.user_prompts().is_empty() => app.notice("Nothing to recap yet."),
+        "recap" => {
+            let ask = app.controls.aside.borrow().recap();
+            let used = Rc::new(RefCell::new(None));
+            let slot = used.clone();
+            app.begin_busy();
+            let ended = run_turn(app, keys, rx, async move {
+                let (text, usage) = ask.await?;
+                *slot.borrow_mut() = Some(usage);
+                Ok((text, Stop::Completed))
+            })
+            .await?;
+            app.end_busy();
+            match (ended, used.take()) {
+                (Ended::Done(Ok((text, _))), Some(usage)) => app.show_recap(&text, &usage),
+                (Ended::Done(Err(e)), _) => app.error(&format!("/recap: {e:#}")),
+                _ => {}
+            }
+        }
         "swarm" => {
             let was_on = app.controls.swarm.replace(true);
             let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {arg}"), arg, images).await;
@@ -461,11 +478,20 @@ async fn prompt_turn(
     snapshots.take();
     let before = Totals::of(agent);
     let ended = run_turn(app, keys, rx, agent.run(prompt, images)).await?;
+    let completed = matches!(ended, Ended::Done(Ok((_, Stop::Completed))));
     app.finish_turn(ended, before, Totals::of(agent));
     if matches!(app.last_end, Some(LastEnd::Interrupted)) {
         agent.recover()?;
     }
+    if wants_recap(app.auto_recap, completed, Totals::of(agent).tool_calls - before.tool_calls) {
+        app.recap = Some(Box::pin(app.controls.aside.borrow().recap()));
+    }
     Ok(())
+}
+
+/// Whether a finished turn gets a recap by itself: a turn that only answered is its own recap.
+fn wants_recap(on: bool, completed: bool, tool_calls: u32) -> bool {
+    on && completed && tool_calls > 0
 }
 
 fn agent_sink(agent: &Agent) -> Sink {
@@ -491,6 +517,7 @@ fn entries(session: &Setup) -> Vec<Entry> {
 #[derive(Clone, Copy)]
 struct Totals {
     requests: u32,
+    tool_calls: u32,
     prompt: u64,
     cached: u64,
     completion: u64,
@@ -499,7 +526,7 @@ struct Totals {
 impl Totals {
     fn of(agent: &Agent) -> Self {
         let usage = &agent.stats.usage;
-        Self { requests: agent.stats.requests, prompt: usage.prompt, cached: usage.cached, completion: usage.completion }
+        Self { requests: agent.stats.requests, tool_calls: agent.stats.tool_calls, prompt: usage.prompt, cached: usage.cached, completion: usage.completion }
     }
 }
 
@@ -644,6 +671,9 @@ struct App {
     aside: Option<(String, Instant)>,
     /// Answered /btw blocks waiting for the model's paragraph to end before they are printed.
     held_asides: Vec<Line>,
+    /// Whether a turn that used tools is followed by a recap.
+    auto_recap: bool,
+    recap: Option<PendingRecap>,
     last_end: Option<LastEnd>,
     cwd: PathBuf,
     notify_after: Duration,
@@ -733,6 +763,8 @@ impl App {
             later_noted: false,
             aside: None,
             held_asides: Vec::new(),
+            auto_recap: true,
+            recap: None,
             last_end: None,
             cwd: cwd.to_path_buf(),
             notify_after: Duration::from_secs(10),
@@ -841,16 +873,29 @@ impl App {
 
     async fn read_input(&mut self, keys: &mut EventStream) -> Result<Option<Input>> {
         if let Some(input) = self.next_input.take() {
+            self.recap = None;
             return Ok(Some(input));
         }
         if std::mem::take(&mut self.send_now) {
             let steered: Vec<_> = self.controls.steer.borrow_mut().drain(..).collect();
             if let Some((text, images)) = joined(steered) {
+                self.recap = None;
                 return Ok(Some(Input::Prompt(text, images)));
             }
         }
         loop {
-            let Some(event) = keys.next().await else { return Ok(None) };
+            let event = tokio::select! {
+                event = keys.next() => event,
+                done = async { self.recap.as_mut().expect("a recap is pending").as_mut().await }, if self.recap.is_some() => {
+                    self.recap = None;
+                    if let Ok((text, usage)) = done {
+                        self.show_recap(&text, &usage);
+                    }
+                    self.draw()?;
+                    continue;
+                }
+            };
+            let Some(event) = event else { return Ok(None) };
             let event = event?;
             let result = self.on_key_idle(event);
             self.sync_menu();
@@ -858,7 +903,10 @@ impl App {
             match result {
                 Idle::Continue => {}
                 Idle::Exit => return Ok(None),
-                Idle::Input(input) => return Ok(Some(input)),
+                Idle::Input(input) => {
+                    self.recap = None;
+                    return Ok(Some(input));
+                }
             }
         }
     }
@@ -1724,6 +1772,15 @@ impl App {
         self.release_asides(false);
     }
 
+    /// A recap, printed as a block of its own with what asking for it cost.
+    fn show_recap(&mut self, text: &str, usage: &Usage) {
+        let cached = usage.cached * 100 / usage.prompt.max(1);
+        let note = format!("{} in, {cached}% cached", short(usage.prompt));
+        let text = text.to_string();
+        self.held_asides.push(Line::block(move |width| recap_rows(&text, &note, width)));
+        self.release_asides(true);
+    }
+
     /// Prints the answered /btw blocks, unless the model is in the middle of a paragraph and
     /// `force` is off: the block would cut it in two.
     fn release_asides(&mut self, force: bool) {
@@ -2367,6 +2424,11 @@ fn aside_rows(question: &str, answer: &str, note: &str, width: usize) -> Vec<Str
     rows
 }
 
+/// A recap as one block: its label, the text wrapped under it, and what asking for it cost.
+fn recap_rows(text: &str, note: &str, width: usize) -> Vec<String> {
+    wrap_words(&format!("{BOLD}{LAGOON}recap{RESET} {text} {DIM}· {note}{RESET}"), width, 6)
+}
+
 /// What the empty prompt says it takes, in fg-faint: nothing once something is typed or while
 /// a picker or a question `waits`, since those say it themselves.
 fn placeholder(empty: bool, busy: bool, waits: bool) -> Option<&'static str> {
@@ -2892,6 +2954,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "resume", aliases: &[], args: "", about: "Continue an earlier session in this folder" },
     Command { name: "btw", aliases: &[], args: "<question>", about: "Ask a side question, also while the agent works; not kept" },
     Command { name: "compact", aliases: &[], args: "[focus]", about: "Summarize the conversation to free context" },
+    Command { name: "recap", aliases: &[], args: "", about: "Recap the session in 100 characters; also after each turn that used tools" },
     Command { name: "undo", aliases: &[], args: "", about: "Put files back as they were before the last turn" },
     Command { name: "plan", aliases: &[], args: "", about: "Toggle plan mode (also Shift+Tab)" },
     Command { name: "swarm", aliases: &[], args: "[task|on|off]", about: "Swarm mode: split work across many subagents" },
@@ -3307,6 +3370,23 @@ mod tests {
         let long = aside_rows("q", &"word ".repeat(30), "n", 30);
         assert!(long.iter().all(|row| text::width(row) <= 30));
         assert!(long.iter().skip(1).all(|row| unstyled(row).starts_with("  │")));
+    }
+
+    #[test]
+    fn a_recap_is_a_labelled_block_that_fits_the_width() {
+        let rows = recap_rows("Fixed the repeat breaker.", "12k in, 98% cached", 60);
+        assert_eq!(rows.iter().map(|row| unstyled(row)).collect::<Vec<_>>(), ["recap Fixed the repeat breaker. · 12k in, 98% cached"]);
+        let chinese = recap_rows(&"已修复重复调用熔断器，并让会话脚本按正确顺序配对。".repeat(3), "12k in", 30);
+        assert!(chinese.len() > 1 && chinese.iter().all(|row| text::width(row) <= 30), "{chinese:?}");
+        assert!(chinese.iter().skip(1).all(|row| unstyled(row).starts_with("      ")));
+    }
+
+    #[test]
+    fn only_a_completed_turn_that_used_tools_is_recapped_by_itself() {
+        assert!(wants_recap(true, true, 3));
+        assert!(!wants_recap(true, true, 0), "an answer is its own recap");
+        assert!(!wants_recap(true, false, 3), "interrupted or cut off");
+        assert!(!wants_recap(false, true, 3), "switched off");
     }
 
     #[test]
