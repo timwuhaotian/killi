@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.28 — 2026-10-23
+
+- **The working row has some presence.** Elapsed time is bold, `Esc` follows the key-hint
+  convention in lagoon, and the separator is faint — the whole row in dim looked stingy.
+- **The live area no longer touches the scrollback.** Streaming preview text is separated
+  from the conversation by a blank row, the way the other live-area sections already are.
+
 ## 0.2.27 — 2026-10-23
 
 - **A skill sees the image pasted beside it.** `/lean-build make it nicer [Image #1]` dropped

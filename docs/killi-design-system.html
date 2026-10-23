@@ -545,7 +545,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <section class="comp" id="c-Spinner">
   <div class="comp-head"><h3>Spinner</h3><span class="muted">Signals</span></div>
   <div class="stage ki-stage" id="stage-Spinner"></div>
-  <div class="guide"><p>The working row, nearest the prompt while Killi works: the <code>killi</code> wordmark — its letters fade in, then the banner's gradient drifts through them under a sweeping highlight — followed by <code>working 12s · Esc to interrupt</code> in <code>fg-muted</code>. A running tool call turns the quarter glyph <code>◐ ◓ ◑ ◒</code> instead.</p>
+  <div class="guide"><p>The working row, nearest the prompt while Killi works: the <code>killi</code> wordmark — its letters fade in, then the banner's gradient drifts through them under a sweeping highlight — followed by <code>working</code> in <code>fg-muted</code>, the elapsed time in <code>fg-strong</code>, then <code>·</code> in <code>fg-faint</code> and <code>Esc</code> in <code>lagoon</code> with <code>to interrupt</code> in <code>fg-muted</code>, like every other key hint. A running tool call turns the quarter glyph <code>◐ ◓ ◑ ◒</code> instead.</p>
 <p><strong>Provide:</strong> <code>elapsed</code>; <code>Quarter</code> for a tool row.</p>
 <ul>
 <li>Do keep exactly one wordmark on screen; tool rows above it carry their own glyph.</li>
@@ -1212,7 +1212,11 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     var frame = useTick(true, 20);
     return h('div', { className: 'ki-working', role: 'status' },
       h('span', { className: 'ki-word' }, wordmark(frame)),
-      h('span', { className: 'ki-label' }, ' working ' + clock(props.elapsed) + ' · Esc to interrupt'));
+      h('span', { className: 'ki-label' }, ' working '),
+      h('span', { className: 'ki-strong' }, clock(props.elapsed)),
+      h('span', { className: 'ki-faint' }, ' · '),
+      h('span', { className: 'ki-lagoon' }, 'Esc'),
+      h('span', { className: 'ki-label' }, ' to interrupt'));
   }
   function Quarter() {
     var frame = useTick(true, 0);

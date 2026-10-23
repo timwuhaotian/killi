@@ -1978,6 +1978,9 @@ impl App {
             }
         };
         if !self.partial.is_empty() {
+            // Preview touches the scrollback without this: `draw` prints pending rows
+            // then the live rows with no gap of its own.
+            space(&mut rows);
             let mut markdown = self.markdown.clone();
             let mut styled = markdown.line(&self.partial);
             styled.extend(markdown.finish());
@@ -2009,7 +2012,7 @@ impl App {
             }
             if self.asking.is_none() {
                 let spin = banner::working(self.spinner);
-                rows.push(fit(&format!("{spin} {DIM}working {} · Esc to interrupt{RESET}", clock(started.elapsed())), width));
+                rows.push(fit(&format!("{spin} {DIM}working{RESET} {BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}", clock(started.elapsed())), width));
             }
             for queued in &self.queued {
                 rows.push(fit(&format!("{FIN}❯{RESET} {DIM}{} (sent at the next step){RESET}", queued.replace('\n', " ")), width));
