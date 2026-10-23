@@ -5,6 +5,19 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- **A first run that starts from the agent you already use.** Without a config, `killi`
+  offers to import from the coding agents it finds on the machine — Kimi Code, pi and
+  opencode — carrying over their providers, models, API keys, default model, thinking level
+  and MCP servers into killi's layout; providers those tools only reach through an account
+  login are skipped. omp's config is YAML, which killi doesn't read, so it isn't offered yet.
+- **A first run that ends on a session.** Run without a config, `killi` offers to write one
+  (or import Kimi Code's) and then keeps going instead of stopping: when the model it would
+  start on has no key — `$OPENAI_API_KEY` isn't set, say — it offers to paste the key, stores
+  it under `[providers.*]` in `~/.killi/config.toml` with echo off, or to start on another
+  configured model, rewriting `default_model`. Declining, a `-p` run or a piped start still
+  ends on one line naming the variable to export or the line to set, and the first-launch
+  command question is only asked once a model can start.
+
 ## 0.2.37 — 2026-10-23
 
 - **A recap after each turn, and `/recap`.** A turn that completed and used tools is followed

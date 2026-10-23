@@ -81,14 +81,12 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
         }
         _ => {
             let options = parse(args)?;
-            if options.prompt.is_none() && !config::set_up_if_missing()? {
-                return Ok(ExitCode::SUCCESS);
-            }
             quit_on_signals();
-            let config = config::Config::load()?;
             if options.prompt.is_none() {
-                config::command_guide_if_first()?;
+                config::set_up_if_missing()?;
+                config::guide_model(options.model.as_deref())?;
             }
+            let config = config::Config::load()?;
             let cwd = std::env::current_dir()?;
             let last = || session::list(&cwd).into_iter().next().map(|s| s.path);
             let resume = match (&options.resume, options.continue_last) {

@@ -110,11 +110,17 @@ Rust 1.94 or later.
 
 ### Models
 
-killi reads `~/.killi/config.toml`. On the first interactive launch, a short guide offers
-to add another start command beside the binary (such as `dw` -> `killi`); press Enter to
-keep starting it as `killi`. Run without a config, `killi` offers to make it: by importing
-Kimi Code's, or from a starting config to edit. To do that yourself: if you use Kimi Code, copy
-its providers, models and MCP servers:
+killi reads `~/.killi/config.toml`. Run without a config, `killi` offers to make one
+from another coding agent it finds on the machine — Kimi Code, pi or opencode — carrying over
+their providers, models, API keys, default model, thinking level and MCP servers into killi's
+layout; providers those tools only reach through an account login are skipped. Otherwise it
+writes a starting config to edit — and then keeps going. When the model it would start on has
+no key — `$OPENAI_API_KEY` isn't set, say — it offers to paste the key (stored under
+`[providers.*]` in the config, read with echo off) or to start on another configured model,
+so a first run ends on a session instead of an error. On the first interactive launch a short
+guide also offers to add another start command beside the binary (such as `dw` -> `killi`);
+press Enter to keep starting it as `killi`. To write the config yourself: if you use Kimi
+Code, copy its providers, models and MCP servers:
 
 ```sh
 killi import-kimi

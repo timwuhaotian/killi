@@ -106,6 +106,19 @@ pub struct Provider {
     pub custom_headers: BTreeMap<String, String>,
 }
 
+impl Provider {
+    /// The key to send with requests: the environment variable's value when the provider
+    /// reads one, else the inline `api_key`. `None` when it is unset or blank.
+    fn key(&self) -> Option<String> {
+        match (&self.api_key, &self.api_key_env) {
+            (_, Some(var)) => std::env::var(var).ok(),
+            (Some(key), None) => Some(key.clone()),
+            (None, None) => None,
+        }
+        .filter(|key| !key.is_empty())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Model {
     pub provider: String,
@@ -149,6 +162,37 @@ pub enum Protocol {
     Anthropic,
     /// OpenAI Responses.
     Responses,
+}
+
+/// The model killi would start on when its provider has no key.
+pub struct MissingKey {
+    /// The model alias that can't start.
+    pub alias: String,
+    /// The provider that names no usable key.
+    pub provider: String,
+}
+
+/// Why a provider has no key: "$VAR isn't set", "api_key is blank" or "no api_key or api_key_env".
+fn key_reason(provider: &Provider) -> String {
+    match (&provider.api_key, &provider.api_key_env) {
+        (_, Some(var)) => format!("${var} isn't set"),
+        (Some(_), None) => "api_key is blank".to_string(),
+        (None, None) => "no api_key or api_key_env".to_string(),
+    }
+}
+
+/// Why the model killi would start on can't, without the advice `no_key` adds.
+fn no_key_yet(alias: &str, provider: &Provider) -> String {
+    format!("model `{alias}` needs a key, but {}", key_reason(provider))
+}
+
+/// What to do about a model that has no key, as `resolve` and a declined guide end on.
+fn no_key(alias: &str, name: &str, provider: &Provider) -> String {
+    let advice = match provider.api_key_env {
+        Some(_) => format!("export it, or set api_key under [providers.{name}] in ~/.killi/config.toml, or start with -m <provider/model>"),
+        None => format!("set api_key under [providers.{name}] in ~/.killi/config.toml"),
+    };
+    format!("{}: {advice}", no_key_yet(alias, provider))
 }
 
 /// How much the model should reason, resolved the way Kimi Code does it.
@@ -204,12 +248,7 @@ impl Config {
             (None, Protocol::Anthropic) => "https://api.anthropic.com".to_string(),
             (None, _) => "https://api.openai.com/v1".to_string(),
         };
-        let api_key = match (&provider.api_key, &provider.api_key_env) {
-            (_, Some(var)) => std::env::var(var)
-                .with_context(|| format!("provider `{}` reads its key from ${var}, which isn't set", model.provider))?,
-            (Some(key), None) => key.clone(),
-            (None, None) => bail!("provider `{}` has neither api_key nor api_key_env", model.provider),
-        };
+        let Some(api_key) = provider.key() else { bail!("{}", no_key(alias, &model.provider, provider)) };
         Ok(ResolvedModel {
             alias: alias.to_string(),
             model: model.model.clone(),
@@ -222,6 +261,16 @@ impl Config {
             images: model.capabilities.iter().any(|c| c == "image_in"),
             thinking: self.thinking_for(model),
         })
+    }
+
+    /// The model killi would start on when its provider has no key: the alias and the
+    /// provider's name. `None` when that model has a key, or when something else is wrong
+    /// with it, which `resolve` reports.
+    pub fn missing_key(&self, requested: Option<&str>) -> Option<MissingKey> {
+        let alias = requested.or(self.default_model.as_deref())?;
+        let model = self.models.get(alias)?;
+        let provider = self.providers.get(&model.provider)?;
+        provider.key().is_none().then(|| MissingKey { alias: alias.to_string(), provider: model.provider.clone() })
     }
 
     /// Kimi Code's order: `thinking.enabled = false` turns reasoning off, then the configured
@@ -335,31 +384,160 @@ pub fn init() -> Result<()> {
     let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
     file.write_all(TEMPLATE.as_bytes())?;
     file.write_all(prompt_section().as_bytes())?;
-    println!("Wrote {}. Set your providers' keys and models there, then run `killi`.", path.display());
+    println!("Wrote {}. Set your providers' keys and models there.", path.display());
     Ok(())
 }
 
-/// When killi starts in a terminal without a config, offers to make one: by importing Kimi
-/// Code's if there is one, or from the starting template. Returns false when the user has to
-/// edit the new config before killi can start; a declined offer leaves `load` to explain.
-pub fn set_up_if_missing() -> Result<bool> {
-    let path = killi_home().join("config.toml");
-    if path.exists() || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
-        return Ok(true);
-    }
-    eprintln!("killi has no config yet at {}.", path.display());
+/// A coding agent whose config killi can import: its name, the config that shows it is
+/// set up on this machine, and the importer for it.
+type ImportSource = (&'static str, PathBuf, fn(bool) -> Result<()>);
+
+/// The other coding agents whose config killi can import, that are set up on this machine.
+fn import_sources() -> Vec<ImportSource> {
+    let mut sources: Vec<ImportSource> = Vec::new();
     let kimi = home().join(".kimi-code/config.toml");
     if kimi.exists() {
-        if confirm(&format!("Import providers, models and MCP servers from Kimi Code ({})?", kimi.display()))? {
-            import_kimi(false)?;
+        sources.push(("Kimi Code", kimi, import_kimi));
+    }
+    let pi = home().join(".pi/agent/models.json");
+    if pi.exists() {
+        sources.push(("pi", pi, import_pi));
+    }
+    let opencode = home().join(".config/opencode/opencode.json");
+    if opencode.exists() {
+        sources.push(("opencode", opencode, import_opencode));
+    }
+    sources
+}
+
+/// When killi starts in a terminal without a config, offers to make one from another coding
+/// agent's — whichever are set up on this machine — or from the starting template. The start
+/// then goes on to `guide_model`, which gives the new config a key; declining every offer
+/// leaves `load` to explain that there is no config.
+pub fn set_up_if_missing() -> Result<()> {
+    let path = killi_home().join("config.toml");
+    if path.exists() || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Ok(());
+    }
+    eprintln!("killi has no config yet at {}.", path.display());
+    for (name, source, import) in import_sources() {
+        if confirm(&format!("Import providers, models and MCP servers from {name} ({})?", source.display()))? {
+            if let Err(error) = import(false) {
+                eprintln!("killi: {error:#}");
+                continue;
+            }
+            return Ok(());
         }
-        return Ok(true);
     }
-    if !confirm("Write a starting config to edit?")? {
-        return Ok(true);
+    if confirm("Write a starting config to edit?")? {
+        init()?;
     }
-    init()?;
-    Ok(false)
+    Ok(())
+}
+
+/// The first-run model guide: when the model killi would start on has no key, offers to
+/// paste one — stored in the config file, read with echo off — or to start on another
+/// configured model. Interactive starts only: `-p` and piped runs keep failing with the
+/// reason from `resolve`, and so does a start where every offer is declined.
+pub fn guide_model(model: Option<&str>) -> Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Ok(());
+    }
+    let path = killi_home().join("config.toml");
+    loop {
+        let config = Config::load()?;
+        let Some(missing) = config.missing_key(model) else { return Ok(()) };
+        let Some(provider) = config.providers.get(&missing.provider) else { return Ok(()) };
+        eprintln!("{}", no_key_yet(&missing.alias, provider));
+        let otherwise = if model.is_some() { "press Enter to quit" } else { "press Enter to choose another model" };
+        let key = read_secret(&format!("Paste the key to store it in ~/.killi/config.toml, or {otherwise}: "))?;
+        if !key.is_empty() {
+            set_provider_key(&path, &missing.provider, &key)?;
+            continue;
+        }
+        if model.is_some() || !pick_model(&config, &path)? {
+            return Ok(());
+        }
+    }
+}
+
+/// Lists the configured models with whether their key is there, and makes the chosen one the
+/// default. False when the user keeps the model they have.
+fn pick_model(config: &Config, path: &Path) -> Result<bool> {
+    let aliases: Vec<&str> = config.models.keys().map(String::as_str).collect();
+    eprintln!("Models in ~/.killi/config.toml:");
+    for (index, alias) in aliases.iter().enumerate() {
+        let note = match config.missing_key(Some(alias)) {
+            Some(missing) => key_reason(&config.providers[&missing.provider]),
+            None => "ready".to_string(),
+        };
+        eprintln!("  {}. {alias} — {note}", index + 1);
+    }
+    let answer = read_line("Start with which? ")?;
+    match answer.parse::<usize>() {
+        Ok(choice) if (1..=aliases.len()).contains(&choice) => {
+            set_default_model(path, aliases[choice - 1])?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Stores `key` as the `api_key` of `provider` in the config file, in place of the
+/// `api_key` or `api_key_env` line in its section, so `resolve` reads the key from the file.
+/// The rest of the file, comments included, is left as it is.
+fn set_provider_key(path: &Path, provider: &str, key: &str) -> Result<()> {
+    let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let header = format!("[providers.{provider}]");
+    let key_line = format!("api_key = {}", toml::Value::String(key.to_string()));
+    let mut out: Vec<String> = Vec::new();
+    let mut in_provider = false;
+    let mut written = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_provider = trimmed.starts_with(&header);
+        } else if in_provider && trimmed.starts_with("api_key") {
+            if !written {
+                out.push(key_line.clone());
+                written = true;
+            }
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if !written {
+        let Some(at) = out.iter().position(|line| line.trim().starts_with(&header)) else {
+            bail!("no {header} table in {} to store the key in", path.display())
+        };
+        out.insert(at + 1, key_line);
+    }
+    fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))
+}
+
+/// Makes `alias` the `default_model` of the config file: the line is replaced where the file
+/// has one before its first table, and added at the top where it has none.
+fn set_default_model(path: &Path, alias: &str) -> Result<()> {
+    let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let line = format!("default_model = {}", toml::Value::String(alias.to_string()));
+    let mut out: Vec<String> = Vec::new();
+    let mut written = false;
+    let mut in_table = false;
+    for text_line in text.lines() {
+        let trimmed = text_line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_table = true;
+        } else if !in_table && !written && trimmed.starts_with("default_model") {
+            out.push(line.clone());
+            written = true;
+            continue;
+        }
+        out.push(text_line.to_string());
+    }
+    if !written {
+        out.insert(0, line);
+    }
+    fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))
 }
 
 /// The first-launch guide: on the first interactive start, offers to add another command
@@ -459,11 +637,63 @@ fn command_on_path(name: &str, except: &Path) -> Option<PathBuf> {
 
 /// Asks a yes/no question on the terminal; Enter means yes.
 fn confirm(question: &str) -> Result<bool> {
-    eprint!("{question} [Y/n] ");
+    Ok(matches!(read_line(&format!("{question} [Y/n] "))?.to_ascii_lowercase().as_str(), "" | "y" | "yes"))
+}
+
+/// Prints `prompt` and reads one line from the terminal, trimmed; end of input reads as no
+/// answer.
+fn read_line(prompt: &str) -> Result<String> {
+    eprint!("{prompt}");
     std::io::stderr().flush()?;
     let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer)?;
-    Ok(matches!(answer.trim().to_ascii_lowercase().as_str(), "" | "y" | "yes"))
+    if std::io::stdin().read_line(&mut answer)? == 0 {
+        return Ok(String::new());
+    }
+    Ok(answer.trim().to_string())
+}
+
+/// Reads one line with the terminal's echo off, so a pasted key stays out of the scrollback.
+/// Ctrl+C cancels the paste: with signals off for the read it arrives as a byte, and reads as
+/// no answer rather than ending killi with the echo still off.
+fn read_secret(prompt: &str) -> Result<String> {
+    let mut settings = unsafe { std::mem::zeroed::<libc::termios>() };
+    // SAFETY: stdin is a terminal here and `settings` is initialized before it is read into.
+    let terminal = unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut settings) } == 0;
+    let saved = settings;
+    if terminal {
+        settings.c_lflag &= !(libc::ECHO | libc::ISIG);
+        // SAFETY: the settings were just read from this terminal.
+        unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &settings) };
+    }
+    let answer = read_line(prompt);
+    if terminal {
+        // SAFETY: `saved` is this terminal's own settings, read before the change.
+        unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &saved) };
+        eprintln!();
+    }
+    let answer = answer?;
+    Ok(if answer.contains('\u{3}') { String::new() } else { answer })
+}
+
+/// Writes an imported config with the `[prompt]` table, and copies the source agent's MCP
+/// servers when killi has none. Every importer ends here.
+fn write_import(out: toml::Table, mcp_src: Option<&Path>, dst_dir: &Path, force: bool) -> Result<()> {
+    let dst = dst_dir.join("config.toml");
+    if dst.exists() && !force {
+        bail!("{} already exists; pass --force to overwrite it", dst.display());
+    }
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(dst_dir)?;
+    let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&dst)?;
+    file.write_all(toml::to_string(&out)?.as_bytes())?;
+    file.write_all(prompt_section().as_bytes())?;
+    if let Some(src) = mcp_src.filter(|src| src.exists()) {
+        let mcp_dst = dst_dir.join("mcp.json");
+        if !mcp_dst.exists() || force {
+            fs::copy(src, &mcp_dst).with_context(|| format!("could not copy {} to {}", src.display(), mcp_dst.display()))?;
+            println!("Copied MCP servers into {}", mcp_dst.display());
+        }
+    }
+    Ok(())
 }
 
 /// Copies providers, models, `default_model` and `[thinking]` from Kimi Code's config.
@@ -519,24 +749,325 @@ pub fn import_kimi(force: bool) -> Result<()> {
     out.insert("providers".into(), toml::Value::Table(providers));
     out.insert("models".into(), toml::Value::Table(models));
 
-    fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
-    let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&dst)?;
-    file.write_all(toml::to_string(&out)?.as_bytes())?;
-    file.write_all(prompt_section().as_bytes())?;
-
+    write_import(out, Some(&home().join(".kimi-code/mcp.json")), &killi_home(), force)?;
     println!("Imported {provider_count} providers and {model_count} models into {}", dst.display());
-    let mcp_src = home().join(".kimi-code/mcp.json");
-    let mcp_dst = dir.join("mcp.json");
-    if mcp_src.exists() && (!mcp_dst.exists() || force) {
-        let text = fs::read(&mcp_src)?;
-        let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&mcp_dst)?;
-        file.write_all(&text)?;
-        println!("Copied MCP servers into {}", mcp_dst.display());
-    }
     if !skipped.is_empty() {
         println!("Skipped providers without an API key (Kimi account login): {}", skipped.join(", "));
     }
     Ok(())
+}
+
+/// Copies providers, models, the default model, the thinking level and MCP servers from
+/// pi's config (`~/.pi/agent`). A provider pi reaches through its account login has no key
+/// in `models.json` and is skipped, as Kimi Code's account providers are.
+pub fn import_pi(force: bool) -> Result<()> {
+    import_pi_from(&home().join(".pi/agent"), &killi_home(), force)
+}
+
+fn import_pi_from(dir: &Path, dst_dir: &Path, force: bool) -> Result<()> {
+    let Some(config) = read_json(&dir.join("models.json"))? else {
+        bail!("no models.json in {} to import", dir.display())
+    };
+    let catalog = read_json(&dir.join("models-store.json"))?.unwrap_or_default();
+    let settings = read_json(&dir.join("settings.json"))?.unwrap_or_default();
+    let Some(all) = config.get("providers").and_then(serde_json::Value::as_object) else {
+        bail!("no providers in {}/models.json", dir.display())
+    };
+
+    let mut out = toml::Table::new();
+    let mut providers = toml::Table::new();
+    let mut models = toml::Table::new();
+    let mut skipped = Vec::new();
+    for (name, provider) in all {
+        let Some(api_key) = json_str(provider, "apiKey") else {
+            skipped.push(name.clone());
+            continue;
+        };
+        let listed = pi_models(provider, catalog.get(name).unwrap_or(&serde_json::Value::Null));
+        if listed.is_empty() {
+            skipped.push(name.clone());
+            continue;
+        }
+        let kind = pi_protocol(json_str(provider, "api").as_deref().or(listed[0].api.as_deref()));
+        let mut table = toml::Table::new();
+        table.insert("type".into(), kind.into());
+        if let Some(url) = json_str(provider, "baseUrl").or_else(|| listed[0].base_url.clone()) {
+            table.insert("base_url".into(), url.into());
+        }
+        table.insert("api_key".into(), api_key.into());
+        providers.insert(name.clone(), toml::Value::Table(table));
+
+        for model in &listed {
+            let mut table = toml::Table::new();
+            table.insert("provider".into(), name.clone().into());
+            table.insert("model".into(), model.id.clone().into());
+            if let Some(api) = model.api.as_deref() {
+                let protocol = pi_protocol(Some(api));
+                if protocol != kind {
+                    table.insert("protocol".into(), protocol.into());
+                }
+            }
+            if let Some(context) = model.context {
+                table.insert("max_context_size".into(), toml_int(context));
+            }
+            if let Some(output) = model.output {
+                table.insert("max_output_size".into(), toml_int(output));
+            }
+            let mut capabilities = Vec::new();
+            if model.reasoning {
+                capabilities.push("thinking".to_string());
+            }
+            if model.image {
+                capabilities.push("image_in".to_string());
+            }
+            if !capabilities.is_empty() {
+                table.insert("capabilities".into(), capabilities.into());
+            }
+            models.insert(format!("{name}/{}", model.id), toml::Value::Table(table));
+        }
+    }
+    if providers.is_empty() {
+        bail!("pi's config has no provider with an API key to import");
+    }
+
+    let configured = json_str(&settings, "defaultProvider").zip(json_str(&settings, "defaultModel")).map(|(p, m)| format!("{p}/{m}"));
+    let default = match &configured {
+        Some(alias) if models.contains_key(alias) => Some(alias.clone()),
+        _ => models.keys().next().cloned(),
+    };
+    if let Some(alias) = &default {
+        out.insert("default_model".into(), alias.clone().into());
+        if configured.as_deref() != Some(alias.as_str()) {
+            eprintln!("pi's default model {} wasn't imported, so `{alias}` is the default", configured.as_deref().unwrap_or("(none)"));
+        }
+    }
+    if let Some(effort) = json_str(&settings, "defaultThinkingLevel").filter(|level| level != "auto") {
+        out.insert("thinking".into(), toml::Table::from_iter([("effort".to_string(), effort.into())]).into());
+    }
+    let (provider_count, model_count) = (providers.len(), models.len());
+    out.insert("providers".into(), toml::Value::Table(providers));
+    out.insert("models".into(), toml::Value::Table(models));
+
+    write_import(out, Some(&dir.join("mcp.json")), dst_dir, force)?;
+    println!("Imported {provider_count} providers and {model_count} models into {}", dst_dir.join("config.toml").display());
+    if !skipped.is_empty() {
+        println!("Skipped providers without an API key (pi account login): {}", skipped.join(", "));
+    }
+    Ok(())
+}
+
+/// One model as pi lists it, in a provider's own `models` or the `models-store.json` catalog.
+struct PiModel {
+    id: String,
+    /// The API the model speaks, when it says so; else the provider's.
+    api: Option<String>,
+    base_url: Option<String>,
+    context: Option<u64>,
+    output: Option<u64>,
+    reasoning: bool,
+    image: bool,
+}
+
+/// The provider's own models, or its catalog's when it lists none.
+fn pi_models(provider: &serde_json::Value, catalog: &serde_json::Value) -> Vec<PiModel> {
+    let inline = provider.get("models").and_then(serde_json::Value::as_array).filter(|models| !models.is_empty());
+    let listed: Vec<&serde_json::Value> = match inline {
+        Some(models) => models.iter().collect(),
+        None => catalog.get("models").and_then(serde_json::Value::as_array).map(|m| m.iter().collect()).unwrap_or_default(),
+    };
+    listed
+        .iter()
+        .filter_map(|model| {
+            Some(PiModel {
+                id: json_str(model, "id")?,
+                api: json_str(model, "api"),
+                base_url: json_str(model, "baseUrl"),
+                context: json_u64(model, "contextWindow"),
+                output: json_u64(model, "maxTokens"),
+                reasoning: model.get("reasoning").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                image: model.get("input").and_then(serde_json::Value::as_array).is_some_and(|input| input.iter().any(|kind| kind.as_str() == Some("image"))),
+            })
+        })
+        .collect()
+}
+
+/// The API pi names for a provider or model, as killi's provider type.
+fn pi_protocol(api: Option<&str>) -> &'static str {
+    match api {
+        Some("openai-responses") => "openai_responses",
+        Some("anthropic-messages") => "anthropic",
+        _ => "openai",
+    }
+}
+
+/// Copies providers, models, the default model and MCP servers from opencode's config
+/// (`~/.config/opencode/opencode.json`, with keys from `~/.local/share/opencode/auth.json`).
+/// Providers opencode signs into with OAuth have no key to copy and are skipped.
+pub fn import_opencode(force: bool) -> Result<()> {
+    import_opencode_from(&home().join(".config/opencode/opencode.json"), &home().join(".local/share/opencode/auth.json"), &killi_home(), force)
+}
+
+fn import_opencode_from(config_path: &Path, auth_path: &Path, dst_dir: &Path, force: bool) -> Result<()> {
+    let Some(config) = read_json(config_path)? else {
+        bail!("no opencode config at {} to import", config_path.display())
+    };
+    let auth = read_json(auth_path)?.unwrap_or_default();
+    let Some(all) = config.get("provider").and_then(serde_json::Value::as_object) else {
+        bail!("no providers in {}", config_path.display())
+    };
+
+    let mut out = toml::Table::new();
+    let mut providers = toml::Table::new();
+    let mut models = toml::Table::new();
+    let mut skipped = Vec::new();
+    for (name, provider) in all {
+        let Some(api_key) = opencode_key(provider, &auth, name) else {
+            skipped.push(name.clone());
+            continue;
+        };
+        let Some(listed) = provider.get("models").and_then(serde_json::Value::as_object).filter(|models| !models.is_empty()) else {
+            skipped.push(name.clone());
+            continue;
+        };
+        let mut table = toml::Table::new();
+        table.insert("type".into(), opencode_protocol(json_str(provider, "npm").as_deref()).into());
+        if let Some(url) = provider.get("options").and_then(|options| json_str(options, "baseURL")) {
+            table.insert("base_url".into(), url.into());
+        }
+        table.insert("api_key".into(), api_key.into());
+        providers.insert(name.clone(), toml::Value::Table(table));
+
+        for (id, model) in listed {
+            let mut table = toml::Table::new();
+            table.insert("provider".into(), name.clone().into());
+            table.insert("model".into(), id.clone().into());
+            let limits = model.get("limit");
+            if let Some(context) = limits.and_then(|limits| json_u64(limits, "context")) {
+                table.insert("max_context_size".into(), toml_int(context));
+            }
+            if let Some(output) = limits.and_then(|limits| json_u64(limits, "output")) {
+                table.insert("max_output_size".into(), toml_int(output));
+            }
+            let mut capabilities = Vec::new();
+            if model.get("reasoning").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+                capabilities.push("thinking".to_string());
+            }
+            if model.get("attachment").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+                capabilities.push("image_in".to_string());
+            }
+            if !capabilities.is_empty() {
+                table.insert("capabilities".into(), capabilities.into());
+            }
+            models.insert(format!("{name}/{id}"), toml::Value::Table(table));
+        }
+    }
+    if providers.is_empty() {
+        bail!("opencode's config has no provider with an API key and models to import");
+    }
+
+    let configured = json_str(&config, "model");
+    let default = configured.as_ref().filter(|alias| models.contains_key(*alias)).or_else(|| models.keys().next()).cloned();
+    if let Some(alias) = &default {
+        out.insert("default_model".into(), alias.clone().into());
+        if configured.as_deref() != Some(alias.as_str()) {
+            eprintln!("opencode's default model {} wasn't imported, so `{alias}` is the default", configured.as_deref().unwrap_or("(none)"));
+        }
+    }
+    let (provider_count, model_count) = (providers.len(), models.len());
+    out.insert("providers".into(), toml::Value::Table(providers));
+    out.insert("models".into(), toml::Value::Table(models));
+
+    write_import(out, None, dst_dir, force)?;
+    copy_opencode_mcp(&config, dst_dir, force)?;
+    println!("Imported {provider_count} providers and {model_count} models into {}", dst_dir.join("config.toml").display());
+    if !skipped.is_empty() {
+        println!("Skipped providers without an API key (opencode OAuth, or no models): {}", skipped.join(", "));
+    }
+    Ok(())
+}
+
+/// The key opencode keeps for a provider: the config's `options.apiKey`, else the API key
+/// `/connect` stored in `auth.json`. An OAuth sign-in has no key to copy.
+fn opencode_key(provider: &serde_json::Value, auth: &serde_json::Value, name: &str) -> Option<String> {
+    if let Some(key) = provider.get("options").and_then(|options| json_str(options, "apiKey")) {
+        return Some(key);
+    }
+    let entry = auth.get(name)?;
+    (entry.get("type").and_then(serde_json::Value::as_str) == Some("api")).then(|| json_str(entry, "key"))?
+}
+
+/// The npm package opencode names for a provider, as killi's provider type.
+fn opencode_protocol(npm: Option<&str>) -> &'static str {
+    match npm {
+        Some("@ai-sdk/anthropic") => "anthropic",
+        Some("@ai-sdk/openai") => "openai",
+        _ => "openai",
+    }
+}
+
+/// Writes opencode's MCP servers in killi's `mcpServers` shape: a local server's command
+/// array becomes the command and its args, a remote one its URL. Disabled ones are left out.
+fn copy_opencode_mcp(config: &serde_json::Value, dst_dir: &Path, force: bool) -> Result<()> {
+    let Some(all) = config.get("mcp").and_then(serde_json::Value::as_object).filter(|servers| !servers.is_empty()) else {
+        return Ok(());
+    };
+    let dst = dst_dir.join("mcp.json");
+    if dst.exists() && !force {
+        return Ok(());
+    }
+    let mut servers = serde_json::Map::new();
+    for (name, server) in all {
+        if server.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) {
+            continue;
+        }
+        let mut entry = serde_json::Map::new();
+        let command = server.get("command").and_then(serde_json::Value::as_array);
+        if let Some(command) = command.filter(|command| !command.is_empty()) {
+            let args: Vec<&str> = command.iter().skip(1).filter_map(serde_json::Value::as_str).collect();
+            entry.insert("command".into(), command[0].clone());
+            if !args.is_empty() {
+                entry.insert("args".into(), args.into());
+            }
+        } else if let Some(url) = json_str(server, "url") {
+            entry.insert("url".into(), url.into());
+        }
+        if !entry.is_empty() {
+            servers.insert(name.clone(), entry.into());
+        }
+    }
+    if servers.is_empty() {
+        return Ok(());
+    }
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(dst_dir)?;
+    let file = serde_json::json!({ "mcpServers": servers });
+    fs::write(&dst, serde_json::to_string_pretty(&file)?).with_context(|| format!("could not write {}", dst.display()))?;
+    println!("Copied MCP servers into {}", dst.display());
+    Ok(())
+}
+
+/// Reads a JSON file, or `None` when there isn't one.
+fn read_json(path: &Path) -> Result<Option<serde_json::Value>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("could not read {}", path.display())),
+    };
+    Ok(Some(serde_json::from_str(&text).with_context(|| format!("invalid JSON in {}", path.display()))?))
+}
+
+/// A JSON object's string field, when it is set and not blank.
+fn json_str(value: &serde_json::Value, field: &str) -> Option<String> {
+    value.get(field).and_then(serde_json::Value::as_str).map(String::from).filter(|text| !text.is_empty())
+}
+
+/// A JSON object's number field.
+fn json_u64(value: &serde_json::Value, field: &str) -> Option<u64> {
+    value.get(field).and_then(serde_json::Value::as_u64)
+}
+
+/// A token count as a TOML integer.
+fn toml_int(value: u64) -> toml::Value {
+    toml::Value::Integer(value as i64)
 }
 
 #[cfg(test)]
@@ -550,6 +1081,168 @@ mod tests {
         let model = config.resolve(None).unwrap();
         assert_eq!(model.protocol, super::Protocol::Responses);
         assert_eq!(model.thinking, super::Thinking::Effort("high".into()));
+    }
+
+    #[test]
+    fn a_missing_key_variable_names_the_variable_and_the_fix() {
+        let config: super::Config = toml::from_str(
+            "default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n",
+        )
+        .unwrap();
+        let error = config.resolve(None).unwrap_err().to_string();
+        assert!(error.contains("model `test/model`"), "{error}");
+        assert!(error.contains("$KILLI_TEST_ABSENT_KEY"), "{error}");
+        assert!(error.contains("[providers.test]"), "{error}");
+        assert!(error.contains("~/.killi/config.toml"), "{error}");
+        assert!(!error.contains("environment variable not found"), "{error}");
+    }
+
+    #[test]
+    fn an_empty_key_variable_counts_as_missing() {
+        // SAFETY: no other test reads or writes KILLI_TEST_EMPTY_KEY.
+        unsafe { std::env::set_var("KILLI_TEST_EMPTY_KEY", "") };
+        let config: super::Config = toml::from_str(
+            "default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_EMPTY_KEY\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n",
+        )
+        .unwrap();
+        let error = config.resolve(None).unwrap_err().to_string();
+        assert!(error.contains("$KILLI_TEST_EMPTY_KEY"), "{error}");
+    }
+
+    #[test]
+    fn missing_key_names_the_model_and_provider_that_cant_start() {
+        let source = "[providers.test]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[providers.inline]\ntype = \"openai\"\napi_key = \"sk-inline\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n\n[models.\"inline/model\"]\nprovider = \"inline\"\nmodel = \"model\"\n";
+        let config: super::Config = toml::from_str(&format!("default_model = \"test/model\"\n{source}")).unwrap();
+        let missing = config.missing_key(None).unwrap();
+        assert_eq!(missing.alias, "test/model");
+        assert_eq!(missing.provider, "test");
+        assert!(config.missing_key(Some("inline/model")).is_none(), "an inline key is a key");
+        assert!(config.missing_key(Some("unknown/model")).is_none(), "resolve reports those");
+
+        let blank: super::Config = toml::from_str("default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n").unwrap();
+        assert!(blank.missing_key(None).is_some(), "a blank key is no key");
+    }
+
+    #[test]
+    fn storing_a_key_replaces_the_environment_line_and_keeps_the_rest() {
+        let root = std::env::temp_dir().join(format!("killi-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        std::fs::write(&path, "# my config\ndefault_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n").unwrap();
+
+        super::set_provider_key(&path, "test", "sk-pasted").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# my config"), "{text}");
+        assert!(!text.contains("api_key_env"), "{text}");
+        let config: super::Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.providers["test"].api_key.as_deref(), Some("sk-pasted"));
+        assert!(config.missing_key(None).is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn choosing_a_model_rewrites_the_default_model_line() {
+        let root = std::env::temp_dir().join(format!("killi-default-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        std::fs::write(&path, "default_model = \"test/first\"\n\n[models.\"test/first\"]\nprovider = \"test\"\nmodel = \"first\"\n").unwrap();
+        super::set_default_model(&path, "test/second").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "default_model = \"test/second\"\n\n[models.\"test/first\"]\nprovider = \"test\"\nmodel = \"first\"\n");
+
+        std::fs::write(&path, "[models.\"test/first\"]\nprovider = \"test\"\nmodel = \"first\"\n").unwrap();
+        super::set_default_model(&path, "test/first").unwrap();
+        let config: super::Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config.default_model.as_deref(), Some("test/first"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn importing_pi_carries_over_providers_models_and_the_default() {
+        let root = std::env::temp_dir().join(format!("killi-import-pi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("pi");
+        let dst = root.join("killi");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("models.json"), serde_json::json!({"providers": {
+            "sph": {"baseUrl": "https://gw.example.com/v1", "api": "openai-completions", "apiKey": "sk-sph", "models": [
+                {"id": "glm-5.3", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000}
+            ]},
+            "minimax": {"apiKey": "sk-mm"},
+            "nokey": {"baseUrl": "https://x/v1", "models": [{"id": "m"}]}
+        }}).to_string()).unwrap();
+        std::fs::write(src.join("models-store.json"), serde_json::json!({"minimax": {"models": [
+            {"id": "MiniMax-M3", "api": "anthropic-messages", "baseUrl": "https://api.minimaxi.com/anthropic", "reasoning": true, "contextWindow": 196608, "maxTokens": 32768},
+            {"id": "MiniMax-M3-Flash", "baseUrl": "https://api.minimaxi.com/anthropic"}
+        ]}}).to_string()).unwrap();
+        std::fs::write(src.join("settings.json"), serde_json::json!({"defaultProvider": "minimax", "defaultModel": "MiniMax-M3", "defaultThinkingLevel": "high"}).to_string()).unwrap();
+        std::fs::write(src.join("mcp.json"), serde_json::json!({"mcpServers": {"x": {"command": "echo"}}}).to_string()).unwrap();
+
+        super::import_pi_from(&src, &dst, false).unwrap();
+        let text = std::fs::read_to_string(dst.join("config.toml")).unwrap();
+        let config: super::Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.default_model.as_deref(), Some("minimax/MiniMax-M3"));
+        assert_eq!(config.thinking.effort.as_deref(), Some("high"));
+        assert_eq!(config.providers.len(), 2, "a provider without a key is skipped");
+        assert_eq!(config.providers["sph"].api_key.as_deref(), Some("sk-sph"));
+        assert_eq!(config.providers["sph"].base_url.as_deref(), Some("https://gw.example.com/v1"));
+        assert_eq!(config.providers["minimax"].kind, "anthropic", "the catalog model's API names the protocol");
+        assert_eq!(config.providers["minimax"].base_url.as_deref(), Some("https://api.minimaxi.com/anthropic"));
+        let glm = &config.models["sph/glm-5.3"];
+        assert_eq!((glm.max_context_size, glm.max_output_size), (Some(1_000_000), Some(128_000)));
+        assert_eq!(glm.capabilities, ["thinking", "image_in"]);
+        assert_eq!(config.models["minimax/MiniMax-M3-Flash"].protocol, None, "a model that names no API takes its provider's");
+        assert_eq!(std::fs::read_to_string(dst.join("mcp.json")).unwrap(), std::fs::read_to_string(src.join("mcp.json")).unwrap());
+        assert!(config.missing_key(None).is_none(), "the imported config starts as it is");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn importing_opencode_carries_over_providers_models_and_mcp() {
+        let root = std::env::temp_dir().join(format!("killi-import-opencode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("opencode");
+        let dst = root.join("killi");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("opencode.json"), serde_json::json!({
+            "model": "minimax/MiniMax-M3",
+            "provider": {
+                "sph": {"npm": "@ai-sdk/openai-compatible", "options": {"baseURL": "https://gw.example.com/v1", "apiKey": "sk-sph"}, "models": {
+                    "glm-5.3": {"name": "GLM 5.3", "reasoning": true, "attachment": true, "limit": {"context": 1000000, "output": 128000}}
+                }},
+                "volc": {"options": {"baseURL": "https://ark.example.com/v3"}, "models": {"doubao": {}}},
+                "oauthonly": {"models": {"m": {}}}
+            },
+            "mcp": {
+                "local": {"type": "local", "command": ["npx", "-y", "pkg"]},
+                "remote": {"type": "remote", "url": "https://mcp.example.com"},
+                "off": {"type": "local", "command": ["x"], "enabled": false}
+            }
+        }).to_string()).unwrap();
+        std::fs::write(src.join("auth.json"), serde_json::json!({
+            "volc": {"type": "api", "key": "sk-volc"},
+            "oauthonly": {"type": "oauth", "refresh": "r"}
+        }).to_string()).unwrap();
+
+        super::import_opencode_from(&src.join("opencode.json"), &src.join("auth.json"), &dst, false).unwrap();
+        let config: super::Config = toml::from_str(&std::fs::read_to_string(dst.join("config.toml")).unwrap()).unwrap();
+        assert_eq!(config.default_model.as_deref(), Some("sph/glm-5.3"), "a default whose provider wasn't imported falls back");
+        assert_eq!(config.providers.len(), 2);
+        assert_eq!(config.providers["sph"].api_key.as_deref(), Some("sk-sph"));
+        assert_eq!(config.providers["volc"].api_key.as_deref(), Some("sk-volc"), "the key comes from auth.json");
+        assert_eq!(config.providers["volc"].kind, "openai");
+        let glm = &config.models["sph/glm-5.3"];
+        assert_eq!((glm.max_context_size, glm.max_output_size), (Some(1_000_000), Some(128_000)));
+        assert_eq!(glm.capabilities, ["thinking", "image_in"]);
+        assert_eq!(config.models["volc/doubao"].model, "doubao");
+
+        let mcp: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dst.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(mcp["mcpServers"]["local"]["command"], "npx");
+        assert_eq!(mcp["mcpServers"]["local"]["args"], serde_json::json!(["-y", "pkg"]));
+        assert_eq!(mcp["mcpServers"]["remote"]["url"], "https://mcp.example.com");
+        assert!(mcp["mcpServers"].get("off").is_none(), "a disabled server is left out");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

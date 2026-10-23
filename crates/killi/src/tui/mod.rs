@@ -95,6 +95,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     let background = if config.ui.theme.is_none() { query_background() } else { None };
     text::init_theme(config.ui.theme.as_deref(), background);
     let mut session = Setup::new(config, &cwd, start.model.as_deref()).await?;
+    // Only once killi has a model to start on: a broken config ends on the reason instead.
+    crate::config::command_guide_if_first()?;
     let mut agent = match &start.resume {
         Some(log) => session.resume(log, controls.clone(), sink.clone())?,
         None => session.start(controls.clone(), sink.clone())?,
