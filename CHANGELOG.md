@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.40 — 2026-10-23
+
+- **A message ends a wait.** A message typed while `bash` or `task_output` with `wait` was
+  waiting only reached the model when the call ended, up to five minutes later, which read as
+  a hang (a CI wait held back three "is it stuck?" messages in one session). Now the wait
+  stops when the message is queued: `bash` moves its command to a background task, as it
+  does at its timeout, and `task_output` returns what it has; the model reads the message on
+  its next request and can wait again. Subagents are not cut short.
+- **`/effort` works while the agent works.** `/effort low` typed mid-turn is checked against
+  the model's efforts at once and applied when the turn ends, before the next prompt; the
+  slash menu offers it, and its choices, meanwhile.
+
 ## 0.2.39 — 2026-10-23
 
 - **A message typed mid-turn comes before the next command, not after the batch.** It
