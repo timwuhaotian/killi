@@ -86,6 +86,9 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
             }
             quit_on_signals();
             let config = config::Config::load()?;
+            if options.prompt.is_none() {
+                config::command_guide_if_first()?;
+            }
             let cwd = std::env::current_dir()?;
             let last = || session::list(&cwd).into_iter().next().map(|s| s.path);
             let resume = match (&options.resume, options.continue_last) {

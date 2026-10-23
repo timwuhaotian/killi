@@ -110,7 +110,9 @@ Rust 1.94 or later.
 
 ### Models
 
-killi reads `~/.killi/config.toml`. Run without one, `killi` offers to make it: by importing
+killi reads `~/.killi/config.toml`. On the first interactive launch, a short guide offers
+to add another start command beside the binary (such as `dw` -> `killi`); press Enter to
+keep starting it as `killi`. Run without a config, `killi` offers to make it: by importing
 Kimi Code's, or from a starting config to edit. To do that yourself: if you use Kimi Code, copy
 its providers, models and MCP servers:
 

@@ -2039,7 +2039,7 @@ impl App {
                 rows.push(fit(&format!("{spin} {DIM}working{RESET} {BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}", clock(started.elapsed())), width));
             }
             for queued in &self.queued {
-                rows.push(fit(&format!("{FIN}❯{RESET} {DIM}{} (sent at the next step){RESET}", queued.replace('\n', " ")), width));
+                rows.push(fit(&queued_row(queued), width));
             }
         }
         if self.todos.iter().any(|t| t.status != "completed") {
@@ -2831,6 +2831,12 @@ struct Command {
     about: &'static str,
 }
 
+/// A message queued while the agent works, saying Ctrl+S can send it now instead of
+/// waiting for the next step.
+fn queued_row(queued: &str) -> String {
+    format!("{FIN}❯{RESET} {DIM}{} (sent at the next step · Ctrl+S sends it now){RESET}", queued.replace('\n', " "))
+}
+
 /// What a submitted prompt is: a command when it starts with `/`, else a message to the model.
 /// The images pasted into it go along either way, since a skill's request can hold one.
 /// The queued messages as the one prompt that starts the next turn, blank-line separated.
@@ -3219,6 +3225,11 @@ mod tests {
         assert!(placeholder(true, true, false).unwrap().contains("Ctrl+S"));
         assert_eq!(placeholder(false, false, false), None);
         assert_eq!(placeholder(true, false, true), None);
+    }
+
+    #[test]
+    fn a_queued_message_says_ctrl_s_sends_it_now() {
+        assert_eq!(unstyled(&queued_row("fix\nthis")), "❯ fix this (sent at the next step · Ctrl+S sends it now)");
     }
 
     #[test]

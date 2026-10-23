@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.36 — 2026-10-23
+
+- **First-launch command guide.** The first interactive start asks for another command to
+  start killi with (such as `dw`), creates it as a symlink beside the binary, and remembers
+  the choice; pressing Enter keeps `killi`. Existing commands are never overwritten.
+- **Queued messages name their shortcut.** A message queued while the agent works now
+  reads "(sent at the next step · Ctrl+S sends it now)", so the way to send it at once is
+  there on the row instead of only in the help.
+
 ## 0.2.35 — 2026-10-23
 
 - **Memory and waits, from an audit.** The session log is written a line at a time, not a
