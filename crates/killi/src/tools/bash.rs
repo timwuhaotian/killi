@@ -2,6 +2,8 @@
 //! timeout keeps going in the background instead of being killed, and so does what a finished
 //! command left running in its process group, such as `nohup server &`. A `Process` kills its
 //! group when dropped, so an interrupted turn or a closed session leaves nothing behind.
+//! A call that waits stops waiting when the user sends a message, so a long wait never keeps
+//! the model from reading it.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -22,6 +24,8 @@ const MAX_TIMEOUT: u64 = 300;
 /// A command that starts with a `sleep` this many seconds long is refused: it waits the whole
 /// time however soon the job it waits for ends.
 const MAX_SLEEP: f64 = 30.0;
+/// How often a waiting call asks whether the user has sent a message.
+const WAKE_POLL: Duration = Duration::from_millis(100);
 /// Output beyond this is dropped from memory, oldest first; the model only ever sees the tail.
 const MAX_CAPTURE: usize = 16 * 1024 * 1024;
 /// What a finished task keeps of output the model hasn't read; what it has read is let go.
@@ -33,6 +37,19 @@ const DRAIN: Duration = Duration::from_millis(20);
 const NO_OUTPUT: &str = "(no output)";
 /// The same for a foreground command that exited 0, so an empty result isn't mistaken for a failure to run.
 const NO_OUTPUT_OK: &str = "(no output, exit code 0)";
+
+/// Whether the user has typed a message the model hasn't read yet, which ends a wait.
+pub type Wake<'a> = &'a dyn Fn() -> bool;
+
+/// Resolves once `wake` says so; checked after each poll, so a call that ends sooner wins.
+async fn until(wake: Wake<'_>) {
+    loop {
+        tokio::time::sleep(WAKE_POLL).await;
+        if wake() {
+            return;
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Tasks {
@@ -314,7 +331,7 @@ fn run_dir(ctx: &Context, cwd: Option<&str>) -> Result<PathBuf, String> {
     if dir.is_dir() { Ok(dir) } else { Err(format!("cwd {cwd} is not a directory.")) }
 }
 
-pub async fn bash(ctx: &Context, args: &Value) -> Output {
+pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
     let Some(command) = args.get("command").and_then(Value::as_str) else {
         return Output::error("bash needs `command`.");
     };
@@ -340,16 +357,24 @@ pub async fn bash(ctx: &Context, args: &Value) -> Output {
     }
 
     let _waiting = waiting(ctx, format!("bash `{}`", first_line(command)), process.output.clone());
-    let exit = match process.wait(Duration::from_secs(timeout)).await {
-        Some(exit) => exit,
-        None => {
-            let (text, shown) = take_output(ctx, &process, 0);
-            let id = ctx.tasks.borrow_mut().add(command, process, shown);
-            return Output::ok(format!(
-                "{text}\n[Still running after {timeout}s, so it moved to background task {id}. Use task_output to wait for it or read more, task_stop to end it.]"
-            ))
-            .brief(format!("still running → task {id}"));
-        }
+    let started = Instant::now();
+    let exit = tokio::select! {
+        biased;
+        exit = process.wait(Duration::from_secs(timeout)) => exit,
+        () = until(wake) => None,
+    };
+    let Some(exit) = exit else {
+        let (text, shown) = take_output(ctx, &process, 0);
+        let id = ctx.tasks.borrow_mut().add(command, process, shown);
+        let why = if wake() {
+            format!(
+                "A message from the user is waiting, so it moved to background task {id} after {}s. Read it first; task_output with `wait` picks the wait up again, task_stop ends it.",
+                started.elapsed().as_secs()
+            )
+        } else {
+            format!("Still running after {timeout}s, so it moved to background task {id}. Use task_output to wait for it or read more, task_stop to end it.")
+        };
+        return Output::ok(format!("{text}\n[{why}]")).brief(format!("still running → task {id}"));
     };
     let (mut text, shown) = take_output(ctx, &process, 0);
     let lines = match text.lines().count() {
@@ -449,7 +474,7 @@ impl Tasks {
     }
 }
 
-pub async fn task_output(ctx: &Context, args: &Value) -> Output {
+pub async fn task_output(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
     let Some(id) = args.get("id").and_then(Value::as_u64).map(|id| id as u32) else {
         return Output::error("task_output needs `id`.");
     };
@@ -462,9 +487,14 @@ pub async fn task_output(ctx: &Context, args: &Value) -> Output {
         let what = format!("task_output on task {id} `{}`", first_line(&task.command));
         (task.process.exit.clone(), task.started, task.process.pgid, what, task.process.output.clone())
     };
+    let mut interrupted = false;
     if wait > 0 {
         let _waiting = waiting(ctx, what, output);
-        wait_for_group(pgid, exit_rx, Duration::from_secs(wait)).await;
+        tokio::select! {
+            biased;
+            () = wait_for_group(pgid, exit_rx, Duration::from_secs(wait)) => {}
+            () = until(wake) => interrupted = true,
+        }
     }
     let mut tasks = ctx.tasks.borrow_mut();
     let task = tasks.list.get_mut(&id).expect("task exists");
@@ -483,7 +513,10 @@ pub async fn task_output(ctx: &Context, args: &Value) -> Output {
         }
         None => format!("Task {id} is still running ({}s).", started.elapsed().as_secs()),
     };
-    let body = if text == NO_OUTPUT { "(no new output)".to_string() } else { text };
+    let mut body = if text == NO_OUTPUT { "(no new output)".to_string() } else { text };
+    if interrupted && task.process.exit().is_none() {
+        body.push_str("\n[Stopped waiting: a message from the user is waiting. Read it first; task_output with `wait` picks the wait up again.]");
+    }
     Output::ok(format!("{status}\n{body}")).brief(status)
 }
 
@@ -557,9 +590,13 @@ mod tests {
         Context::new(dir.clone(), dir.join(format!("killi-spill-{}", std::process::id())))
     }
 
+    fn never() -> bool {
+        false
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn merges_stderr_and_reports_exit_code() {
-        let out = bash(&ctx(), &json!({"command": "echo out; echo err >&2; exit 3"})).await;
+        let out = bash(&ctx(), &json!({"command": "echo out; echo err >&2; exit 3"}), &never).await;
         assert!(out.is_error);
         assert_eq!(out.text, "out\nerr\n[Command exited with code 3]");
     }
@@ -571,10 +608,10 @@ mod tests {
         fs::create_dir_all(&sub).unwrap();
         let name = sub.file_name().unwrap().to_str().unwrap();
         for cwd in [sub.to_str().unwrap(), name] {
-            let out = bash(&ctx, &json!({"command": "pwd", "cwd": cwd})).await;
+            let out = bash(&ctx, &json!({"command": "pwd", "cwd": cwd}), &never).await;
             assert_eq!(out.text.trim(), sub.canonicalize().unwrap().to_str().unwrap());
         }
-        let out = bash(&ctx, &json!({"command": "pwd", "cwd": "no-such-dir"})).await;
+        let out = bash(&ctx, &json!({"command": "pwd", "cwd": "no-such-dir"}), &never).await;
         assert!(out.is_error);
         assert_eq!(out.text, "cwd no-such-dir is not a directory.");
         fs::remove_dir_all(sub).unwrap();
@@ -582,7 +619,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn a_silent_success_says_so_with_its_exit_code() {
-        let out = bash(&ctx(), &json!({"command": "true"})).await;
+        let out = bash(&ctx(), &json!({"command": "true"}), &never).await;
         assert!(!out.is_error);
         assert_eq!(out.text, "(no output, exit code 0)");
         assert_eq!(out.brief, "no output");
@@ -591,17 +628,58 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn a_slow_command_moves_to_the_background() {
         let ctx = ctx();
-        let out = bash(&ctx, &json!({"command": "echo start; sleep 2; echo done", "timeout": 1})).await;
+        let out = bash(&ctx, &json!({"command": "echo start; sleep 2; echo done", "timeout": 1}), &never).await;
         assert!(out.text.starts_with("start\n[Still running after 1s, so it moved to background task 1."));
-        let out = task_output(&ctx, &json!({"id": 1, "wait": 10})).await;
+        let out = task_output(&ctx, &json!({"id": 1, "wait": 10}), &never).await;
         assert_eq!(out.text, "Task 1 exited with code 0.\ndone");
         assert!(ctx.tasks.borrow_mut().newly_finished().is_empty());
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn a_message_from_the_user_ends_the_wait_and_keeps_the_command_running() {
+        let ctx = ctx();
+        let sent = std::cell::Cell::new(false);
+        let wake = || sent.get();
+        let started = Instant::now();
+        let args = json!({"command": "echo start; sleep 20", "timeout": 60});
+        let (out, ()) = tokio::join!(bash(&ctx, &args, &wake), async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            sent.set(true);
+        });
+        assert!(started.elapsed() < Duration::from_secs(5), "it waited for the command");
+        assert!(out.text.starts_with("start\n[A message from the user is waiting, so it moved to background task 1 after 0s."), "{}", out.text);
+        assert!(ctx.tasks.borrow().list[&1].process.running());
+        assert_eq!(task_stop(&ctx, &json!({"id": 1})).text, "Stopped task 1.");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_command_that_ends_first_is_not_moved_when_a_message_waits() {
+        let out = bash(&ctx(), &json!({"command": "echo quick"}), &|| true).await;
+        assert_eq!(out.text, "quick");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_message_from_the_user_ends_a_task_output_wait() {
+        let ctx = ctx();
+        bash(&ctx, &json!({"command": "sleep 20", "run_in_background": true}), &never).await;
+        let sent = std::cell::Cell::new(false);
+        let wake = || sent.get();
+        let started = Instant::now();
+        let args = json!({"id": 1, "wait": 60});
+        let (out, ()) = tokio::join!(task_output(&ctx, &args, &wake), async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            sent.set(true);
+        });
+        assert!(started.elapsed() < Duration::from_secs(5), "it waited for the task");
+        assert!(out.text.starts_with("Task 1 is still running"), "{}", out.text);
+        assert!(out.text.contains("[Stopped waiting: a message from the user is waiting."), "{}", out.text);
+        task_stop(&ctx, &json!({"id": 1}));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn background_tasks_report_when_they_finish() {
         let ctx = ctx();
-        let out = bash(&ctx, &json!({"command": "exit 4", "run_in_background": true})).await;
+        let out = bash(&ctx, &json!({"command": "exit 4", "run_in_background": true}), &never).await;
         assert_eq!(out.text, "Started background task 1. Read its output with task_output.");
         let mut exit = ctx.tasks.borrow().list[&1].process.exit.clone();
         exit.wait_for(Option::is_some).await.unwrap();
@@ -611,9 +689,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn task_stop_kills_the_process_group() {
         let ctx = ctx();
-        bash(&ctx, &json!({"command": "sleep 30 & sleep 30", "run_in_background": true})).await;
+        bash(&ctx, &json!({"command": "sleep 30 & sleep 30", "run_in_background": true}), &never).await;
         assert_eq!(task_stop(&ctx, &json!({"id": 1})).text, "Stopped task 1.");
-        let out = task_output(&ctx, &json!({"id": 1, "wait": 5})).await;
+        let out = task_output(&ctx, &json!({"id": 1, "wait": 5}), &never).await;
         assert!(out.text.starts_with("Task 1 was killed by a signal."), "{}", out.text);
     }
 
@@ -630,11 +708,11 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn what_a_finished_command_leaves_running_becomes_a_task_raised_once() {
         let ctx = ctx();
-        let out = bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"})).await;
+        let out = bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"}), &never).await;
         assert_eq!(out.text, "(no output, exit code 0)\n[What it started is still running, as background task 1; task_output with `wait` returns when it ends, task_stop ends it.]");
         assert_eq!(out.brief, "no output · left task 1");
         assert!(ctx.tasks.borrow_mut().newly_finished().is_empty());
-        let out = task_output(&ctx, &json!({"id": 1})).await;
+        let out = task_output(&ctx, &json!({"id": 1}), &never).await;
         assert!(out.text.starts_with("Task 1 exited with code 0; what it started is still running ("), "{}", out.text);
         let left = ctx.tasks.borrow_mut().left_running();
         assert_eq!(left.len(), 1);
@@ -648,7 +726,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn a_command_that_leaves_nothing_running_is_not_kept() {
         let ctx = ctx();
-        let out = bash(&ctx, &json!({"command": "sleep 0.1 & wait; echo hi"})).await;
+        let out = bash(&ctx, &json!({"command": "sleep 0.1 & wait; echo hi"}), &never).await;
         assert_eq!(out.text, "hi");
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(ctx.tasks.borrow_mut().left_running().is_empty());
@@ -657,8 +735,8 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn closing_the_session_kills_what_still_runs() {
         let ctx = ctx();
-        bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"})).await;
-        bash(&ctx, &json!({"command": "sleep 30", "run_in_background": true})).await;
+        bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"}), &never).await;
+        bash(&ctx, &json!({"command": "sleep 30", "run_in_background": true}), &never).await;
         let pgids: Vec<u32> = ctx.tasks.borrow().list.values().map(|task| task.process.pgid).collect();
         assert_eq!(ctx.tasks.borrow_mut().stop_all(), vec!["nohup sleep 30 >/dev/null 2>&1 &".to_string(), "sleep 30".to_string()]);
         assert!(until_stopped(&ctx, 1).await && until_stopped(&ctx, 2).await);
@@ -669,9 +747,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn waiting_on_a_task_waits_for_what_it_left_running() {
         let ctx = ctx();
-        bash(&ctx, &json!({"command": "nohup sleep 1 >/dev/null 2>&1 &"})).await;
+        bash(&ctx, &json!({"command": "nohup sleep 1 >/dev/null 2>&1 &"}), &never).await;
         let started = Instant::now();
-        let out = task_output(&ctx, &json!({"id": 1, "wait": 20})).await;
+        let out = task_output(&ctx, &json!({"id": 1, "wait": 20}), &never).await;
         assert!(out.text.starts_with("Task 1 exited with code 0.\n"), "{}", out.text);
         assert!(started.elapsed() >= Duration::from_millis(800), "returned before the job ended");
         assert!(started.elapsed() < Duration::from_secs(10), "waited past the job's end");
@@ -681,8 +759,8 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn waiting_on_a_task_gives_up_at_its_limit() {
         let ctx = ctx();
-        bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"})).await;
-        let out = task_output(&ctx, &json!({"id": 1, "wait": 1})).await;
+        bash(&ctx, &json!({"command": "nohup sleep 30 >/dev/null 2>&1 &"}), &never).await;
+        let out = task_output(&ctx, &json!({"id": 1, "wait": 1}), &never).await;
         assert!(out.text.starts_with("Task 1 exited with code 0; what it started is still running ("), "{}", out.text);
         ctx.tasks.borrow_mut().stop_all();
     }
@@ -699,14 +777,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn a_long_fixed_sleep_does_not_run() {
-        let out = bash(&ctx(), &json!({"command": "sleep 270; tail /tmp/log"})).await;
+        let out = bash(&ctx(), &json!({"command": "sleep 270; tail /tmp/log"}), &never).await;
         assert!(out.is_error);
         assert!(out.text.starts_with("Not run: `sleep 270` waits the whole time"), "{}", out.text);
         assert!(out.text.contains("task_output"), "{}", out.text);
-        let out = bash(&ctx(), &json!({"command": "sleep 0.1; echo ok"})).await;
+        let out = bash(&ctx(), &json!({"command": "sleep 0.1; echo ok"}), &never).await;
         assert_eq!(out.text, "ok");
         let ctx = ctx();
-        let out = bash(&ctx, &json!({"command": "sleep 30", "run_in_background": true})).await;
+        let out = bash(&ctx, &json!({"command": "sleep 30", "run_in_background": true}), &never).await;
         assert!(!out.is_error, "{}", out.text);
         ctx.tasks.borrow_mut().stop_all();
     }
@@ -716,7 +794,7 @@ mod tests {
         let ctx = ctx();
         assert_eq!(ctx.running.borrow().describe(), None);
         let command = json!({"command": "echo one; echo two; sleep 2", "timeout": 10});
-        let (_, seen) = tokio::join!(bash(&ctx, &command), async {
+        let (_, seen) = tokio::join!(bash(&ctx, &command, &never), async {
             tokio::time::sleep(Duration::from_millis(500)).await;
             ctx.running.borrow().describe()
         });
@@ -754,12 +832,12 @@ mod tests {
     async fn a_job_holding_the_pipe_does_not_hold_the_command() {
         let ctx = ctx();
         let started = Instant::now();
-        let out = bash(&ctx, &json!({"command": "echo started; (sleep 1; echo late) &", "timeout": 20})).await;
+        let out = bash(&ctx, &json!({"command": "echo started; (sleep 1; echo late) &", "timeout": 20}), &never).await;
         assert!(started.elapsed() < Duration::from_secs(5), "waited for the job's pipe: {:?}", started.elapsed());
         assert!(out.text.starts_with("started\n[What it started is still running, as background task 1"), "{}", out.text);
         let mut seen = String::new();
         for _ in 0..100 {
-            seen.push_str(&task_output(&ctx, &json!({"id": 1})).await.text);
+            seen.push_str(&task_output(&ctx, &json!({"id": 1}), &never).await.text);
             if seen.contains("late") {
                 return;
             }
@@ -772,9 +850,9 @@ mod tests {
     async fn a_finished_task_keeps_only_what_the_model_has_not_read() {
         let ctx = ctx();
         for _ in 0..2 {
-            bash(&ctx, &json!({"command": "head -c 3000000 /dev/zero | tr '\\0' a", "run_in_background": true})).await;
+            bash(&ctx, &json!({"command": "head -c 3000000 /dev/zero | tr '\\0' a", "run_in_background": true}), &never).await;
         }
-        let out = task_output(&ctx, &json!({"id": 1, "wait": 30})).await;
+        let out = task_output(&ctx, &json!({"id": 1, "wait": 30}), &never).await;
         assert!(out.text.starts_with("Task 1 exited with code 0."), "{}", out.text);
         let mut exit = ctx.tasks.borrow().list[&2].process.exit.clone();
         exit.wait_for(Option::is_some).await.unwrap();
@@ -786,10 +864,10 @@ mod tests {
         };
         assert_eq!(held(1), (0, 3_000_000), "read output is let go");
         assert_eq!(held(2), (FINISHED_KEEP, 3_000_000 - FINISHED_KEEP), "unread output keeps its last megabyte");
-        let out = task_output(&ctx, &json!({"id": 2})).await;
+        let out = task_output(&ctx, &json!({"id": 2}), &never).await;
         assert!(out.text.contains(&format!("The first {} bytes were not kept.", 3_000_000 - FINISHED_KEEP)), "{}", &out.text[..120]);
         assert_eq!(held(2).0, 0);
-        assert_eq!(task_output(&ctx, &json!({"id": 1})).await.text, "Task 1 exited with code 0.\n(no new output)");
+        assert_eq!(task_output(&ctx, &json!({"id": 1}), &never).await.text, "Task 1 exited with code 0.\n(no new output)");
         let _ = fs::remove_dir_all(&ctx.spill_dir);
     }
 }

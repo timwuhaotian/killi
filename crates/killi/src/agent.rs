@@ -775,7 +775,12 @@ impl Agent {
             {
                 tools::Output::error("Plan mode is on: bash runs only read-only commands (ls, rg, git log, cargo check, …), without redirects. Finish the plan and call exit_plan_mode.")
             }
-            _ => tools::run(&self.ctx, &call.name, args).await,
+            _ => {
+                // Only the top-level agent hears the user; a subagent waits out its own commands.
+                let steer = (self.depth == 0).then(|| self.controls.steer.clone());
+                let wake = move || steer.as_ref().is_some_and(|steer| !steer.borrow().is_empty());
+                tools::run(&self.ctx, &call.name, args, &wake).await
+            }
         }
     }
 
@@ -1530,6 +1535,36 @@ mod tests {
         assert_eq!(agent.controls.steer.borrow().len(), 1, "the message waits for the next request");
         agent.before_request().await.unwrap();
         assert_eq!(agent.messages.last().unwrap(), &json!({"role": "user", "content": "stop"}));
+    }
+
+    /// Runs one `bash` call while a message from the user is typed, for an agent at `depth`.
+    async fn bash_with_a_message(command: &str, depth: u8) -> (String, Duration) {
+        let controls = Controls::default();
+        let steer = controls.steer.clone();
+        let sink: Sink = Rc::new(move |event| {
+            if let Event::ToolStart { .. } = event {
+                steer.borrow_mut().push_back(("are you stuck?".into(), Vec::new()));
+            }
+        });
+        let mut agent = idle_agent("wake", controls, sink);
+        agent.depth = depth;
+        let call = ToolCall { id: "a".into(), name: "bash".into(), arguments: json!({"command": command, "timeout": 60}).to_string() };
+        let started = Instant::now();
+        let output = agent.execute("a", &call, false).await;
+        (output.text, started.elapsed())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_message_typed_during_a_long_command_does_not_wait_for_it() {
+        let (text, took) = bash_with_a_message("sleep 20", 0).await;
+        assert!(took < Duration::from_secs(5), "waited {took:?}");
+        assert!(text.contains("A message from the user is waiting, so it moved to background task 1"), "{text}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_subagent_waits_out_its_command_whatever_the_user_types() {
+        let (text, _) = bash_with_a_message("sleep 1; echo done", 1).await;
+        assert_eq!(text, "done");
     }
 
     #[test]

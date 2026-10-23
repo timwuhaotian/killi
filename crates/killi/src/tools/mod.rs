@@ -82,13 +82,13 @@ impl Output {
 }
 
 /// Runs the tools that need nothing but the working directory; the agent handles the rest.
-pub async fn run(ctx: &Context, name: &str, args: Value) -> Output {
+pub async fn run(ctx: &Context, name: &str, args: Value, wake: bash::Wake<'_>) -> Output {
     match name {
         "read" => files::read(ctx, &args),
         "write" => files::write(ctx, &args),
         "edit" => edit::edit(ctx, &args),
-        "bash" => bash::bash(ctx, &args).await,
-        "task_output" => bash::task_output(ctx, &args).await,
+        "bash" => bash::bash(ctx, &args, wake).await,
+        "task_output" => bash::task_output(ctx, &args, wake).await,
         "task_stop" => bash::task_stop(ctx, &args),
         "grep" => search::grep(ctx, args).await,
         "glob" => search::glob(ctx, args).await,

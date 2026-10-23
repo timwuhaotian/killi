@@ -644,6 +644,8 @@ struct App {
     picker: Option<Picker>,
     /// Input to act on before reading keys again, such as `/model <alias>`.
     next_input: Option<Input>,
+    /// An effort picked while the agent works; it applies once the turn ends.
+    effort_later: Option<String>,
     /// What the slash menu searches, and the choices it offers after /model and /effort.
     entries: Vec<Entry>,
     model_choices: Vec<Item>,
@@ -740,6 +742,7 @@ impl App {
             asking: None,
             picker: None,
             next_input: None,
+            effort_later: None,
             entries: Vec::new(),
             model_choices: Vec::new(),
             effort_choices: Vec::new(),
@@ -874,6 +877,9 @@ impl App {
     // ---------- input ----------
 
     async fn read_input(&mut self, keys: &mut EventStream) -> Result<Option<Input>> {
+        if let Some(effort) = self.effort_later.take() {
+            return Ok(Some(Input::Effort(effort)));
+        }
         if let Some(input) = self.next_input.take() {
             self.recap = None;
             return Ok(Some(input));
@@ -1060,7 +1066,7 @@ impl App {
     }
 
     /// The slash menu for the prompt as typed. While the agent works it offers only the commands
-    /// that run then, typed at the start of the prompt.
+    /// that run then, typed at the start of the prompt, and /effort's choices.
     fn suggestions(&self) -> Option<Suggestions> {
         if self.picker.is_some() || self.asking.is_some() || self.editor.browsing() {
             return None;
@@ -1070,7 +1076,11 @@ impl App {
         }
         if self.busy.is_some() {
             let entries: Vec<Entry> = self.entries.iter().filter(|e| BUSY_COMMANDS.contains(&e.name.as_str())).cloned().collect();
-            return menu::suggest(self.editor.before_cursor(), &entries, |_| Vec::new()).filter(|menu| menu.command && menu.start == 0);
+            return menu::suggest(self.editor.before_cursor(), &entries, |command| match command {
+                "effort" | "thinking" => self.effort_choices.clone(),
+                _ => Vec::new(),
+            })
+            .filter(|menu| !menu.command || menu.start == 0);
         }
         menu::suggest(self.editor.before_cursor(), &self.entries, |command| match command {
             "model" => self.model_choices.clone(),
@@ -1208,11 +1218,28 @@ impl App {
     /// A command sent while the agent works: one in `BUSY_COMMANDS` runs now, the others wait
     /// for the turn to end. False when it didn't run.
     fn command_while_busy(&mut self, name: &str, arg: &str) -> bool {
+        if matches!(name, "effort" | "thinking") {
+            self.effort_after_turn(arg);
+            return true;
+        }
         let ran = self.run_local(name, arg);
         if !ran {
             self.notice(&format!("/{name} runs when the agent is idle: wait for this turn to finish, or press Esc. / lists what runs now."));
         }
         ran
+    }
+
+    /// /effort while the agent works: the running turn holds the agent, so the pick is kept and
+    /// `read_input` applies it as soon as the turn ends.
+    fn effort_after_turn(&mut self, arg: &str) {
+        let efforts: Vec<&str> = self.effort_choices.iter().map(|item| item.value.as_str()).collect();
+        match effort_named(&self.status.model, &efforts, arg) {
+            Ok(effort) => {
+                self.notice(&format!("Thinking effort {effort} starts when this turn ends."));
+                self.effort_later = Some(effort);
+            }
+            Err(reason) => self.error(&reason),
+        }
     }
 
     fn on_key_asking(&mut self, key: KeyEvent) -> bool {
@@ -2938,8 +2965,21 @@ fn runs_at_once(menu: &Suggestions, index: usize) -> bool {
     menu.command && menu.start == 0 && is_command(name) && !needs_argument
 }
 
-/// The commands that also run while the agent works: they need nothing the running turn holds.
-const BUSY_COMMANDS: &[&str] = &["btw", "plan", "swarm", "later", "help"];
+/// The commands that also work while the agent works: they need nothing the running turn holds,
+/// except /effort, which waits for the turn to end (see `App::effort_after_turn`).
+const BUSY_COMMANDS: &[&str] = &["btw", "plan", "swarm", "later", "help", "effort"];
+
+/// The effort `arg` names among those `model` takes, or what to tell the user.
+fn effort_named(model: &str, efforts: &[&str], arg: &str) -> Result<String, String> {
+    let effort = arg.trim().to_lowercase();
+    if efforts.contains(&effort.as_str()) {
+        Ok(effort)
+    } else if effort.is_empty() {
+        Err(format!("Say which effort: /effort {}.", efforts.join(" | ")))
+    } else {
+        Err(format!("{model} has no effort “{effort}”; choose one of {}.", efforts.join(", ")))
+    }
+}
 
 /// Says which background commands were stopped as a session ended, if any.
 pub fn stopped_note(stopped: &[String]) -> Option<String> {
@@ -3198,6 +3238,14 @@ mod tests {
     fn a_command_that_needs_an_argument_waits_for_it() {
         let menu = Suggestions { items: vec![Item { value: "btw".into(), description: String::new() }], start: 0, command: true };
         assert!(!runs_at_once(&menu, 0));
+    }
+
+    #[test]
+    fn an_effort_is_named_among_the_ones_the_model_takes() {
+        let efforts = ["off", "high"];
+        assert_eq!(effort_named("m/x", &efforts, " High "), Ok("high".to_string()));
+        assert_eq!(effort_named("m/x", &efforts, "turbo"), Err("m/x has no effort “turbo”; choose one of off, high.".to_string()));
+        assert_eq!(effort_named("m/x", &efforts, ""), Err("Say which effort: /effort off | high.".to_string()));
     }
 
     #[test]
