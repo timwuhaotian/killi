@@ -35,7 +35,7 @@ use crossterm::{execute, queue};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
-use crate::agent::{Agent, Controls, Event, Image, Question, Sink, Stop, Todo};
+use crate::agent::{Agent, Controls, Event, Image, Question, Sink, Steered, Stop, Todo};
 use crate::config::{Config, Thinking};
 use crate::setup::{Overview, Setup};
 use crate::llm::{Client, Usage};
@@ -634,6 +634,8 @@ struct App {
     spinner: usize,
     exit_armed: Option<Instant>,
     queued: Vec<String>,
+    /// Ctrl+S ended the running turn to send the queued messages at once.
+    send_now: bool,
     /// A /btw question for the running turn to send.
     aside_asked: Option<String>,
     /// The running turn called `later`, so a reply that leaves something for later noted it.
@@ -726,6 +728,7 @@ impl App {
             spinner: 0,
             exit_armed: None,
             queued: Vec::new(),
+            send_now: false,
             aside_asked: None,
             later_noted: false,
             aside: None,
@@ -839,6 +842,12 @@ impl App {
     async fn read_input(&mut self, keys: &mut EventStream) -> Result<Option<Input>> {
         if let Some(input) = self.next_input.take() {
             return Ok(Some(input));
+        }
+        if std::mem::take(&mut self.send_now) {
+            let steered: Vec<_> = self.controls.steer.borrow_mut().drain(..).collect();
+            if let Some((text, images)) = joined(steered) {
+                return Ok(Some(Input::Prompt(text, images)));
+            }
         }
         loop {
             let Some(event) = keys.next().await else { return Ok(None) };
@@ -1112,29 +1121,38 @@ impl App {
         match key.code {
             KeyCode::Esc => return true,
             KeyCode::Char('c') if ctrl => return true,
-            KeyCode::Enter if !newline_key(&key) => {
-                if let Some(question) = aside_question(self.editor.text()) {
-                    self.aside_asked = Some(question);
-                    self.editor.take();
-                    return false;
-                }
-                if let Some(command) = self.editor.text().trim().strip_prefix('/') {
-                    let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
-                    let (name, arg) = (name.to_string(), arg.trim().to_string());
-                    if self.command_while_busy(&name, &arg) {
-                        self.editor.take();
-                    }
-                    return false;
-                }
-                let (text, images) = self.editor.take_with_images();
-                if !text.trim().is_empty() {
-                    self.controls.steer.borrow_mut().push_back((text.clone(), images));
-                    self.queued.push(text);
-                }
+            KeyCode::Enter if !newline_key(&key) => self.send_busy(),
+            KeyCode::Char('s') if ctrl => {
+                self.send_busy();
+                self.send_now = !self.controls.steer.borrow().is_empty();
+                return self.send_now;
             }
             _ => self.edit_key(key),
         }
         false
+    }
+
+    /// Enter while the agent works: a /btw question or a command runs now, anything else
+    /// is queued for the agent's next step.
+    fn send_busy(&mut self) {
+        if let Some(question) = aside_question(self.editor.text()) {
+            self.aside_asked = Some(question);
+            self.editor.take();
+            return;
+        }
+        if let Some(command) = self.editor.text().trim().strip_prefix('/') {
+            let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
+            let (name, arg) = (name.to_string(), arg.trim().to_string());
+            if self.command_while_busy(&name, &arg) {
+                self.editor.take();
+            }
+            return;
+        }
+        let (text, images) = self.editor.take_with_images();
+        if !text.trim().is_empty() {
+            self.controls.steer.borrow_mut().push_back((text.clone(), images));
+            self.queued.push(text);
+        }
     }
 
     /// A command sent while the agent works: one in `BUSY_COMMANDS` runs now, the others wait
@@ -1349,8 +1367,12 @@ impl App {
             Ended::Interrupted => {
                 self.last_end = Some(LastEnd::Interrupted);
                 self.begin(Kind::Note);
-                self.commit(format!("{WARN}Interrupted.{RESET} {DIM}Tell killi what to do instead.{RESET}"));
-                self.controls.steer.borrow_mut().clear();
+                if self.send_now {
+                    self.commit(format!("{WARN}Interrupted{RESET} {DIM}to send your message now.{RESET}"));
+                } else {
+                    self.commit(format!("{WARN}Interrupted.{RESET} {DIM}Tell killi what to do instead.{RESET}"));
+                    self.controls.steer.borrow_mut().clear();
+                }
             }
             Ended::Done(Err(e)) => {
                 self.last_end = Some(LastEnd::Interrupted);
@@ -1384,7 +1406,7 @@ impl App {
             ));
         }
         self.last_kind = Kind::None;
-        if elapsed >= self.notify_after {
+        if elapsed >= self.notify_after && !self.send_now {
             notify(match self.last_end {
                 Some(LastEnd::Done) => "Done",
                 _ => "Stopped",
@@ -2351,7 +2373,7 @@ fn placeholder(empty: bool, busy: bool, waits: bool) -> Option<&'static str> {
     if !empty || waits {
         return None;
     }
-    Some(if busy { "a message for the next step · /btw asks on the side" } else { "ask, or / for commands and skills" })
+    Some(if busy { "a message for the next step · Ctrl+S sends it now · /btw asks on the side" } else { "ask, or / for commands and skills" })
 }
 
 /// A full-width line around the prompt, in lagoon with `label` on it in plan mode.
@@ -2800,6 +2822,15 @@ struct Command {
 
 /// What a submitted prompt is: a command when it starts with `/`, else a message to the model.
 /// The images pasted into it go along either way, since a skill's request can hold one.
+/// The queued messages as the one prompt that starts the next turn, blank-line separated.
+fn joined(steered: Vec<Steered>) -> Option<(String, Vec<Image>)> {
+    if steered.is_empty() {
+        return None;
+    }
+    let text = steered.iter().map(|(text, _)| text.trim_end()).collect::<Vec<_>>().join("\n\n");
+    Some((text, steered.into_iter().flat_map(|(_, images)| images).collect()))
+}
+
 fn submission(text: String, images: Vec<Image>) -> Option<Input> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -2860,6 +2891,7 @@ const KEYS: &[(&str, &str)] = &[
     ("Enter", "send; while the agent works, sends your message at its next step"),
     ("Shift+Enter", "new line; also Ctrl+J, or \\ then Enter"),
     ("Esc", "interrupt the agent"),
+    ("Ctrl+S", "while the agent works, interrupt it and send your message now"),
     ("Shift+Tab", "plan mode"),
     ("Ctrl+O", "show the last tool output or thought in full"),
     ("Ctrl+V", "paste an image (Cmd+V too in Kil)"),
@@ -3162,8 +3194,18 @@ mod tests {
     fn the_empty_prompt_hints_at_commands_and_steering_unless_something_else_waits() {
         assert_eq!(placeholder(true, false, false), Some("ask, or / for commands and skills"));
         assert!(placeholder(true, true, false).unwrap().contains("/btw"));
+        assert!(placeholder(true, true, false).unwrap().contains("Ctrl+S"));
         assert_eq!(placeholder(false, false, false), None);
         assert_eq!(placeholder(true, false, true), None);
+    }
+
+    #[test]
+    fn queued_messages_sent_now_become_one_prompt_with_their_images() {
+        let image = |n: u32| Image { label: format!("[Image #{n}]"), url: format!("data:image/png;base64,{n}") };
+        assert!(joined(Vec::new()).is_none());
+        let (text, images) = joined(vec![("first [Image #1] ".into(), vec![image(1)]), ("second".into(), Vec::new())]).unwrap();
+        assert_eq!(text, "first [Image #1]\n\nsecond");
+        assert_eq!(images, vec![image(1)]);
     }
 
     #[test]

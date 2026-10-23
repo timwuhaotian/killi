@@ -162,6 +162,7 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | Enter | send; while the agent works, your message reaches it at its next step |
 | Shift+Enter, Ctrl+J | new line |
 | Esc | interrupt |
+| Ctrl+S | while the agent works, interrupt it and send your message now |
 | Shift+Tab | plan mode |
 | Ctrl+V | paste an image from the clipboard as `[Image #1]` (Cmd+V too in [Kil](https://github.com/timwuhaotian/kil)) |
 | Ctrl+O | the last tool output or thought in full |

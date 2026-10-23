@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "killi"
-version = "0.2.31"
+version = "0.2.32"
 dependencies = [
  "anyhow",
  "crossterm",

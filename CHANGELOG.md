@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.32 — 2026-10-23
+
+- **Ctrl+S sends your message now.** While the agent works, Enter queues a message for its
+  next step; Ctrl+S ends the step like Esc, answers the tool calls it cut, and starts the next
+  turn at once with the queued messages and whatever is typed, as one prompt. With nothing
+  queued or typed it does nothing.
+
 ## 0.2.31 — 2026-10-23
 
 - **`killi update` shows what it is doing.** On a terminal it draws a live row while it checks
