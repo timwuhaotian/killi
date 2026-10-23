@@ -100,6 +100,11 @@ pub async fn run(ctx: &Context, name: &str, args: Value, wake: bash::Wake<'_>) -
 
 /// One line for the terminal: what the call touches, with paths relative to `cwd` and a
 /// leading `cd <cwd> &&` left out.
+/// `n` and `noun`, the noun made plural unless `n` is 1: "1 file", "3 files".
+pub fn count(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
 pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
     let field = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or_default();
     let cwd = cwd.display().to_string();
@@ -122,7 +127,7 @@ pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
         "fetch_url" => field("url").to_string(),
         "web_search" => field("query").to_string(),
         "agent" => field("description").to_string(),
-        "agent_swarm" => format!("{} ({} items)", field("description"), args["items"].as_array().map_or(0, Vec::len)),
+        "agent_swarm" => format!("{} ({})", field("description"), count(args["items"].as_array().map_or(0, Vec::len), "item")),
         "skill" => field("name").to_string() + field("query"),
         "mcp" => format!("{} {}", field("server"), field("tool")),
         "ask_user_question" => field("question").to_string(),

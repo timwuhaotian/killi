@@ -231,7 +231,8 @@ impl Editor {
     }
 
     /// The text as rows no wider than `width` after `prompt`, and the cursor's row and column.
-    /// Words `/name` that `known` accepts are drawn in lagoon, like other commands.
+    /// Rows break after a space where they can, so words stay whole. Words `/name` that `known`
+    /// accepts are drawn in lagoon, like other commands.
     pub fn render(&self, prompt: &str, width: usize, known: &dyn Fn(&str) -> bool) -> (Vec<String>, usize, usize) {
         let prompt_width = super::text::width(prompt);
         let room = width.saturating_sub(prompt_width).max(1);
@@ -241,40 +242,37 @@ impl Editor {
         let mut offset = 0;
         for (n, line) in self.text.split('\n').enumerate() {
             let lead = if n == 0 { prompt.to_string() } else { " ".repeat(prompt_width) };
-            let mut row = String::new();
-            let mut row_width = 0;
-            let mut first = true;
-            let mut lit = false;
-            for (i, c) in line.char_indices() {
-                let w = c.width().unwrap_or(0);
-                if row_width + w > room {
-                    if lit {
-                        row.push_str(RESET);
-                        lit = false;
+            let chars: Vec<(usize, char, usize)> = line.char_indices().map(|(i, c)| (i, c, c.width().unwrap_or(0))).collect();
+            let bounds: Vec<usize> = std::iter::once(0).chain(row_starts(&chars, room)).chain([chars.len()]).collect();
+            for (r, span) in bounds.windows(2).enumerate() {
+                let mut row = String::new();
+                let mut row_width = 0;
+                let mut lit = false;
+                for &(i, c, w) in &chars[span[0]..span[1]] {
+                    // A space that would pass the edge is not drawn: the row ends there.
+                    let hanging = c == ' ' && row_width + w > room;
+                    if offset + i == self.cursor {
+                        cursor = if hanging { (rows.len() + 1, prompt_width) } else { (rows.len(), prompt_width + row_width) };
                     }
-                    rows.push(format!("{}{row}", if first { lead.clone() } else { " ".repeat(prompt_width) }));
-                    row.clear();
-                    row_width = 0;
-                    first = false;
+                    if hanging {
+                        continue;
+                    }
+                    let on = marked.iter().any(|&(s, e)| (s..e).contains(&(offset + i)));
+                    if on != lit {
+                        row.push_str(&if on { LAGOON.to_string() } else { RESET.to_string() });
+                        lit = on;
+                    }
+                    row.push(c);
+                    row_width += w;
                 }
-                if offset + i == self.cursor {
-                    cursor = (rows.len(), prompt_width + row_width);
+                if lit {
+                    row.push_str(RESET);
                 }
-                let on = marked.iter().any(|&(s, e)| (s..e).contains(&(offset + i)));
-                if on != lit {
-                    row.push_str(&if on { LAGOON.to_string() } else { RESET.to_string() });
-                    lit = on;
+                if span[1] == chars.len() && offset + line.len() == self.cursor {
+                    cursor = if row_width >= room { (rows.len() + 1, prompt_width) } else { (rows.len(), prompt_width + row_width) };
                 }
-                row.push(c);
-                row_width += w;
+                rows.push(format!("{}{row}", if r == 0 { lead.clone() } else { " ".repeat(prompt_width) }));
             }
-            if lit {
-                row.push_str(RESET);
-            }
-            if offset + line.len() == self.cursor {
-                cursor = if row_width >= room { (rows.len() + 1, prompt_width) } else { (rows.len(), prompt_width + row_width) };
-            }
-            rows.push(format!("{}{row}", if first { lead } else { " ".repeat(prompt_width) }));
             offset += line.len() + 1;
         }
         if cursor.0 >= rows.len() {
@@ -282,6 +280,37 @@ impl Editor {
         }
         (rows, cursor.0, cursor.1)
     }
+}
+
+/// Where each row of a line after the first begins, as indexes into `chars` (byte offset, char,
+/// width): at the start of the word that would pass `room` columns, or at the character itself
+/// when the row is a single word. Spaces never start a row; one that doesn't fit hangs.
+fn row_starts(chars: &[(usize, char, usize)], room: usize) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let (mut row_start, mut word_start, mut width) = (0, 0, 0);
+    for (k, &(_, c, w)) in chars.iter().enumerate() {
+        if c == ' ' {
+            if width + w <= room {
+                width += w;
+            }
+            word_start = k + 1;
+            continue;
+        }
+        if width + w > room {
+            let at = if word_start > row_start { word_start } else { k };
+            starts.push(at);
+            row_start = at;
+            width = chars[at..k].iter().map(|&(.., w)| w).sum();
+            if width + w > room {
+                starts.push(k);
+                row_start = k;
+                width = 0;
+            }
+            word_start = row_start;
+        }
+        width += w;
+    }
+    starts
 }
 
 #[cfg(test)]
@@ -345,6 +374,30 @@ mod tests {
         e.home();
         assert_eq!(e.render("› ", 6, &|_| false).1, 2);
         assert_eq!(e.render("› ", 6, &|_| false).2, 2);
+    }
+
+    #[test]
+    fn render_breaks_rows_between_words() {
+        let mut e = Editor::default();
+        e.insert("hello there world");
+        let (rows, row, col) = e.render("› ", 12, &|_| false);
+        assert_eq!(rows, vec!["› hello ", "  there ", "  world"]);
+        assert_eq!((row, col), (2, 7));
+        e.home();
+        assert_eq!((e.render("› ", 12, &|_| false).1, e.render("› ", 12, &|_| false).2), (0, 2));
+        for _ in 0..6 {
+            e.right();
+        }
+        assert_eq!((e.render("› ", 12, &|_| false).1, e.render("› ", 12, &|_| false).2), (1, 2), "the cursor on a word that moved down is on its row");
+        let mut e = Editor::default();
+        e.insert("a extraordinarily b");
+        let (rows, ..) = e.render("", 8, &|_| false);
+        assert_eq!(rows, vec!["a ", "extraord", "inarily ", "b"], "a word longer than a row is still split");
+        let mut e = Editor::default();
+        e.insert("abcdefgh ij");
+        let (rows, row, col) = e.render("", 8, &|_| false);
+        assert_eq!(rows, vec!["abcdefgh", "ij"], "a space past the edge hangs instead of starting a row");
+        assert_eq!((row, col), (1, 2));
     }
 
     #[test]

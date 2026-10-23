@@ -5,6 +5,17 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.41 — 2026-10-23
+
+- **The prompt wraps at spaces.** A long message broke in the middle of a word; now rows
+  break between words, and only a word longer than a row is split.
+- **`/help` wraps under its column.** A long description went back to the left edge; it now
+  hangs under the description column.
+- **Singular counts.** "1 prompt", "1 request", "1 tool call", "1 line", "1 file" instead of
+  "1 prompts" and "file(s)".
+- **A long folder in the banner is cut at a folder boundary** (`…/code/killi`), not
+  mid-name.
+
 ## 0.2.40 — 2026-10-23
 
 - **A message ends a wait.** A message typed while `bash` or `task_output` with `wait` was

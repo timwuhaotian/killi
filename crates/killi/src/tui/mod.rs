@@ -392,7 +392,7 @@ async fn handle_command(
         "undo" => match snapshots.undo() {
             Ok(changes) if changes.is_empty() => app.notice("Undone. No files had changed in the last turn."),
             Ok(changes) => {
-                app.notice(&format!("Undone: {} file(s) restored to how they were before the last turn.", changes.len()));
+                app.notice(&format!("Undone: {} restored to how they were before the last turn.", crate::tools::count(changes.len(), "file")));
                 for change in changes.iter().take(20) {
                     app.commit(format!("  {DIM}{change}{RESET}"));
                 }
@@ -807,12 +807,7 @@ impl App {
         self.commit(String::new());
         self.emit(Line::block(move |width| {
             let room = width.saturating_sub(41).max(20);
-            let cwd = if text::width(&cwd) > room {
-                let tail: String = cwd.chars().rev().take(room - 1).collect::<Vec<_>>().into_iter().rev().collect();
-                format!("…{tail}")
-            } else {
-                cwd.clone()
-            };
+            let cwd = shorten_path(&cwd, room);
             let mut side = vec![
                 format!("{BOLD}killi{RESET} {DIM}{}{RESET}", env!("CARGO_PKG_VERSION")),
                 format!("{DIM}a coding agent for the terminal{RESET}"),
@@ -832,7 +827,7 @@ impl App {
         }
         if resumed {
             let prompts = agent.user_prompts();
-            self.commit(format!("{DIM}Resumed a session with {} prompt(s); the last was “{}”.{RESET}", prompts.len(), prompts.last().map_or("", |s| s.lines().next().unwrap_or(""))));
+            self.commit(format!("{DIM}Resumed a session with {} prompt{}; the last was “{}”.{RESET}", prompts.len(), if prompts.len() == 1 { "" } else { "s" }, prompts.last().map_or("", |s| s.lines().next().unwrap_or(""))));
         }
         self.commit(keys_hint());
         self.commit(String::new());
@@ -1761,28 +1756,7 @@ impl App {
 
     fn help(&mut self) {
         self.begin(Kind::Note);
-        self.commit(format!("{BOLD}Commands{RESET} {DIM}type / to search them and your skills{RESET}"));
-        let rows: Vec<(String, String, &str)> = COMMANDS
-            .iter()
-            .map(|c| {
-                let aliases: String = c.aliases.iter().map(|a| format!(", /{a}")).collect();
-                let args = if c.args.is_empty() { String::new() } else { format!(" {}", c.args) };
-                (format!("/{}", c.name), format!("{aliases}{args}"), c.about)
-            })
-            .chain([("/<skill>".to_string(), " [request]".to_string(), "Run a skill")])
-            .collect();
-        let column = rows.iter().map(|(name, rest, _)| text::width(name) + text::width(rest)).max().unwrap_or(0);
-        for (name, rest, about) in rows {
-            let pad = " ".repeat(column - text::width(&name) - text::width(&rest));
-            self.commit(format!("  {LAGOON}{name}{RESET}{DIM}{rest}{RESET}{pad}  {about}"));
-        }
-        self.commit(String::new());
-        self.commit(format!("{BOLD}Keys{RESET}"));
-        let column = KEYS.iter().map(|(key, _)| text::width(key)).max().unwrap_or(0);
-        for (key, about) in KEYS {
-            self.commit(format!("  {BOLD}{key:<column$}{RESET}  {DIM}{about}{RESET}"));
-        }
-        self.commit(String::new());
+        self.emit(Line::block(help_rows));
         self.last_kind = Kind::None;
     }
 
@@ -1870,7 +1844,7 @@ impl App {
             .map(|s| {
                 let age = s.modified.elapsed().map(ago).unwrap_or_default();
                 let prompt = s.first_prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-                (format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)), format!("{} prompts", s.prompts), PickerChoice::Session(s.path))
+                (format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)), format!("{} prompt{}", s.prompts, if s.prompts == 1 { "" } else { "s" }), PickerChoice::Session(s.path))
             })
             .collect();
         self.picker = Some(Picker::new("Resume a session".into(), options, 0));
@@ -1899,7 +1873,7 @@ impl App {
             .map(|keep| (format!("keep the newest {keep}"), format!("removes {} of {others}", others - keep), PickerChoice::Prune(keep)))
             .collect();
         if options.is_empty() {
-            return self.notice(&format!("Only {others} other session(s) on this machine; nothing worth pruning."));
+            return self.notice(&format!("Only {} on this machine; nothing worth pruning.", crate::tools::count(others, "other session")));
         }
         self.picker = Some(Picker::new("Prune sessions · this one stays".into(), options, 0));
     }
@@ -2453,6 +2427,33 @@ fn aside_rows(question: &str, answer: &str, note: &str, width: usize) -> Vec<Str
     rows
 }
 
+/// `/help`: the commands, then the keys, each description wrapped under its own column.
+fn help_rows(width: usize) -> Vec<String> {
+    let mut rows = vec![format!("{BOLD}Commands{RESET} {DIM}type / to search them and your skills{RESET}")];
+    let commands: Vec<(String, String, &str)> = COMMANDS
+        .iter()
+        .map(|c| {
+            let aliases: String = c.aliases.iter().map(|a| format!(", /{a}")).collect();
+            let args = if c.args.is_empty() { String::new() } else { format!(" {}", c.args) };
+            (format!("/{}", c.name), format!("{aliases}{args}"), c.about)
+        })
+        .chain([("/<skill>".to_string(), " [request]".to_string(), "Run a skill")])
+        .collect();
+    let column = commands.iter().map(|(name, rest, _)| text::width(name) + text::width(rest)).max().unwrap_or(0);
+    for (name, rest, about) in commands {
+        let pad = " ".repeat(column - text::width(&name) - text::width(&rest));
+        rows.extend(wrap_words(&format!("  {LAGOON}{name}{RESET}{DIM}{rest}{RESET}{pad}  {about}"), width, column + 4));
+    }
+    rows.push(String::new());
+    rows.push(format!("{BOLD}Keys{RESET}"));
+    let column = KEYS.iter().map(|(key, _)| text::width(key)).max().unwrap_or(0);
+    for (key, about) in KEYS {
+        rows.extend(wrap_words(&format!("  {BOLD}{key:<column$}{RESET}  {DIM}{about}{RESET}"), width, column + 4));
+    }
+    rows.push(String::new());
+    rows
+}
+
 /// A recap as one block: its label, the text wrapped under it, and what asking for it cost.
 fn recap_rows(text: &str, note: &str, width: usize) -> Vec<String> {
     wrap_words(&format!("{BOLD}{LAGOON}recap{RESET} {text} {DIM}· {note}{RESET}"), width, 6)
@@ -2785,6 +2786,19 @@ fn screen_rows(line: &str, width: usize) -> usize {
     line.split('\n').map(|part| text::width(part).max(1).div_ceil(width.max(1))).sum()
 }
 
+/// `path` cut from the left to fit `room` columns, at a folder boundary where there is one:
+/// `…/code/killi`, not `…hnet.com.sg/code/killi`.
+fn shorten_path(path: &str, room: usize) -> String {
+    if text::width(path) <= room {
+        return path.to_string();
+    }
+    let tail: String = path.chars().rev().take(room.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
+    match tail.find('/') {
+        Some(at) => format!("…{}", &tail[at..]),
+        None => format!("…{tail}"),
+    }
+}
+
 /// `path` with the home folder as `~`.
 fn tilde(path: &Path) -> String {
     match path.strip_prefix(crate::config::home()) {
@@ -2808,7 +2822,7 @@ fn handoff(
 ) -> String {
     let usage = &stats.usage;
     let cached = usage.cached * 100 / usage.prompt.max(1);
-    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    let plural = |n: usize, word: &str| crate::tools::count(n, word);
     let mut out = vec![
         format!("killi session {id} · {cwd}"),
         format!("log: {}", log.display()),
@@ -3094,6 +3108,35 @@ pub fn restore_terminal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_folder_is_cut_at_a_folder_boundary() {
+        assert_eq!(shorten_path("~/code/killi", 20), "~/code/killi");
+        assert_eq!(shorten_path("/Users/wuhaotian@sphnet.com.sg/code/killi", 20), "…/code/killi");
+        assert_eq!(shorten_path("/Users/me/averyverylongfoldername", 12), "…gfoldername");
+    }
+
+    #[test]
+    fn help_wraps_descriptions_under_their_column() {
+        let bare = |row: &str| {
+            let mut out = String::new();
+            let mut chars = row.chars();
+            while let Some(c) = chars.next() {
+                if c == '\x1b' {
+                    chars.by_ref().find(char::is_ascii_alphabetic);
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        };
+        let rows: Vec<String> = help_rows(60).iter().map(|r| bare(r)).collect();
+        assert!(rows.iter().all(|r| text::width(r) <= 60));
+        let recap = rows.iter().position(|r| r.starts_with("  /recap")).unwrap();
+        let column = rows[recap].find("Recap").unwrap();
+        assert!(rows[recap + 1].starts_with(&" ".repeat(column)), "{:?}", rows[recap + 1]);
+        assert!(!rows[recap + 1].trim_start().starts_with('/'));
+    }
 
     #[test]
     fn the_handoff_names_the_log_and_sums_the_session_up() {

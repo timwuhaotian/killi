@@ -169,7 +169,7 @@ pub fn write(ctx: &Context, args: &Value) -> Output {
     }
     let verb = if existed { "Overwrote" } else { "Created" };
     let lines = content.lines().count();
-    Output::ok(format!("{verb} {path} ({lines} lines).")).brief(format!("{} {lines} lines", verb.to_lowercase()))
+    Output::ok(format!("{verb} {path} ({}).", super::count(lines, "line"))).brief(format!("{} {}", verb.to_lowercase(), super::count(lines, "line")))
 }
 
 /// A text file as read and edit see it: BOM removed, and CRLF shown as LF when every line

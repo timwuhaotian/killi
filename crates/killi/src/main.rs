@@ -216,10 +216,10 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
         let usage = &stats.usage;
         let cached = (usage.cached * 100).checked_div(usage.prompt).unwrap_or(0);
         eprintln!(
-            "\n{}{stop_reason} · {} requests · {} tool calls · {} tokens in, {cached}% cached · {} out · {:.1}s{}",
+            "\n{}{stop_reason} · {} · {} · {} tokens in, {cached}% cached · {} out · {:.1}s{}",
             p.dim,
-            stats.requests,
-            stats.tool_calls,
+            tools::count(stats.requests as usize, "request"),
+            tools::count(stats.tool_calls as usize, "tool call"),
             usage.prompt,
             usage.completion,
             elapsed.as_secs_f32(),
