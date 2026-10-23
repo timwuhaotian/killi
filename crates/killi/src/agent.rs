@@ -666,12 +666,20 @@ impl Agent {
     }
 
     /// Runs a reply's tool calls in order; consecutive `agent` calls run in parallel, and an
-    /// `agent_swarm` call runs its subagents in parallel. Returns true when the repeat breaker trips.
+    /// `agent_swarm` call runs its subagents in parallel. A message typed meanwhile waits for
+    /// the call running now, not for the ones after it: those are answered as not run.
+    /// Returns true when the repeat breaker trips.
     async fn execute_calls(&mut self, calls: Vec<(String, ToolCall)>, truncated: bool) -> Result<bool> {
         let mut stop = false;
         let mut images = Vec::new();
         let mut i = 0;
         while i < calls.len() {
+            if !self.controls.steer.borrow().is_empty() {
+                for (id, _) in &calls[i..] {
+                    self.push(json!({"role": "tool", "tool_call_id": id, "content": SKIPPED_FOR_MESSAGE}))?;
+                }
+                break;
+            }
             if calls[i].1.name == "agent" && self.depth == 0 {
                 let end = calls[i..].iter().position(|(_, c)| c.name != "agent").map_or(calls.len(), |n| i + n);
                 let started = Instant::now();
@@ -1299,6 +1307,9 @@ fn is_overflow(error: &anyhow::Error) -> bool {
 }
 
 /// Told at the end of a turn that leaves commands running, after the list of them.
+/// The result of a call that didn't run because the user sent a message before its turn.
+const SKIPPED_FOR_MESSAGE: &str = "Not run: the user sent a message first, which follows. Run it again if it is still needed.";
+
 const LEFT_RUNNING: &str = "Stop with task_stop what nothing needs anymore, such as a server or watcher started for a test or a check. If one should keep running, say so in your reply.";
 
 /// Longest recap, in characters.
@@ -1469,6 +1480,56 @@ mod tests {
         assert!(request[5]["content"].as_str().unwrap().ends_with("\n\nwhat are you doing?"));
         assert_eq!(request.len(), 6);
         assert_eq!(side_request(&history[..2], BTW_NOTE, "q", None).len(), 3);
+    }
+
+    /// An agent that has never asked a model anything: enough to run a reply's tool calls.
+    fn idle_agent(name: &str, controls: Controls, sink: Sink) -> Agent {
+        let dir = std::env::temp_dir().join(format!("killi-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("session.jsonl");
+        std::fs::write(&log, "").unwrap();
+        let model = crate::config::ResolvedModel {
+            alias: "test".into(),
+            model: "test".into(),
+            protocol: crate::config::Protocol::OpenAi,
+            base_url: String::new(),
+            api_key: String::new(),
+            headers: Default::default(),
+            max_output: None,
+            context_window: None,
+            images: false,
+            thinking: Thinking::Off,
+        };
+        let client = Client::new(model).unwrap();
+        Agent::assemble(client, &dir, Vec::new(), Settings::default(), controls, sink, Session::open(&log).unwrap())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_message_typed_during_a_call_goes_ahead_of_the_calls_after_it() {
+        let controls = Controls::default();
+        let steer = controls.steer.clone();
+        let sink: Sink = Rc::new(move |event| {
+            if let Event::ToolStart { id, .. } = event
+                && id == "a"
+            {
+                steer.borrow_mut().push_back(("stop".into(), Vec::new()));
+            }
+        });
+        let mut agent = idle_agent("steer", controls, sink);
+        let calls: Vec<_> = ["a", "b", "c"]
+            .iter()
+            .map(|id| (id.to_string(), ToolCall { id: id.to_string(), name: "todo_write".into(), arguments: r#"{"todos":[]}"#.into() }))
+            .collect();
+        let ids: Vec<_> = calls.iter().map(|(id, _)| json!({"id": id})).collect();
+        agent.push(json!({"role": "assistant", "tool_calls": ids})).unwrap();
+        agent.execute_calls(calls, false).await.unwrap();
+        let results: Vec<_> = agent.messages[1..].iter().map(|m| (m["tool_call_id"].as_str().unwrap(), m["content"].as_str().unwrap())).collect();
+        assert!(results[0].1.starts_with("Task list updated"), "{results:?}");
+        assert_eq!(results[1..], [("b", SKIPPED_FOR_MESSAGE), ("c", SKIPPED_FOR_MESSAGE)]);
+        assert!(unanswered(&agent.messages).is_empty());
+        assert_eq!(agent.controls.steer.borrow().len(), 1, "the message waits for the next request");
+        agent.before_request().await.unwrap();
+        assert_eq!(agent.messages.last().unwrap(), &json!({"role": "user", "content": "stop"}));
     }
 
     #[test]
