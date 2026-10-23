@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.2.27 — 2026-10-23
+
+- **A skill sees the image pasted beside it.** `/lean-build make it nicer [Image #1]` dropped
+  the image: the command carried only its text, so the model got the literal `[Image #1]` and
+  said it couldn't see it. A skill or `/swarm` now sends the image the way a plain prompt does.
+
 ## 0.2.26 — 2026-10-23
 
 - **Waiting on a job ends when the job ends.** `task_output` with `wait` now waits for what a

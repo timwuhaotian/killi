@@ -128,8 +128,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     agent.recover()?;
                 }
             }
-            Input::Command(command, arg) => {
-                if !handle_command(&mut app, &mut agent, &mut session, &mut snapshots, &mut keys, &mut rx, &cwd, &command, &arg).await? {
+            Input::Command(command, arg, images) => {
+                if !handle_command(&mut app, &mut agent, &mut session, &mut snapshots, &mut keys, &mut rx, &cwd, &command, &arg, &images).await? {
                     break;
                 }
             }
@@ -351,6 +351,7 @@ async fn handle_command(
     cwd: &Path,
     command: &str,
     arg: &str,
+    images: &[Image],
 ) -> Result<bool> {
     if app.run_local(command, arg) {
         return Ok(true);
@@ -365,7 +366,7 @@ async fn handle_command(
         }
         "swarm" => {
             let was_on = app.controls.swarm.replace(true);
-            let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {arg}"), arg).await;
+            let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {arg}"), arg, images).await;
             app.controls.swarm.set(was_on);
             result?;
         }
@@ -435,14 +436,16 @@ async fn handle_command(
         "usage" | "cost" => app.usage_report(agent),
         "session" | "share" => app.share_session(agent),
         other => match session.skill_prompt(other.strip_prefix("skill:").unwrap_or(other), arg) {
-            Some(prompt) => prompt_turn(app, agent, snapshots, keys, rx, format!("/{other} {arg}").trim_end(), &prompt).await?,
+            Some(prompt) => prompt_turn(app, agent, snapshots, keys, rx, format!("/{other} {arg}").trim_end(), &prompt, images).await?,
             None => app.error(&format!("Unknown command /{other}. Type /help for the list.")),
         },
     }
     Ok(true)
 }
 
-/// Runs one turn started by a command: `shown` goes in the transcript, `prompt` to the agent.
+/// Runs one turn started by a command: `shown` goes in the transcript, `prompt` to the agent,
+/// with the images pasted beside the command.
+#[allow(clippy::too_many_arguments)]
 async fn prompt_turn(
     app: &mut App,
     agent: &mut Agent,
@@ -451,12 +454,13 @@ async fn prompt_turn(
     rx: &mut mpsc::UnboundedReceiver<Event>,
     shown: &str,
     prompt: &str,
+    images: &[Image],
 ) -> Result<()> {
     app.begin_turn(shown);
     app.draw()?;
     snapshots.take();
     let before = Totals::of(agent);
-    let ended = run_turn(app, keys, rx, agent.run(prompt, &[])).await?;
+    let ended = run_turn(app, keys, rx, agent.run(prompt, images)).await?;
     app.finish_turn(ended, before, Totals::of(agent));
     if matches!(app.last_end, Some(LastEnd::Interrupted)) {
         agent.recover()?;
@@ -502,7 +506,8 @@ impl Totals {
 enum Input {
     /// A message to the model, with the images pasted into it.
     Prompt(String, Vec<Image>),
-    Command(String, String),
+    /// A command with its argument and the images pasted into it.
+    Command(String, String, Vec<Image>),
     Resume(PathBuf),
     Model(String),
     Effort(String),
@@ -929,15 +934,10 @@ impl App {
     /// Sends the prompt: a command when it starts with `/`, else a message to the model.
     fn submit(&mut self) -> Idle {
         let (text, images) = self.editor.take_with_images();
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Idle::Continue;
+        match submission(text, images) {
+            Some(input) => Idle::Input(input),
+            None => Idle::Continue,
         }
-        if let Some(command) = trimmed.strip_prefix('/') {
-            let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
-            return Idle::Input(Input::Command(name.to_string(), arg.trim().to_string()));
-        }
-        Idle::Input(Input::Prompt(text, images))
     }
 
     fn on_key_picker(&mut self, key: KeyEvent) -> Idle {
@@ -1104,7 +1104,7 @@ impl App {
         if let Some(menu) = self.suggestions()
             && let Some(idle) = self.on_key_menu(key, &menu)
         {
-            if let Idle::Input(Input::Command(name, arg)) = idle {
+            if let Idle::Input(Input::Command(name, arg, _)) = idle {
                 self.command_while_busy(&name, &arg);
             }
             return false;
@@ -2793,6 +2793,20 @@ struct Command {
     about: &'static str,
 }
 
+/// What a submitted prompt is: a command when it starts with `/`, else a message to the model.
+/// The images pasted into it go along either way, since a skill's request can hold one.
+fn submission(text: String, images: Vec<Image>) -> Option<Input> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(command) = trimmed.strip_prefix('/') {
+        let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
+        return Some(Input::Command(name.to_string(), arg.trim().to_string(), images));
+    }
+    Some(Input::Prompt(text, images))
+}
+
 /// Whether `name` is a built-in command or one of its aliases, not a skill.
 fn is_command(name: &str) -> bool {
     COMMANDS.iter().any(|c| c.name == name || c.aliases.contains(&name))
@@ -3045,6 +3059,20 @@ mod tests {
         assert!(runs_at_once(&menu, 1));
         assert!(!runs_at_once(&menu, 2));
         assert!(!runs_at_once(&Suggestions { start: 4, ..menu }, 0));
+    }
+
+    #[test]
+    fn a_skill_keeps_the_images_pasted_beside_it() {
+        let image = Image { label: "[Image #1]".into(), url: "data:image/png;base64,AA".into() };
+        match submission("/lean-build make it nicer [Image #1]".into(), vec![image.clone()]) {
+            Some(Input::Command(name, arg, images)) => {
+                assert_eq!((name.as_str(), arg.as_str()), ("lean-build", "make it nicer [Image #1]"));
+                assert_eq!(images, vec![image.clone()]);
+            }
+            _ => panic!("a prompt starting with / is a command"),
+        }
+        assert!(matches!(submission("what is [Image #1]".into(), vec![image]), Some(Input::Prompt(_, images)) if images.len() == 1));
+        assert!(submission("  ".into(), Vec::new()).is_none());
     }
 
     #[test]
