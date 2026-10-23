@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.3.0 — 2026-10-23
+
 - **Finished calls are quiet.** Every tool row began with a lagoon tick, which marked nothing.
   A finished call's `✓` is now faint, so what is running or has failed is what the eye finds;
   the `$` of a bash row is faint too, and a path keeps its folders muted so the file stands
