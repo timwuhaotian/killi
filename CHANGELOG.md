@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.8 — 2026-10-24
+
+- **Reading a screenshot no longer compacts the conversation.** The compaction estimate
+  counted an inline image's base64 as text: a 300 KB screenshot came to 200k estimated
+  tokens for about 1.5k billed, so an 8k-token conversation was compacted after every
+  `read` of an image, and with MiniMax the summary came back empty and the turn ended in
+  `the model returned an empty summary`. An image now counts as a fixed 2k-token reserve,
+  as the output cap already did. A proactive compaction that fails is a notice and the turn
+  goes on, since the request may still fit and an overflow compacts the reduced history on
+  the way back; an empty summary says what the model did instead (called tools, or only
+  reasoned) and leaves a `warn` record in the session log.
+
 ## 0.4.7 — 2026-10-24
 
 - **`web_search` falls back when its service fails, and `fetch_url` says what went wrong.**
