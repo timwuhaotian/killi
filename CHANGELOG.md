@@ -5,6 +5,17 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.3.1 — 2026-10-24
+
+- **A queued message leaves the queue once it is sent.** A message typed while the agent
+  works went into the conversation at its next step, often within seconds now that a message
+  ends a wait, but it kept saying "Ctrl+S sends it now" until the turn ended, and Ctrl+S then
+  did nothing because nothing was waiting. Once the agent takes it, it now prints as your
+  message, and the queue holds only what Ctrl+S can still send.
+- **Ctrl+C clears a draft first.** While the agent works, or asks you something, Ctrl+C
+  interrupted it even with a half-typed message in the prompt. It now clears the prompt, as
+  when idle; on an empty prompt it interrupts.
+
 ## 0.3.0 — 2026-10-23
 
 - **Finished calls are quiet.** Every tool row began with a lagoon tick, which marked nothing.
