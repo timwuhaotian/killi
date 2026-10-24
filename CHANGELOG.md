@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.4 — 2026-10-24
+
 - **A first run can start from omp too.** Without a config, the import offers now include
   omp beside Kimi Code, pi and opencode: its `~/.omp/agent/models.yml` providers and models
   — pi's shape spelled as YAML, read by a small block-style reader of killi's own, so no YAML
