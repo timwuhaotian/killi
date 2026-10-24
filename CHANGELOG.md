@@ -5,6 +5,19 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.7 — 2026-10-24
+
+- **`web_search` falls back when its service fails, and `fetch_url` says what went wrong.**
+  A transient failure (429, 5xx, network) is retried once, then `web_search` tries any
+  other source the `[search]` table already makes usable — a `url` instance beside a
+  keyed provider, Brave's public page last — and names every failure when none answer,
+  instead of leaving the model to guess addresses. `fetch_url` expands the error's cause
+  chain: an unresolvable domain says the host is likely invented and not to retry spelling
+  variants, an error page is named by its `<title>` instead of raw HTML, a short page
+  (home, index) appends its own links so the next address comes from the page, and a PDF
+  is read as text through `pdftotext` (poppler) when installed, with a clear error when
+  it is not or the PDF has no extractable text.
+
 ## 0.4.6 — 2026-10-24
 
 - **`web_search` can ask a SearXNG instance, and `/web-search-config` sets the service up.**
