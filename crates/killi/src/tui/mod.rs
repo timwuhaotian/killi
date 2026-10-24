@@ -363,12 +363,20 @@ where
         {
             break Ended::Done(result);
         }
+        if app.queued.len() > app.controls.steer.borrow().len() {
+            // The agent took queued messages between steps: what it did before that comes first.
+            while let Ok(event) = rx.try_recv() {
+                app.on_agent(event);
+            }
+            app.show_sent();
+        }
         app.draw()?;
     };
     drop(future);
     while let Ok(event) = rx.try_recv() {
         app.on_agent(event);
     }
+    app.show_sent();
     Ok(ended)
 }
 
@@ -1218,6 +1226,7 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => return true,
+            KeyCode::Char('c') if ctrl && !self.editor.is_empty() => self.editor.clear(),
             KeyCode::Char('c') if ctrl => return true,
             KeyCode::Enter if !newline_key(&key) => self.send_busy(),
             KeyCode::Char('s') if ctrl => {
@@ -1250,6 +1259,20 @@ impl App {
         if !text.trim().is_empty() {
             self.controls.steer.borrow_mut().push_back((text.clone(), images));
             self.queued.push(text);
+        }
+    }
+
+    /// Moves the queued messages the agent has taken into the conversation from the live area
+    /// to the scrollback, so the queue shows only what Ctrl+S can still send.
+    fn show_sent(&mut self) {
+        let sent = take_sent(&mut self.queued, self.controls.steer.borrow().len());
+        if sent.is_empty() {
+            return;
+        }
+        self.flush_partial();
+        self.end_thinking();
+        for text in sent {
+            self.commit_prompt(&text);
         }
     }
 
@@ -1296,6 +1319,7 @@ impl App {
                 let _ = asking.question.reply.send(String::new());
                 self.commit(format!("{DIM}  (dismissed){RESET}"));
             }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.editor.is_empty() => self.editor.clear(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
             KeyCode::Enter if !newline_key(&key) => {
                 let typed = self.editor.take();
@@ -3083,8 +3107,12 @@ fn queued_row(queued: &str) -> String {
     format!("{FIN}❯{RESET} {DIM}{} (sent at the next step · Ctrl+S sends it now){RESET}", queued.replace('\n', " "))
 }
 
-/// What a submitted prompt is: a command when it starts with `/`, else a message to the model.
-/// The images pasted into it go along either way, since a skill's request can hold one.
+/// The queued messages the agent has taken, oldest first: all but the `waiting` ones still in
+/// the steer queue.
+fn take_sent(queued: &mut Vec<String>, waiting: usize) -> Vec<String> {
+    queued.drain(..queued.len().saturating_sub(waiting)).collect()
+}
+
 /// The queued messages as the one prompt that starts the next turn, blank-line separated.
 fn joined(steered: Vec<Steered>) -> Option<(String, Vec<Image>)> {
     if steered.is_empty() {
@@ -3094,6 +3122,8 @@ fn joined(steered: Vec<Steered>) -> Option<(String, Vec<Image>)> {
     Some((text, steered.into_iter().flat_map(|(_, images)| images).collect()))
 }
 
+/// What a submitted prompt is: a command when it starts with `/`, else a message to the model.
+/// The images pasted into it go along either way, since a skill's request can hold one.
 fn submission(text: String, images: Vec<Image>) -> Option<Input> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -3174,7 +3204,7 @@ const KEYS: &[(&str, &str)] = &[
     ("Ctrl+V", "paste an image (Cmd+V too in Kil)"),
     ("↑ ↓", "history"),
     ("PageUp PageDown", "scroll the conversation (fullscreen mode, with the wheel)"),
-    ("Ctrl+C", "clear the prompt; twice to quit"),
+    ("Ctrl+C", "clear the prompt; on an empty one, interrupt the agent, or twice to quit"),
 ];
 
 /// Raw mode and bracketed paste while the UI runs, and the alternate screen with the mouse in
@@ -3623,6 +3653,16 @@ mod tests {
     #[test]
     fn a_queued_message_says_ctrl_s_sends_it_now() {
         assert_eq!(unstyled(&queued_row("fix\nthis")), "❯ fix this (sent at the next step · Ctrl+S sends it now)");
+    }
+
+    #[test]
+    fn queued_messages_the_agent_took_leave_the_queue_oldest_first() {
+        let mut queued = vec!["first".to_string(), "second".to_string(), "third".to_string()];
+        assert!(take_sent(&mut queued, 3).is_empty());
+        assert_eq!(take_sent(&mut queued, 1), ["first", "second"]);
+        assert_eq!(queued, ["third"]);
+        assert_eq!(take_sent(&mut queued, 0), ["third"]);
+        assert!(queued.is_empty());
     }
 
     #[test]
