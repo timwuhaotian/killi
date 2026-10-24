@@ -45,7 +45,7 @@ pub async fn fetch_url(ctx: &Context, args: &Value) -> Output {
     };
     let response = match client.get(&url).send().await {
         Ok(response) => response,
-        Err(e) => return Output::error(format!("Could not fetch {url}: {e}")),
+        Err(e) => return Output::error(format!("Could not fetch {url}: {}", fetch_error(&e))),
     };
     let status = response.status();
     let kind = response
@@ -55,16 +55,27 @@ pub async fn fetch_url(ctx: &Context, args: &Value) -> Output {
         .unwrap_or_default()
         .to_ascii_lowercase();
     let final_url = response.url().to_string();
+    let is_pdf = kind.contains("application/pdf") || url.split(['?', '#']).next().is_some_and(|u| u.to_ascii_lowercase().ends_with(".pdf"));
     // A body that can't be shown is not downloaded at all.
-    if status.is_success() && !kind.is_empty() && !is_text(&kind) {
-        return Output::error(format!("{url} is `{kind}`, not text."));
+    if status.is_success() && !kind.is_empty() && !is_text(&kind) && !is_pdf {
+        return Output::error(format!("{url} is `{kind}`, not text. PDFs aside, fetch_url only shows text, including HTML."));
     }
     let bytes = match capped_body(response).await {
         Ok(bytes) => bytes,
-        Err(e) => return Output::error(format!("Could not read {url}: {e}")),
+        Err(e) => return Output::error(format!("Could not read {url}: {}", fetch_error(&e))),
     };
     if !status.is_success() {
-        return Output::error(format!("{url} answered HTTP {status}: {}", truncate(&String::from_utf8_lossy(&bytes), 500)));
+        let page = String::from_utf8_lossy(&bytes);
+        let title = html_title(&page);
+        let summary = match title {
+            Some(title) => format!("{title} — {}", truncate(&plain(&page), 300)),
+            None => truncate(&plain(&page), 400).to_string(),
+        };
+        let hint = if status.as_u16() == 404 { " The address is likely wrong; do not guess variants — find the real URL with web_search." } else { "" };
+        return Output::error(format!("{url} answered HTTP {status}: {summary}{hint}"));
+    }
+    if is_pdf {
+        return pdf_text(ctx, &bytes, &url).await;
     }
     let text = String::from_utf8_lossy(&bytes).into_owned();
     if kind.contains("html") || (kind.is_empty() && looks_like_html(&bytes)) {
@@ -85,6 +96,62 @@ pub async fn fetch_url(ctx: &Context, args: &Value) -> Output {
         return shown(&text);
     }
     Output::error(format!("{url} is `{kind}`, not text."))
+}
+
+/// Why a request failed, with the whole cause chain and what to do about it: a name that
+/// does not resolve means the address itself is invented, so guessing spellings is wasted.
+fn fetch_error(error: &reqwest::Error) -> String {
+    let mut causes = vec![error.to_string()];
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        causes.push(cause.to_string());
+        source = cause.source();
+    }
+    let detail = causes.join(": ");
+    let hint = if error.is_timeout() {
+        " The site took too long; retry once or try another source."
+    } else if detail.contains("dns error") || detail.contains("failed to lookup address") || detail.contains("Name or service not known") || detail.contains("nodename nor servname") {
+        " The domain does not resolve — the host name is likely wrong or invented. Do not retry spelling variants; find the real domain with web_search."
+    } else if error.is_connect() {
+        " The site could not be reached (connection refused or network down); do not retry the same address repeatedly."
+    } else if detail.contains("certificate") || detail.contains("tls") || detail.contains("SSL") {
+        " The site's TLS certificate was rejected; report it instead of retrying."
+    } else {
+        ""
+    };
+    format!("{detail}.{hint}")
+}
+
+/// The `<title>` of an HTML page, tags and extra space stripped.
+fn html_title(html: &str) -> Option<String> {
+    let title = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").unwrap();
+    title.captures(html).map(|c| plain(&c[1])).filter(|t| !t.is_empty())
+}
+
+/// Extracts a downloaded PDF's text with `pdftotext` (poppler) when it is installed.
+async fn pdf_text(ctx: &Context, bytes: &[u8], url: &str) -> Output {
+    let _ = ctx;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let file = Temp(std::env::temp_dir().join(format!("killi-pdf-{}-{nanos}.pdf", std::process::id())));
+    if let Err(e) = tokio::fs::write(&file.0, bytes).await {
+        return Output::error(format!("Could not save the PDF from {url}: {e}"));
+    }
+    let run = Command::new("pdftotext").arg("-layout").arg(&file.0).arg("-").output().await;
+    match run {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            if text.trim().is_empty() {
+                Output::error(format!("{url} is a PDF with no extractable text (scanned images or encrypted); fetch_url cannot read it."))
+            } else {
+                shown(text.trim())
+            }
+        }
+        Ok(out) => Output::error(format!("{url} is a PDF pdftotext could not read: {}", truncate(&String::from_utf8_lossy(&out.stderr), 300))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Output::error(format!(
+            "{url} is a PDF, and no `pdftotext` (poppler) is installed to read it; install it (e.g. `brew install poppler`) or use the HTML page instead."
+        )),
+        Err(e) => Output::error(format!("Could not run pdftotext on {url}: {e}")),
+    }
 }
 
 /// Whether a content type is one `fetch_url` can show.
@@ -308,23 +375,109 @@ struct Hit {
     snippet: String,
 }
 
+/// One way of searching, tried in `search`'s order until one returns results.
+#[derive(Debug, Clone, PartialEq)]
+enum Source {
+    Tavily(String),
+    BraveApi(String),
+    BravePage,
+    Searxng { base: String, key: Option<String> },
+}
+
+impl Source {
+    fn name(&self) -> &'static str {
+        match self {
+            Source::Tavily(_) => "Tavily",
+            Source::BraveApi(_) | Source::BravePage => "Brave",
+            Source::Searxng { .. } => "SearXNG",
+        }
+    }
+}
+
+/// The sources to try, in order: the configured provider first, then any other source the
+/// config already makes usable — a key for another provider or a SearXNG instance — and
+/// Brave's public page last, which needs nothing. One `api_key` serves one provider, so a
+/// fallback with another service's key only exists when that service needs no key (SearXNG
+/// without auth) or is the public page.
+fn sources(settings: &SearchSettings) -> Result<Vec<Source>, String> {
+    let provider = if settings.provider.is_empty() { "brave" } else { settings.provider.as_str() };
+    let key = settings.api_key.as_deref().filter(|k| !k.is_empty());
+    let instance = settings.url.as_deref().map(str::trim).filter(|u| !u.is_empty());
+    let primary = match (provider, key, instance) {
+        ("tavily", Some(key), _) => Source::Tavily(key.to_string()),
+        ("tavily", None, _) => {
+            return Err("web_search with Tavily needs an API key: set `api_key` or `api_key_env` under [search].".into())
+        }
+        ("brave", Some(key), _) => Source::BraveApi(key.to_string()),
+        ("brave", None, _) => Source::BravePage,
+        ("searxng", _, Some(base)) => Source::Searxng { base: base.to_string(), key: key.map(str::to_string) },
+        ("searxng", _, None) => {
+            return Err("web_search with SearXNG needs the instance: set `url` under [search].".into())
+        }
+        (other, _, _) => {
+            return Err(format!("Unknown search provider `{other}`; use \"brave\", \"tavily\" or \"searxng\"."))
+        }
+    };
+    let mut chain = vec![primary];
+    // A SearXNG instance in `url` is usable beside a keyed provider when it asks for no key
+    // of its own — killi cannot know its key, so try it without one.
+    if !matches!(chain[0], Source::Searxng { .. }) && let Some(base) = instance {
+        chain.push(Source::Searxng { base: base.to_string(), key: None });
+    }
+    if !matches!(chain[0], Source::BravePage) {
+        chain.push(Source::BravePage);
+    }
+    Ok(chain)
+}
+
 async fn search(settings: &SearchSettings, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
+    search_chain(&sources(settings)?, query, limit).await
+}
+
+/// Tries each source in order, retrying a transient failure once, until one returns
+/// results; when none does, every failure is named so the model can say what it tried.
+async fn search_chain(chain: &[Source], query: &str, limit: usize) -> Result<Vec<Hit>, String> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| format!("Could not create an HTTP client: {e}"))?;
-    let key = settings.api_key.as_deref();
-    let provider = if settings.provider.is_empty() { "brave" } else { settings.provider.as_str() };
-    match (provider, key) {
-        ("tavily", Some(key)) => {
+    let mut failures: Vec<String> = Vec::new();
+    for source in chain {
+        match search_once(&client, source, query, limit).await {
+            Ok(found) if !found.is_empty() => return Ok(found),
+            Ok(_) => failures.push(format!("{}: no results", source.name())),
+            Err(e) if retryable(&e) => match search_once(&client, source, query, limit).await {
+                Ok(found) if !found.is_empty() => return Ok(found),
+                Ok(_) => failures.push(format!("{}: no results", source.name())),
+                Err(e) => failures.push(format!("{}: {e}", source.name())),
+            },
+            Err(e) => failures.push(format!("{}: {e}", source.name())),
+        }
+    }
+    Err(format!(
+        "Search failed on every source ({}). Set an API key under [search] in the config to search reliably.",
+        failures.join("; ")
+    ))
+}
+
+/// A failure another attempt or another source may get past: rate limits, server errors
+/// and the network itself. A refusal (4xx other than 429) is final for that source.
+fn retryable(error: &str) -> bool {
+    ["429", "500", "502", "503", "504", "failed:", "timed out"]
+        .iter()
+        .any(|mark| error.contains(mark))
+}
+
+async fn search_once(client: &reqwest::Client, source: &Source, query: &str, limit: usize) -> Result<Vec<Hit>, String> {
+    match source {
+        Source::Tavily(key) => {
             let body = serde_json::json!({"query": query, "max_results": limit});
             let reply = client.post("https://api.tavily.com/search").bearer_auth(key).header("content-type", "application/json").body(body.to_string()).send().await;
             let json = json_reply(reply, "Tavily").await?;
             Ok(hits(&json["results"], "title", "url", "content", limit))
         }
-        ("tavily", None) => Err("web_search with Tavily needs an API key: set `api_key` or `api_key_env` under [search].".into()),
-        ("brave", Some(key)) => {
+        Source::BraveApi(key) => {
             let reply = client
                 .get("https://api.search.brave.com/res/v1/web/search")
                 .header("X-Subscription-Token", key)
@@ -334,7 +487,7 @@ async fn search(settings: &SearchSettings, query: &str, limit: usize) -> Result<
             let json = json_reply(reply, "Brave").await?;
             Ok(hits(&json["web"]["results"], "title", "url", "description", limit))
         }
-        ("brave", None) => {
+        Source::BravePage => {
             let reply = client
                 .get("https://search.brave.com/search")
                 .query(&[("q", query), ("source", "web")])
@@ -345,16 +498,11 @@ async fn search(settings: &SearchSettings, query: &str, limit: usize) -> Result<
             let html = reply.text().await.map_err(|e| format!("Search failed: {e}"))?;
             let found = brave_page(&html, limit);
             if found.is_empty() && (!status.is_success() || html.to_ascii_lowercase().contains("captcha")) {
-                return Err(format!(
-                    "Brave turned the search away (HTTP {status}). Set an API key under [search] in the config to search reliably."
-                ));
+                return Err(format!("turned the search away (HTTP {status})"));
             }
             Ok(found)
         }
-        ("searxng", _) => {
-            let Some(base) = settings.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) else {
-                return Err("web_search with SearXNG needs the instance: set `url` under [search].".into());
-            };
+        Source::Searxng { base, key } => {
             let mut request = client.get(format!("{}/search", base.trim_end_matches('/'))).query(&[("q", query), ("format", "json")]);
             if let Some(key) = key {
                 request = request.bearer_auth(key);
@@ -369,7 +517,6 @@ async fn search(settings: &SearchSettings, query: &str, limit: usize) -> Result<
             };
             Ok(hits(&json["results"], "title", "url", "content", limit))
         }
-        (other, _) => Err(format!("Unknown search provider `{other}`; use \"brave\", \"tavily\" or \"searxng\".")),
     }
 }
 
@@ -436,15 +583,53 @@ fn looks_like_html(bytes: &[u8]) -> bool {
     start.contains("<!doctype html") || start.contains("<html")
 }
 
-/// The page's main content as Markdown, with its title on top.
+/// The page's main content as Markdown, with its title on top. The Markdown keeps links;
+/// on a short page (a home or index page) the page's own links are appended, so the next
+/// address comes from the page and is never guessed.
 fn readable(html: &str, url: &str) -> Option<String> {
     let config = Config { text_mode: TextMode::Markdown, ..Default::default() };
     let article = Readability::new(html, Some(url), Some(config)).ok()?.parse().ok()?;
+    // With `TextMode::Markdown`, `text_content` is the Markdown (links kept as `[text](url)`).
     let body = article.text_content.trim().to_string();
     if body.is_empty() {
         return None;
     }
-    Some(if article.title.is_empty() { body } else { format!("# {}\n\n{body}", article.title.trim()) })
+    let mut text = if article.title.is_empty() { body } else { format!("# {}\n\n{body}", article.title.trim()) };
+    if text.len() < MIN_READABLE * 10 {
+        let links = page_links(html, url);
+        if !links.is_empty() {
+            text.push_str("\n\nLinks on this page:\n");
+            text.push_str(&links.join("\n"));
+        }
+    }
+    Some(text)
+}
+
+/// Up to 60 distinct links of a page as `- [text](absolute-url)`, fragments and scripts out.
+fn page_links(html: &str, base: &str) -> Vec<String> {
+    let anchor = Regex::new(r#"(?is)<a\s[^>]*href\s*=\s*"([^"]+)"[^>]*>(.*?)</a>"#).unwrap();
+    let base = reqwest::Url::parse(base).ok();
+    let mut seen = std::collections::HashSet::new();
+    let mut links = Vec::new();
+    for capture in anchor.captures_iter(html) {
+        let href = capture[1].trim();
+        if href.is_empty() || href.starts_with('#') || href.starts_with("javascript:") || href.starts_with("mailto:") || href.starts_with("tel:") {
+            continue;
+        }
+        let Some(base) = &base else { break };
+        let Ok(absolute) = base.join(href) else { continue };
+        let absolute = absolute.to_string();
+        if !seen.insert(absolute.clone()) {
+            continue;
+        }
+        let label = plain(&capture[2]);
+        let label = if label.is_empty() { absolute.clone() } else { truncate(&label, 80).to_string() };
+        links.push(format!("- [{label}]({absolute})"));
+        if links.len() >= 60 {
+            break;
+        }
+    }
+    links
 }
 
 #[cfg(test)]
@@ -536,6 +721,57 @@ mod tests {
     }
 
     #[test]
+    fn a_short_page_lists_its_links_and_the_article_keeps_them() {
+        let html = r##"<html><head><title>Home</title></head><body><nav>
+            <a href="/timetable/">Timetable</a> <a href="https://other.test/x">Other</a>
+            <a href="#top">Top</a> <a href="/timetable/">Again</a></nav>
+            <p>Welcome.</p></body></html>"##;
+        let text = super::readable(html, "https://example.test/").unwrap();
+        assert!(text.contains("[Timetable](https://example.test/timetable/)"), "{text}");
+        assert!(text.contains("[Other](https://other.test/x)"), "{text}");
+        assert!(!text.contains("- [Top]"), "fragment links are not listed: {text}");
+        assert_eq!(text.matches("- [Timetable]").count(), 1, "duplicates are listed once: {text}");
+    }
+
+    #[test]
+    fn an_error_page_is_named_by_its_title() {
+        let html = "<html><head><title>404 Not Found</title></head><body><h1>Not Found</h1></body></html>";
+        assert_eq!(super::html_title(html).as_deref(), Some("404 Not Found"));
+        assert_eq!(super::html_title("<p>none</p>"), None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_404_reports_its_title_not_its_head() {
+        let page = "<html><head><meta charset=\"utf-8\"><title>ページが見つかりません</title></head><body><h1>Not Found</h1></body></html>";
+        let url = serve_body("HTTP/1.1 404 Not Found\r\ncontent-type: text/html\r\n\r\n", page).await;
+        let args = serde_json::json!({"url": url});
+        let out = super::fetch_url(&ctx(), &args).await;
+        assert!(out.is_error && out.text.contains("ページが見つかりません") && out.text.contains("do not guess"), "{}", out.text);
+        assert!(!out.text.contains("meta charset"), "{}", out.text);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_unresolvable_host_says_not_to_guess_spellings() {
+        let args = serde_json::json!({"url": "https://killi-test.invalid/"});
+        let out = tokio::time::timeout(std::time::Duration::from_secs(20), super::fetch_url(&ctx(), &args)).await.expect("dns should fail fast");
+        assert!(out.is_error && out.text.contains("Do not retry spelling variants"), "{}", out.text);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_pdf_is_read_as_text_or_says_why_not() {
+        // Smallest valid one-page PDF with the word Hello.
+        let pdf = "%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 24 Tf 100 700 Td (Hello) Tj ET\nendstream\nendobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
+        let url = serve_body("HTTP/1.1 200 OK\r\ncontent-type: application/pdf\r\n\r\n", pdf).await;
+        let args = serde_json::json!({"url": url});
+        let out = super::fetch_url(&ctx(), &args).await;
+        if std::process::Command::new("pdftotext").arg("-v").output().is_ok() {
+            assert!(!out.is_error && out.text.contains("Hello"), "{}", out.text);
+        } else {
+            assert!(out.is_error && out.text.contains("pdftotext"), "{}", out.text);
+        }
+    }
+
+    #[test]
     fn extracts_the_article() {
         let html = r#"<html><head><title>Notes</title></head><body>
             <nav><a href="/">Home</a> <a href="/about">About</a></nav>
@@ -584,6 +820,26 @@ mod tests {
         super::SearchSettings { provider: "searxng".into(), url, ..super::SearchSettings::default() }
     }
 
+    /// Answers 429 to the first request and results to the rest, counting hits.
+    async fn serve_flaky(hits: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                let n = hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = socket.read(&mut [0u8; 4096]).await;
+                let reply = if n == 0 {
+                    "HTTP/1.1 429 Too Many Requests\r\ncontent-type: text/plain\r\n\r\nslow down"
+                } else {
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"results\":[{\"title\":\"A\",\"url\":\"https://a.test\",\"content\":\"about a\"}]}"
+                };
+                let _ = socket.write_all(reply.as_bytes()).await;
+            }
+        });
+        url
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn searxng_reads_the_instance_results() {
         let body = r#"{"results":[{"title":"A","url":"https://a.test","content":"about a"},{"title":"no url"}]}"#;
@@ -596,6 +852,61 @@ mod tests {
     async fn searxng_without_an_instance_is_an_error() {
         let err = super::search(&searxng(None), "a", 5).await.unwrap_err();
         assert!(err.contains("`url`"), "{err}");
+    }
+
+    #[test]
+    fn the_chain_is_the_provider_then_what_else_is_usable() {
+        let keyed = super::SearchSettings { provider: "tavily".into(), api_key: Some("k".into()), ..super::SearchSettings::default() };
+        assert_eq!(super::sources(&keyed).unwrap(), vec![super::Source::Tavily("k".into()), super::Source::BravePage]);
+        let local = super::SearchSettings { provider: "brave".into(), api_key: Some("k".into()), url: Some("http://localhost:8888".into()) };
+        assert_eq!(
+            super::sources(&local).unwrap(),
+            vec![
+                super::Source::BraveApi("k".into()),
+                super::Source::Searxng { base: "http://localhost:8888".into(), key: None },
+                super::Source::BravePage
+            ]
+        );
+        assert_eq!(super::sources(&super::SearchSettings::default()).unwrap(), vec![super::Source::BravePage]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_source_failing_names_them_all() {
+        // Nothing listens on port 1, so the instance fails at once; the public page is the
+        // only other source and its failure is reported beside the instance's.
+        let settings = super::SearchSettings { provider: "searxng".into(), url: Some("http://127.0.0.1:1".into()), ..super::SearchSettings::default() };
+        let err = super::search(&settings, "a", 5).await.unwrap_err();
+        assert!(err.contains("every source") && err.contains("SearXNG") && err.contains("Brave"), "{err}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_rate_limited_source_is_retried_once() {
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let url = serve_flaky(hits.clone()).await;
+        let chain = vec![super::Source::Searxng { base: url, key: None }];
+        let found = super::search_chain(&chain, "a", 5).await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_dead_source_falls_back_to_the_next() {
+        let body = r#"{"results":[{"title":"A","url":"https://a.test","content":"about a"}]}"#;
+        let url = serve_body("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n", body).await;
+        let chain = vec![
+            super::Source::Searxng { base: "http://127.0.0.1:1".into(), key: None },
+            super::Source::Searxng { base: url, key: None },
+        ];
+        let found = super::search_chain(&chain, "a", 5).await.unwrap();
+        assert_eq!((found.len(), found[0].url.as_str()), (1, "https://a.test"));
+    }
+
+    #[test]
+    fn only_transient_failures_are_retryable() {
+        assert!(super::retryable("Brave search answered HTTP 429 Too Many Requests: x"));
+        assert!(super::retryable("SearXNG search failed: error sending request"));
+        assert!(!super::retryable("Tavily search answered HTTP 401 Unauthorized: x"));
+        assert!(!super::retryable("turned the search away (HTTP 403)"));
     }
 
     #[tokio::test(flavor = "current_thread")]

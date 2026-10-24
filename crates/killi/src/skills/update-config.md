@@ -62,10 +62,13 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   without it only Kil does that), `recap = false` (no automatic 100-character recap after a
   turn that used tools; `/recap` still asks for one).
 - `[search]`: `provider` ("brave", the default, "tavily" or "searxng"), `url` (the SearXNG
-  instance) and `api_key` or `api_key_env` for `web_search`. Without a key, Brave's public
-  page is read, which can refuse; "searxng" asks `{url}/search?q=…&format=json`, so the
-  instance must enable the json format. `/web-search-config` asks for all of this and writes
-  the table itself.
+  instance) and `api_key` or `api_key_env` for `web_search`. `web_search` tries the
+  configured provider first (a transient failure — 429, 5xx, network — is retried once),
+  then falls back to any other source the table makes usable and to Brave's public page
+  last, which needs no key and can refuse; one `api_key` serves one provider, so a keyed
+  fallback to another API is not picked up from this table. "searxng" asks
+  `{url}/search?q=…&format=json`, so the instance must enable the json format.
+  `/web-search-config` asks for all of this and writes the table itself.
 
 An MCP server in `mcp.json` has `command`, `args`, `env` (stdio) or `url`, `headers`,
 `bearerTokenEnvVar` (HTTP), plus `enabled` (false leaves it out) and `toolTimeoutMs`.

@@ -32,8 +32,10 @@ pub struct Config {
     pub search: SearchConfig,
 }
 
-/// `[search]`: the service behind `web_search`. Without a key, "brave" reads Brave's public
-/// search page, which can turn automated requests away.
+/// `[search]`: the service behind `web_search`. `web_search` tries that service first,
+/// retrying a transient failure once, then any other source the table already makes
+/// usable — a `url` instance needs no key of its own here — and Brave's public search
+/// page last, which needs nothing and can turn automated requests away.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct SearchConfig {
     /// "brave" (default), "tavily" or "searxng".
