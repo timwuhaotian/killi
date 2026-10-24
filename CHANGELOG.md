@@ -5,6 +5,17 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.5 — 2026-10-24
+
+- **`@` names a file.** Type `@` at the start of a word and a menu offers the workspace's
+  files and folders, fuzzy-ranked like the slash menu (`@tuimod` finds `src/tui/mod.rs`);
+  Tab or Enter inserts `@path`, a folder as `@folder/` to keep typing in it. The listing
+  honors `.gitignore` and is read afresh each time an `@` is typed. When the message is sent
+  — idle, steering, or as a skill's argument — the files it names follow the text in one
+  system reminder, so the model has their contents without a read. A binary file is named
+  only; a long one is cut at the `read` tool's 50 KB.
+- **The resume command stands on its own line** after killi quits, so it copies alone.
+
 ## 0.4.4 — 2026-10-24
 
 - **A first run can start from omp too.** Without a config, the import offers now include
