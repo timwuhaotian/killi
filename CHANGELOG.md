@@ -5,6 +5,32 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.0 — 2026-10-24
+
+- **Streams cannot end in the middle and pass as replies.** Malformed SSE data, an
+  unconsumed stream tail or a missing protocol terminator now retries instead of recording a
+  partial answer or acting on cut-off tool arguments. Replies stopped at the output limit are
+  returned for continuation, while filters and refusals are no longer repeated unchanged.
+- **Structured reasoning survives a tool call.** OpenAI-compatible `reasoning_details` are
+  kept by item and replayed to the endpoint that produced them, including Kimi's stream-only
+  indexes being left out on replay; Anthropic-compatible sessions still receive the matching
+  scalar reasoning when they cannot use those structured items.
+- **Output fits the context that is left.** Each wire format caps its output by the estimated
+  remaining window (with images reserved as images, not as base64 text), older Claude thinking
+  budgets stay below `max_tokens`, and compaction counts the messages added since the last
+  billed request. A conversation that already overflowed is summarized from a reduced copy
+  without editing signed reasoning.
+- **Reads run together.** Consecutive `read`, `grep` and `glob` calls in one reply run in
+  parallel and answer in call order; hooks and every other tool keep the old serial order.
+  A repeated call whose result keeps changing warns instead of ending the turn, and a turn's
+  subagents share one swarm budget.
+- **Search says when it could not search.** Ordinary grep reads line by line, traversal and
+  read failures are reported instead of becoming "no matches", and a failed command keeps the
+  start of its output with the tail, in the same 50KB budget, so the first error is not buried.
+- **Eval reports count every repeat.** `eval.py` keeps all runs of each tool's latest version
+  and model, excludes records with failed metrics from performance means instead of counting
+  them as zeroes, and shows `N/A` when there is nothing valid to average.
+
 ## 0.3.1 — 2026-10-24
 
 - **A queued message leaves the queue once it is sent.** A message typed while the agent
