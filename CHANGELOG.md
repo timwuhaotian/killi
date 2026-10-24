@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.1 — 2026-10-24
+
 - **`/update-config`, a built-in skill about killi's own configuration.** It lists every
   file under `~/.killi` and in the project, every key of `config.toml`, `mcp.json` and the
   hooks with its default, and what applies on `/reload` against the next start, so the agent
