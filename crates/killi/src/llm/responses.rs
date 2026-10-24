@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-use super::{Delta, Failure, Prepared, Reply, StreamParser, ToolCall, content_text, system_text, truncate};
+use super::{Delta, Failure, Prepared, Reply, StreamParser, ToolCall, cap_output, content_text, system_text, truncate};
 use crate::config::{ResolvedModel, Thinking};
 
 pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value], cache_key: &str) -> Result<Prepared> {
@@ -25,11 +25,11 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
             json!({"type": "function", "name": f["name"], "description": f["description"], "parameters": f["parameters"], "strict": false})
         })
         .collect();
-    body.insert("tools".into(), tools.into());
     body.insert("prompt_cache_key".into(), cache_key.into());
     if let Some(max) = model.max_output {
-        body.insert("max_output_tokens".into(), max.clamp(1, 131_072).into());
+        body.insert("max_output_tokens".into(), cap_output(model, messages, &tools, max).clamp(1, 131_072).into());
     }
+    body.insert("tools".into(), tools.into());
     match &model.thinking {
         Thinking::Off => {}
         Thinking::On => {
@@ -101,6 +101,7 @@ fn convert_input(history: &[Value]) -> Vec<Value> {
 pub(super) struct Parser {
     /// Output index of each function call, to route argument deltas.
     calls: HashMap<u64, usize>,
+    terminal: bool,
 }
 
 impl StreamParser for Parser {
@@ -144,6 +145,7 @@ impl StreamParser for Parser {
                 }
             }
             Some("response.completed" | "response.incomplete") => {
+                self.terminal = true;
                 let response = &event["response"];
                 let usage = &response["usage"];
                 let num = |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
@@ -151,9 +153,18 @@ impl StreamParser for Parser {
                 reply.usage.cached = num("/input_tokens_details/cached_tokens");
                 reply.usage.completion = num("/output_tokens");
                 reply.usage.reasoning = num("/output_tokens_details/reasoning_tokens");
-                let truncated = response["incomplete_details"]["reason"] == "max_output_tokens";
+                let incomplete = event["type"] == "response.incomplete";
+                let reason = response["incomplete_details"]["reason"].as_str();
+                if incomplete && reason != Some("max_output_tokens") {
+                    let message = format!("response incomplete: {}", reason.unwrap_or("unknown reason"));
+                    return Err(if reason == Some("content_filter") {
+                        Failure::fatal(message)
+                    } else {
+                        Failure::transient(message)
+                    });
+                }
                 reply.finish_reason = Some(
-                    if truncated {
+                    if incomplete {
                         "length"
                     } else if reply.tool_calls.is_empty() {
                         "stop"
@@ -176,6 +187,14 @@ impl StreamParser for Parser {
             _ => {}
         }
         Ok(())
+    }
+
+    fn finish(&mut self, _reply: &mut Reply) -> Result<(), Failure> {
+        if self.terminal {
+            Ok(())
+        } else {
+            Err(Failure::transient("Responses stream ended without a terminal response event".into()))
+        }
     }
 }
 
@@ -217,5 +236,44 @@ mod tests {
         assert_eq!(reply.reasoning_items.len(), 1);
         assert_eq!(reply.finish_reason.as_deref(), Some("tool_calls"));
         assert_eq!((reply.usage.prompt, reply.usage.cached), (50, 40));
+        parser.finish(&mut reply).unwrap();
+    }
+
+    #[test]
+    fn terminal_event_is_required_and_incomplete_reasons_are_classified() {
+        let mut parser = Parser::default();
+        let mut reply = Reply::default();
+        let mut sink = |_: Delta| {};
+        assert!(parser.finish(&mut reply).unwrap_err().retryable);
+
+        let incomplete = json!({"type": "response.incomplete", "response": {"incomplete_details": {"reason": "content_filter"}}});
+        assert!(!parser.event(&incomplete, &mut reply, &mut sink).unwrap_err().retryable);
+        let incomplete = json!({"type": "response.incomplete", "response": {"incomplete_details": {"reason": "internal_error"}}});
+        assert!(parser.event(&incomplete, &mut reply, &mut sink).unwrap_err().retryable);
+        let truncated = json!({"type": "response.incomplete", "response": {"incomplete_details": {"reason": "max_output_tokens"}}});
+        parser.event(&truncated, &mut reply, &mut sink).unwrap();
+        assert_eq!(reply.finish_reason.as_deref(), Some("length"));
+        parser.finish(&mut reply).unwrap();
+    }
+
+    #[test]
+    fn prepare_caps_output_from_remaining_context() {
+        let model = ResolvedModel {
+            alias: "m".into(),
+            model: "gpt-5".into(),
+            protocol: crate::config::Protocol::Responses,
+            base_url: "http://localhost".into(),
+            api_key: String::new(),
+            headers: Default::default(),
+            max_output: Some(4_000),
+            context_window: Some(2_000),
+            images: false,
+            thinking: Thinking::Off,
+        };
+        let messages = vec![json!({"role": "user", "content": "hello"})];
+        let prepared = prepare(&model, &messages, &[], "cache").unwrap();
+        let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+        let expected = super::cap_output(&model, &messages, &[], 4_000);
+        assert_eq!(body["max_output_tokens"], expected);
     }
 }

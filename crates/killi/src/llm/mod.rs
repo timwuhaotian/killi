@@ -40,7 +40,7 @@ pub struct Reply {
     /// The field an OpenAI-compatible provider used for reasoning, so it is sent back the same way.
     pub reasoning_key: Option<&'static str>,
     /// Provider-specific reasoning to replay verbatim: Anthropic thinking blocks with their
-    /// signatures, or OpenAI Responses reasoning items.
+    /// signatures, OpenAI Chat reasoning details, or OpenAI Responses reasoning items.
     pub reasoning_items: Vec<Value>,
     pub tool_calls: Vec<ToolCall>,
     /// Normalized to OpenAI's values: `stop`, `length`, `tool_calls`.
@@ -72,9 +72,11 @@ struct Prepared {
 /// The state a protocol keeps while it reads one streamed reply.
 trait StreamParser {
     fn event(&mut self, event: &Value, reply: &mut Reply, on_delta: &mut dyn FnMut(Delta)) -> Result<(), Failure>;
-    fn finish(&mut self, _reply: &mut Reply) {}
+    fn done(&mut self) {}
+    fn finish(&mut self, reply: &mut Reply) -> Result<(), Failure>;
 }
 
+#[derive(Debug)]
 struct Failure {
     retryable: bool,
     retry_after: Option<Duration>,
@@ -157,7 +159,7 @@ impl Client {
         }
 
         let mut parser: Box<dyn StreamParser> = match self.model.protocol {
-            Protocol::OpenAi => Box::new(openai::Parser),
+            Protocol::OpenAi => Box::<openai::Parser>::default(),
             Protocol::Anthropic => Box::<anthropic::Parser>::default(),
             Protocol::Responses => Box::<responses::Parser>::default(),
         };
@@ -172,23 +174,95 @@ impl Client {
                 let line = String::from_utf8_lossy(&line);
                 let Some(data) = line.trim().strip_prefix("data:") else { continue };
                 let data = data.trim();
-                if data == "[DONE]" {
+                let Some(event) = parse_sse_data(data)? else {
+                    parser.done();
                     break 'stream;
-                }
-                let Ok(event) = serde_json::from_str::<Value>(data) else { continue };
+                };
                 parser.event(&event, &mut reply, on_delta)?;
             }
         }
-        parser.finish(&mut reply);
-
-        if reply.text.trim().is_empty() && reply.tool_calls.is_empty() {
-            return Err(Failure::transient(match reply.reasoning.is_empty() {
-                true => "empty response".into(),
-                false => "response contained only reasoning".into(),
-            }));
-        }
-        Ok(reply)
+        ensure_stream_consumed(&buffer)?;
+        parser.finish(&mut reply)?;
+        validate_reply(reply)
     }
+}
+
+fn parse_sse_data(data: &str) -> Result<Option<Value>, Failure> {
+    if data == "[DONE]" {
+        return Ok(None);
+    }
+    serde_json::from_str(data)
+        .map(Some)
+        .map_err(|e| Failure::transient(format!("malformed SSE JSON: {e}")))
+}
+
+fn ensure_stream_consumed(buffer: &[u8]) -> Result<(), Failure> {
+    if buffer.iter().all(|b| b.is_ascii_whitespace()) {
+        Ok(())
+    } else {
+        Err(Failure::transient("stream ended with unconsumed data".into()))
+    }
+}
+
+/// Only normal termination and an output-limit reply are usable; in particular, a content
+/// filter must not turn a partial or reasoning-only attempt into a committed assistant turn.
+fn validate_reply(reply: Reply) -> Result<Reply, Failure> {
+    if let Some(reason) = reply.finish_reason.as_deref()
+        && !matches!(reason, "stop" | "length" | "tool_calls")
+    {
+        return Err(Failure::fatal(format!("response terminated abnormally: {reason}")));
+    }
+    if reply.text.trim().is_empty() && reply.tool_calls.is_empty() && reply.finish_reason.is_none() {
+        return Err(Failure::transient(match reply.reasoning.is_empty() {
+            true => "empty response without a termination reason".into(),
+            false => "reasoning-only response without a termination reason".into(),
+        }));
+    }
+    Ok(reply)
+}
+
+const IMAGE_TOKEN_RESERVE: u64 = 2_048;
+
+/// Estimated serialized input size, with inline image data replaced by a fixed per-image
+/// reserve instead of treating base64 as text. This only caps output; it never drives compaction.
+fn estimated_value_bytes(value: &Value) -> u64 {
+    match value {
+        Value::Null => 4,
+        Value::Bool(value) => 4 + u64::from(!*value),
+        Value::Number(value) => value.to_string().len() as u64,
+        Value::String(value) if value.starts_with("data:") && value.contains(";base64,") => IMAGE_TOKEN_RESERVE * 4,
+        Value::String(value) => value.len() as u64 + 2,
+        Value::Array(values) => values
+            .iter()
+            .fold(2, |total, value| total.saturating_add(estimated_value_bytes(value)).saturating_add(1)),
+        Value::Object(values) => values.iter().fold(2, |total, (key, value)| {
+            let value_bytes = if key == "data" && values.get("type").and_then(Value::as_str) == Some("base64") {
+                IMAGE_TOKEN_RESERVE * 4
+            } else {
+                estimated_value_bytes(value)
+            };
+            total
+                .saturating_add(key.len() as u64)
+                .saturating_add(4)
+                .saturating_add(value_bytes)
+        }),
+    }
+}
+
+/// A conservative four-bytes-per-token estimate, including JSON framing and tool schemas.
+fn estimated_input_tokens(messages: &[Value], tools: &[Value]) -> u64 {
+    let bytes = messages.iter().chain(tools).fold(0u64, |total, value| {
+        total.saturating_add(estimated_value_bytes(value))
+    });
+    bytes.saturating_add(3) / 4
+}
+
+const OUTPUT_SAFETY_TOKENS: u64 = 256;
+
+fn cap_output(model: &ResolvedModel, messages: &[Value], tools: &[Value], max: u64) -> u64 {
+    let Some(window) = model.context_window else { return max.max(1) };
+    let reserved = estimated_input_tokens(messages, tools).saturating_add(OUTPUT_SAFETY_TOKENS);
+    max.min(window.saturating_sub(reserved)).max(1)
 }
 
 fn retryable_status(status: StatusCode) -> bool {
@@ -288,5 +362,67 @@ mod tests {
         assert!(backoff(1) >= Duration::from_millis(500) && backoff(1) <= Duration::from_millis(625));
         assert!(backoff(7) >= Duration::from_secs(32) && backoff(7) <= Duration::from_secs(40));
         assert!(backoff(10) <= Duration::from_secs(40));
+    }
+
+    #[test]
+    fn malformed_json_and_unconsumed_stream_tails_are_transient() {
+        assert!(parse_sse_data("{not json}").unwrap_err().retryable);
+        assert!(parse_sse_data("[DONE]").unwrap().is_none());
+        assert!(ensure_stream_consumed(b" \r\n").is_ok());
+        assert!(ensure_stream_consumed(br#"data: {"unfinished":"#).unwrap_err().retryable);
+    }
+
+    #[test]
+    fn empty_replies_follow_their_termination_reason() {
+        let empty = |reason: Option<&str>| Reply {
+            finish_reason: reason.map(str::to_string),
+            ..Reply::default()
+        };
+        assert!(validate_reply(empty(Some("stop"))).is_ok());
+        let reasoning_only = Reply { reasoning: "plan".into(), finish_reason: Some("length".into()), ..Reply::default() };
+        assert!(validate_reply(reasoning_only).is_ok());
+        assert_eq!(validate_reply(empty(Some("length"))).unwrap().finish_reason.as_deref(), Some("length"));
+        assert!(validate_reply(empty(None)).unwrap_err().retryable);
+        assert!(!validate_reply(empty(Some("content_filter"))).unwrap_err().retryable);
+        assert!(!validate_reply(empty(Some("refusal"))).unwrap_err().retryable);
+    }
+
+    #[test]
+    fn input_estimate_reserves_an_image_instead_of_counting_base64_as_text() {
+        let image = serde_json::json!({
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", "A".repeat(1_000_000))}}]
+        });
+        let estimate = estimated_input_tokens(&[image], &[]);
+        assert!((IMAGE_TOKEN_RESERVE..IMAGE_TOKEN_RESERVE + 100).contains(&estimate), "{estimate}");
+    }
+
+    #[test]
+    fn output_cap_reserves_estimated_input_and_never_reaches_zero() {
+        assert_eq!(estimated_input_tokens(&[serde_json::json!(1234)], &[]), 1);
+        assert_eq!(estimated_input_tokens(&[serde_json::json!(12345)], &[]), 2);
+        let model = ResolvedModel {
+            alias: String::new(),
+            model: String::new(),
+            protocol: Protocol::OpenAi,
+            base_url: String::new(),
+            api_key: String::new(),
+            headers: Default::default(),
+            max_output: Some(8_000),
+            context_window: Some(2_000),
+            images: false,
+            thinking: crate::config::Thinking::Off,
+        };
+        let messages = vec![serde_json::json!({"role": "user", "content": "x".repeat(4_000)})];
+        let input = estimated_input_tokens(&messages, &[]);
+        assert_eq!(cap_output(&model, &messages, &[], 8_000), 2_000 - input - OUTPUT_SAFETY_TOKENS);
+        assert_eq!(cap_output(&model, &messages, &[], 100), 100);
+        assert_eq!(cap_output(&model, &messages, &[], 0), 1);
+
+        let mut unknown = model;
+        unknown.context_window = None;
+        assert_eq!(cap_output(&unknown, &messages, &[], 8_000), 8_000);
+        unknown.context_window = Some(1);
+        assert_eq!(cap_output(&unknown, &messages, &[], 8_000), 1);
     }
 }

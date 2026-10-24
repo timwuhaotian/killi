@@ -28,6 +28,8 @@ const MAX_SLEEP: f64 = 30.0;
 const WAKE_POLL: Duration = Duration::from_millis(100);
 /// Output beyond this is dropped from memory, oldest first; the model only ever sees the tail.
 const MAX_CAPTURE: usize = 16 * 1024 * 1024;
+/// The beginning is also kept, within the display budget, so a failed command retains its root cause.
+const HEAD_CAPTURE: usize = MAX_BYTES;
 /// What a finished task keeps of output the model hasn't read; what it has read is let go.
 const FINISHED_KEEP: usize = 1024 * 1024;
 /// How long to read what a command wrote before it exited, once its shell is gone but a job it
@@ -78,6 +80,7 @@ struct Process {
 #[derive(Default)]
 struct Captured {
     bytes: Vec<u8>,
+    head: Vec<u8>,
     /// Bytes dropped from the front to stay under MAX_CAPTURE.
     dropped: usize,
     /// When the last output arrived.
@@ -86,6 +89,8 @@ struct Captured {
 
 impl Captured {
     fn append(&mut self, chunk: &[u8]) {
+        let head = HEAD_CAPTURE.saturating_sub(self.head.len()).min(chunk.len());
+        self.head.extend_from_slice(&chunk[..head]);
         self.bytes.extend_from_slice(chunk);
         self.last = Some(Instant::now());
         if self.bytes.len() > MAX_CAPTURE {
@@ -364,7 +369,7 @@ pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
         () = until(wake) => None,
     };
     let Some(exit) = exit else {
-        let (text, shown) = take_output(ctx, &process, 0);
+        let (text, shown) = take_output(ctx, &process, 0, false);
         let id = ctx.tasks.borrow_mut().add(command, process, shown);
         let why = if wake() {
             format!(
@@ -376,7 +381,8 @@ pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
         };
         return Output::ok(format!("{text}\n[{why}]")).brief(format!("still running → task {id}"));
     };
-    let (mut text, shown) = take_output(ctx, &process, 0);
+    let failed = !matches!(exit, Exit::Code(0));
+    let (mut text, shown) = take_output(ctx, &process, 0, failed);
     let lines = match text.lines().count() {
         _ if text == NO_OUTPUT => "no output".to_string(),
         1 => "1 line".to_string(),
@@ -403,24 +409,39 @@ pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
 }
 
 /// The output after `from`, cut to its last 2000 lines within 50KB, and the new read offset.
-fn take_output(ctx: &Context, process: &Process, from: usize) -> (String, usize) {
+fn take_output(ctx: &Context, process: &Process, from: usize, failed: bool) -> (String, usize) {
     let captured = process.output.lock().expect("output lock");
     let start = from.saturating_sub(captured.dropped).min(captured.bytes.len());
-    let text = String::from_utf8_lossy(&captured.bytes[start..]);
     let lost = captured.dropped.saturating_sub(from);
-    (tail(ctx, &text, lost), captured.dropped + captured.bytes.len())
+    let read_to = captured.dropped + captured.bytes.len();
+    if failed && from == 0 {
+        let missing = lost.saturating_sub(captured.head.len());
+        let overlap = captured.head.len().saturating_sub(captured.dropped).min(captured.bytes.len());
+        let mut bytes = Vec::with_capacity(captured.head.len() + captured.bytes.len() - overlap);
+        bytes.extend_from_slice(&captured.head);
+        bytes.extend_from_slice(&captured.bytes[overlap..]);
+        let text = String::from_utf8_lossy(&bytes);
+        return (failed_tail(ctx, &text, missing), read_to);
+    }
+    let text = String::from_utf8_lossy(&captured.bytes[start..]);
+    (tail(ctx, &text, lost), read_to)
 }
 
 impl Task {
     /// Lets go of a finished task's output: all of it once the model has read it, else the last
     /// megabyte. A task that ran for hours would otherwise hold up to 16 MB until the session ends.
     fn release(&mut self) {
-        if self.process.exit().is_none() || self.process.running() {
+        let Some(exit) = self.process.exit() else { return };
+        if self.process.running() {
             return;
         }
         let mut captured = self.process.output.lock().expect("output lock");
-        let keep = if self.read_to >= captured.dropped + captured.bytes.len() { 0 } else { FINISHED_KEEP };
-        captured.trim(keep);
+        let read = self.read_to >= captured.dropped + captured.bytes.len();
+        captured.trim(if read { 0 } else { FINISHED_KEEP });
+        // A failed task's first read still needs the output's head for its root cause.
+        if read || matches!(exit, Exit::Code(0)) {
+            captured.head = Vec::new();
+        }
     }
 }
 
@@ -498,7 +519,8 @@ pub async fn task_output(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output 
     }
     let mut tasks = ctx.tasks.borrow_mut();
     let task = tasks.list.get_mut(&id).expect("task exists");
-    let (text, read_to) = take_output(ctx, &task.process, task.read_to);
+    let failed = task.process.exit().is_some_and(|exit| !matches!(exit, Exit::Code(0)));
+    let (text, read_to) = take_output(ctx, &task.process, task.read_to, failed);
     task.read_to = read_to;
     task.release();
     let status = match task.process.exit() {
@@ -569,6 +591,77 @@ fn tail(ctx: &Context, output: &str, dropped: usize) -> String {
     };
     let lost = if dropped > 0 { format!(" The first {dropped} bytes were not kept.") } else { String::new() };
     format!("[Showing lines {}-{total} of {total}.{saved}{lost}]\n{shown}", start + 1)
+}
+
+/// Keeps both ends of a failed command within the same display budget as `tail`.
+/// `missing` counts only retained-output bytes that were dropped between head and tail.
+fn failed_tail(ctx: &Context, output: &str, missing: usize) -> String {
+    let output = output.trim_end_matches('\n');
+    if output.is_empty() {
+        return NO_OUTPUT.into();
+    }
+    let total = output.bytes().filter(|&b| b == b'\n').count() + 1;
+    if total <= MAX_LINES && output.len() <= MAX_BYTES && missing == 0 {
+        return output.to_string();
+    }
+    let saved = match spill(ctx, "bash", output) {
+        Some(path) => {
+            format!(" {}: {}", if missing > 0 { "Retained output" } else { "Full output" }, path.display())
+        }
+        None => String::new(),
+    };
+    let lost = if missing > 0 {
+        format!(" {missing} bytes between the retained head and tail were not kept.")
+    } else {
+        String::new()
+    };
+    let separator = "\n[... output omitted ...]\n";
+    let body_budget = MAX_BYTES - separator.len();
+    let line_budget = MAX_LINES - 1;
+    let head_line_budget = line_budget / 2;
+    let head_byte_budget = body_budget / 2;
+    let mut head_end = 0;
+    let mut head_lines = 0;
+    for line in output.split('\n') {
+        let next = line.len() + usize::from(head_lines > 0);
+        if head_lines == head_line_budget || head_end + next > head_byte_budget {
+            break;
+        }
+        head_end += next;
+        head_lines += 1;
+    }
+    if head_lines == 0 {
+        head_end = head_byte_budget.min(output.len());
+        while !output.is_char_boundary(head_end) {
+            head_end -= 1;
+        }
+        head_lines = 1;
+    }
+
+    let tail_byte_budget = body_budget - head_end;
+    let tail_line_budget = line_budget - head_lines;
+    let mut tail_start = output.len();
+    let mut tail_lines = 0;
+    for line in output.rsplit('\n') {
+        let next = line.len() + usize::from(tail_lines > 0);
+        if tail_lines == tail_line_budget || output.len() - tail_start + next > tail_byte_budget {
+            break;
+        }
+        tail_start -= line.len();
+        if tail_lines > 0 {
+            tail_start -= 1;
+        }
+        tail_lines += 1;
+    }
+    if tail_lines == 0 {
+        tail_start = output.len() - floor_boundary(output, tail_byte_budget);
+        tail_lines = 1;
+    }
+    let head = &output[..head_end];
+    let tail = &output[tail_start..];
+    format!(
+        "[Showing the first {head_lines} and last {tail_lines} lines of {total}.{saved}{lost}]\n{head}{separator}{tail}"
+    )
 }
 
 fn floor_boundary(s: &str, max: usize) -> usize {
@@ -810,6 +903,44 @@ mod tests {
         let text = tail(&ctx, &output, 0);
         assert!(text.starts_with("[Showing lines 1001-3000 of 3000. Full output: "));
         assert!(text.ends_with("\n3000"));
+        let _ = fs::remove_dir_all(&ctx.spill_dir);
+    }
+
+    #[test]
+    fn failed_output_keeps_the_head_and_tail_within_budget_and_utf8() {
+        let ctx = ctx();
+        let output = format!("根因: first\n{}末尾: last", (1..=3000).map(|n| format!("行 {n}\n")).collect::<String>());
+        let text = failed_tail(&ctx, &output, 0);
+        assert!(text.starts_with("[Showing the first "), "{}", &text[..160]);
+        assert!(text.contains(" lines of 3002. Full output: /"), "{}", &text[..160]);
+        let body = text.split_once('\n').unwrap().1;
+        assert!(body.starts_with("根因: first\n"));
+        assert!(body.ends_with("末尾: last"));
+        assert!(body.len() <= MAX_BYTES);
+        assert!(body.lines().count() <= MAX_LINES);
+        assert_eq!(failed_tail(&ctx, "first\nlast", 0), "first\nlast");
+        let _ = fs::remove_dir_all(&ctx.spill_dir);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_command_returns_both_ends_and_the_spill_path() {
+        let ctx = ctx();
+        let command = "echo '根因: first'; for n in {1..2100}; do echo \"line $n\"; done; echo '末尾: last'; exit 9";
+        let out = bash(&ctx, &json!({"command": command}), &never).await;
+        assert!(out.is_error);
+        assert!(out.text.contains("根因: first"), "{}", &out.text[..160]);
+        assert!(out.text.contains("末尾: last\n[Command exited with code 9]"));
+        assert!(out.text.contains("Full output: /"), "{}", &out.text[..200]);
+        let _ = fs::remove_dir_all(&ctx.spill_dir);
+    }
+
+    #[test]
+    fn failed_output_cuts_a_wide_line_at_utf8_boundaries() {
+        let ctx = ctx();
+        let output = "界".repeat(MAX_BYTES);
+        let text = failed_tail(&ctx, &output, 0);
+        assert!(text.contains("[... output omitted ...]"));
+        assert!(text.split_once('\n').unwrap().1.len() <= MAX_BYTES);
         let _ = fs::remove_dir_all(&ctx.spill_dir);
     }
 

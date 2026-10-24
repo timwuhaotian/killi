@@ -158,6 +158,7 @@ def run_one(tool, task_dir, spec, log_dir, version):
     record = {
         "tool": tool,
         "version": version,
+        "config_model": "default" if tool == "claude" else MODEL,
         "task": task_dir.name,
         "kind": spec["kind"],
         "when": datetime.now().isoformat(timespec="seconds"),
@@ -195,12 +196,44 @@ def run(tools, names, repeat):
     print(f"logs in {log_dir}")
 
 
+def config_of(row):
+    return (row.get("version", "?"), row.get("config_model") or row.get("model", "?"))
+
+
 def latest_results():
     rows = [json.loads(line) for line in RESULTS.read_text().splitlines() if line.strip()]
+    configs = {}
+    for row in rows:
+        # A metrics failure must not make `(version, "?")` look like a new configuration.
+        # Old records only have the model metrics() reported, so use it as their fallback.
+        if "config_model" in row or "model" in row:
+            configs[row["tool"]] = config_of(row)
     latest = {}
     for row in rows:
-        latest.setdefault((row["tool"], row["task"]), []).append(row)
+        if configs.get(row["tool"]) == config_of(row):
+            latest.setdefault((row["tool"], row["task"]), []).append(row)
+    # A row that predates config_model and lacks model after a metrics failure cannot be
+    # attributed with certainty; if its tool/version has exactly one selected config, keep
+    # its pass/fail there while metrics_valid keeps it out of performance means.
+    for row in rows:
+        if configs.get(row["tool"]) != config_of(row) and "config_model" not in row and "model" not in row:
+            config = configs.get(row["tool"])
+            if config and config[0] == row.get("version", "?"):
+                latest.setdefault((row["tool"], row["task"]), []).append(row)
     return latest
+
+
+def metrics_valid(row):
+    fields = ("wall_s", "memory_mb", "requests", "input_fresh", "input_cached", "output")
+    return "metrics_error" not in row and all(row.get(field) is not None for field in fields)
+
+
+def average(rows, field):
+    return sum(row[field] for row in rows) / len(rows) if rows else None
+
+
+def format_metric(value, spec, suffix=""):
+    return "N/A" if value is None else f"{value:{spec}}{suffix}"
 
 
 def report():
@@ -212,10 +245,11 @@ def report():
     task_names = sorted({task for _, task in latest})
     summary = {}
     for tool in names:
-        runs = [rs[-1] for (t, _), rs in latest.items() if t == tool]
+        runs = [r for (t, _), rs in latest.items() if t == tool for r in rs]
         if not runs:
             continue
         count = len(runs)
+        valid = [r for r in runs if metrics_valid(r)]
         summary[tool] = {
             "name": labels[tool],
             "version": runs[-1].get("version", "?"),
@@ -223,12 +257,14 @@ def report():
             "runs": count,
             "passed": sum(r["passed"] for r in runs),
             "pass_rate": sum(r["passed"] for r in runs) / count,
-            "avg_wall_s": sum(r["wall_s"] for r in runs) / count,
-            "avg_input": sum(r.get("input_fresh", 0) + r.get("input_cached", 0) for r in runs) / count,
-            "avg_fresh": sum(r.get("input_fresh", 0) for r in runs) / count,
-            "avg_output": sum(r.get("output", 0) for r in runs) / count,
-            "avg_requests": sum(r.get("requests", 0) for r in runs) / count,
-            "avg_memory_mb": sum(r.get("memory_mb") or 0 for r in runs) / count,
+            "valid_metrics": len(valid),
+            "invalid_metrics": count - len(valid),
+            "avg_wall_s": average(valid, "wall_s"),
+            "avg_input": sum(r["input_fresh"] + r["input_cached"] for r in valid) / len(valid) if valid else None,
+            "avg_fresh": average(valid, "input_fresh"),
+            "avg_output": average(valid, "output"),
+            "avg_requests": average(valid, "requests"),
+            "avg_memory_mb": average(valid, "memory_mb"),
         }
     (ROOT / "docs/eval.json").write_text(json.dumps({"summary": summary, "runs": latest_rows(latest)}, indent=1) + "\n")
     chart.render_eval(summary)
@@ -236,22 +272,25 @@ def report():
     lines = ["# Capability tests", "",
              f"{len(task_names)} coding tasks, each run through killi, Kimi Code and Claude Code with `scripts/eval.py`.",
              "A task passes when its check (the project's tests, clippy, or an exact answer) succeeds after the",
-             "tool finishes; the tests are restored first, so editing them doesn't help.", ""]
+             "tool finishes; the tests are restored first, so editing them doesn't help.",
+             "The main report includes every repeat of each tool's latest version and model configuration.",
+             "Pass rates include all runs; performance means use only records with complete, valid metrics.", ""]
     lines += ["| | " + " | ".join(summary[t]["name"] for t in summary) + " |", "|---|" + "---|" * len(summary)]
     rows = [
         ("Version", lambda s: s["version"]),
         ("Model", lambda s: s["model"]),
         ("Passed", lambda s: f'{s["passed"]} / {s["runs"]}'),
-        ("Input tokens per task", lambda s: f'{s["avg_input"]:,.0f}'),
-        ("… not from cache", lambda s: f'{s["avg_fresh"]:,.0f}'),
-        ("Output tokens per task", lambda s: f'{s["avg_output"]:,.0f}'),
-        ("Requests per task", lambda s: f'{s["avg_requests"]:.1f}'),
-        ("Time per task", lambda s: f'{s["avg_wall_s"]:.0f} s'),
-        ("Peak memory", lambda s: f'{s["avg_memory_mb"]:.0f} MB'),
+        ("Valid metrics", lambda s: f'{s["valid_metrics"]} / {s["runs"]}'),
+        ("Input tokens per run", lambda s: format_metric(s["avg_input"], ",.0f")),
+        ("… not from cache", lambda s: format_metric(s["avg_fresh"], ",.0f")),
+        ("Output tokens per run", lambda s: format_metric(s["avg_output"], ",.0f")),
+        ("Requests per run", lambda s: format_metric(s["avg_requests"], ".1f")),
+        ("Time per run", lambda s: format_metric(s["avg_wall_s"], ".0f", " s")),
+        ("Peak memory", lambda s: format_metric(s["avg_memory_mb"], ".0f", " MB")),
     ]
     for label, fmt in rows:
         lines.append(f"| {label} | " + " | ".join(fmt(summary[t]) for t in summary) + " |")
-    lines += ["", "## Per task", "", "Pass (✓) or fail (✗), input tokens, and time.", ""]
+    lines += ["", "## Per task", "", "Passed runs, mean input tokens, and mean time over records with valid metrics.", ""]
     lines += ["| Task | " + " | ".join(summary[t]["name"] for t in summary) + " |", "|---|" + "---|" * len(summary)]
     for task in task_names:
         cells = []
@@ -260,9 +299,14 @@ def report():
             if not rs:
                 cells.append("–")
                 continue
-            r = rs[-1]
-            tokens = r.get("input_fresh", 0) + r.get("input_cached", 0)
-            cells.append(f'{"✓" if r["passed"] else "✗"} {tokens / 1000:.0f}k · {r["wall_s"]:.0f} s')
+            valid = [r for r in rs if metrics_valid(r)]
+            tokens = sum(r["input_fresh"] + r["input_cached"] for r in valid) / len(valid) if valid else None
+            cell = f'{sum(r["passed"] for r in rs)} / {len(rs)} passed · '
+            cell += f'{format_metric(tokens / 1000 if tokens is not None else None, ".0f", "k")} · '
+            cell += format_metric(average(valid, "wall_s"), ".0f", " s")
+            if len(valid) < len(rs):
+                cell += f" · {len(rs) - len(valid)} invalid"
+            cells.append(cell)
         lines.append(f"| `{task}` | " + " | ".join(cells) + " |")
     every = [json.loads(line) for line in RESULTS.read_text().splitlines() if line.strip()]
     versions = {}
@@ -273,12 +317,13 @@ def report():
         lines += ["", "## killi across versions", "", "Every run of killi, by version, on the tasks that version ran.", "",
                   "| Version | Passed | Input tokens per task | … not from cache | Requests per task | Time per task |", "|---|---|---|---|---|---|"]
         for version, rows in sorted(versions.items()):
-            n = len(rows)
+            valid = [r for r in rows if metrics_valid(r)]
+            tokens = sum(r["input_fresh"] + r["input_cached"] for r in valid) / len(valid) if valid else None
             lines.append(
-                f"| {version} | {sum(r['passed'] for r in rows)} / {n} | "
-                f"{sum(r.get('input_fresh', 0) + r.get('input_cached', 0) for r in rows) / n:,.0f} | "
-                f"{sum(r.get('input_fresh', 0) for r in rows) / n:,.0f} | "
-                f"{sum(r.get('requests', 0) for r in rows) / n:.1f} | {sum(r['wall_s'] for r in rows) / n:.0f} s |"
+                f"| {version} | {sum(r['passed'] for r in rows)} / {len(rows)} | "
+                f"{format_metric(tokens, ',.0f')} | {format_metric(average(valid, 'input_fresh'), ',.0f')} | "
+                f"{format_metric(average(valid, 'requests'), '.1f')} | "
+                f"{format_metric(average(valid, 'wall_s'), '.0f', ' s')} |"
             )
     lines += ["", "Peak memory is the tool's own process (macOS peak memory footprint), not the compilers or",
               "test runners it starts. Claude Code's tokens include this machine's skills, plugins and MCP",
@@ -288,7 +333,7 @@ def report():
 
 
 def latest_rows(latest):
-    return [rs[-1] for rs in latest.values()]
+    return [dict(row, metrics_valid=metrics_valid(row)) for rows in latest.values() for row in rows]
 
 
 def main():

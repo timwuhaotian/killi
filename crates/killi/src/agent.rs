@@ -10,7 +10,7 @@ use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, future::join_all};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -27,6 +27,8 @@ const REPEAT_WARNINGS: [u32; 3] = [3, 5, 7];
 const REPEAT_STOP: u32 = 8;
 const MAX_RESULT_CHARS: usize = 50_000;
 const MAX_PARALLEL_AGENTS: usize = 4;
+const MAX_SWARM_AGENTS_PER_TURN: usize = swarm::MAX_ITEMS;
+const DEFAULT_OUTPUT_RESERVE: u64 = 4_096;
 /// User prompts kept word for word through a compaction, in characters (about 20k tokens).
 const KEPT_PROMPTS_CHARS: usize = 80_000;
 
@@ -179,7 +181,7 @@ fn unanswered(messages: &[Value]) -> Vec<String> {
 
 #[derive(Clone, Default)]
 pub struct Settings {
-    /// Compact once a request's input passes this many tokens.
+    /// Compact once billed input, an estimated appended suffix and output reserve pass this.
     pub compact_at: u64,
     /// Extra command prefixes bash may run in plan mode.
     pub plan_allow: Vec<String>,
@@ -243,6 +245,10 @@ pub struct Agent {
     ids: HashSet<String>,
     /// Identical tool calls made in the current turn, by a hash of the call.
     repeats: HashMap<u64, Repeat>,
+    /// History length at the last usage report; later messages are the unbilled suffix.
+    accounted_messages: usize,
+    /// Subagents started by swarm calls in this turn.
+    swarm_used: usize,
     /// The log already says that the provider hides its reasoning.
     reasoning_noted: bool,
     todos: Vec<Todo>,
@@ -301,6 +307,7 @@ impl Agent {
                 }
             }
         }
+        agent.accounted_messages = loaded.messages.len();
         agent.messages = Rc::new(loaded.messages);
         agent.stats.context = loaded.context;
         agent.recover()?;
@@ -333,6 +340,8 @@ impl Agent {
             sink,
             ids: HashSet::new(),
             repeats: HashMap::new(),
+            accounted_messages: 0,
+            swarm_used: 0,
             reasoning_noted: false,
             todos: Vec::new(),
             plan_announced: false,
@@ -445,6 +454,7 @@ impl Agent {
     pub async fn run(&mut self, user: &str, images: &[Image]) -> Result<(String, Stop)> {
         // The breaker is for a loop inside one turn; a call the user asks for again is not one.
         self.repeats.clear();
+        self.swarm_used = 0;
         let mut notes = Vec::new();
         if std::mem::take(&mut self.interrupted) {
             notes.push("The user interrupted your previous turn.".to_string());
@@ -483,7 +493,7 @@ impl Agent {
                 Ok(reply) => reply,
                 Err(error) if !overflow_compacted && is_overflow(&error) => {
                     overflow_compacted = true;
-                    self.compact(None).await?;
+                    self.compact_with(None, CompactMode::Reduced).await?;
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -575,7 +585,18 @@ impl Agent {
         if let Some(window) = self.client.model.context_window {
             limit = limit.min(window * 85 / 100);
         }
-        limit > 0 && self.stats.context > limit
+        if limit == 0 {
+            return false;
+        }
+        let suffix = estimate_tokens(&self.messages[self.accounted_messages.min(self.messages.len())..]);
+        let reserve = self.client.model.max_output.unwrap_or(DEFAULT_OUTPUT_RESERVE);
+        // If the maximum output alone exhausts the configured compaction limit, no suffix can
+        // ever fit that rule. Keep ordinary proactive compaction off rather than compacting
+        // after every appended message; provider output caps and overflow recovery still apply.
+        if reserve >= limit {
+            return self.stats.context.saturating_add(suffix) > limit;
+        }
+        self.stats.context.saturating_add(suffix) > limit - reserve
     }
 
     async fn request(&mut self) -> Result<Reply> {
@@ -622,6 +643,7 @@ impl Agent {
     fn account(&mut self, usage: &Usage, finish_reason: Option<&Option<String>>, took: Option<Duration>) -> Result<()> {
         self.stats.first_prompt.get_or_insert(usage.prompt);
         self.stats.context = usage.prompt;
+        self.accounted_messages = self.messages.len();
         let total = &mut self.stats.usage;
         total.prompt += usage.prompt;
         total.cached += usage.cached;
@@ -665,9 +687,10 @@ impl Agent {
         Ok(calls)
     }
 
-    /// Runs a reply's tool calls in order; consecutive `agent` calls run in parallel, and an
-    /// `agent_swarm` call runs its subagents in parallel. A message typed meanwhile waits for
-    /// the call running now, not for the ones after it: those are answered as not run.
+    /// Runs a reply's tool calls in order; consecutive read-only file/search calls and `agent`
+    /// calls run in parallel, and an `agent_swarm` call runs its subagents in parallel. Hooks
+    /// keep every call serial. A message typed meanwhile waits for the calls running now, not
+    /// for the ones after them: those are answered as not run.
     /// Returns true when the repeat breaker trips.
     async fn execute_calls(&mut self, calls: Vec<(String, ToolCall)>, truncated: bool) -> Result<bool> {
         let mut stop = false;
@@ -679,6 +702,20 @@ impl Agent {
                     self.push(json!({"role": "tool", "tool_call_id": id, "content": SKIPPED_FOR_MESSAGE}))?;
                 }
                 break;
+            }
+            if self.settings.hooks.is_empty() && parallel_read(&calls[i].1) {
+                let end = calls[i..].iter().position(|(_, c)| !parallel_read(c)).map_or(calls.len(), |n| i + n);
+                let started = Instant::now();
+                let outputs = self.execute_reads(&calls[i..end], truncated).await;
+                let took = started.elapsed();
+                for ((id, call), output) in calls[i..end].iter().zip(outputs) {
+                    if let Some(image) = &output.image {
+                        images.push((tools::summary(&call.name, &parse_args(call).unwrap_or_default(), &self.ctx.cwd), image.clone()));
+                    }
+                    stop |= self.finish_call(id, call, output, took)?;
+                }
+                i = end;
+                continue;
             }
             if calls[i].1.name == "agent" && self.depth == 0 {
                 let end = calls[i..].iter().position(|(_, c)| c.name != "agent").map_or(calls.len(), |n| i + n);
@@ -726,6 +763,41 @@ impl Agent {
         }
         let parts: Vec<Value> = images.iter().flat_map(|image| image_parts(&format!("{}:", image.label), &image.url)).collect();
         self.push(json!({"role": "user", "content": parts}))
+    }
+
+    /// Runs a consecutive read-only group without a `Send` bound, then returns outputs in call
+    /// order. Parsing, summaries and instruction-file discovery stay the same as for `execute`.
+    async fn execute_reads(&mut self, group: &[(String, ToolCall)], truncated: bool) -> Vec<tools::Output> {
+        let mut pending = Vec::with_capacity(group.len());
+        for (id, call) in group {
+            self.stats.tool_calls += 1;
+            let mut invalid = None;
+            let args = match parse_args(call) {
+                Ok(args) => {
+                    self.tool_start(id, &tools::summary(&call.name, &args, &self.ctx.cwd));
+                    if let Some(path) = args["path"].as_str() {
+                        self.instructions.touched(&tools::resolve(&self.ctx, path));
+                    }
+                    args
+                }
+                Err(why) => {
+                    self.tool_start(id, &format!("{} (invalid arguments)", call.name));
+                    invalid = Some(invalid_arguments(call, &why, truncated));
+                    json!({})
+                }
+            };
+            let ctx = self.ctx.clone();
+            let name = call.name.clone();
+            let steer = (self.depth == 0).then(|| self.controls.steer.clone());
+            pending.push(async move {
+                if let Some(output) = invalid {
+                    output
+                } else {
+                    dispatch_tool(&ctx, &name, args, steer).await
+                }
+            });
+        }
+        join_all(pending).await
     }
 
     async fn execute(&mut self, id: &str, call: &ToolCall, truncated: bool) -> tools::Output {
@@ -778,8 +850,7 @@ impl Agent {
             _ => {
                 // Only the top-level agent hears the user; a subagent waits out its own commands.
                 let steer = (self.depth == 0).then(|| self.controls.steer.clone());
-                let wake = move || steer.as_ref().is_some_and(|steer| !steer.borrow().is_empty());
-                tools::run(&self.ctx, &call.name, args, &wake).await
+                dispatch_tool(&self.ctx, &call.name, args, steer).await
             }
         }
     }
@@ -810,15 +881,19 @@ impl Agent {
         let result = hash_text(&output.text);
         let (count, same) = self.repeats.entry(repeat_key(call, result)).or_default().note(result);
         if REPEAT_WARNINGS.contains(&count) {
-            let same = if same { " and got the same result" } else { "" };
+            let warning = if same {
+                " and got the same result. Repeating it won't change the result; try a different approach."
+            } else {
+                ". Its result changed, so this is a repetition warning, not a stale-result loop."
+            };
             output.text.push_str(&format!(
-                "\n\n<system-reminder>You have made this exact {} call {count} times{same}. Repeating it won't change the result; try a different approach.</system-reminder>",
+                "\n\n<system-reminder>You have made this exact {} call {count} times{warning}</system-reminder>",
                 call.name
             ));
         }
         let meta = json!({"is_error": output.is_error, "brief": output.brief, "ms": millis(took)});
         self.push_meta(json!({"role": "tool", "tool_call_id": id, "content": output.text}), Some(meta))?;
-        Ok(count >= REPEAT_STOP)
+        Ok(same && count >= REPEAT_STOP)
     }
 
     /// Notes something for later, or crosses an item off, in the project's `later.md`.
@@ -929,7 +1004,7 @@ impl Agent {
     }
 
     /// Runs an `agent_swarm` call: one fresh subagent per item, `swarm_parallel` at a time,
-    /// and one result with every report in item order.
+    /// bounded by the turn's total swarm budget, with every report in item order.
     async fn run_swarm(&mut self, id: &str, call: &ToolCall) -> tools::Output {
         self.stats.tool_calls += 1;
         let args = match parse_args(call) {
@@ -944,6 +1019,10 @@ impl Agent {
             Ok(prompts) => prompts,
             Err(why) => return tools::Output::error(why),
         };
+        if let Err(why) = reserve_swarm(self.swarm_used, prompts.len()) {
+            return tools::Output::error(why);
+        }
+        self.swarm_used += prompts.len();
         let description = args["description"].as_str().map(str::trim).filter(|d| !d.is_empty()).unwrap_or("swarm");
         let mut jobs = Vec::new();
         for (n, (_, prompt)) in prompts.iter().enumerate() {
@@ -1033,6 +1112,8 @@ impl Agent {
             sink,
             ids: self.ids.clone(),
             repeats: HashMap::new(),
+            accounted_messages: 0,
+            swarm_used: 0,
             reasoning_noted: false,
             todos: Vec::new(),
             plan_announced: self.plan_announced,
@@ -1049,8 +1130,15 @@ impl Agent {
     /// Replaces the conversation with the user's prompts, word for word, and a summary of
     /// the work. The only time earlier messages change.
     pub async fn compact(&mut self, focus: Option<&str>) -> Result<()> {
+        self.compact_with(focus, CompactMode::Full).await
+    }
+
+    async fn compact_with(&mut self, focus: Option<&str>, mode: CompactMode) -> Result<()> {
         (self.sink)(Event::Notice("Compacting the conversation…".into()));
-        let mut request = self.messages.to_vec();
+        let mut request = match mode {
+            CompactMode::Full => self.messages.to_vec(),
+            CompactMode::Reduced => reduced(&self.messages),
+        };
         let mut instruction = COMPACT_INSTRUCTION.to_string();
         if let Some(focus) = focus.filter(|f| !f.trim().is_empty()) {
             instruction.push_str(&format!("\nThe user asked the summary to focus on: {focus}"));
@@ -1059,7 +1147,7 @@ impl Agent {
         request.push(instruction.clone());
         let reply = match self.client.complete(&request, &self.tools, &self.session.id, &mut |_| {}).await {
             // Too long to be read even to summarize it: summarize it with its bulk cut.
-            Err(error) if is_overflow(&error) => {
+            Err(error) if mode == CompactMode::Full && is_overflow(&error) => {
                 request = reduced(&self.messages);
                 request.push(instruction);
                 self.client.complete(&request, &self.tools, &self.session.id, &mut |_| {}).await?
@@ -1091,6 +1179,7 @@ impl Agent {
         self.share();
         self.session.record(&json!({"type": "compaction", "messages": *self.messages}))?;
         self.stats.context = 0;
+        self.accounted_messages = self.messages.len();
         (self.sink)(Event::Notice("Compacted.".into()));
         Ok(())
     }
@@ -1161,26 +1250,133 @@ impl Agent {
     }
 }
 
+/// Whether a built-in call only reads files or search results and can share a read-only batch.
+fn parallel_read(call: &ToolCall) -> bool {
+    matches!(call.name.as_str(), "read" | "grep" | "glob")
+}
+
+/// Dispatches the tools that need only their shared context, without borrowing the agent.
+async fn dispatch_tool(ctx: &tools::Context, name: &str, args: Value, steer: Option<Rc<RefCell<VecDeque<Steered>>>>) -> tools::Output {
+    let wake = move || steer.as_ref().is_some_and(|steer| !steer.borrow().is_empty());
+    tools::run(ctx, name, args, &wake).await
+}
+
+fn reserve_swarm(used: usize, requested: usize) -> Result<(), String> {
+    let remaining = MAX_SWARM_AGENTS_PER_TURN.saturating_sub(used);
+    if requested > remaining {
+        return Err(format!(
+            "This turn's swarm budget has {remaining} subagents left, but this call needs {requested}. Use fewer items or finish with the existing reports; the total limit is {MAX_SWARM_AGENTS_PER_TURN}."
+        ));
+    }
+    Ok(())
+}
+
+/// A conservative character-based estimate for history appended since the last usage report.
+/// The billed fixed prefix stays in `stats.context`; this estimates only the new suffix.
+fn estimate_tokens(messages: &[Value]) -> u64 {
+    messages.iter().fold(0_u64, |total, message| {
+        let chars = message.to_string().chars().count() as u64;
+        total.saturating_add(chars.div_ceil(2)).saturating_add(4)
+    })
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum CompactMode {
+    Full,
+    Reduced,
+}
+
 /// Characters of a tool result kept in a conversation cut down to be summarized.
 const REDUCED_RESULT_CHARS: usize = 2_000;
+const REDUCED_TEXT_CHARS: usize = 4_000;
+const REDUCED_REASONING_CHARS: usize = 1_000;
+const REDUCED_RECENT_MESSAGES: usize = 8;
 
-/// `messages` with their bulk cut, for a summary request that must fit a window the whole
-/// conversation overflowed: long tool results are shortened and images dropped.
+/// `messages` with their bulk cut for a reduced summary request. The system prompt and recent
+/// text stay verbatim; old prose keeps both ends, and old signed reasoning is dropped rather
+/// than edited. This reduces the request conservatively, without promising a token-level fit.
 fn reduced(messages: &[Value]) -> Vec<Value> {
+    let recent_from = messages.len().saturating_sub(REDUCED_RECENT_MESSAGES);
     messages
         .iter()
-        .map(|message| {
-            let mut message = message.clone();
-            if message["role"] == "tool" {
+        .enumerate()
+        .map(|(index, original)| {
+            let mut message = original.clone();
+            let role = message["role"].as_str().unwrap_or_default().to_string();
+            if role == "system" {
+                return message;
+            }
+            if role == "tool" {
                 if let Some(text) = message["content"].as_str().filter(|t| t.len() > REDUCED_RESULT_CHARS) {
                     message["content"] = format!("{}\n[… cut to fit the context window]", truncate(text, REDUCED_RESULT_CHARS)).into();
                 }
-            } else if let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) {
+                return message;
+            }
+            if let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) {
                 parts.retain(|part| part["type"] != "image_url");
+            }
+            if index >= recent_from {
+                return message;
+            }
+            let protected_user = role == "user"
+                && message["content"].as_str().is_some_and(|text| {
+                    text.starts_with(crate::session::COMPACTED_MARK) || text.contains("<system-reminder>")
+                });
+            if matches!(role.as_str(), "assistant" | "user") && !protected_user {
+                match message.get_mut("content") {
+                    Some(Value::String(text)) => reduce_text(text, REDUCED_TEXT_CHARS),
+                    Some(Value::Array(parts)) => {
+                        for part in parts {
+                            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                let text = text.to_string();
+                                part["text"] = cut_middle(&text, REDUCED_TEXT_CHARS).into();
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if role == "assistant" {
+                // Reasoning is replayed verbatim. An oversized old reasoning bundle is dropped
+                // as one bundle, never truncated or left inconsistent with its signed items.
+                let reasoning_size = crate::llm::REASONING_KEYS
+                    .iter()
+                    .map(|key| message.get(*key).map_or(0, |value| value.to_string().len()))
+                    .sum::<usize>()
+                    + message.get("reasoning_items").map_or(0, |value| value.to_string().len());
+                if reasoning_size > REDUCED_REASONING_CHARS {
+                    let object = message.as_object_mut().expect("a message is an object");
+                    for key in crate::llm::REASONING_KEYS {
+                        object.remove(key);
+                    }
+                    object.remove("reasoning_items");
+                }
             }
             message
         })
         .collect()
+}
+
+fn reduce_text(text: &mut String, limit: usize) {
+    if text.len() > limit {
+        *text = cut_middle(text, limit);
+    }
+}
+
+/// Cuts the middle so both the request and constraints often placed at the end survive.
+fn cut_middle(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    const MARK: &str = "\n[… middle cut for reduced compaction …]\n";
+    let budget = limit.saturating_sub(MARK.len());
+    let head = truncate(text, budget * 3 / 4);
+    let tail_len = budget - head.len();
+    let mut start = text.len() - tail_len;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("{head}{MARK}{}", &text[start..])
 }
 
 /// Whether a reply was billed for reasoning that never came back.
@@ -1405,6 +1601,29 @@ mod tests {
     }
 
     #[test]
+    fn changed_results_warn_but_only_unchanged_results_hit_the_repeat_stop() {
+        let read = call(r#"{"path":"a"}"#);
+        let mut changing = idle_agent("repeat-changing", Controls::default(), Rc::new(|_| {}));
+        for n in 0..REPEAT_STOP {
+            let output = tools::Output::ok(format!("result {n}"));
+            assert!(!changing.finish_call(&format!("c{n}"), &read, output, Duration::ZERO).unwrap());
+        }
+        let warnings = changing
+            .messages
+            .iter()
+            .filter(|message| message["content"].as_str().is_some_and(|text| text.contains("not a stale-result loop")))
+            .count();
+        assert_eq!(warnings, REPEAT_WARNINGS.len());
+        let mut unchanged = idle_agent("repeat-unchanged", Controls::default(), Rc::new(|_| {}));
+        for n in 0..REPEAT_STOP {
+            let stop = unchanged
+                .finish_call(&format!("c{n}"), &read, tools::Output::ok("same result"), Duration::ZERO)
+                .unwrap();
+            assert_eq!(stop, n + 1 == REPEAT_STOP);
+        }
+    }
+
+    #[test]
     fn a_recap_is_one_line_within_the_limit() {
         assert_eq!(fit_recap("  Fixed it.\n\nTests pass. "), "Fixed it. Tests pass.");
         let long = "字".repeat(RECAP_CHARS + 30);
@@ -1452,6 +1671,41 @@ mod tests {
         assert!(text.starts_with(&"x".repeat(REDUCED_RESULT_CHARS)) && text.ends_with("[… cut to fit the context window]"), "{}", text.len());
         assert_eq!(cut[4], history[4]);
         assert_eq!(cut[5]["content"], json!([{"type": "text", "text": "Image from a.png:"}]));
+    }
+
+    #[test]
+    fn reduced_history_bounds_old_prose_and_reasoning_but_protects_recent_context() {
+        let long = |tail: &str| format!("{}{tail}", "x".repeat(12_000));
+        let history = vec![
+            json!({"role": "system", "content": long("SYSTEM")}),
+            json!({"role": "user", "content": long("USER CONSTRAINT AT THE END")}),
+            json!({
+                "role": "assistant",
+                "content": long("ASSISTANT END"),
+                "reasoning_content": long("REASONING END"),
+                "reasoning_items": [{"type": "thinking", "thinking": "x".repeat(2_000), "signature": "signed"}]
+            }),
+            json!({"role": "user", "content": format!("{} keep requests", crate::session::COMPACTED_MARK)}),
+            json!({"role": "assistant", "content": "one"}),
+            json!({"role": "assistant", "content": "two"}),
+            json!({"role": "assistant", "content": "three"}),
+            json!({"role": "assistant", "content": "four"}),
+            json!({"role": "assistant", "content": "five"}),
+            json!({"role": "assistant", "content": "six"}),
+            json!({"role": "assistant", "content": "seven"}),
+            json!({"role": "assistant", "content": long("RECENT END"), "reasoning_items": [{"encrypted_content": "keep"}]}),
+        ];
+        let cut = reduced(&history);
+        assert_eq!(cut[0], history[0]);
+        for (index, tail) in [(1, "USER CONSTRAINT AT THE END"), (2, "ASSISTANT END")] {
+            let text = cut[index]["content"].as_str().unwrap();
+            assert!(text.len() <= REDUCED_TEXT_CHARS, "{}", text.len());
+            assert!(text.ends_with(tail));
+        }
+        assert!(cut[2].get("reasoning_content").is_none(), "oversized reasoning is dropped as one bundle");
+        assert!(cut[2].get("reasoning_items").is_none(), "signed reasoning is dropped, not edited");
+        assert_eq!(cut[3], history[3], "compacted user requests and constraints stay verbatim");
+        assert_eq!(cut[11], history[11], "recent messages stay verbatim");
     }
 
     #[test]
@@ -1507,6 +1761,101 @@ mod tests {
         };
         let client = Client::new(model).unwrap();
         Agent::assemble(client, &dir, Vec::new(), Settings::default(), controls, sink, Session::open(&log).unwrap())
+    }
+
+    #[test]
+    fn only_read_only_file_and_search_calls_form_parallel_groups() {
+        for name in ["read", "grep", "glob"] {
+            assert!(parallel_read(&ToolCall { id: "c".into(), name: name.into(), arguments: "{}".into() }));
+        }
+        for name in ["write", "edit", "bash", "ask_user_question", "task_output"] {
+            assert!(!parallel_read(&ToolCall { id: "c".into(), name: name.into(), arguments: "{}".into() }));
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_batches_start_together_and_write_results_in_call_order() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let seen = events.clone();
+        let sink: Sink = Rc::new(move |event| {
+            seen.borrow_mut().push(match event {
+                Event::ToolStart { id, .. } => format!("start:{id}"),
+                Event::ToolEnd { id, .. } => format!("end:{id}"),
+                _ => return,
+            });
+        });
+        let mut agent = idle_agent("parallel-reads", Controls::default(), sink);
+        for (name, text) in [("a.txt", "alpha"), ("b.txt", "beta"), ("c.txt", "gamma")] {
+            std::fs::write(agent.ctx.cwd.join(name), text).unwrap();
+        }
+        let calls: Vec<_> = [("a", "a.txt"), ("b", "b.txt"), ("c", "c.txt")]
+            .into_iter()
+            .map(|(id, path)| {
+                (id.to_string(), ToolCall { id: id.into(), name: "read".into(), arguments: json!({"path": path}).to_string() })
+            })
+            .collect();
+        assert!(!agent.execute_calls(calls, false).await.unwrap());
+        assert_eq!(
+            *events.borrow(),
+            ["start:a", "start:b", "start:c", "end:a", "end:b", "end:c"]
+        );
+        let results: Vec<_> = agent.messages.iter().map(|m| (m["tool_call_id"].as_str().unwrap(), m["content"].as_str().unwrap())).collect();
+        assert_eq!(results.iter().map(|(id, _)| *id).collect::<Vec<_>>(), ["a", "b", "c"]);
+        for ((_, text), expected) in results.into_iter().zip(["alpha", "beta", "gamma"]) {
+            assert!(text.contains(expected), "{text}");
+        }
+        assert_eq!(agent.stats.tool_calls, 3);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn configured_hooks_keep_read_calls_serial() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let seen = events.clone();
+        let sink: Sink = Rc::new(move |event| {
+            seen.borrow_mut().push(match event {
+                Event::ToolStart { id, .. } => format!("start:{id}"),
+                Event::ToolEnd { id, .. } => format!("end:{id}"),
+                _ => return,
+            });
+        });
+        let mut agent = idle_agent("serial-hooks", Controls::default(), sink);
+        let hooks = toml::from_str("[[PreToolUse]]\ncommand = ':'\n").unwrap();
+        agent.settings = Rc::new(Settings { hooks: Rc::new(hooks), ..Settings::default() });
+        std::fs::write(agent.ctx.cwd.join("a.txt"), "alpha").unwrap();
+        let calls: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|id| {
+                (id.to_string(), ToolCall { id: id.into(), name: "read".into(), arguments: r#"{"path":"a.txt"}"#.into() })
+            })
+            .collect();
+        agent.execute_calls(calls, false).await.unwrap();
+        assert_eq!(*events.borrow(), ["start:a", "end:a", "start:b", "end:b"]);
+    }
+
+    #[test]
+    fn compaction_estimates_only_the_appended_suffix_and_reserves_output() {
+        let mut agent = idle_agent("compaction-estimate", Controls::default(), Rc::new(|_| {}));
+        agent.settings = Rc::new(Settings { compact_at: 10_000, ..Settings::default() });
+        Rc::get_mut(&mut agent.client).unwrap().model.max_output = Some(1_000);
+        agent.stats.context = 9_000;
+        assert!(!agent.compaction_due(), "the exact input-plus-output boundary is still allowed");
+        agent.stats.context = 9_001;
+        assert!(agent.compaction_due(), "the output reserve counts before the next request");
+
+        agent.stats.context = 100;
+        agent.push(json!({"role": "user", "content": "old ".repeat(20_000)})).unwrap();
+        agent.accounted_messages = agent.messages.len();
+        assert!(!agent.compaction_due(), "the fixed prefix is not estimated a second time");
+        agent.push(json!({"role": "user", "content": "new ".repeat(5_000)})).unwrap();
+        assert!(agent.compaction_due(), "the unbilled appended suffix counts conservatively");
+    }
+
+    #[test]
+    fn swarm_budget_is_total_per_turn_not_just_concurrency() {
+        assert!(reserve_swarm(0, MAX_SWARM_AGENTS_PER_TURN).is_ok());
+        assert!(reserve_swarm(1, MAX_SWARM_AGENTS_PER_TURN).is_err());
+        assert!(reserve_swarm(MAX_SWARM_AGENTS_PER_TURN, 2).is_err());
+        assert!(reserve_swarm(MAX_SWARM_AGENTS_PER_TURN - 2, 2).is_ok());
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-use super::{Delta, Failure, Prepared, Reply, StreamParser, ToolCall, arguments_object, content_text, system_text, truncate};
+use super::{Delta, Failure, Prepared, Reply, StreamParser, ToolCall, arguments_object, cap_output, content_text, system_text, truncate};
 use crate::config::{ResolvedModel, Thinking};
 
 const VERSION: &str = "2023-06-01";
@@ -16,7 +16,8 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
     let (system, history) = system_text(messages);
     let mut body = Map::new();
     body.insert("model".into(), model.model.clone().into());
-    body.insert("max_tokens".into(), max_tokens(model, claude).into());
+    let max_tokens = max_tokens(model, claude, messages, tools);
+    body.insert("max_tokens".into(), max_tokens.into());
     body.insert("stream".into(), true.into());
     if !system.is_empty() {
         body.insert("system".into(), json!([{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]));
@@ -24,7 +25,7 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
     body.insert("tools".into(), convert_tools(tools));
     body.insert("messages".into(), convert_messages(history, claude.is_some()).into());
     let budget = claude.is_some_and(|v| v.budget_thinking());
-    for (key, value) in thinking_params(&model.thinking, budget) {
+    for (key, value) in thinking_params(&model.thinking, budget, max_tokens) {
         body.insert(key, value);
     }
     let mut headers = vec![
@@ -82,22 +83,28 @@ impl ClaudeVersion {
     }
 }
 
-fn max_tokens(model: &ResolvedModel, claude: Option<ClaudeVersion>) -> u64 {
-    match claude {
+fn max_tokens(model: &ResolvedModel, claude: Option<ClaudeVersion>, messages: &[Value], tools: &[Value]) -> u64 {
+    let max = match claude {
         Some(version) => model.max_output.map_or(version.max_tokens(), |n| n.min(version.max_tokens())),
         None => model.max_output.unwrap_or(FALLBACK_MAX_TOKENS),
-    }
+    };
+    cap_output(model, messages, tools, max)
 }
 
 /// Kimi Code's encoding: budget tokens for older Claude models, adaptive thinking plus an
 /// effort for everything else, including Anthropic-compatible providers.
-fn thinking_params(thinking: &Thinking, budget: bool) -> Vec<(String, Value)> {
+fn thinking_params(thinking: &Thinking, budget: bool, max_tokens: u64) -> Vec<(String, Value)> {
     let effort = match thinking {
         Thinking::Off => return vec![("thinking".into(), json!({"type": "disabled"}))],
         Thinking::On => None,
         Thinking::Effort(effort) => Some(effort.as_str()),
     };
     if budget {
+        // Anthropic's minimum explicit budget is 1024; below that, disable thinking rather than
+        // consume the entire response or emit an invalid budget.
+        if max_tokens <= 1_024 {
+            return vec![("thinking".into(), json!({"type": "disabled"}))];
+        }
         let tokens = match effort {
             Some("low") => Some(1_024),
             Some("medium") => Some(4_096),
@@ -107,7 +114,7 @@ fn thinking_params(thinking: &Thinking, budget: bool) -> Vec<(String, Value)> {
         let mut params = vec![(
             "thinking".to_string(),
             match tokens {
-                Some(tokens) => json!({"type": "enabled", "budget_tokens": tokens}),
+                Some(tokens) => json!({"type": "enabled", "budget_tokens": tokens.min(max_tokens - 1)}),
                 None => json!({"type": "enabled"}),
             },
         )];
@@ -219,7 +226,11 @@ fn assistant_blocks(message: &Value, claude: bool) -> Vec<Value> {
                 _ => {}
             }
         }
-    } else if !claude
+    }
+    // A chat reply can carry structured details Anthropic does not use beside its scalar
+    // reasoning. Only an emitted thinking block suppresses the scalar fallback.
+    if blocks.is_empty()
+        && !claude
         && let Some(text) = super::REASONING_KEYS.iter().find_map(|k| message[*k].as_str()).filter(|t| !t.is_empty())
     {
         blocks.push(json!({"type": "thinking", "thinking": text}));
@@ -252,6 +263,7 @@ fn append(field: &mut Value, text: &str) {
 pub(super) struct Parser {
     blocks: HashMap<u64, Block>,
     input: InputUsage,
+    message_stop: bool,
 }
 
 /// Input token counts. Anthropic reports them in `message_start`; MiniMax sends placeholders
@@ -347,7 +359,8 @@ impl StreamParser for Parser {
                         match reason {
                             "max_tokens" => "length",
                             "tool_use" => "tool_calls",
-                            _ => "stop",
+                            "end_turn" | "stop_sequence" => "stop",
+                            other => other,
                         }
                         .to_string(),
                     );
@@ -357,6 +370,7 @@ impl StreamParser for Parser {
                 }
                 self.input.update(&event["usage"], reply);
             }
+            Some("message_stop") => self.message_stop = true,
             Some("error") => {
                 let error = &event["error"];
                 let message = format!("provider error mid-stream: {}", truncate(&error.to_string(), 2000));
@@ -372,12 +386,16 @@ impl StreamParser for Parser {
         Ok(())
     }
 
-    fn finish(&mut self, reply: &mut Reply) {
+    fn finish(&mut self, reply: &mut Reply) -> Result<(), Failure> {
+        if !self.message_stop {
+            return Err(Failure::transient("Anthropic stream ended without message_stop".into()));
+        }
         for call in &mut reply.tool_calls {
             if call.arguments.trim().is_empty() {
                 call.arguments = "{}".into();
             }
         }
+        Ok(())
     }
 }
 
@@ -442,6 +460,17 @@ mod tests {
     }
 
     #[test]
+    fn chat_reasoning_items_do_not_hide_scalar_reasoning_from_anthropic() {
+        let message = json!({
+            "role": "assistant",
+            "reasoning_content": "plan",
+            "reasoning_items": [{"type": "reasoning.text", "text": "plan"}],
+            "content": "ok"
+        });
+        assert_eq!(assistant_blocks(&message, false)[0], json!({"type": "thinking", "thinking": "plan"}));
+    }
+
+    #[test]
     fn stream_assembles_thinking_text_and_tool_calls() {
         let mut parser = Parser::default();
         let mut reply = Reply::default();
@@ -457,11 +486,12 @@ mod tests {
             json!({"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": "{\"path\":"}}),
             json!({"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": "\"a\"}"}}),
             json!({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 9}}),
+            json!({"type": "message_stop"}),
         ];
         for event in &events {
             parser.event(event, &mut reply, &mut sink).ok().unwrap();
         }
-        parser.finish(&mut reply);
+        parser.finish(&mut reply).unwrap();
         assert_eq!(reply.reasoning_items[0], json!({"type": "thinking", "thinking": "plan", "signature": "s1"}));
         assert_eq!(reply.text, "Reading.");
         assert_eq!(reply.tool_calls[0].arguments, "{\"path\":\"a\"}");
@@ -481,6 +511,47 @@ mod tests {
         }
         assert_eq!(reply.reasoning_items[0], json!({"type": "thinking", "thinking": "abc", "signature": "ABC"}));
         assert_eq!(reply.reasoning, "abc");
+    }
+
+    #[test]
+    fn max_tokens_is_capped_by_remaining_context() {
+        let model = ResolvedModel {
+            alias: "m".into(),
+            model: "compatible".into(),
+            protocol: crate::config::Protocol::Anthropic,
+            base_url: String::new(),
+            api_key: String::new(),
+            headers: Default::default(),
+            max_output: Some(4_000),
+            context_window: Some(2_000),
+            images: false,
+            thinking: Thinking::Off,
+        };
+        let messages = vec![json!({"role": "user", "content": "hello"})];
+        let expected = super::cap_output(&model, &messages, &[], 4_000);
+        assert_eq!(max_tokens(&model, None, &messages, &[]), expected);
+        assert!(expected < 2_000);
+    }
+
+    #[test]
+    fn message_stop_is_required() {
+        let mut parser = Parser::default();
+        let mut reply = Reply::default();
+        let mut sink = |_: Delta| {};
+        parser.event(&json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}), &mut reply, &mut sink).unwrap();
+        assert!(parser.finish(&mut reply).unwrap_err().retryable);
+        parser.event(&json!({"type": "message_stop"}), &mut reply, &mut sink).unwrap();
+        parser.finish(&mut reply).unwrap();
+    }
+
+    #[test]
+    fn thinking_budget_leaves_visible_output_even_at_tiny_limits() {
+        let budget = |max| thinking_params(&Thinking::On, true, max);
+        assert_eq!(budget(1)[0].1, json!({"type": "disabled"}));
+        assert_eq!(budget(1_024)[0].1, json!({"type": "disabled"}));
+        assert_eq!(budget(1_025)[0].1["budget_tokens"], 1_024);
+        assert_eq!(budget(2_000)[0].1["budget_tokens"], 1_999);
+        assert_eq!(budget(64_000)[0].1["budget_tokens"], 32_000);
     }
 
     #[test]
