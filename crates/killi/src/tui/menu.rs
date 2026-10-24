@@ -1,11 +1,12 @@
 //! The slash menu: what `/` offers as you type, at the start of a word anywhere in the prompt. Commands and skills are ranked with pi-tui's
 //! fuzzy matcher, as in Kimi Code, then entries whose description mentions what you typed
-//! follow; after `/model ` or `/effort ` it offers that command's choices.
+//! follow; after `/model ` or `/effort ` it offers that command's choices. `@` at the start of
+//! a word offers the workspace's files the same way.
 
 /// One row of the menu.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
-    /// What a choice inserts: a command name without its slash, or an argument.
+    /// What a choice inserts: a command name without its slash, an argument, or a path.
     pub value: String,
     pub description: String,
 }
@@ -24,9 +25,22 @@ pub struct Suggestions {
     pub items: Vec<Item>,
     /// Byte offset in the text where the replaced part starts.
     pub start: usize,
-    /// Choosing replaces the command name (`/name `) rather than its argument.
-    pub command: bool,
+    pub fill: Fill,
 }
+
+/// What choosing an item puts in the prompt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fill {
+    /// A command or skill name, as `/name `.
+    Command,
+    /// A command's argument, in place of the one typed.
+    Argument,
+    /// A workspace path, as `@path `; a folder ends in `/` with no space, to keep typing in it.
+    File,
+}
+
+/// Files the `@` menu lists at most; the rest are reached by typing more.
+const MAX_FILES_SHOWN: usize = 200;
 
 /// The menu for `before`, the text before the cursor, or None when there is nothing to offer.
 /// `arguments` gives a command's choices by its name.
@@ -34,10 +48,10 @@ pub struct Suggestions {
 /// A `/` that starts a word anywhere in the text offers commands and skills; only the one at
 /// the very start can be followed by that command's choices.
 pub fn suggest(before: &str, entries: &[Entry], arguments: impl Fn(&str) -> Vec<Item>) -> Option<Suggestions> {
-    let word = before.char_indices().rev().find(|(_, c)| c.is_whitespace()).map_or(0, |(i, c)| i + c.len_utf8());
+    let word = word_start(before);
     if let Some(typed) = before[word..].strip_prefix('/') {
         let items = commands(entries, typed);
-        return (!items.is_empty()).then_some(Suggestions { items, start: word, command: true });
+        return (!items.is_empty()).then_some(Suggestions { items, start: word, fill: Fill::Command });
     }
     let typed = before.strip_prefix('/')?;
     let space = typed.find(char::is_whitespace)?;
@@ -50,7 +64,27 @@ pub fn suggest(before: &str, entries: &[Entry], arguments: impl Fn(&str) -> Vec<
     if items.len() == 1 && items[0].value == argument {
         items.clear();
     }
-    (!items.is_empty()).then_some(Suggestions { items, start: 1 + space + 1, command: false })
+    (!items.is_empty()).then_some(Suggestions { items, start: 1 + space + 1, fill: Fill::Argument })
+}
+
+/// The file menu for `before`: the `files` of the workspace that fuzzy-match the word at the
+/// cursor after its `@`, best first, or None when the word isn't one or nothing matches. A
+/// word that already is the one path it matches gets no menu, so Enter sends the prompt.
+pub fn files(before: &str, files: &[String]) -> Option<Suggestions> {
+    let start = word_start(before);
+    let typed = before[start..].strip_prefix('@')?;
+    let paths: Vec<&str> = files.iter().map(String::as_str).collect();
+    let matched = fuzzy_filter(&paths, typed, |path| path);
+    if matched.is_empty() || matched == [typed] {
+        return None;
+    }
+    let items = matched.into_iter().take(MAX_FILES_SHOWN).map(|path| Item { value: path.to_string(), description: String::new() }).collect();
+    Some(Suggestions { items, start, fill: Fill::File })
+}
+
+/// The byte offset where the word the cursor is in begins.
+fn word_start(before: &str) -> usize {
+    before.char_indices().rev().find(|(_, c)| c.is_whitespace()).map_or(0, |(i, c)| i + c.len_utf8())
 }
 
 /// Entries whose name or alias fuzzy-matches `query`, best first, each shown under the name
@@ -188,7 +222,7 @@ mod tests {
     fn a_slash_alone_lists_everything_in_order() {
         let s = suggest("/", &entries(), |_| Vec::new()).unwrap();
         assert_eq!(values(&s), ["model", "effort", "new", "exit", "code-review", "pdf", "make-pdf-report"]);
-        assert!(s.command);
+        assert_eq!(s.fill, Fill::Command);
     }
 
     #[test]
@@ -224,7 +258,7 @@ mod tests {
         };
         let s = suggest("/effort h", &entries(), efforts).unwrap();
         assert_eq!(values(&s), ["high"]);
-        assert_eq!((s.start, s.command), (8, false));
+        assert_eq!((s.start, s.fill), (8, Fill::Argument));
         assert_eq!(values(&suggest("/effort ", &entries(), efforts).unwrap()).len(), 4);
         assert!(suggest("/effort high", &entries(), efforts).is_none());
         assert!(suggest("/model x", &entries(), efforts).is_none());
@@ -236,12 +270,25 @@ mod tests {
         let none = |_: &str| Vec::new();
         let s = suggest("use /pdf and /rev", &entries(), none).unwrap();
         assert_eq!(values(&s), ["code-review"]);
-        assert_eq!((s.start, s.command), (13, true));
+        assert_eq!((s.start, s.fill), (13, Fill::Command));
         assert_eq!(suggest("/pdf then /", &entries(), none).unwrap().start, 10);
         assert_eq!(suggest("héllo /pd", &entries(), none).unwrap().start, 7);
         assert!(suggest("see src/pdf", &entries(), none).is_none());
         assert!(suggest("hello /zzz", &entries(), none).is_none());
         assert!(suggest("hello ", &entries(), none).is_none());
+    }
+
+    #[test]
+    fn an_at_word_offers_the_files_that_match_it() {
+        let paths: Vec<String> = ["README.md", "src/main.rs", "src/tui/", "src/tui/mod.rs"].iter().map(|p| p.to_string()).collect();
+        let s = files("see @", &paths).unwrap();
+        assert_eq!((values(&s).len(), s.start, s.fill), (4, 4, Fill::File));
+        assert_eq!(values(&files("@tuimod", &paths).unwrap()), ["src/tui/mod.rs"]);
+        assert_eq!(values(&files("@tui/", &paths).unwrap())[0], "src/tui/");
+        assert!(files("@src/main.rs", &paths).is_none(), "the path typed in full needs no menu");
+        assert!(files("@zzz", &paths).is_none());
+        assert!(files("mail me@", &paths).is_none(), "an @ inside a word is not a mention");
+        assert!(files("hello", &paths).is_none());
     }
 
     #[test]

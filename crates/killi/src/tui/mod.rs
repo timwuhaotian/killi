@@ -11,6 +11,7 @@ pub(crate) mod banner;
 mod editor;
 mod history;
 mod menu;
+mod mention;
 mod palette;
 mod paste;
 pub(crate) mod text;
@@ -46,7 +47,7 @@ use crate::session::{Choice, Replayed};
 use crate::snapshot::Snapshots;
 use editor::Editor;
 use history::{Entry as Line, History};
-use menu::{Entry, Item, Suggestions};
+use menu::{Entry, Fill, Item, Suggestions};
 use palette::Ground;
 use text::{ADD, BOLD, BRANCH, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, RULE, SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_words};
 
@@ -128,7 +129,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         let Some(input) = app.read_input(&mut keys).await? else { break };
         match input {
             Input::Prompt(prompt, images) => {
-                prompt_turn(&mut app, &mut agent, &mut snapshots, &mut keys, &mut rx, &prompt, &prompt, &images).await?;
+                let sent = mention::expand(&cwd, &prompt);
+                prompt_turn(&mut app, &mut agent, &mut snapshots, &mut keys, &mut rx, &prompt, &sent, &images).await?;
             }
             Input::Command(command, arg, images) => {
                 if !handle_command(&mut app, &mut agent, &mut session, &mut snapshots, &mut keys, &mut rx, &cwd, &command, &arg, &images).await? {
@@ -211,7 +213,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     }
     agent.discard_if_unused();
     if !agent.user_prompts().is_empty() {
-        println!("{DIM}To continue this session: {}{RESET}", resume_command(&agent.session.log_path));
+        // The command on its own line, so a triple-click or a drag copies it alone.
+        println!("{DIM}To continue this session:{RESET}\n{}", resume_command(&agent.session.log_path));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -425,7 +428,7 @@ async fn handle_command(
         }
         "swarm" => {
             let was_on = app.controls.swarm.replace(true);
-            let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {arg}"), arg, images).await;
+            let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {arg}"), &mention::expand(cwd, arg), images).await;
             app.controls.swarm.set(was_on);
             result?;
         }
@@ -495,7 +498,13 @@ async fn handle_command(
         "usage" | "cost" => app.usage_report(agent),
         "session" | "share" => app.share_session(agent),
         other => match session.skill_prompt(other.strip_prefix("skill:").unwrap_or(other), arg) {
-            Some(prompt) => prompt_turn(app, agent, snapshots, keys, rx, format!("/{other} {arg}").trim_end(), &prompt, images).await?,
+            Some(prompt) => {
+                let sent = match mention::attachment(cwd, arg) {
+                    Some(files) => format!("{prompt}\n\n{files}"),
+                    None => prompt,
+                };
+                prompt_turn(app, agent, snapshots, keys, rx, format!("/{other} {arg}").trim_end(), &sent, images).await?;
+            }
             None => app.error(&format!("Unknown command /{other}. Type /help for the list.")),
         },
     }
@@ -695,6 +704,9 @@ struct App {
     menu_text: String,
     /// The text the menu was closed on with Esc; it opens again when the text changes.
     menu_closed: Option<String>,
+    /// The workspace's paths the `@` menu searches, read when an `@` word is at the cursor
+    /// and dropped when none is, so each `@` sees the files as they are then.
+    files: Option<Vec<String>>,
     busy: Option<Instant>,
     /// A request being retried: the attempt and when its wait ends, for the working row.
     retry: Option<(u32, Instant)>,
@@ -793,6 +805,7 @@ impl App {
             menu_selected: 0,
             menu_text: String::new(),
             menu_closed: None,
+            files: None,
             busy: None,
             details: Vec::new(),
             detail_back: 0,
@@ -1091,9 +1104,9 @@ impl App {
         Idle::Continue
     }
 
-    /// Keys for the slash menu: ↑↓ choose; Tab or Enter runs a command at the start of the
-    /// prompt, completes a skill or a later command and fills in an argument; Esc closes it (the
-    /// `/` is then plain text). None lets the key through.
+    /// Keys for the slash and `@` menus: ↑↓ choose; Tab or Enter runs a command at the start of
+    /// the prompt, completes a skill, a later command or a path and fills in an argument; Esc
+    /// closes it (the `/` or `@` is then plain text). None lets the key through.
     fn on_key_menu(&mut self, key: KeyEvent, menu: &Suggestions) -> Option<Idle> {
         let count = menu.items.len();
         let selected = self.menu_selected.min(count - 1);
@@ -1114,12 +1127,18 @@ impl App {
 
     fn choose(&mut self, menu: &Suggestions, index: usize) {
         let value = &menu.items[index].value;
-        let with = if menu.command { format!("/{value} ") } else { value.clone() };
+        let with = match menu.fill {
+            Fill::Command => format!("/{value} "),
+            Fill::Argument => value.clone(),
+            Fill::File if value.ends_with('/') => format!("@{value}"),
+            Fill::File => format!("@{value} "),
+        };
         self.editor.replace_before(menu.start, &with);
     }
 
-    /// The slash menu for the prompt as typed. While the agent works it offers only the commands
-    /// that run then, typed at the start of the prompt, and /effort's choices.
+    /// The slash or `@` menu for the prompt as typed. While the agent works the slash menu
+    /// offers only the commands that run then, typed at the start of the prompt, and /effort's
+    /// choices; files are offered as ever.
     fn suggestions(&self) -> Option<Suggestions> {
         if self.picker.is_some() || self.asking.is_some() || self.editor.browsing() {
             return None;
@@ -1127,13 +1146,18 @@ impl App {
         if self.menu_closed.as_deref() == Some(self.editor.text()) {
             return None;
         }
+        if let Some(files) = &self.files
+            && let Some(menu) = menu::files(self.editor.before_cursor(), files)
+        {
+            return Some(menu);
+        }
         if self.busy.is_some() {
             let entries: Vec<Entry> = self.entries.iter().filter(|e| BUSY_COMMANDS.contains(&e.name.as_str())).cloned().collect();
             return menu::suggest(self.editor.before_cursor(), &entries, |command| match command {
                 "effort" | "thinking" => self.effort_choices.clone(),
                 _ => Vec::new(),
             })
-            .filter(|menu| !menu.command || menu.start == 0);
+            .filter(|menu| menu.fill != Fill::Command || menu.start == 0);
         }
         menu::suggest(self.editor.before_cursor(), &self.entries, |command| match command {
             "model" => self.model_choices.clone(),
@@ -1150,7 +1174,19 @@ impl App {
         }
         self.menu_text = self.editor.text().to_string();
         let current = |item: &Item| item.value == self.status.model || item.value == self.status.thinking;
-        self.menu_selected = self.suggestions().filter(|m| !m.command).and_then(|m| m.items.iter().position(current)).unwrap_or(0);
+        self.menu_selected = self.suggestions().filter(|m| m.fill == Fill::Argument).and_then(|m| m.items.iter().position(current)).unwrap_or(0);
+    }
+
+    /// Reads the workspace's paths when the cursor is in an `@` word and forgets them when it
+    /// isn't, so the list is as fresh as the `@` and costs nothing between them.
+    fn sync_files(&mut self) {
+        let before = self.editor.before_cursor();
+        let word = before.rsplit(char::is_whitespace).next().unwrap_or(before);
+        match (word.starts_with('@'), self.files.is_some()) {
+            (true, false) => self.files = Some(mention::list(&self.cwd)),
+            (false, true) => self.files = None,
+            _ => {}
+        }
     }
 
     /// Shows the model and effort the agent runs on in the status line and the slash menu.
@@ -1264,7 +1300,7 @@ impl App {
         }
         let (text, images) = self.editor.take_with_images();
         if !text.trim().is_empty() {
-            self.controls.steer.borrow_mut().push_back((text.clone(), images));
+            self.controls.steer.borrow_mut().push_back((mention::expand(&self.cwd, &text), images));
             self.queued.push(text);
         }
     }
@@ -2279,19 +2315,24 @@ impl App {
         placeholder(self.editor.is_empty(), self.busy.is_some(), self.picker.is_some() || self.asking.is_some())
     }
 
-    /// The slash menu, `visible` items at a time around the selection, and a line of keys.
+    /// The slash or `@` menu, `visible` items at a time around the selection, and a line of keys.
     fn menu_rows(&self, menu: &Suggestions, visible: usize) -> Vec<String> {
         let count = menu.items.len();
         let selected = self.menu_selected.min(count - 1);
-        let lead = if menu.command { "/" } else { "" };
+        let (lead, column) = match menu.fill {
+            Fill::Command => ("/", 32),
+            Fill::Argument => ("", 32),
+            Fill::File => ("@", self.width),
+        };
         let names: Vec<String> = menu.items.iter().map(|i| format!("{lead}{}", i.value)).collect();
         let options: Vec<(&str, &str)> = names.iter().zip(&menu.items).map(|(name, item)| (name.as_str(), item.description.as_str())).collect();
-        let mut rows = choice_rows(&options, selected, visible, self.width, 32);
+        let mut rows = choice_rows(&options, selected, visible, self.width, column);
         let position = if count > visible { format!("{}/{count}", selected + 1) } else { String::new() };
-        let enter = match (menu.command, runs_at_once(menu, selected)) {
-            (true, true) => "runs",
-            (true, false) => "completes",
-            (false, _) => "fills in",
+        let enter = match (menu.fill, runs_at_once(menu, selected)) {
+            (Fill::Command, true) => "runs",
+            (Fill::Command, false) => "completes",
+            (Fill::Argument, _) => "fills in",
+            (Fill::File, _) => "inserts",
         };
         let hints = [(1, position), (4, "↑↓ choose".into()), (5, format!("Tab or Enter {enter}")), (3, "Esc closes".into())];
         rows.push(hint_row(&hints, self.width));
@@ -2319,6 +2360,7 @@ impl App {
     /// is ever shown. When only rows changed, as on a spinner tick, just those are rewritten;
     /// a committed line scrolls the area, so then it is painted whole.
     fn draw(&mut self) -> Result<()> {
+        self.sync_files();
         if self.fullscreen {
             return self.draw_screen();
         }
@@ -2571,7 +2613,7 @@ fn placeholder(empty: bool, busy: bool, waits: bool) -> Option<&'static str> {
     if !empty || waits {
         return None;
     }
-    Some(if busy { "a message for the next step · Ctrl+S sends it now · /btw asks on the side" } else { "ask, or / for commands and skills" })
+    Some(if busy { "a message for the next step · Ctrl+S sends it now · /btw asks on the side" } else { "ask, / for commands and skills, @ for files" })
 }
 
 /// A full-width line around the prompt, in lagoon with `label` on it in plan mode.
@@ -2961,7 +3003,7 @@ fn overview_rows(overview: &Overview) -> Vec<String> {
 
 /// The keys worth knowing, each in lagoon with what it does dimmed beside it.
 fn key_hints() -> Vec<String> {
-    [("/", "commands and skills"), ("Shift+Enter", "new line"), ("Shift+Tab", "plan mode"), ("Esc", "interrupts")]
+    [("/", "commands and skills"), ("@", "files"), ("Shift+Enter", "new line"), ("Shift+Tab", "plan mode"), ("Esc", "interrupts")]
         .iter()
         .map(|(key, what)| format!("{LAGOON}{key}{RESET} {DIM}{what}{RESET}"))
         .collect()
@@ -3180,7 +3222,7 @@ fn is_command(name: &str) -> bool {
 fn runs_at_once(menu: &Suggestions, index: usize) -> bool {
     let name = menu.items[index].value.as_str();
     let needs_argument = COMMANDS.iter().any(|c| (c.name == name || c.aliases.contains(&name)) && c.args.starts_with('<'));
-    menu.command && menu.start == 0 && is_command(name) && !needs_argument
+    menu.fill == Fill::Command && menu.start == 0 && is_command(name) && !needs_argument
 }
 
 /// The commands that also work while the agent works: they need nothing the running turn holds,
@@ -3228,6 +3270,7 @@ const COMMANDS: &[Command] = &[
 ];
 
 const KEYS: &[(&str, &str)] = &[
+    ("@", "name a file: the menu searches the workspace, and the file goes to the model with your message"),
     ("Enter", "send; while the agent works, sends your message at its next step"),
     ("Shift+Enter", "new line; also Ctrl+J, or \\ then Enter"),
     ("Esc", "interrupt the agent"),
@@ -3520,7 +3563,7 @@ mod tests {
         ]);
         assert!(overview_rows(&Overview::default()).is_empty());
         let hints: Vec<String> = key_hints().iter().map(|hint| unstyled(hint)).collect();
-        assert_eq!(hints.join(" · "), "/ commands and skills · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts");
+        assert_eq!(hints.join(" · "), "/ commands and skills · @ files · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts");
     }
 
     #[test]
@@ -3594,7 +3637,7 @@ mod tests {
     #[test]
     fn choosing_a_skill_leaves_it_in_the_prompt() {
         let item = |value: &str| Item { value: value.into(), description: String::new() };
-        let menu = Suggestions { items: vec![item("usage"), item("cost"), item("pr-resolve")], start: 0, command: true };
+        let menu = Suggestions { items: vec![item("usage"), item("cost"), item("pr-resolve")], start: 0, fill: Fill::Command };
         assert!(runs_at_once(&menu, 0));
         assert!(runs_at_once(&menu, 1));
         assert!(!runs_at_once(&menu, 2));
@@ -3617,7 +3660,7 @@ mod tests {
 
     #[test]
     fn a_command_that_needs_an_argument_waits_for_it() {
-        let menu = Suggestions { items: vec![Item { value: "btw".into(), description: String::new() }], start: 0, command: true };
+        let menu = Suggestions { items: vec![Item { value: "btw".into(), description: String::new() }], start: 0, fill: Fill::Command };
         assert!(!runs_at_once(&menu, 0));
     }
 
@@ -3798,7 +3841,7 @@ mod tests {
 
     #[test]
     fn the_empty_prompt_hints_at_commands_and_steering_unless_something_else_waits() {
-        assert_eq!(placeholder(true, false, false), Some("ask, or / for commands and skills"));
+        assert_eq!(placeholder(true, false, false), Some("ask, / for commands and skills, @ for files"));
         assert!(placeholder(true, true, false).unwrap().contains("/btw"));
         assert!(placeholder(true, true, false).unwrap().contains("Ctrl+S"));
         assert_eq!(placeholder(false, false, false), None);

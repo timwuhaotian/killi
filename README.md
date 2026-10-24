@@ -171,6 +171,7 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | Key | |
 |---|---|
 | / | the command menu: ↑↓ choose, Tab completes, Enter runs, Esc closes |
+| @ | the file menu: fuzzy-search the workspace, Tab or Enter inserts `@path`; the file's contents go to the model with your message |
 | Enter | send; while the agent works, your message reaches it at its next step |
 | Shift+Enter, Ctrl+J | new line |
 | Esc | interrupt |

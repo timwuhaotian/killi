@@ -9,8 +9,8 @@ scratch HOME, and each screen is written as an SVG painted on the theme's own pa
 
 The themes are Kil's five (crates/kil/src/theme.rs in the Kil repo): killi asks the terminal
 for its background and foreground, and the pseudo-terminal answers with the theme's. SGR dim is
-drawn as Kil draws it, each channel scaled to two thirds. Scenes: start, menu, picker, conv (a
-bug fix with a diff), question, plan, busy (mid-turn). `--inline` runs killi as it runs outside
+drawn as Kil draws it, each channel scaled to two thirds. Scenes: start, menu, files (the `@`
+menu), picker, conv (a bug fix with a diff), question, plan, busy (mid-turn). `--inline` runs killi as it runs outside
 Kil, in the terminal's scrollback; `--colors 256` hides COLORTERM; `--no-osc` never answers the
 color queries, like a terminal that doesn't know them; `--no-color` sets NO_COLOR.
 
@@ -54,6 +54,7 @@ FIX = "FIX the slugify test\r"
 SCENES = {
     "start": dict(keys=[]),
     "menu": dict(keys=["/"]),
+    "files": dict(keys=["fix @sl"]),
     "picker": dict(keys=["/model\r"]),
     "conv": dict(keys=[FIX], until="ask, or /"),
     "question": dict(keys=["QUESTION please\r"], until="Esc dismisses"),
