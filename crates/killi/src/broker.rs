@@ -8,7 +8,6 @@
 //! back to the client that asked, and drops what servers send unasked.
 
 use std::collections::{BTreeMap, HashMap};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -21,6 +20,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, ChildStdin, Command};
+
+use crate::tools::OwnSession;
 use tokio::sync::{mpsc, oneshot, watch};
 
 /// How long the broker and its servers outlive the last attached killi.
@@ -37,7 +38,7 @@ pub struct Launch {
 }
 
 impl Launch {
-    /// Starts the server in its own process group, its stdin and stdout piped.
+    /// Starts the server in its own session, its stdin and stdout piped.
     pub fn spawn(&self) -> Result<Child> {
         Command::new(&self.command)
             .args(&self.args)
@@ -46,7 +47,7 @@ impl Launch {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .process_group(0)
+            .own_session()
             .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("could not start {}", self.command))
@@ -92,7 +93,7 @@ async fn start_broker(socket: &Path) -> Result<UnixStream> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .process_group(0)
+        .own_session()
         .spawn()
         .context("could not start the MCP broker")?;
     let deadline = Instant::now() + Duration::from_secs(5);

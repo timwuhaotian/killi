@@ -21,7 +21,7 @@ use std::pin::Pin;
 use std::process::ExitCode;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -940,6 +940,10 @@ impl App {
         loop {
             let event = tokio::select! {
                 event = keys.next() => event,
+                () = resumed() => {
+                    self.draw()?;
+                    continue;
+                }
                 done = async { self.recap.as_mut().expect("a recap is pending").as_mut().await }, if self.recap.is_some() => {
                     self.recap = None;
                     if let Ok((text, usage)) = done {
@@ -2310,6 +2314,11 @@ impl App {
         if self.fullscreen {
             return self.draw_screen();
         }
+        if RESUMED.swap(false, Ordering::Relaxed) {
+            // The shell wrote below the area killi erased before it stopped; draw afresh here.
+            self.cursor_row = 0;
+            self.shown.clear();
+        }
         let committed = self.pending_rows();
         let (rows, cursor_row, cursor_col) = self.live();
         let rows: Vec<String> = rows.iter().map(|row| text::plain(row).into_owned()).collect();
@@ -2356,12 +2365,16 @@ impl App {
         self.shown = rows;
         self.shown_col = cursor_col;
         self.cursor_row = cursor_row;
+        CURSOR_ROW.store(cursor_row, Ordering::Relaxed);
         Ok(())
     }
 
     /// Paints the whole screen in fullscreen mode: the conversation's view above, the live area
     /// on the bottom rows. Only the rows that changed are written, in one synchronized update.
     fn draw_screen(&mut self) -> Result<()> {
+        if RESUMED.swap(false, Ordering::Relaxed) {
+            self.shown.clear();
+        }
         let (live, cursor_row, cursor_col) = self.live();
         let cut = live.len().saturating_sub(self.height);
         let (live, cursor_row) = (&live[cut..], cursor_row.saturating_sub(cut));
@@ -3218,23 +3231,31 @@ static ENHANCED: AtomicBool = AtomicBool::new(false);
 /// ends.
 static FULLSCREEN: AtomicBool = AtomicBool::new(false);
 
+/// The inline live area's cursor row, so `suspend_cleanly` can erase the area.
+static CURSOR_ROW: AtomicUsize = AtomicUsize::new(0);
+
+/// Set once killi was stopped and continued: the next resize draws the inline live area where
+/// the cursor is, since the shell wrote below the erased one meanwhile.
+static RESUMED: AtomicBool = AtomicBool::new(false);
+
+/// The write end of the pipe a stop signal's handler pokes.
+static SUSPEND_PIPE: AtomicI32 = AtomicI32::new(-1);
+
+/// Woken once killi is continued, so an idle prompt repaints without waiting for a key:
+/// crossterm stops surfacing SIGWINCH after a stop, so the resume can't lean on a resize event.
+static RESUMED_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Awaits the next continue. A free function so it borrows nothing of `App` and can share a
+/// `select!` with the futures that do.
+async fn resumed() {
+    RESUMED_NOTIFY.notified().await;
+}
+
 impl TerminalGuard {
     fn enter(fullscreen: bool) -> Result<Self> {
         terminal::enable_raw_mode()?;
-        let mut out = stdout();
-        execute!(out, EnableBracketedPaste)?;
-        if terminal::supports_keyboard_enhancement().unwrap_or(false) {
-            execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
-            ENHANCED.store(true, Ordering::Relaxed);
-        }
-        if fullscreen {
-            // Button and wheel reports (1000) in the SGR form (1006). crossterm's own
-            // `EnableMouseCapture` also asks for 1003, a report of every pointer move.
-            execute!(out, EnterAlternateScreen, Clear(ClearType::All), MoveTo(0, 0))?;
-            write!(out, "\x1b[?1000h\x1b[?1006h")?;
-            out.flush()?;
-            FULLSCREEN.store(true, Ordering::Relaxed);
-        }
+        let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
+        take_terminal(fullscreen, enhanced)?;
         // With `panic = "abort"` no destructor runs, so a panic would leave the shell on the
         // alternate screen with the mouse reporting.
         let report = std::panic::take_hook();
@@ -3242,8 +3263,122 @@ impl TerminalGuard {
             restore_terminal();
             report(info);
         }));
+        suspend_cleanly();
         Ok(Self)
     }
+}
+
+/// Puts the terminal in the state the UI needs: raw mode, bracketed paste, disambiguated
+/// escape codes when the terminal knows them, and in fullscreen mode the alternate screen with
+/// button and wheel reports (1000) in the SGR form (1006); crossterm's own `EnableMouseCapture`
+/// also asks for 1003, a report of every pointer move.
+fn take_terminal(fullscreen: bool, enhanced: bool) -> Result<()> {
+    terminal::enable_raw_mode()?;
+    let mut out = stdout();
+    execute!(out, EnableBracketedPaste)?;
+    if enhanced {
+        execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
+        ENHANCED.store(true, Ordering::Relaxed);
+    }
+    if fullscreen {
+        execute!(out, EnterAlternateScreen, Clear(ClearType::All), MoveTo(0, 0))?;
+        write!(out, "\x1b[?1000h\x1b[?1006h")?;
+        out.flush()?;
+        FULLSCREEN.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+extern "C" fn on_suspend_signal(_: libc::c_int) {
+    let fd = SUSPEND_PIPE.load(Ordering::Relaxed);
+    if fd >= 0 {
+        // SAFETY: a one-byte write to a pipe this process opened; async-signal-safe.
+        unsafe { libc::write(fd, [0u8].as_ptr().cast(), 1) };
+    }
+}
+
+/// Being stopped gives the terminal back first, and takes it again when killi is continued, so
+/// a suspended killi never leaves the shell in raw mode with the mouse reporting, where the
+/// wheel would type `65;48;33M` into the prompt. The reported SIGTTIN came from a child that
+/// took the terminal, which `OwnSession` now prevents; this covers the remaining path, an
+/// explicit `kill -TSTP` (Ctrl+Z is a key in raw mode, not a signal). SIGTTOU is ignored so
+/// taking the terminal again never stops killi should the shell not have handed it back yet.
+/// A handler only pokes a pipe; a thread does the work, since restoring the terminal takes a
+/// lock a signal handler must not wait on. It erases the inline live area, restores the
+/// terminal, stops the whole process with SIGSTOP, and once continued takes the terminal again
+/// and raises SIGWINCH, which reaches the UI as a resize and paints everything afresh.
+fn suspend_cleanly() {
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: pipe fills the two descriptors; fcntl acts on one this function owns.
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return;
+    }
+    let [reader, writer] = fds;
+    // SAFETY: as above.
+    unsafe { libc::fcntl(writer, libc::F_SETFL, libc::O_NONBLOCK) };
+    SUSPEND_PIPE.store(writer, Ordering::Relaxed);
+    // SAFETY: a zeroed sigaction is valid; the handler only writes a byte to the pipe, and
+    // ignoring SIGTTOU keeps a terminal write off the background from stopping killi.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = on_suspend_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(libc::SIGTSTP, &action, std::ptr::null_mut());
+
+        let mut ignore: libc::sigaction = std::mem::zeroed();
+        ignore.sa_sigaction = libc::SIG_IGN;
+        libc::sigemptyset(&mut ignore.sa_mask);
+        libc::sigaction(libc::SIGTTOU, &ignore, std::ptr::null_mut());
+    }
+    std::thread::spawn(move || {
+        // SAFETY: the set holds only SIGTSTP, so its handler runs on the main thread, not here.
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGTSTP);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        }
+        let mut bytes = [0u8; 16];
+        // SAFETY: reads into a buffer of the given length.
+        let mut read = || unsafe { libc::read(reader, bytes.as_mut_ptr().cast(), bytes.len()) };
+        loop {
+            let n = read();
+            if n == 0 || (n < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted) {
+                return;
+            }
+            if n < 0 {
+                continue;
+            }
+            let taken = terminal::is_raw_mode_enabled().unwrap_or(false);
+            let (fullscreen, enhanced) = (FULLSCREEN.load(Ordering::Relaxed), ENHANCED.load(Ordering::Relaxed));
+            if taken && !fullscreen {
+                let mut out = stdout();
+                let row = CURSOR_ROW.load(Ordering::Relaxed);
+                if row > 0 {
+                    let _ = queue!(out, MoveUp(row as u16));
+                }
+                let _ = execute!(out, MoveToColumn(0), Clear(ClearType::FromCursorDown));
+            }
+            restore_terminal();
+            // SAFETY: stops this process; the shell continues it with `fg`.
+            unsafe { libc::kill(libc::getpid(), libc::SIGSTOP) };
+            // Continued. A poke that arrived before the stop is stale.
+            loop {
+                let mut poll = libc::pollfd { fd: reader, events: libc::POLLIN, revents: 0 };
+                // SAFETY: `poll` points at one pollfd that lives for the whole call.
+                if unsafe { libc::poll(&mut poll, 1, 0) } <= 0 || read() <= 0 {
+                    break;
+                }
+            }
+            if taken {
+                let _ = take_terminal(fullscreen, enhanced);
+                RESUMED.store(true, Ordering::Relaxed);
+                // A tick repaints a turn in flight; this wakes an idle prompt to repaint now.
+                RESUMED_NOTIFY.notify_one();
+            }
+        }
+    });
 }
 
 /// Ends mouse reports and leaves the alternate screen, if the UI is on it.

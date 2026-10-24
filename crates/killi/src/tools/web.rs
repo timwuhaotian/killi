@@ -8,6 +8,7 @@ use serde_json::Value;
 use tokio::process::Command;
 
 use super::{Context, MAX_BYTES, Output, SearchSettings, files};
+use super::bash::OwnSession;
 use crate::llm::truncate;
 
 const MAX_DOWNLOAD: usize = 10 * 1024 * 1024;
@@ -150,7 +151,7 @@ fn chrome() -> Option<PathBuf> {
 }
 
 /// Headless Chrome on `url` with a throwaway profile, so a running Chrome is left alone, and
-/// in its own process group so the helpers it starts can be killed with it.
+/// in its own session so the helpers it starts can be killed with it.
 fn browser(url: &str, extra: &[String]) -> Result<(Command, PathBuf), String> {
     let Some(chrome) = chrome() else {
         return Err("No Chrome, Chromium, Edge or Brave found in /Applications (or KILLI_CHROME).".into());
@@ -167,7 +168,7 @@ fn browser(url: &str, extra: &[String]) -> Result<(Command, PathBuf), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .process_group(0)
+        .own_session()
         .kill_on_drop(true);
     Ok((command, profile))
 }

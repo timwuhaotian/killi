@@ -5,7 +5,19 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
-## 0.4.1 — 2026-10-24
+## 0.4.2 — 2026-10-24
+
+- **A command can no longer take the terminal from killi.** Every process killi starts — bash
+  commands, hooks, MCP servers, the headless browser — now runs in a session of its own, not
+  only a process group. An interactive shell such as `zsh -i` opens `/dev/tty` and could make
+  itself the terminal's foreground group; killi's next keystroke then stopped it with SIGTTIN,
+  and the user's shell left the prompt in raw mode with the mouse still reporting, so scrolling
+  typed `65;48;33M` into it. A new session has no controlling terminal, so a child cannot grab
+  it, and killi stays in the foreground. Each child is still ended with everything it started.
+- **A suspended killi gives the terminal back.** Should killi be stopped anyway — now only by an
+  explicit `kill -TSTP`, since Ctrl+Z is a key in raw mode — it restores the terminal first
+  (cooked mode, mouse reports and bracketed paste off, the live area erased), then takes it
+  again and repaints when continued, so a stopped session never leaves the shell in raw mode.
 
 - **`/update-config`, a built-in skill about killi's own configuration.** It lists every
   file under `~/.killi` and in the project, every key of `config.toml`, `mcp.json` and the

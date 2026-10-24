@@ -154,6 +154,37 @@ impl Exit {
     }
 }
 
+/// Starts a command in a session of its own, so it has no controlling terminal: `killpg` on its
+/// pid still ends it with everything it started (a new session is also a new process group),
+/// and nothing it runs can take the terminal from killi. A child in a process group of its own
+/// (`process_group(0)`) still shares killi's session and terminal: a shell run with `-i` (zsh
+/// opens `/dev/tty` when stdin isn't one) made itself the foreground process group, killi's
+/// next read of the keyboard stopped it with SIGTTIN, and the user's shell printed `suspended
+/// (tty input)` over the prompt with the mouse reports still on.
+pub trait OwnSession {
+    fn own_session(&mut self) -> &mut Self;
+}
+
+fn setsid() -> std::io::Result<()> {
+    // SAFETY: setsid takes no arguments and is async-signal-safe, as `pre_exec` requires.
+    if unsafe { libc::setsid() } == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+}
+
+impl OwnSession for Command {
+    fn own_session(&mut self) -> &mut Self {
+        // SAFETY: the closure only calls setsid.
+        unsafe { self.pre_exec(setsid) }
+    }
+}
+
+impl OwnSession for std::process::Command {
+    fn own_session(&mut self) -> &mut Self {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: the closure only calls setsid.
+        unsafe { self.pre_exec(setsid) }
+    }
+}
+
 impl Process {
     fn spawn(dir: &Path, command: &str) -> std::io::Result<Self> {
         let mut child = Command::new("/bin/bash")
@@ -167,7 +198,7 @@ impl Process {
             .env("TERM", "dumb")
             .env("PAGER", "cat")
             .env("GIT_PAGER", "cat")
-            .process_group(0)
+            .own_session()
             .spawn()?;
         let pgid = child.id().unwrap_or_default();
         let mut stdout = child.stdout.take().expect("stdout is piped");
@@ -777,6 +808,13 @@ mod tests {
         let mut exit = ctx.tasks.borrow().list[&1].process.exit.clone();
         exit.wait_for(Option::is_some).await.unwrap();
         assert_eq!(ctx.tasks.borrow_mut().newly_finished(), vec!["Background task 1 (`exit 4`) exited with code 4.".to_string()]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_command_has_no_controlling_terminal() {
+        let ctx = ctx();
+        let out = bash(&ctx, &json!({"command": "( : </dev/tty ) 2>/dev/null && echo opened || echo closed"}), &never).await;
+        assert_eq!(out.text, "closed");
     }
 
     #[tokio::test(flavor = "current_thread")]

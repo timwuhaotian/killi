@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::tools::OwnSession;
+
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(transparent)]
 pub struct HooksConfig(BTreeMap<String, Vec<Hook>>);
@@ -125,7 +127,7 @@ async fn execute(command: &str, cwd: &Path, input: &str, timeout: Duration) -> O
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
+        .own_session()
         .kill_on_drop(true)
         .spawn()
         .ok()?;
