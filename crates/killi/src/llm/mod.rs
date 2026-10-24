@@ -221,10 +221,12 @@ fn validate_reply(reply: Reply) -> Result<Reply, Failure> {
     Ok(reply)
 }
 
-const IMAGE_TOKEN_RESERVE: u64 = 2_048;
+/// Tokens reserved per inline image: its base64 is about a hundred times what it bills.
+pub(crate) const IMAGE_TOKEN_RESERVE: u64 = 2_048;
 
 /// Estimated serialized input size, with inline image data replaced by a fixed per-image
-/// reserve instead of treating base64 as text. This only caps output; it never drives compaction.
+/// reserve instead of treating base64 as text. This only caps output; compaction has its own
+/// estimate in `agent.rs`, which reserves the same per image.
 fn estimated_value_bytes(value: &Value) -> u64 {
     match value {
         Value::Null => 4,

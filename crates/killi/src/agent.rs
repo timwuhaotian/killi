@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use crate::config::Thinking;
-use crate::llm::{Client, Delta, Reply, ToolCall, Usage, truncate};
+use crate::llm::{Client, Delta, IMAGE_TOKEN_RESERVE, Reply, ToolCall, Usage, truncate};
 use crate::session::Session;
 use crate::hooks::{HooksConfig, tool_payload};
 use crate::skills::Skills;
@@ -585,8 +585,12 @@ impl Agent {
             let list: String = found.iter().map(|p| format!("\n- {p}")).collect();
             self.push(json!({"role": "user", "content": format!("<system-reminder>These AGENTS.md files apply to paths you just used but aren't in your instructions. Read them before changing anything in those folders:{list}</system-reminder>")}))?;
         }
-        if self.compaction_due() {
-            self.compact(None).await?;
+        if self.compaction_due()
+            && let Err(error) = self.compact(None).await
+        {
+            // Proactive compaction is a saving, not a need: the request may still fit, and an
+            // overflow compacts the reduced history on the way back.
+            (self.sink)(Event::Notice(format!("Compaction failed: {error:#}. Continuing without it.")));
         }
         Ok(())
     }
@@ -1168,7 +1172,17 @@ impl Agent {
         self.stats.requests += 1;
         self.account(&reply.usage, None, None)?;
         if reply.text.trim().is_empty() {
-            bail!("the model returned an empty summary, so the conversation was left as it was");
+            let instead = if reply.tool_calls.is_empty() {
+                match reply.reasoning.is_empty() {
+                    true => "returned an empty summary".to_string(),
+                    false => format!("only reasoned, {} characters, and wrote no summary", reply.reasoning.chars().count()),
+                }
+            } else {
+                let names: Vec<&str> = reply.tool_calls.iter().map(|call| call.name.as_str()).collect();
+                format!("called {} instead of writing a summary", names.join(", "))
+            };
+            self.session.record(&json!({"type": "warn", "message": format!("Compaction: the model {instead}.")}))?;
+            bail!("the model {instead}, so the conversation was left as it was");
         }
         let mut kept = Vec::new();
         let mut size = 0;
@@ -1283,12 +1297,25 @@ fn reserve_swarm(used: usize, requested: usize) -> Result<(), String> {
 }
 
 /// A conservative character-based estimate for history appended since the last usage report.
-/// The billed fixed prefix stays in `stats.context`; this estimates only the new suffix.
+/// The billed fixed prefix stays in `stats.context`; this estimates only the new suffix. An
+/// inline image counts as `IMAGE_TOKEN_RESERVE`, not its base64: a 300 KB screenshot bills
+/// about 1.5k tokens, and counted as text it compacted conversations of 8k tokens.
 fn estimate_tokens(messages: &[Value]) -> u64 {
     messages.iter().fold(0_u64, |total, message| {
-        let chars = message.to_string().chars().count() as u64;
-        total.saturating_add(chars.div_ceil(2)).saturating_add(4)
+        total.saturating_add(estimate_chars(message).div_ceil(2)).saturating_add(4)
     })
+}
+
+/// Characters of `value` serialized, with each inline image's data replaced by its reserve.
+fn estimate_chars(value: &Value) -> u64 {
+    match value {
+        Value::String(text) if text.starts_with("data:") && text.contains(";base64,") => IMAGE_TOKEN_RESERVE * 2,
+        Value::Array(values) => values.iter().fold(2, |total, value| total.saturating_add(estimate_chars(value)).saturating_add(1)),
+        Value::Object(values) => values.iter().fold(2, |total, (key, value)| {
+            total.saturating_add(key.chars().count() as u64).saturating_add(4).saturating_add(estimate_chars(value))
+        }),
+        other => other.to_string().chars().count() as u64,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1859,6 +1886,26 @@ mod tests {
         assert!(!agent.compaction_due(), "the fixed prefix is not estimated a second time");
         agent.push(json!({"role": "user", "content": "new ".repeat(5_000)})).unwrap();
         assert!(agent.compaction_due(), "the unbilled appended suffix counts conservatively");
+    }
+
+    #[test]
+    fn an_inline_image_counts_as_its_reserve_not_its_base64() {
+        let mut agent = idle_agent("compaction-image", Controls::default(), Rc::new(|_| {}));
+        agent.settings = Rc::new(Settings { compact_at: 10_000, ..Settings::default() });
+        Rc::get_mut(&mut agent.client).unwrap().model.max_output = Some(1_000);
+        agent.stats.context = 100;
+        agent.accounted_messages = agent.messages.len();
+        let data = format!("data:image/jpeg;base64,{}", "A".repeat(400_000));
+        let image = json!({"role": "user", "content": [
+            {"type": "text", "text": "Image from read shot.png:"},
+            {"type": "image_url", "image_url": {"url": data}},
+        ]});
+        let estimate = estimate_tokens(std::slice::from_ref(&image));
+        assert!((IMAGE_TOKEN_RESERVE..IMAGE_TOKEN_RESERVE + 100).contains(&estimate), "{estimate}");
+        agent.push(image).unwrap();
+        assert!(!agent.compaction_due(), "a screenshot in an 8k-token conversation is not a reason to compact");
+        agent.push(json!({"role": "user", "content": "A".repeat(400_000)})).unwrap();
+        assert!(agent.compaction_due(), "the same characters as text still count");
     }
 
     #[test]
