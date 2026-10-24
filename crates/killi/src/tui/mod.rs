@@ -696,6 +696,8 @@ struct App {
     /// The text the menu was closed on with Esc; it opens again when the text changes.
     menu_closed: Option<String>,
     busy: Option<Instant>,
+    /// A request being retried: the attempt and when its wait ends, for the working row.
+    retry: Option<(u32, Instant)>,
     /// The latest tool outputs and thoughts, for Ctrl+O.
     details: Vec<(String, String)>,
     /// How far back Ctrl+O has gone from the newest.
@@ -804,6 +806,7 @@ impl App {
             },
             controls,
             spinner: 0,
+            retry: None,
             exit_armed: None,
             queued: Vec::new(),
             send_now: false,
@@ -1496,6 +1499,7 @@ impl App {
         self.end_thinking();
         self.running.clear();
         self.aside = None;
+        self.retry = None;
         self.busy = None;
     }
 
@@ -1558,6 +1562,9 @@ impl App {
     }
 
     fn on_agent(&mut self, event: Event) {
+        if !matches!(event, Event::Retry { .. } | Event::Sub { .. }) {
+            self.retry = None;
+        }
         match event {
             Event::Text(text) => {
                 let text = if self.last_kind == Kind::Text { text.as_str() } else { text.trim_start() };
@@ -1589,6 +1596,7 @@ impl App {
                 None => self.thinking = Some((Instant::now(), text)),
             },
             Event::Retry { attempt, wait, reason } => {
+                self.retry = Some((attempt, Instant::now() + wait));
                 let line = format!("{WARN}⚠ retry {attempt} in {}:{RESET}{DIM} {}{RESET}", clock(wait), gist(&reason));
                 self.begin(Kind::Tool);
                 self.emit(Line::Fit(line));
@@ -2175,8 +2183,8 @@ impl App {
             if self.asking.is_none() {
                 // Tool rows keep their list together, but the wordmark never touches them or the conversation.
                 space(&mut rows);
-                let spin = banner::working(self.spinner);
-                rows.push(fit(&format!("{spin} {DIM}working{RESET} {BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}", clock(started.elapsed())), width));
+                let retry = self.retry.map(|(attempt, until)| (attempt, until.saturating_duration_since(Instant::now())));
+                rows.push(fit(&working_row(self.spinner, started.elapsed(), retry), width));
             }
             for queued in &self.queued {
                 rows.push(fit(&queued_row(queued), width));
@@ -3116,6 +3124,18 @@ struct Command {
 
 /// A message queued while the agent works, saying Ctrl+S can send it now instead of
 /// waiting for the next step.
+/// The working row: the spinner and wordmark, then what the turn is doing and for how long.
+/// While a failed request waits to be retried it counts that wait down instead, since nothing
+/// is working then; once the wait is over the elapsed time of the turn returns.
+fn working_row(frame: usize, elapsed: Duration, retry: Option<(u32, Duration)>) -> String {
+    let spin = banner::working(frame);
+    let doing = match retry.filter(|(_, left)| !left.is_zero()) {
+        Some((attempt, left)) => format!("{WARN}retrying in{RESET} {BOLD}{}{RESET} {DIM}· attempt {attempt}{RESET}", clock(left)),
+        None => format!("{DIM}working{RESET} {BOLD}{}{RESET}", clock(elapsed)),
+    };
+    format!("{spin} {doing} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}")
+}
+
 fn queued_row(queued: &str) -> String {
     format!("{FIN}❯{RESET} {DIM}{} (sent at the next step · Ctrl+S sends it now){RESET}", queued.replace('\n', " "))
 }
@@ -3788,6 +3808,15 @@ mod tests {
     #[test]
     fn a_queued_message_says_ctrl_s_sends_it_now() {
         assert_eq!(unstyled(&queued_row("fix\nthis")), "❯ fix this (sent at the next step · Ctrl+S sends it now)");
+    }
+
+    #[test]
+    fn the_working_row_counts_a_retry_wait_down_then_returns_to_the_turn() {
+        let secs = Duration::from_secs;
+        let row = |retry| unstyled(&working_row(20, secs(45), retry));
+        assert!(row(None).ends_with("killi working 45s · Esc to interrupt"));
+        assert!(row(Some((2, secs(8)))).ends_with("killi retrying in 8s · attempt 2 · Esc to interrupt"));
+        assert!(row(Some((2, secs(0)))).ends_with("killi working 45s · Esc to interrupt"), "the wait is over, the request is in flight");
     }
 
     #[test]

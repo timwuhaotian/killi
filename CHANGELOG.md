@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.3 — 2026-10-24
+
+- **The working row counts a retry wait down.** When a request fails and killi waits to try
+  it again — up to about 40 s of backoff, or longer when the provider says so — the row said
+  `working 45s` while nothing was happening, and the `⚠ retry 2 in 8s` line above it stood
+  still. It now reads `retrying in 8s · attempt 2` with the seconds ticking, and returns to
+  the turn's elapsed time once the next request is in flight.
+
 ## 0.4.2 — 2026-10-24
 
 - **A command can no longer take the terminal from killi.** Every process killi starts — bash
