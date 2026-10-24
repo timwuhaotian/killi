@@ -403,6 +403,10 @@ fn import_sources() -> Vec<ImportSource> {
     if pi.exists() {
         sources.push(("pi", pi, import_pi));
     }
+    let omp_dir = home().join(".omp/agent");
+    if let Some(omp) = ["models.yml", "models.yaml", "models.json"].into_iter().map(|name| omp_dir.join(name)).find(|path| path.exists()) {
+        sources.push(("omp", omp, import_omp));
+    }
     let opencode = home().join(".config/opencode/opencode.json");
     if opencode.exists() {
         sources.push(("opencode", opencode, import_opencode));
@@ -770,8 +774,48 @@ fn import_pi_from(dir: &Path, dst_dir: &Path, force: bool) -> Result<()> {
     };
     let catalog = read_json(&dir.join("models-store.json"))?.unwrap_or_default();
     let settings = read_json(&dir.join("settings.json"))?.unwrap_or_default();
+    let configured = json_str(&settings, "defaultProvider").zip(json_str(&settings, "defaultModel")).map(|(p, m)| format!("{p}/{m}"));
+    let effort = json_str(&settings, "defaultThinkingLevel").filter(|level| level != "auto");
+    import_pi_shape(dir, dst_dir, force, &config, &catalog, configured.as_deref(), effort.as_deref(), "pi", PiKey::Pi)
+}
+
+/// How a pi-shaped `apiKey` reads. pi's is the key itself; omp's names an environment
+/// variable when one is set, and runs as a shell command when it starts with `!` — that
+/// spelling killi won't copy, so the provider is skipped like an account login.
+enum PiKey {
+    Pi,
+    Omp,
+}
+
+/// The `api_key`/`api_key_env` pair a pi-shaped provider's `apiKey` becomes, or `None`
+/// when there is no key killi can use.
+fn pi_key_fields(provider: &serde_json::Value, key: &PiKey) -> Option<(&'static str, String)> {
+    let raw = json_str(provider, "apiKey")?;
+    match key {
+        PiKey::Pi => Some(("api_key", raw)),
+        PiKey::Omp if raw.starts_with('!') => None,
+        PiKey::Omp if std::env::var(&raw).is_ok_and(|value| !value.is_empty()) => Some(("api_key_env", raw)),
+        PiKey::Omp => Some(("api_key", raw)),
+    }
+}
+
+/// Writes a pi-shaped agent's config — pi's `models.json`, omp's YAML read the same way —
+/// as killi's: each provider with a key and its models, the default and effort the caller
+/// found, and its MCP servers copied across.
+#[allow(clippy::too_many_arguments)]
+fn import_pi_shape(
+    dir: &Path,
+    dst_dir: &Path,
+    force: bool,
+    config: &serde_json::Value,
+    catalog: &serde_json::Value,
+    configured: Option<&str>,
+    effort: Option<&str>,
+    source: &str,
+    key: PiKey,
+) -> Result<()> {
     let Some(all) = config.get("providers").and_then(serde_json::Value::as_object) else {
-        bail!("no providers in {}/models.json", dir.display())
+        bail!("no providers in {}", dir.display())
     };
 
     let mut out = toml::Table::new();
@@ -779,7 +823,7 @@ fn import_pi_from(dir: &Path, dst_dir: &Path, force: bool) -> Result<()> {
     let mut models = toml::Table::new();
     let mut skipped = Vec::new();
     for (name, provider) in all {
-        let Some(api_key) = json_str(provider, "apiKey") else {
+        let Some((key_field, api_key)) = pi_key_fields(provider, &key) else {
             skipped.push(name.clone());
             continue;
         };
@@ -794,7 +838,18 @@ fn import_pi_from(dir: &Path, dst_dir: &Path, force: bool) -> Result<()> {
         if let Some(url) = json_str(provider, "baseUrl").or_else(|| listed[0].base_url.clone()) {
             table.insert("base_url".into(), url.into());
         }
-        table.insert("api_key".into(), api_key.into());
+        table.insert(key_field.into(), api_key.into());
+        if let Some(headers) = provider.get("headers").and_then(serde_json::Value::as_object) {
+            let mut custom = toml::Table::new();
+            for (header, value) in headers {
+                if let Some(value) = value.as_str() {
+                    custom.insert(header.clone(), value.into());
+                }
+            }
+            if !custom.is_empty() {
+                table.insert("custom_headers".into(), toml::Value::Table(custom));
+            }
+        }
         providers.insert(name.clone(), toml::Value::Table(table));
 
         for model in &listed {
@@ -827,21 +882,20 @@ fn import_pi_from(dir: &Path, dst_dir: &Path, force: bool) -> Result<()> {
         }
     }
     if providers.is_empty() {
-        bail!("pi's config has no provider with an API key to import");
+        bail!("{source}'s config has no provider with an API key to import");
     }
 
-    let configured = json_str(&settings, "defaultProvider").zip(json_str(&settings, "defaultModel")).map(|(p, m)| format!("{p}/{m}"));
-    let default = match &configured {
-        Some(alias) if models.contains_key(alias) => Some(alias.clone()),
+    let default = match configured {
+        Some(alias) if models.contains_key(alias) => Some(alias.to_string()),
         _ => models.keys().next().cloned(),
     };
     if let Some(alias) = &default {
         out.insert("default_model".into(), alias.clone().into());
-        if configured.as_deref() != Some(alias.as_str()) {
-            eprintln!("pi's default model {} wasn't imported, so `{alias}` is the default", configured.as_deref().unwrap_or("(none)"));
+        if configured != Some(alias.as_str()) {
+            eprintln!("{source}'s default model {} wasn't imported, so `{alias}` is the default", configured.unwrap_or("(none)"));
         }
     }
-    if let Some(effort) = json_str(&settings, "defaultThinkingLevel").filter(|level| level != "auto") {
+    if let Some(effort) = effort {
         out.insert("thinking".into(), toml::Table::from_iter([("effort".to_string(), effort.into())]).into());
     }
     let (provider_count, model_count) = (providers.len(), models.len());
@@ -851,7 +905,7 @@ fn import_pi_from(dir: &Path, dst_dir: &Path, force: bool) -> Result<()> {
     write_import(out, Some(&dir.join("mcp.json")), dst_dir, force)?;
     println!("Imported {provider_count} providers and {model_count} models into {}", dst_dir.join("config.toml").display());
     if !skipped.is_empty() {
-        println!("Skipped providers without an API key (pi account login): {}", skipped.join(", "));
+        println!("Skipped providers without an API key ({source} account login): {}", skipped.join(", "));
     }
     Ok(())
 }
@@ -891,13 +945,52 @@ fn pi_models(provider: &serde_json::Value, catalog: &serde_json::Value) -> Vec<P
         .collect()
 }
 
-/// The API pi names for a provider or model, as killi's provider type.
+/// The API pi (or omp) names for a provider or model, as killi's provider type.
 fn pi_protocol(api: Option<&str>) -> &'static str {
     match api {
-        Some("openai-responses") => "openai_responses",
+        Some("openai-responses" | "openai-codex-responses" | "azure-openai-responses") => "openai_responses",
         Some("anthropic-messages") => "anthropic",
         _ => "openai",
     }
+}
+
+/// Copies providers, models, the default model, the thinking level and MCP servers from
+/// omp's config (`~/.omp/agent`). omp writes pi's model shape as YAML (`models.yml`, with
+/// the default in `config.yml`), so the import reads it into the same value tree pi's JSON
+/// makes and shares pi's mapping. Only the providers omp's models file defines come over:
+/// the ones it builds in — reached with an environment variable or its account login —
+/// carry no endpoint or key in the file. A leftover pi-style `models.json`/`settings.json`
+/// in the directory is read when the YAML isn't there.
+pub fn import_omp(force: bool) -> Result<()> {
+    import_omp_from(&home().join(".omp/agent"), &killi_home(), force)
+}
+
+fn import_omp_from(dir: &Path, dst_dir: &Path, force: bool) -> Result<()> {
+    let Some(config) = read_yaml(&dir.join("models.yml"))?.or(read_json(&dir.join("models.json"))?) else {
+        bail!("no models.yml or models.json in {} to import", dir.display())
+    };
+    let catalog = read_json(&dir.join("models-store.json"))?.unwrap_or_default();
+    let settings = read_yaml(&dir.join("config.yml"))?.or(read_json(&dir.join("settings.json"))?).unwrap_or_default();
+    let (configured, effort) = omp_default(&settings);
+    import_pi_shape(dir, dst_dir, force, &config, &catalog, configured.as_deref(), effort.as_deref(), "omp", PiKey::Omp)
+}
+
+/// omp's configured default model and thinking level: its `modelRoles.default` (the first
+/// of a comma list, with any `:effort` off its end), else the pi-era settings it migrates
+/// from. A role alias (`@smol`) or a glob names no one model, so pressing on falls back.
+fn omp_default(settings: &serde_json::Value) -> (Option<String>, Option<String>) {
+    let role = settings.get("modelRoles").and_then(|roles| json_str(roles, "default"));
+    if let Some(role) = role.filter(|value| !value.starts_with('@') && !value.starts_with('*')) {
+        let first = role.split(',').next().unwrap_or_default().trim();
+        let (alias, effort) = match first.rsplit_once(':') {
+            Some((alias, effort)) if !effort.is_empty() && effort != "auto" => (alias, Some(effort.to_string())),
+            _ => (first, None),
+        };
+        return ((!alias.is_empty()).then(|| alias.to_string()), effort);
+    }
+    let configured = json_str(settings, "defaultProvider").zip(json_str(settings, "defaultModel")).map(|(p, m)| format!("{p}/{m}"));
+    let effort = json_str(settings, "defaultThinkingLevel").filter(|level| level != "auto");
+    (configured, effort)
 }
 
 /// Copies providers, models, the default model and MCP servers from opencode's config
@@ -1043,6 +1136,207 @@ fn copy_opencode_mcp(config: &serde_json::Value, dst_dir: &Path, force: bool) ->
     fs::write(&dst, serde_json::to_string_pretty(&file)?).with_context(|| format!("could not write {}", dst.display()))?;
     println!("Copied MCP servers into {}", dst.display());
     Ok(())
+}
+
+/// Reads a YAML config, as omp writes it, into the shape `read_json` returns. Only the
+/// block style omp's own writer emits — mappings and sequences by indentation, plain,
+/// quoted and single-line flow scalars — is understood; aliases, block scalars and other
+/// spelled-out YAML are reported rather than guessed at, so an unimportable file fails the
+/// import instead of importing wrong. A `.yaml` sibling stands in for a missing `.yml`.
+fn read_yaml(path: &Path) -> Result<Option<serde_json::Value>> {
+    let present = if path.exists() { path.to_path_buf() } else { path.with_extension("yaml") };
+    let text = match fs::read_to_string(&present) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("could not read {}", present.display())),
+    };
+    let mut lines: Vec<(usize, usize, &str)> = Vec::new();
+    for (at, raw) in text.lines().enumerate() {
+        let line = strip_yaml_comment(raw.trim_end());
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.trim() == "---" {
+            if lines.is_empty() {
+                continue;
+            }
+            bail!("YAML in {} has more than one document (line {})", present.display(), at + 1);
+        }
+        let (Some(spaces), None) = (line.bytes().position(|b| b != b' '), line.find('\t')) else {
+            bail!("YAML in {} indents with tabs (line {})", present.display(), at + 1);
+        };
+        lines.push((spaces, at + 1, line[spaces..].trim_end()));
+    }
+    if lines.is_empty() {
+        return Ok(Some(serde_json::Value::Null));
+    }
+    let at = lines[0].1;
+    let (value, used) = yaml_block(&lines, 0, lines[0].0).map_err(|reason| anyhow::anyhow!("{reason} in {}", present.display()))?;
+    if used != lines.len() {
+        bail!("could not read the YAML in {} past line {at}", present.display());
+    }
+    Ok(Some(value))
+}
+
+/// The part of a YAML line before any comment: a `#` starts one only between words, and a
+/// quoted span keeps its own.
+fn strip_yaml_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut quote = 0u8;
+    let mut i = 0;
+    while i < bytes.len() {
+        match (quote, bytes[i]) {
+            (b'"', b'\\') => i += 1,
+            (b'"', b'"') | (b'\'', b'\'') => quote = 0,
+            (0, b'"' | b'\'') => quote = bytes[i],
+            (0, b'#') if i == 0 || bytes[i - 1] == b' ' => return &line[..i],
+            _ => {}
+        }
+        i += 1;
+    }
+    line
+}
+
+/// One block node at `indent` from `lines[start..]`: its value and the index after it.
+fn yaml_block(lines: &[(usize, usize, &str)], start: usize, indent: usize) -> std::result::Result<(serde_json::Value, usize), String> {
+    if lines[start].2.starts_with("- ") || lines[start].2 == "-" {
+        return yaml_sequence(lines, start, indent);
+    }
+    if yaml_key(lines[start].2).is_some() {
+        return yaml_mapping(lines, start, indent);
+    }
+    Ok((yaml_scalar(lines[start].2)?, start + 1))
+}
+
+/// A block mapping whose keys sit at `indent`: each `key:` takes the value behind it, or
+/// the deeper block under it.
+fn yaml_mapping(lines: &[(usize, usize, &str)], start: usize, indent: usize) -> std::result::Result<(serde_json::Value, usize), String> {
+    let mut map = serde_json::Map::new();
+    let mut i = start;
+    while i < lines.len() && lines[i].0 == indent {
+        let (key, rest) = yaml_key(lines[i].2).ok_or_else(|| format!("expected a `key:` at line {}", lines[i].1))?;
+        i += 1;
+        map.insert(key, if rest.is_empty() { yaml_nested(lines, &mut i, indent)? } else { yaml_scalar(rest)? });
+    }
+    Ok((serde_json::Value::Object(map), i))
+}
+
+/// A `key:` with nothing behind it: the block under it, a sequence sitting at the key's own
+/// indent (the one case YAML indents no deeper), or nothing.
+fn yaml_nested(lines: &[(usize, usize, &str)], i: &mut usize, indent: usize) -> std::result::Result<serde_json::Value, String> {
+    if *i >= lines.len() {
+        return Ok(serde_json::Value::Null);
+    }
+    let (next, _, text) = lines[*i];
+    if next > indent {
+        let (value, used) = yaml_block(lines, *i, next)?;
+        *i = used;
+        Ok(value)
+    } else if next == indent && (text.starts_with("- ") || text == "-") {
+        let (value, used) = yaml_sequence(lines, *i, indent)?;
+        *i = used;
+        Ok(value)
+    } else {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+/// A block sequence whose dashes sit at `indent`. An item that opens a mapping — `- id: x`
+/// with the rest aligned after the dash — stands as its own block, so its lines re-indent
+/// to that column before the mapping reads them.
+fn yaml_sequence(lines: &[(usize, usize, &str)], start: usize, indent: usize) -> std::result::Result<(serde_json::Value, usize), String> {
+    let mut items = Vec::new();
+    let mut i = start;
+    while i < lines.len() && lines[i].0 == indent && (lines[i].2.starts_with("- ") || lines[i].2 == "-") {
+        let (_, at, text) = lines[i];
+        let inner = indent + 2;
+        i += 1;
+        let head = text.strip_prefix('-').unwrap_or_default().trim_start();
+        if head.is_empty() {
+            items.push(yaml_nested(lines, &mut i, indent)?);
+        } else if yaml_key(head).is_some() {
+            let mut block = vec![(inner, at, head)];
+            while i < lines.len() && lines[i].0 >= inner {
+                block.push(lines[i]);
+                i += 1;
+            }
+            let (value, _) = yaml_mapping(&block, 0, inner)?;
+            items.push(value);
+        } else {
+            items.push(yaml_scalar(head)?);
+        }
+    }
+    Ok((serde_json::Value::Array(items), i))
+}
+
+/// A line's `key:` split, when it opens a mapping entry: the plain key (a `/` in a model id
+/// stays, a `:` only ends the key before a space or the line's end) and what follows it.
+fn yaml_key(line: &str) -> Option<(String, &str)> {
+    if line.starts_with(['[', '{', '"', '\'']) {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' && (i + 1 == bytes.len() || bytes[i + 1] == b' ') {
+            let key = &line[..i];
+            if key.is_empty() || key.contains([' ', ',', '[', ']', '{', '}']) {
+                return None;
+            }
+            return Some((key.to_string(), line[i + 1..].trim_start()));
+        }
+        i += 1;
+    }
+    None
+}
+
+/// A scalar as omp's writer spells it: a quoted string, a one-line flow collection, or a
+/// plain value read as null, bool, number or text. An anchor's name drops — omp's
+/// `!command` keys stay text, for the importer to decline — and an alias or block scalar is
+/// declined, not guessed.
+fn yaml_scalar(text: &str) -> std::result::Result<serde_json::Value, String> {
+    let text = text.trim();
+    let text = match text.strip_prefix('&') {
+        Some(after) => after.split_once(' ').map_or("", |(_, value)| value).trim_start(),
+        None => text,
+    };
+    match text.chars().next() {
+        Some(c @ ('*' | '|' | '>')) => Err(format!("unsupported YAML scalar starting `{c}`")),
+        Some('"') => serde_json::from_str::<serde_json::Value>(text).map_err(|_| format!("bad quoted string `{text}`")),
+        Some('\'') if text.len() >= 2 && text.ends_with('\'') => Ok(text[1..text.len() - 1].replace("''", "'").into()),
+        Some('[') if text.ends_with(']') => {
+            let inner = text[1..text.len() - 1].trim();
+            if inner.is_empty() {
+                Ok(serde_json::Value::Array(Vec::new()))
+            } else {
+                inner.split(',').map(yaml_scalar).collect::<std::result::Result<Vec<_>, _>>().map(serde_json::Value::Array)
+            }
+        }
+        Some('{') if text.ends_with('}') => {
+            let inner = text[1..text.len() - 1].trim();
+            let mut map = serde_json::Map::new();
+            if !inner.is_empty() {
+                for entry in inner.split(',') {
+                    let (key, value) = entry.split_once(':').ok_or_else(|| format!("bad flow mapping `{text}`"))?;
+                    map.insert(match yaml_scalar(key)? {
+                        serde_json::Value::String(key) => key,
+                        other => other.to_string(),
+                    }, yaml_scalar(value)?);
+                }
+            }
+            Ok(serde_json::Value::Object(map))
+        }
+        _ => Ok(match text {
+            "null" | "Null" | "NULL" | "~" | "" => serde_json::Value::Null,
+            "true" | "True" | "TRUE" => true.into(),
+            "false" | "False" | "FALSE" => false.into(),
+            _ if text.parse::<i64>().is_ok() => text.parse::<i64>().unwrap_or_default().into(),
+            _ if text.contains(['.', 'e', 'E']) && !text.starts_with(['+', '.']) && text.parse::<f64>().is_ok() => {
+                text.parse::<f64>().unwrap_or_default().into()
+            }
+            _ => text.to_string().into(),
+        }),
+    }
 }
 
 /// Reads a JSON file, or `None` when there isn't one.
@@ -1242,6 +1536,91 @@ mod tests {
         assert_eq!(mcp["mcpServers"]["local"]["args"], serde_json::json!(["-y", "pkg"]));
         assert_eq!(mcp["mcpServers"]["remote"]["url"], "https://mcp.example.com");
         assert!(mcp["mcpServers"].get("off").is_none(), "a disabled server is left out");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn importing_omp_carries_over_providers_models_and_the_default() {
+        let root = std::env::temp_dir().join(format!("killi-import-omp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("omp");
+        let dst = root.join("killi");
+        std::fs::create_dir_all(&src).unwrap();
+        // SAFETY: tests that read this variable don't run concurrently with one that changes it.
+        unsafe { std::env::set_var("KILLI_TEST_OMP_KEY", "sk-env") };
+        std::fs::write(src.join("models.yml"), r"# omp's models
+providers:
+  gateway:
+    baseUrl: https://gw.example.com/v1 # the team gateway
+    api: openai-completions
+    apiKey: sk-gateway
+    headers:
+      X-Team: platform
+    models:
+      - id: glm-5.3
+        name: GLM 5.3
+        reasoning: true
+        input: [text, image]
+        cost:
+          input: 0
+          output: 0
+        contextWindow: 1000000
+        maxTokens: 128000
+      - id: fast-chat
+        contextWindow: 128000
+  envkey:
+    baseUrl: https://api.example.com/anthropic
+    apiKey: KILLI_TEST_OMP_KEY
+    models:
+    - id: claude-x
+      api: anthropic-messages
+      reasoning: true
+      maxTokens: 8192
+  cmdkey:
+    baseUrl: https://cmd.example.com/v1
+    apiKey: !op read op://vault/item/key
+    models:
+      - id: m
+  nokey:
+    baseUrl: https://x/v1
+    models:
+      - id: m
+").unwrap();
+        std::fs::write(src.join("config.yml"), r"modelRoles:
+  default: envkey/claude-x:high, gateway/glm-5.3
+").unwrap();
+        std::fs::write(src.join("mcp.json"), serde_json::json!({"mcpServers": {"x": {"command": "echo"}}}).to_string()).unwrap();
+
+        super::import_omp_from(&src, &dst, false).unwrap();
+        let text = std::fs::read_to_string(dst.join("config.toml")).unwrap();
+        let config: super::Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.default_model.as_deref(), Some("envkey/claude-x"), "the `default` role, first of the list, with its `:effort` off the end");
+        assert_eq!(config.thinking.effort.as_deref(), Some("high"));
+        assert_eq!(config.providers.len(), 2, "a `!command` key and a missing key are skipped");
+        assert_eq!(config.providers["gateway"].api_key.as_deref(), Some("sk-gateway"));
+        assert_eq!(config.providers["gateway"].base_url.as_deref(), Some("https://gw.example.com/v1"), "the comment after the URL drops");
+        assert_eq!(config.providers["gateway"].custom_headers.get("X-Team").map(String::as_str), Some("platform"));
+        assert_eq!(config.providers["envkey"].api_key_env.as_deref(), Some("KILLI_TEST_OMP_KEY"), "a set variable's name reads as `api_key_env`");
+        assert_eq!(config.providers["envkey"].kind, "anthropic", "the model's API names the protocol");
+        let glm = &config.models["gateway/glm-5.3"];
+        assert_eq!((glm.max_context_size, glm.max_output_size), (Some(1_000_000), Some(128_000)));
+        assert_eq!(glm.capabilities, ["thinking", "image_in"]);
+        assert_eq!(config.models["gateway/fast-chat"].max_context_size, Some(128_000));
+        assert_eq!(std::fs::read_to_string(dst.join("mcp.json")).unwrap(), std::fs::read_to_string(src.join("mcp.json")).unwrap());
+        assert!(config.missing_key(None).is_none(), "the imported config starts as it is");
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("KILLI_TEST_OMP_KEY") };
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn omp_yaml_the_importer_cannot_read_is_reported() {
+        let root = std::env::temp_dir().join(format!("killi-import-omp-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("models.yml"), "providers:\n  a:\n    apiKey: |\n      sk-1\n").unwrap();
+        assert!(super::read_yaml(&root.join("models.yml")).unwrap_err().to_string().contains("unsupported YAML"));
+        assert!(super::read_yaml(&root.join("missing.yml")).unwrap().is_none());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

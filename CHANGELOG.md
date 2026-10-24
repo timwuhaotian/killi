@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- **A first run can start from omp too.** Without a config, the import offers now include
+  omp beside Kimi Code, pi and opencode: its `~/.omp/agent/models.yml` providers and models
+  — pi's shape spelled as YAML, read by a small block-style reader of killi's own, so no YAML
+  library ships — the API keys behind them (a key naming a set environment variable stays
+  one; a `!command` key is skipped), its `modelRoles.default` as the default model with its
+  thinking level, and its MCP servers. Only the providers that file defines come over: the
+  ones omp builds in carry no endpoint or key there. Custom request headers come over from
+  pi's config too now.
+
 ## 0.4.3 — 2026-10-24
 
 - **The working row counts a retry wait down.** When a request fails and killi waits to try

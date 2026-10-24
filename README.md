@@ -111,7 +111,7 @@ Rust 1.94 or later.
 ### Models
 
 killi reads `~/.killi/config.toml`. Run without a config, `killi` offers to make one
-from another coding agent it finds on the machine — Kimi Code, pi or opencode — carrying over
+from another coding agent it finds on the machine — Kimi Code, pi, omp or opencode — carrying over
 their providers, models, API keys, default model, thinking level and MCP servers into killi's
 layout; providers those tools only reach through an account login are skipped. Otherwise it
 writes a starting config to edit — and then keeps going. When the model it would start on has
