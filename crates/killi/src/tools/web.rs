@@ -283,7 +283,8 @@ pub async fn web_search(ctx: &Context, args: &Value) -> Output {
         return Output::error("web_search needs `query`.");
     };
     let limit = args.get("limit").and_then(Value::as_u64).map_or(DEFAULT_RESULTS, |l| (l as usize).clamp(1, MAX_RESULTS));
-    let found = match search(&ctx.search, query, limit).await {
+    let settings = ctx.search.borrow().clone();
+    let found = match search(&settings, query, limit).await {
         Ok(found) => found,
         Err(e) => return Output::error(e),
     };
@@ -300,6 +301,7 @@ pub async fn web_search(ctx: &Context, args: &Value) -> Output {
     Output::ok(text).brief(format!("{count} result{}", if count == 1 { "" } else { "s" }))
 }
 
+#[derive(Debug)]
 struct Hit {
     title: String,
     url: String,
@@ -349,7 +351,25 @@ async fn search(settings: &SearchSettings, query: &str, limit: usize) -> Result<
             }
             Ok(found)
         }
-        (other, _) => Err(format!("Unknown search provider `{other}`; use \"brave\" or \"tavily\".")),
+        ("searxng", _) => {
+            let Some(base) = settings.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) else {
+                return Err("web_search with SearXNG needs the instance: set `url` under [search].".into());
+            };
+            let mut request = client.get(format!("{}/search", base.trim_end_matches('/'))).query(&[("q", query), ("format", "json")]);
+            if let Some(key) = key {
+                request = request.bearer_auth(key);
+            }
+            let json = match json_reply(request.send().await, "SearXNG").await {
+                Ok(json) => json,
+                // An instance without the json format in its settings answers 403.
+                Err(e) if e.contains("403") => {
+                    return Err(format!("{e}. The instance must allow the json format (search.formats in its settings.yml)."))
+                }
+                Err(e) => return Err(e),
+            };
+            Ok(hits(&json["results"], "title", "url", "content", limit))
+        }
+        (other, _) => Err(format!("Unknown search provider `{other}`; use \"brave\", \"tavily\" or \"searxng\".")),
     }
 }
 
@@ -455,6 +475,19 @@ mod tests {
         url
     }
 
+    /// Serves one response with a fixed `body`.
+    async fn serve_body(head: &'static str, body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = socket.read(&mut [0u8; 1024]).await;
+            let _ = socket.write_all(head.as_bytes()).await;
+            let _ = socket.write_all(body.as_bytes()).await;
+        });
+        url
+    }
+
     fn ctx() -> super::Context {
         super::Context::new(std::env::temp_dir(), std::env::temp_dir().join("killi-fetch-spill"))
     }
@@ -545,5 +578,30 @@ mod tests {
             serde_json::from_str(r#"{"results":[{"title":"A","url":"https://a.test","content":"about a"},{"title":"no url"}]}"#).unwrap();
         let found = super::hits(&json["results"], "title", "url", "content", 5);
         assert_eq!((found.len(), found[0].snippet.as_str()), (1, "about a"));
+    }
+
+    fn searxng(url: Option<String>) -> super::SearchSettings {
+        super::SearchSettings { provider: "searxng".into(), url, ..super::SearchSettings::default() }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn searxng_reads_the_instance_results() {
+        let body = r#"{"results":[{"title":"A","url":"https://a.test","content":"about a"},{"title":"no url"}]}"#;
+        let url = serve_body("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n", body).await;
+        let found = super::search(&searxng(Some(url)), "a", 5).await.unwrap();
+        assert_eq!((found.len(), found[0].title.as_str(), found[0].url.as_str()), (1, "A", "https://a.test"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn searxng_without_an_instance_is_an_error() {
+        let err = super::search(&searxng(None), "a", 5).await.unwrap_err();
+        assert!(err.contains("`url`"), "{err}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn searxng_points_at_the_format_setting_when_refused() {
+        let url = serve_body("HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\n\r\n", "not allowed").await;
+        let err = super::search(&searxng(Some(url)), "a", 5).await.unwrap_err();
+        assert!(err.contains("json format"), "{err}");
     }
 }

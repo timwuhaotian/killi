@@ -34,12 +34,30 @@ pub struct Config {
 
 /// `[search]`: the service behind `web_search`. Without a key, "brave" reads Brave's public
 /// search page, which can turn automated requests away.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct SearchConfig {
-    /// "brave" (default) or "tavily".
+    /// "brave" (default), "tavily" or "searxng".
     pub provider: Option<String>,
+    /// The SearXNG instance, such as "http://localhost:8888"; only "searxng" reads it.
+    pub url: Option<String>,
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
+}
+
+impl SearchConfig {
+    /// What `web_search` reads from it: the provider, its key — `api_key`, or the variable
+    /// `api_key_env` names — and the SearXNG instance.
+    pub fn settings(&self) -> crate::tools::SearchSettings {
+        crate::tools::SearchSettings {
+            provider: self.provider.clone().unwrap_or_default(),
+            url: self.url.clone(),
+            api_key: self
+                .api_key
+                .clone()
+                .or_else(|| self.api_key_env.as_deref().and_then(|name| std::env::var(name).ok()))
+                .filter(|key| !key.is_empty()),
+        }
+    }
 }
 
 /// `[ui]`: how the terminal UI looks.
@@ -540,6 +558,49 @@ fn set_default_model(path: &Path, alias: &str) -> Result<()> {
     }
     if !written {
         out.insert(0, line);
+    }
+    fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))
+}
+
+/// Writes the `[search]` table `/web-search-config` picked: its `provider`, `url`, `api_key`
+/// and `api_key_env` lines are replaced in place, or the table is added at the end. A key of
+/// `None` drops the key lines, so one set for another provider is never reused. The rest of
+/// the file, comments included, is left as it is.
+pub fn set_search(path: &Path, provider: &str, url: Option<&str>, key: Option<&str>) -> Result<()> {
+    let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let value = |v: &str| toml::Value::String(v.to_string()).to_string();
+    let mut fresh = vec![format!("provider = {}", value(provider))];
+    if let Some(url) = url.filter(|u| !u.is_empty()) {
+        fresh.push(format!("url = {}", value(url)));
+    }
+    if let Some(key) = key.filter(|k| !k.is_empty()) {
+        fresh.push(format!("api_key = {}", value(key)));
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut header = None;
+    let mut in_search = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_search = trimmed == "[search]";
+            if in_search && header.is_none() {
+                header = Some(out.len());
+            }
+        } else if in_search && ["provider", "url", "api_key", "api_key_env"].iter().any(|key| trimmed.starts_with(key)) {
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    let at = match header {
+        Some(at) => at + 1,
+        None => {
+            out.push(String::new());
+            out.push("[search]".to_string());
+            out.len()
+        }
+    };
+    for (n, line) in fresh.into_iter().enumerate() {
+        out.insert(at + n, line);
     }
     fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))
 }
@@ -1432,6 +1493,40 @@ mod tests {
         let config: super::Config = toml::from_str(&text).unwrap();
         assert_eq!(config.providers["test"].api_key.as_deref(), Some("sk-pasted"));
         assert!(config.missing_key(None).is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn setting_search_replaces_the_table_and_keeps_the_rest() {
+        let root = std::env::temp_dir().join(format!("killi-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        std::fs::write(&path, "# my config\ndefault_model = \"test/model\"\n\n[search]\nprovider = \"tavily\"\napi_key_env = \"TAVILY_KEY\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n").unwrap();
+
+        super::set_search(&path, "searxng", Some("http://localhost:8080"), None).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# my config\ndefault_model = \"test/model\"\n\n[search]\nprovider = \"searxng\"\nurl = \"http://localhost:8080\"\n"), "{text}");
+        assert!(!text.contains("TAVILY_KEY"), "a key set for another provider is dropped: {text}");
+        assert!(text.contains("[models.\"test/model\"]"), "{text}");
+        let config: super::Config = toml::from_str(&text).unwrap();
+        assert_eq!((config.search.provider.as_deref(), config.search.url.as_deref()), (Some("searxng"), Some("http://localhost:8080")));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn setting_search_adds_the_table_at_the_end() {
+        let root = std::env::temp_dir().join(format!("killi-search-add-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        std::fs::write(&path, "default_model = \"test/model\"\n").unwrap();
+
+        super::set_search(&path, "brave", None, Some("the-key")).unwrap();
+        let config: super::Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!((config.search.provider.as_deref(), config.search.url.as_deref(), config.search.api_key.as_deref()), (Some("brave"), None, Some("the-key")));
+
         std::fs::remove_dir_all(&root).unwrap();
     }
 

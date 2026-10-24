@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.6 — 2026-10-24
+
+- **`web_search` can ask a SearXNG instance, and `/web-search-config` sets the service up.**
+  `[search]` gains `"searxng"` as a provider and a `url`: killi asks
+  `{url}/search?q=…&format=json`, with an optional `api_key` sent as a bearer token, so the
+  instance must enable the json format. `/web-search-config` lists the services — brave, an
+  API key or its public results page; tavily, an API key; searxng, self-hosted, with the
+  docker command and the settings.yml change printed — then asks for the URL (prefilled with
+  `http://localhost:8888`) and the key, masked in the transcript. The pick is written into
+  `~/.killi/config.toml` in place and applies to the running session without starting the
+  prompt cache over. `/web-search-config <service>` skips the list.
+
 ## 0.4.5 — 2026-10-24
 
 - **`@` names a file.** Type `@` at the start of a word and a menu offers the workspace's

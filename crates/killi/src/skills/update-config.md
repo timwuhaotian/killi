@@ -61,8 +61,11 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   `COLORFGBG`), `fullscreen = true` (take the whole screen, with the prompt on the bottom rows;
   without it only Kil does that), `recap = false` (no automatic 100-character recap after a
   turn that used tools; `/recap` still asks for one).
-- `[search]`: `provider` ("brave", the default, or "tavily") and `api_key` or `api_key_env`
-  for `web_search`. Without a key, Brave's public page is read, which can refuse.
+- `[search]`: `provider` ("brave", the default, "tavily" or "searxng"), `url` (the SearXNG
+  instance) and `api_key` or `api_key_env` for `web_search`. Without a key, Brave's public
+  page is read, which can refuse; "searxng" asks `{url}/search?q=…&format=json`, so the
+  instance must enable the json format. `/web-search-config` asks for all of this and writes
+  the table itself.
 
 An MCP server in `mcp.json` has `command`, `args`, `env` (stdio) or `url`, `headers`,
 `bearerTokenEnvVar` (HTTP), plus `enabled` (false leaves it out) and `toolTimeoutMs`.
@@ -75,5 +78,7 @@ effect:
 - `[prompt]`, `[skills]`, `AGENTS.md` files, skill folders: `/reload` in the running session.
 - `[providers]`, `[models]`, `[thinking]`: `/reload`, then `/model` or `/effort` picks them
   up; sessions started afterwards too.
-- `[agent]`, `[hooks]`, `[mcp]`, `[ui]`, `[search]` and the MCP files: the next killi start
+- `[search]`: `/web-search-config` sets and applies it at once, in this session and new ones;
+  a hand edit takes the next killi start (`/exit`, then `killi -c` continues this session).
+- `[agent]`, `[hooks]`, `[mcp]`, `[ui]` and the MCP files: the next killi start
   (`/exit`, then `killi -c` continues this session).

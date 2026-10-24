@@ -165,6 +165,25 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 }
                 Err(e) => app.error(&format!("{e:#}")),
             },
+            Input::Search(provider, url, key) => {
+                let path = crate::config::killi_home().join("config.toml");
+                let pick = crate::config::SearchConfig { provider: Some(provider.clone()), url: url.clone(), api_key: key.clone(), api_key_env: None };
+                match crate::config::set_search(&path, &provider, url.as_deref(), key.as_deref()) {
+                    Ok(()) => {
+                        agent.set_search(pick.settings());
+                        session.set_search(pick);
+                        let what = match (provider.as_str(), url.as_deref(), key.is_some()) {
+                            ("searxng", Some(url), true) => format!("SearXNG at {url}, with its key"),
+                            ("searxng", Some(url), false) => format!("SearXNG at {url}"),
+                            ("brave", _, false) => "Brave, reading its public results page".to_string(),
+                            (other, _, true) => format!("{other}, with an API key"),
+                            (other, _, false) => other.to_string(),
+                        };
+                        app.notice(&format!("Web search: {what}, here and in new sessions."));
+                    }
+                    Err(e) => app.error(&format!("/web-search-config: {e:#}")),
+                }
+            }
             Input::Mcp(name, from_list) => match session.mcp().toggle(&name) {
                 Ok(on) => {
                     app.notice(&match on {
@@ -478,6 +497,16 @@ async fn handle_command(
         },
         "mcp" if arg.is_empty() => app.open_mcp_picker(session.mcp(), None),
         "mcp" => app.next_input = Some(Input::Mcp(arg.to_string(), false)),
+        "web-search-config" if arg.is_empty() => app.open_search_picker(session.config()),
+        "web-search-config" => {
+            let provider = arg.to_lowercase();
+            if ["brave", "tavily", "searxng"].contains(&provider.as_str()) {
+                app.search = Some(SearchFlow { provider: None, url: None, current: session.config().search.clone() });
+                app.search_pick(&provider);
+            } else {
+                app.error("Pick brave, tavily or searxng; /web-search-config alone lists them.");
+            }
+        }
         "model" if arg.is_empty() => app.open_model_picker(session.config()),
         "model" => app.next_input = Some(Input::Model(arg.to_string())),
         "effort" | "thinking" if arg.is_empty() => app.open_effort_picker(session.config()),
@@ -549,6 +578,21 @@ fn agent_sink(agent: &Agent) -> Sink {
     agent.sink()
 }
 
+/// The /web-search-config list: each service behind `web_search`, what it needs, and a mark
+/// on the one in use.
+fn search_options(current: &crate::config::SearchConfig) -> Vec<(String, String, PickerChoice)> {
+    let in_use = current.provider.as_deref().unwrap_or("brave");
+    let option = |name: &str, what: &str| {
+        let mark = if name == in_use { " · in use" } else { "" };
+        (name.to_string(), format!("{what}{mark}"), PickerChoice::Search(name.to_string()))
+    };
+    vec![
+        option("brave", "an API key, or the public results page"),
+        option("tavily", "an API key"),
+        option("searxng", "your own instance: a URL with the json format"),
+    ]
+}
+
 /// What the slash menu searches: the commands, then every skill not named like one.
 fn entries(session: &Setup) -> Vec<Entry> {
     let commands = COMMANDS.iter().map(|c| Entry {
@@ -593,6 +637,8 @@ enum Input {
     Mcp(String, bool),
     /// Deletes every session but the newest this many and the current one.
     Prune(usize),
+    /// Applies a /web-search-config pick: the provider, the SearXNG instance and the key.
+    Search(String, Option<String>, Option<String>),
 }
 
 enum LastEnd {
@@ -610,6 +656,10 @@ struct Running {
 struct Asking {
     question: Question,
     selected: usize,
+    /// The /web-search-config flow asked it, not the model: `answer` routes it back there.
+    internal: bool,
+    /// The answer is a secret, so the echo shows that it was set, not what it is.
+    secret: bool,
 }
 
 struct Picker {
@@ -622,6 +672,14 @@ struct Picker {
     shown: Vec<usize>,
     /// Position in `shown`.
     selected: usize,
+}
+
+/// The /web-search-config flow under way: the service picked (none while its list is open),
+/// the instance URL once answered, and the `[search]` the flow started from, for prefilling.
+struct SearchFlow {
+    provider: Option<String>,
+    url: Option<String>,
+    current: crate::config::SearchConfig,
 }
 
 impl Picker {
@@ -650,6 +708,7 @@ enum PickerChoice {
     Effort(String),
     Mcp(String),
     Prune(usize),
+    Search(String),
 }
 
 #[derive(Default)]
@@ -691,6 +750,8 @@ struct App {
     todos: Vec<Todo>,
     asking: Option<Asking>,
     picker: Option<Picker>,
+    /// A /web-search-config flow between its questions.
+    search: Option<SearchFlow>,
     /// Input to act on before reading keys again, such as `/model <alias>`.
     next_input: Option<Input>,
     /// An effort picked while the agent works; it applies once the turn ends.
@@ -797,6 +858,7 @@ impl App {
             todos: Vec::new(),
             asking: None,
             picker: None,
+            search: None,
             next_input: None,
             effort_later: None,
             entries: Vec::new(),
@@ -1010,6 +1072,10 @@ impl App {
         if self.picker.is_some() {
             return self.on_key_picker(key);
         }
+        if self.asking.is_some() {
+            self.on_key_asking(key);
+            return Idle::Continue;
+        }
         if let Some(menu) = self.suggestions()
             && let Some(idle) = self.on_key_menu(key, &menu)
         {
@@ -1090,13 +1156,17 @@ impl App {
             KeyCode::Enter | KeyCode::Tab => {
                 if let Some(choice) = picker.choice().cloned() {
                     self.picker = None;
-                    return Idle::Input(match choice {
-                        PickerChoice::Session(path) => Input::Resume(path),
-                        PickerChoice::Model(alias) => Input::Model(alias),
-                        PickerChoice::Effort(effort) => Input::Effort(effort),
-                        PickerChoice::Mcp(name) => Input::Mcp(name, true),
-                        PickerChoice::Prune(keep) => Input::Prune(keep),
-                    });
+                    return match choice {
+                        PickerChoice::Session(path) => Idle::Input(Input::Resume(path)),
+                        PickerChoice::Model(alias) => Idle::Input(Input::Model(alias)),
+                        PickerChoice::Effort(effort) => Idle::Input(Input::Effort(effort)),
+                        PickerChoice::Mcp(name) => Idle::Input(Input::Mcp(name, true)),
+                        PickerChoice::Prune(keep) => Idle::Input(Input::Prune(keep)),
+                        PickerChoice::Search(provider) => {
+                            self.search_pick(&provider);
+                            Idle::Continue
+                        }
+                    };
                 }
             }
             _ => {}
@@ -1359,6 +1429,9 @@ impl App {
             }
             KeyCode::Esc => {
                 let asking = self.asking.take().expect("a question is open");
+                if asking.internal {
+                    self.search = None;
+                }
                 let _ = asking.question.reply.send(String::new());
                 self.commit(format!("{DIM}  (dismissed){RESET}"));
             }
@@ -1376,6 +1449,9 @@ impl App {
     fn answer(&mut self, typed: Option<String>) {
         let asking = self.asking.take().expect("a question is open");
         let answer = typed.unwrap_or_else(|| asking.question.options.get(asking.selected).cloned().unwrap_or_default());
+        if asking.internal {
+            return self.search_answer(&answer, asking.secret);
+        }
         self.commit(format!("  {FIN}↳{RESET} {answer}"));
         let _ = asking.question.reply.send(answer);
     }
@@ -1690,7 +1766,7 @@ impl App {
                 } else {
                     self.emit(Line::Words(format!("{BOLD}{FIN}?{RESET} {BOLD}{}{RESET}", question.text), 2));
                 }
-                self.asking = Some(Asking { question, selected: 0 });
+                self.asking = Some(Asking { question, selected: 0, internal: false, secret: false });
                 notify("Waiting for your answer");
             }
             Event::Notice(text) => self.notice(&text),
@@ -2025,6 +2101,82 @@ impl App {
             .map(|s| (s.name.clone(), format!("{} · {}", if s.on { "on" } else { "off" }, s.hint), PickerChoice::Mcp(s.name)))
             .collect();
         self.picker = Some(Picker::new("MCP servers · Enter turns one on or off".into(), options, at));
+    }
+
+    /// /web-search-config: pick what `web_search` asks, then answer for what that service
+    /// needs; the pick is written to the config and applies at once.
+    fn open_search_picker(&mut self, config: &Config) {
+        let in_use = config.search.provider.as_deref().unwrap_or("brave");
+        let selected = ["brave", "tavily", "searxng"].iter().position(|name| *name == in_use).unwrap_or(0);
+        self.search = Some(SearchFlow { provider: None, url: None, current: config.search.clone() });
+        self.picker = Some(Picker::new("Web search service".into(), search_options(&config.search), selected));
+    }
+
+    /// A service picked from that list or named by `/web-search-config <service>`: ask for
+    /// what it needs, prefilled with what the config already has for it.
+    fn search_pick(&mut self, provider: &str) {
+        let Some(flow) = self.search.as_mut() else { return };
+        flow.provider = Some(provider.to_string());
+        let current = flow.current.clone();
+        let same = current.provider.as_deref().unwrap_or("brave") == provider;
+        let key = same.then(|| current.api_key.clone()).flatten();
+        match provider {
+            "searxng" => {
+                self.search_note();
+                let url = current.url.clone().unwrap_or_else(|| "http://localhost:8888".into());
+                self.search_ask("SearXNG instance URL:", Some(&url), false);
+            }
+            "tavily" => self.search_ask("Tavily API key:", key.as_deref(), true),
+            _ => self.search_ask("Brave API key (Enter for none: killi then reads Brave's public page):", key.as_deref(), true),
+        }
+    }
+
+    /// What picking SearXNG asks of the user: it is self-hosted, so say what killi calls and
+    /// where its settings live.
+    fn search_note(&mut self) {
+        self.begin(Kind::Note);
+        self.emit(Line::Words(
+            format!("{DIM}killi asks {{url}}/search?q=…&format=json, so run an instance yourself (docker run -p 8888:8080 searxng/searxng) and enable the json format in its settings.yml: search → formats: [html, json].{RESET}"),
+            2,
+        ));
+    }
+
+    /// One question of the flow, shown as the ask tool's questions are, with the answer typed
+    /// into the prompt. Nobody waits on the reply: `answer` routes it back into the flow.
+    fn search_ask(&mut self, text: &str, prefill: Option<&str>, secret: bool) {
+        self.begin(Kind::Note);
+        self.emit(Line::Words(format!("{BOLD}{FIN}?{RESET} {BOLD}{text}{RESET}"), 2));
+        let (reply, _) = tokio::sync::oneshot::channel::<String>();
+        self.asking = Some(Asking { question: Question { text: text.to_string(), options: Vec::new(), plan: false, reply }, selected: 0, internal: true, secret });
+        if let Some(fill) = prefill.filter(|fill| !fill.is_empty()) {
+            self.editor.insert(fill);
+        }
+    }
+
+    /// One answer of the flow: the instance URL is validated, the key may be empty; once both
+    /// are in, the pick goes to the config file and this session as `Input::Search`.
+    fn search_answer(&mut self, answer: &str, secret: bool) {
+        let Some(mut flow) = self.search.take() else { return };
+        let answer = answer.trim();
+        let provider = flow.provider.clone().unwrap_or_default();
+        if provider == "searxng" && flow.url.is_none() {
+            if !(answer.starts_with("http://") || answer.starts_with("https://")) {
+                self.error("The instance is its URL, such as http://localhost:8888.");
+                self.search = Some(flow);
+                return self.search_ask("SearXNG instance URL:", Some(answer), false);
+            }
+            self.commit(format!("  {FIN}↳{RESET} {answer}"));
+            flow.url = Some(answer.to_string());
+            let key = (flow.current.provider.as_deref().unwrap_or("brave") == "searxng").then(|| flow.current.api_key.clone()).flatten();
+            self.search = Some(flow);
+            return self.search_ask("SearXNG API key, if the instance asks for one (Enter for none):", key.as_deref(), true);
+        }
+        let echo = if answer.is_empty() { "(none)" } else if secret { "(set)" } else { answer };
+        self.commit(format!("  {FIN}↳{RESET} {echo}"));
+        if answer.is_empty() && provider == "tavily" {
+            return self.error("web_search with Tavily needs an API key; nothing was changed.");
+        }
+        self.next_input = Some(Input::Search(provider, flow.url, (!answer.is_empty()).then(|| answer.to_string())));
     }
 
     fn open_effort_picker(&mut self, config: &Config) {
@@ -3251,6 +3403,7 @@ pub fn stopped_note(stopped: &[String]) -> Option<String> {
 const COMMANDS: &[Command] = &[
     Command { name: "model", aliases: &[], args: "[alias]", about: "Switch model" },
     Command { name: "mcp", aliases: &[], args: "[server]", about: "Turn MCP servers on or off" },
+    Command { name: "web-search-config", aliases: &[], args: "", about: "Set what web_search asks: brave, tavily or your own searxng" },
     Command { name: "effort", aliases: &["thinking"], args: "[level]", about: "Switch thinking effort" },
     Command { name: "new", aliases: &["clear"], args: "", about: "Start a fresh session in this folder" },
     Command { name: "resume", aliases: &[], args: "", about: "Continue an earlier session in this folder" },
@@ -3675,6 +3828,17 @@ mod tests {
     #[test]
     fn the_commands_offered_while_busy_exist() {
         assert!(BUSY_COMMANDS.iter().all(|name| is_command(name)));
+    }
+
+    #[test]
+    fn search_options_list_the_services_and_mark_the_one_in_use() {
+        let names = |options: &[(String, String, PickerChoice)]| options.iter().map(|(name, _, _)| name.clone()).collect::<Vec<_>>();
+        let options = search_options(&crate::config::SearchConfig::default());
+        assert_eq!(names(&options), ["brave", "tavily", "searxng"]);
+        assert!(options[0].1.contains("in use"));
+        let searxng = crate::config::SearchConfig { provider: Some("searxng".into()), ..Default::default() };
+        assert!(search_options(&searxng)[2].1.contains("in use"));
+        assert!(!search_options(&searxng)[0].1.contains("in use"));
     }
 
     #[test]

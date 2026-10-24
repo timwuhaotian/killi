@@ -21,9 +21,11 @@ pub const MAX_BYTES: usize = 50 * 1024;
 /// Which service `web_search` asks, from `[search]` in the config.
 #[derive(Clone, Default)]
 pub struct SearchSettings {
-    /// "brave" (the default) or "tavily".
+    /// "brave" (the default), "tavily" or "searxng".
     pub provider: String,
     pub api_key: Option<String>,
+    /// The SearXNG instance; only "searxng" reads it.
+    pub url: Option<String>,
 }
 
 pub struct Context {
@@ -35,7 +37,8 @@ pub struct Context {
     pub running: RefCell<Running>,
     /// Whether the model can see images.
     pub images: bool,
-    pub search: SearchSettings,
+    /// Which service `web_search` asks; /web-search-config swaps it while the session runs.
+    pub search: RefCell<SearchSettings>,
 }
 
 impl Context {
@@ -46,7 +49,7 @@ impl Context {
             tasks: RefCell::new(Tasks::default()),
             running: RefCell::default(),
             images: true,
-            search: SearchSettings::default(),
+            search: RefCell::default(),
         }
     }
 }

@@ -327,7 +327,7 @@ impl Agent {
         let settings_files = settings.instruction_files.clone();
         let mut ctx = tools::Context::new(cwd.to_path_buf(), session.dir.clone());
         ctx.images = client.model.images;
-        ctx.search = settings.search.clone();
+        *ctx.search.borrow_mut() = settings.search.clone();
         Self {
             client: Rc::new(client),
             tools: Rc::new(tools),
@@ -409,11 +409,22 @@ impl Agent {
         }
     }
 
+    /// Points web_search at another service without touching the cached conversation, for
+    /// /web-search-config.
+    pub fn set_search(&mut self, search: crate::tools::SearchSettings) {
+        let mut settings = (*self.settings).clone();
+        settings.search = search.clone();
+        self.settings = Rc::new(settings);
+        *self.ctx.search.borrow_mut() = search;
+    }
+
     /// Replaces the system prompt and settings on purpose, for /reload; the next request is
     /// uncached.
     pub fn reload_system(&mut self, system: &str, settings: Settings) -> Result<()> {
         self.instructions = crate::prompt::Instructions::new(&self.ctx.cwd, &settings.instruction_files);
+        let search = settings.search.clone();
         self.settings = Rc::new(settings);
+        *self.ctx.search.borrow_mut() = search;
         Rc::make_mut(&mut self.messages)[0] = json!({"role": "system", "content": system});
         self.share();
         self.session.record(&json!({"type": "compaction", "messages": *self.messages}))

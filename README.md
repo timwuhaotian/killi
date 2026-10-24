@@ -250,13 +250,23 @@ are open.
   ```
 
 - **Web:** `web_search` finds pages and `fetch_url` reads them. Without setup, search reads
-  Brave's public results page, which can turn automated requests away; for reliable results
-  add a key (`provider` is `"brave"` or `"tavily"`):
+  Brave's public results page, which can turn automated requests away. `/web-search-config`
+  asks for the service and what it needs, writes `[search]` and applies it at once; by hand
+  (`provider` is `"brave"`, `"tavily"` or `"searxng"`):
 
   ```toml
   [search]
   provider = "brave"
   api_key_env = "BRAVE_API_KEY"   # or: api_key = "..."
+  ```
+
+  `"searxng"` points at your own instance instead of a key — self-hosted, with the json format
+  enabled (`settings.yml`: `search → formats: [html, json]`) — and takes an optional key:
+
+  ```toml
+  [search]
+  provider = "searxng"
+  url = "http://localhost:8888"
   ```
 
   `fetch_url` also renders pages that need JavaScript, takes screenshots of them (`screenshot`,
