@@ -29,8 +29,27 @@ const MAX_RESULT_CHARS: usize = 50_000;
 const MAX_PARALLEL_AGENTS: usize = 4;
 const MAX_SWARM_AGENTS_PER_TURN: usize = swarm::MAX_ITEMS;
 const DEFAULT_OUTPUT_RESERVE: u64 = 4_096;
+
+/// Where compaction aims as a share of the model's context window when `compact_at` is unset.
+const COMPACT_AT_PERCENT: u64 = 60;
+
+/// The compaction limit for a model whose context window is unknown.
+const DEFAULT_COMPACT_AT: u64 = 256_000;
 /// User prompts kept word for word through a compaction, in characters (about 20k tokens).
 const KEPT_PROMPTS_CHARS: usize = 80_000;
+
+/// One kept user request, whole when it fits, cut when it embeds a whole skill or document:
+/// the words are the user's, but a pasted body is reloadable and its bulk would floor every
+/// later summary at a size no compaction can shrink.
+const KEPT_PROMPT_CHARS: usize = 4_000;
+
+fn kept_prompt(prompt: &str) -> String {
+    let chars = prompt.chars().count();
+    if chars <= KEPT_PROMPT_CHARS {
+        return prompt.to_string();
+    }
+    format!("{}\n[… {} characters cut]", truncate(prompt, KEPT_PROMPT_CHARS), chars - KEPT_PROMPT_CHARS)
+}
 
 /// A subagent with its prompt, or the result of a call that couldn't start one.
 type Job = std::result::Result<(Agent, String), tools::Output>;
@@ -181,8 +200,9 @@ fn unanswered(messages: &[Value]) -> Vec<String> {
 
 #[derive(Clone, Default)]
 pub struct Settings {
-    /// Compact once billed input, an estimated appended suffix and output reserve pass this.
-    pub compact_at: u64,
+    /// Compact once billed input, an estimated appended suffix and output reserve pass this:
+    /// an explicit limit in tokens, `None` for a share of the model's context window.
+    pub compact_at: Option<u64>,
     /// Extra command prefixes bash may run in plan mode.
     pub plan_allow: Vec<String>,
     /// Subagents an `agent_swarm` call runs at once.
@@ -596,21 +616,23 @@ impl Agent {
     }
 
     fn compaction_due(&self) -> bool {
-        let mut limit = self.settings.compact_at;
-        if let Some(window) = self.client.model.context_window {
-            limit = limit.min(window * 85 / 100);
-        }
+        // A share of the window by default, an explicit `compact_at` instead, and never above
+        // 85%, where the reply and the framing overhead start to squeeze the request.
+        let limit = match self.client.model.context_window {
+            Some(window) => self
+                .settings
+                .compact_at
+                .unwrap_or(window * COMPACT_AT_PERCENT / 100)
+                .min(window * 85 / 100),
+            None => self.settings.compact_at.unwrap_or(DEFAULT_COMPACT_AT),
+        };
         if limit == 0 {
             return false;
         }
         let suffix = estimate_tokens(&self.messages[self.accounted_messages.min(self.messages.len())..]);
-        let reserve = self.client.model.max_output.unwrap_or(DEFAULT_OUTPUT_RESERVE);
-        // If the maximum output alone exhausts the configured compaction limit, no suffix can
-        // ever fit that rule. Keep ordinary proactive compaction off rather than compacting
-        // after every appended message; provider output caps and overflow recovery still apply.
-        if reserve >= limit {
-            return self.stats.context.saturating_add(suffix) > limit;
-        }
+        // Room for one reply, capped at a quarter of the limit: the output cap already fits
+        // each request into the window, so this only keeps a full-size answer from squeezing.
+        let reserve = self.client.model.max_output.unwrap_or(DEFAULT_OUTPUT_RESERVE).min(limit / 4);
         self.stats.context.saturating_add(suffix) > limit - reserve
     }
 
@@ -1187,14 +1209,14 @@ impl Agent {
         let mut kept = Vec::new();
         let mut size = 0;
         for prompt in self.user_prompts().into_iter().rev() {
-            size += prompt.len();
+            size += prompt.chars().count().min(KEPT_PROMPT_CHARS);
             if size > KEPT_PROMPTS_CHARS && !kept.is_empty() {
                 break;
             }
             kept.push(prompt);
         }
         kept.reverse();
-        let requests: String = kept.iter().map(|p| format!("<request>\n{p}\n</request>\n")).collect();
+        let requests: String = kept.iter().map(|p| format!("<request>\n{}\n</request>\n", kept_prompt(p))).collect();
         let summary = format!(
             "{mark} to save space. Below are the user's requests so far, word for word, and a summary of the work. Continue from where it left off; don't redo finished work.</system-reminder>\n\n<user-requests>\n{requests}</user-requests>\n\n<summary>\n{}\n</summary>",
             reply.text.trim(),
@@ -1569,7 +1591,7 @@ Choices made and why.
 Files read or changed, and what changed in each.
 ## Next steps
 Exactly what to do next.
-Be specific: names, paths, commands, error messages. Write in the user's language.</system-reminder>";
+Be specific: names, paths, commands, error messages. Keep the whole summary under about 1,500 tokens: the newest state matters more than the history, and command transcripts don't belong in it. Write in the user's language.</system-reminder>";
 
 #[cfg(test)]
 mod tests {
@@ -1873,7 +1895,7 @@ mod tests {
     #[test]
     fn compaction_estimates_only_the_appended_suffix_and_reserves_output() {
         let mut agent = idle_agent("compaction-estimate", Controls::default(), Rc::new(|_| {}));
-        agent.settings = Rc::new(Settings { compact_at: 10_000, ..Settings::default() });
+        agent.settings = Rc::new(Settings { compact_at: Some(10_000), ..Settings::default() });
         Rc::get_mut(&mut agent.client).unwrap().model.max_output = Some(1_000);
         agent.stats.context = 9_000;
         assert!(!agent.compaction_due(), "the exact input-plus-output boundary is still allowed");
@@ -1891,7 +1913,7 @@ mod tests {
     #[test]
     fn an_inline_image_counts_as_its_reserve_not_its_base64() {
         let mut agent = idle_agent("compaction-image", Controls::default(), Rc::new(|_| {}));
-        agent.settings = Rc::new(Settings { compact_at: 10_000, ..Settings::default() });
+        agent.settings = Rc::new(Settings { compact_at: Some(10_000), ..Settings::default() });
         Rc::get_mut(&mut agent.client).unwrap().model.max_output = Some(1_000);
         agent.stats.context = 100;
         agent.accounted_messages = agent.messages.len();
@@ -1905,7 +1927,60 @@ mod tests {
         agent.push(image).unwrap();
         assert!(!agent.compaction_due(), "a screenshot in an 8k-token conversation is not a reason to compact");
         agent.push(json!({"role": "user", "content": "A".repeat(400_000)})).unwrap();
-        assert!(agent.compaction_due(), "the same characters as text still count");
+        assert!(agent.compaction_due(), "the unbilled appended suffix counts conservatively");
+    }
+
+    #[test]
+    fn compaction_aims_at_sixty_percent_of_the_window_by_default() {
+        let mut agent = idle_agent("compaction-window", Controls::default(), Rc::new(|_| {}));
+        let client = Rc::get_mut(&mut agent.client).unwrap();
+        client.model.context_window = Some(1_000_000);
+        client.model.max_output = Some(128_000);
+        agent.accounted_messages = agent.messages.len();
+        // limit = 600k, reserve = min(128k, 150k): a quarter of the limit caps the reserve.
+        agent.stats.context = 472_000;
+        assert!(!agent.compaction_due(), "the boundary is still allowed");
+        agent.stats.context = 472_001;
+        assert!(agent.compaction_due(), "the capped reserve counts before the next request");
+    }
+
+    #[test]
+    fn an_explicit_compact_at_overrides_the_window_share_and_zero_disables() {
+        let mut agent = idle_agent("compaction-explicit", Controls::default(), Rc::new(|_| {}));
+        let client = Rc::get_mut(&mut agent.client).unwrap();
+        client.model.context_window = Some(1_000_000);
+        client.model.max_output = Some(128_000);
+        agent.accounted_messages = agent.messages.len();
+        agent.stats.context = 8_000;
+        assert!(!agent.compaction_due(), "without a setting the window share applies");
+        agent.settings = Rc::new(Settings { compact_at: Some(10_000), ..Settings::default() });
+        // reserve = min(128k, 2.5k), so the smaller explicit limit still leaves reply room.
+        agent.stats.context = 7_500;
+        assert!(!agent.compaction_due());
+        agent.stats.context = 7_501;
+        assert!(agent.compaction_due(), "the explicit limit wins over the window share");
+        agent.settings = Rc::new(Settings { compact_at: Some(0), ..Settings::default() });
+        agent.stats.context = 900_000;
+        assert!(!agent.compaction_due(), "zero keeps proactive compaction off");
+    }
+
+    #[test]
+    fn an_unknown_window_falls_back_to_a_fixed_limit() {
+        let mut agent = idle_agent("compaction-unknown", Controls::default(), Rc::new(|_| {}));
+        Rc::get_mut(&mut agent.client).unwrap().model.max_output = None;
+        agent.accounted_messages = agent.messages.len();
+        agent.stats.context = DEFAULT_COMPACT_AT - DEFAULT_OUTPUT_RESERVE;
+        assert!(!agent.compaction_due());
+        agent.stats.context += 1;
+        assert!(agent.compaction_due(), "the default reserve applies without an output cap");
+    }
+
+    #[test]
+    fn a_kept_prompt_that_embeds_a_whole_document_is_cut() {
+        let long = "x".repeat(9_000);
+        let kept = kept_prompt(&long);
+        assert!(kept.starts_with(&"x".repeat(4_000)) && kept.contains("[… 5000 characters cut]"), "{}", kept.len());
+        assert_eq!(kept_prompt("plain"), "plain");
     }
 
     #[test]

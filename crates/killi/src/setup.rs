@@ -17,7 +17,6 @@ use crate::session::{self, Choice};
 use crate::skills::Skills;
 use crate::tools;
 
-const DEFAULT_COMPACT_AT: u64 = 256_000;
 const DEFAULT_SWARM_PARALLEL: usize = 8;
 
 /// What a session starts with besides its model and folder, for the banner.
@@ -75,7 +74,7 @@ impl Setup {
             notes.extend(problems);
         }
         let settings = Settings {
-            compact_at: config.agent.compact_at.unwrap_or(DEFAULT_COMPACT_AT),
+            compact_at: config.agent.compact_at,
             plan_allow: config.agent.plan_allow.clone(),
             swarm_parallel: config.agent.swarm_parallel.unwrap_or(DEFAULT_SWARM_PARALLEL).max(1),
             search: config.search.settings(),

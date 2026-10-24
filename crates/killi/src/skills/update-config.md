@@ -42,8 +42,8 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   `/effort` offers; without them: off, on, low, medium, high).
 - `[thinking]`: `enabled = false` turns reasoning off everywhere; otherwise `effort` applies to
   every model, else the model's `default_effort`, else the middle of its `support_efforts`.
-- `[agent]`: `compact_at` (compact once a request passes this many input tokens, default
-  256000), `plan_allow = ["make -n"]` (extra command prefixes bash may run in plan mode),
+- `[agent]`: `compact_at` (compact once a request passes this many input tokens; unset: 60%
+  of the model's `max_context_size`, or 256000 when the window is unknown), `plan_allow = ["make -n"]` (extra command prefixes bash may run in plan mode),
   `notify_after` (seconds a turn takes before a desktop notification, default 10),
   `swarm_parallel` (subagents one `agent_swarm` call runs at once, default 8).
 - `[skills] dirs = ["~/other/skills"]`: skill folders used instead of `~/.agents/skills`; the

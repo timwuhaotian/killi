@@ -5,6 +5,20 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.9 — 2026-10-25
+
+- **Compaction scales with the model's context window, and a summary no longer carries a pasted
+  skill forever.** The limit was a flat 256000 tokens for every model — after the output
+  reserve, a 1M-window conversation compacted at 128k, an eighth of what it paid for. It now
+  aims at 60% of the window by default (`[agent] compact_at` still overrides, and 85% of the
+  window stays the ceiling), and the reserve for one reply is capped at a quarter of the
+  limit instead of the model's whole output cap, which the per-request output cap already
+  fits into the window. A scholar-daily session that compacted 45 times showed the other
+  floor: prompt 1 embedded a whole skill, and the verbatim `<user-requests>` section carried
+  its ~4.5k tokens into every summary, keeping the fresh context near the trigger. Each kept
+  prompt is now cut at 4000 characters, and the summary instruction asks for under ~1500
+  tokens with no command transcripts.
+
 ## 0.4.8 — 2026-10-24
 
 - **Reading a screenshot no longer compacts the conversation.** The compaction estimate
