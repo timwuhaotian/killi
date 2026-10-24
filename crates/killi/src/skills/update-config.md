@@ -1,0 +1,79 @@
+---
+name: update-config
+description: Read, explain or change killi's own configuration: ~/.killi/config.toml (default_model, providers, models, thinking, agent, skills, hooks, mcp, prompt, ui, search), the MCP server files, the project's .killi/config.toml and the other files under ~/.killi. Use when asked where killi's config is, what a setting does, or to add or change a model, provider, API key, hook, MCP server or the system prompt.
+---
+
+# killi's configuration
+
+Built into this killi, so it describes the version running. First read the files below that
+exist and say which you found; then explain or edit. Never show an API key: shorten it to its
+first few characters. `~` is `$HOME`; nothing else moves these paths.
+
+## Files
+
+| Path | Holds |
+|---|---|
+| `~/.killi/config.toml` | the config, TOML; everything under "Keys". `killi init` writes a starting one (mode 0600), `killi import-kimi` copies Kimi Code's, and the first-run guide can import Kimi Code's, pi's or opencode's |
+| `~/.killi/mcp.json` | user MCP servers, `{"mcpServers": {...}}` as Claude Code and Kimi Code write it |
+| `<project>/.mcp.json` | project MCP servers, same format; the project is the nearest folder with `.git` |
+| `<project>/.killi/config.toml` | project config; only `[mcp] eager = ["name"]` is read: servers to start with the session, with native tools |
+| `~/.killi/mcp-off.json` | servers turned off with `/mcp`, kept for later sessions |
+| `~/.killi/command-guide.json` | that the first-run guide already asked which command name to install killi under |
+| `~/.killi/last-model.json` | the last `/model` and `/effort` pick; new sessions start on it unless `-m` names a model |
+| `~/.killi/sessions/<folder>/` | session logs (`-c`, `-r`, `/resume`, `/prune`) and `later.md`; `<folder>` is the working directory with `/` as `-` |
+| `~/.killi/snapshots/` | the bare git repositories `/undo` restores from |
+| `~/.agents/skills/`, `<project>/.agents/skills/`, `<project>/.claude/skills/` | skills: folders with a `SKILL.md`; the first with a name wins, and `update-config` is built in |
+| `~/.agents/AGENTS.md`, then `AGENTS.md` (or `CLAUDE.md`) from the project root down to the working directory | instructions in the system prompt |
+
+## Keys in `~/.killi/config.toml`
+
+A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_model`.
+
+- `default_model = "alias"` names an entry under `[models]`. Without it, `-m` is required.
+- `[providers.<name>]`: `type` ("openai" for Chat Completions and compatible APIs,
+  "anthropic" for Messages, "openai_responses" for Responses), `base_url` (default
+  `https://api.openai.com/v1`, or `https://api.anthropic.com` for anthropic), one of `api_key`
+  or `api_key_env` (the name of an environment variable, which wins when both are set), and
+  `custom_headers = { "X-Name" = "value" }`.
+- `[models."<provider>/<model>"]`: `provider` (a `[providers]` name), `model` (the API's
+  model id), `protocol` (overrides the provider's `type` for this model), `max_context_size`
+  and `max_output_size` (tokens), `capabilities` (`"image_in"` lets the model take images;
+  other entries are kept but unused), `default_effort` and `support_efforts = [...]` (what
+  `/effort` offers; without them: off, on, low, medium, high).
+- `[thinking]`: `enabled = false` turns reasoning off everywhere; otherwise `effort` applies to
+  every model, else the model's `default_effort`, else the middle of its `support_efforts`.
+- `[agent]`: `compact_at` (compact once a request passes this many input tokens, default
+  256000), `plan_allow = ["make -n"]` (extra command prefixes bash may run in plan mode),
+  `notify_after` (seconds a turn takes before a desktop notification, default 10),
+  `swarm_parallel` (subagents one `agent_swarm` call runs at once, default 8).
+- `[skills] dirs = ["~/other/skills"]`: skill folders used instead of `~/.agents/skills`; the
+  project's own folders are always read.
+- `[[hooks.<Event>]]` with `matcher` (a regex over tool names; none matches every tool),
+  `command` (sh, with the event as JSON on stdin) and `timeout` (seconds, default 60). Events:
+  `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`.
+  Exit code 2 blocks and sends stderr to the model; a `PostToolUse` hook's output goes to the
+  model too.
+- `[mcp] eager = ["name"]`: servers that start with every session and get native tool
+  definitions; other servers start when first used through the `mcp` tool.
+- `[prompt] system = '''...'''`: the system prompt's guidance in place of the built-in text;
+  `killi init` adds the built-in text to a config without it. Blank means built in.
+- `[ui]`: `theme` ("dark" or "light"; without it killi asks the terminal, then reads
+  `COLORFGBG`), `fullscreen = true` (take the whole screen, with the prompt on the bottom rows;
+  without it only Kil does that), `recap = false` (no automatic 100-character recap after a
+  turn that used tools; `/recap` still asks for one).
+- `[search]`: `provider` ("brave", the default, or "tavily") and `api_key` or `api_key_env`
+  for `web_search`. Without a key, Brave's public page is read, which can refuse.
+
+An MCP server in `mcp.json` has `command`, `args`, `env` (stdio) or `url`, `headers`,
+`bearerTokenEnvVar` (HTTP), plus `enabled` (false leaves it out) and `toolTimeoutMs`.
+
+## Making a change
+
+Edit the file with the edit tool, keep other keys as they are, and say how the change takes
+effect:
+
+- `[prompt]`, `[skills]`, `AGENTS.md` files, skill folders: `/reload` in the running session.
+- `[providers]`, `[models]`, `[thinking]`: `/reload`, then `/model` or `/effort` picks them
+  up; sessions started afterwards too.
+- `[agent]`, `[hooks]`, `[mcp]`, `[ui]`, `[search]` and the MCP files: the next killi start
+  (`/exit`, then `killi -c` continues this session).

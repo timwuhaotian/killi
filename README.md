@@ -217,6 +217,8 @@ are open.
 - **Skills:** folders with a `SKILL.md` in `~/.agents/skills` and the project's
   `.agents/skills` or `.claude/skills`. Only their names go in the prompt; the agent loads one
   when it applies, and `/<name>` runs one directly. Other folders: `[skills] dirs = [...]`.
+  One is built in: `/update-config` tells the agent every file and key of this version's
+  configuration, so it can say where things are, what a setting does, or make a change.
 - **MCP:** servers from `~/.killi/mcp.json` and the project's `.mcp.json`, in the usual
   `{"mcpServers": {...}}` format (stdio or HTTP). The agent reaches them through one `mcp` tool,
   and a server starts, and its tools load, the first time it's used. To give a project's

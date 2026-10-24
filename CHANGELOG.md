@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- **`/update-config`, a built-in skill about killi's own configuration.** It lists every
+  file under `~/.killi` and in the project, every key of `config.toml`, `mcp.json` and the
+  hooks with its default, and what applies on `/reload` against the next start, so the agent
+  can show the setup or change it. It describes the version running: a test fails when a
+  config key is added without being described. A skill folder of the same name still wins.
+
 ## 0.4.0 — 2026-10-24
 
 - **Streams cannot end in the middle and pass as replies.** Malformed SSE data, an
