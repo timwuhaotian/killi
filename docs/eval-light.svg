@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="814" viewBox="0 0 960 814" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="killi: 14 of 14 passed, 36.8k input tokens per task; Kimi Code: 14 of 14 passed, 206.8k input tokens per task; Claude Code: 14 of 14 passed, 278.9k input tokens per task">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="814" viewBox="0 0 960 814" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="killi: 14 of 14 passed, 36.8k input tokens per run; Kimi Code: 14 of 14 passed, 206.8k input tokens per run; Claude Code: 14 of 14 passed, 278.9k input tokens per run">
 <rect x="0.5" y="0.5" width="959" height="813" rx="12" fill="#ffffff" stroke="#e5e7eb"/>
-<text x="32" y="58" font-size="26" font-weight="700" fill="#111827">killi passed <tspan fill="#2563eb">14 of 14</tspan> tasks with <tspan fill="#2563eb">36.8k</tspan> input tokens each.</text>
+<text x="32" y="58" font-size="26" font-weight="700" fill="#111827">killi passed <tspan fill="#2563eb">14 of 14</tspan> runs with <tspan fill="#2563eb">36.8k</tspan> input tokens per run.</text>
 <text x="32" y="86" font-size="15" fill="#4b5563">Kimi Code: 14 of 14, 206.8k tokens · Claude Code: 14 of 14, 278.9k tokens.</text>
-<text x="32" y="124" font-size="13" font-weight="700" fill="#6b7280" letter-spacing="0.4">TASKS PASSED</text>
+<text x="32" y="124" font-size="13" font-weight="700" fill="#6b7280" letter-spacing="0.4">RUNS PASSED</text>
 <rect x="20" y="134" width="920" height="38" rx="8" fill="#eff4ff"/>
 <text x="182" y="151" font-size="15" font-weight="700" fill="#111827" text-anchor="end">killi</text>
 <text x="182" y="166" font-size="11" fill="#6b7280" text-anchor="end">MiMo-V2.6-Pro</text>
@@ -16,7 +16,7 @@
 <text x="182" y="246" font-size="11" fill="#6b7280" text-anchor="end">Claude Opus 5.5</text>
 <rect x="194" y="226" width="560.0" height="14" rx="4" fill="#d1d5db"/>
 <text x="764.0" y="238" font-size="14" font-weight="500" fill="#111827">14 of 14</text>
-<text x="32" y="288" font-size="13" font-weight="700" fill="#6b7280" letter-spacing="0.4">INPUT TOKENS PER TASK</text>
+<text x="32" y="288" font-size="13" font-weight="700" fill="#6b7280" letter-spacing="0.4">INPUT TOKENS PER RUN</text>
 <rect x="20" y="298" width="920" height="38" rx="8" fill="#eff4ff"/>
 <text x="182" y="315" font-size="15" font-weight="700" fill="#111827" text-anchor="end">killi</text>
 <text x="182" y="330" font-size="11" fill="#6b7280" text-anchor="end">MiMo-V2.6-Pro</text>
@@ -30,7 +30,7 @@
 <text x="182" y="410" font-size="11" fill="#6b7280" text-anchor="end">Claude Opus 5.5</text>
 <rect x="194" y="390" width="560.0" height="14" rx="4" fill="#d1d5db"/>
 <text x="764.0" y="402" font-size="14" font-weight="500" fill="#111827">278.9k<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 7.6× killi</tspan></text>
-<text x="32" y="452" font-size="13" font-weight="700" fill="#6b7280" letter-spacing="0.4">TIME PER TASK</text>
+<text x="32" y="452" font-size="13" font-weight="700" fill="#6b7280" letter-spacing="0.4">TIME PER RUN</text>
 <rect x="20" y="462" width="920" height="38" rx="8" fill="#eff4ff"/>
 <text x="182" y="479" font-size="15" font-weight="700" fill="#111827" text-anchor="end">killi</text>
 <text x="182" y="494" font-size="11" fill="#6b7280" text-anchor="end">MiMo-V2.6-Pro</text>
@@ -58,6 +58,6 @@
 <text x="182" y="738" font-size="11" fill="#6b7280" text-anchor="end">Claude Opus 5.5</text>
 <rect x="194" y="718" width="319.7" height="14" rx="4" fill="#d1d5db"/>
 <text x="523.7" y="730" font-size="14" font-weight="500" fill="#111827">191.4 MB<tspan dx="8" font-size="12" font-weight="400" fill="#6b7280">· 38× killi</tspan></text>
-<text x="32" y="772" font-size="12" fill="#6b7280">14 Rust and TypeScript tasks from evals/tasks, run once per tool with scripts/eval.py; a task passes when its check</text>
-<text x="32" y="790" font-size="12" fill="#6b7280">succeeds after the tool finishes, with the tests restored first. Peak memory is the tool&#x27;s own process, not the compilers it starts.</text>
+<text x="32" y="772" font-size="12" fill="#6b7280">Every repeat of each tool&#x27;s latest version and model is included (14 killi runs); performance means use valid records.</text>
+<text x="32" y="790" font-size="12" fill="#6b7280">A task passes when its check succeeds after the tool finishes, with tests restored first. Peak memory excludes child processes.</text>
 </svg>

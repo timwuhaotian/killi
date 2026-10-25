@@ -1,13 +1,15 @@
 ---
 name: refresh-metrics
-description: Re-measure killi's installed size, startup, memory and first-request tokens against Kimi Code and Claude Code, regenerate the docs/bench-*.svg and docs/eval-*.svg charts, and update the numbers README.md quotes. Use after a release, when Kimi Code or Claude Code updates, or when asked to refresh the benchmark charts or the size, memory and token claims.
+description: Re-measure killi's installed size, startup, memory and first-request tokens against Kimi Code and Claude Code, regenerate the docs/bench-*.svg, docs/eval-*.svg and combined docs/benchmarks-*.svg charts, and update the numbers README.md quotes. Use after a release, when Kimi Code or Claude Code updates, or when asked to refresh the benchmark charts or the size, memory and token claims.
 ---
 
 # Refresh the metrics and charts
 
 Four things come from the scripts, in this order: `scripts/bench.py` writes `docs/bench.json`,
-`scripts/chart.py` draws `docs/bench-{light,dark}.svg`, `scripts/eval.py` runs the capability
-tasks, and `scripts/eval.py report` writes `docs/eval.{md,json}` and `docs/eval-{light,dark}.svg`.
+`scripts/chart.py` draws `docs/bench-{light,dark}.svg`, `docs/eval-{light,dark}.svg` and
+`docs/benchmarks-{light,dark}.svg` (both charts stacked in one image — the one at the top of
+the README, right under the screenshot), `scripts/eval.py` runs the capability tasks, and
+`scripts/eval.py report` writes `docs/eval.{md,json}` and redraws the eval and combined charts.
 The README quotes numbers from all of them, so it is the last thing to edit.
 
 ## 0. Before measuring
@@ -50,7 +52,7 @@ Things that change between runs for reasons that aren't killi:
 
 ```sh
 python3 scripts/chart.py
-qlmanage -t -s 1000 -o "$TMPDIR" docs/bench-light.svg   # a PNG to look at; it crops to a square
+rsvg-convert -w 960 docs/benchmarks-light.svg -o "$TMPDIR/benchmarks.png"   # a PNG of the whole combined chart to look at (qlmanage crops to a square)
 ```
 
 The footnote names the chip and macOS from `bench.json` (`machine`), so it is always the
@@ -79,7 +81,9 @@ Update by hand, from `docs/bench.json` and `docs/eval.json`:
 
 `docs/screenshot.svg` and `docs/menu.svg` are drawn by `scripts/screenshot.py`, which runs
 killi in a pseudo-terminal (it needs `pyte` and `cargo build --release`). Redraw them when
-the UI changes, with a clean `--home` holding only a `.killi/config.toml` and a few skills:
+the UI changes, with a clean `--home` holding only a `.killi/config.toml` and a few skills.
+The clean home also needs `.killi/command-guide.json` (`{"command":"killi"}`), or the
+first-launch guide blocks the pty before the prompt appears:
 
 ```sh
 scripts/screenshot.py --project ~/code/slug --home /tmp/home --model minimax/MiniMax-M3.1-Flash \
@@ -100,6 +104,6 @@ it isn't in `bench.py` because the README's claim is memory running a prompt.
 
 ## Commit
 
-`docs/bench.json`, `docs/bench-*.svg`, `docs/eval.*`, `evals/results.jsonl`, `README.md` and any
+`docs/bench.json`, `docs/bench-*.svg`, `docs/benchmarks-*.svg`, `docs/eval.*`, `evals/results.jsonl`, `README.md` and any
 script change. `evals/runs/` is ignored. These aren't part of a release; for that see
 `RELEASING.md`.

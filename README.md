@@ -16,8 +16,17 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 [Kiled](https://github.com/timwuhaotian/kiled) editor.
 
 <p align="center">
-  <img src="docs/screenshot.svg" width="960" alt="killi's banner, then killi fixing a failing Rust test: it reads the project, runs the tests, thinks, edits src/lib.rs with a numbered line diff, reruns the tests and explains the fix; the status line shows the model, thinking effort, a context gauge, tokens with 83% cached and the git branch">
+  <img src="docs/screenshot.svg" width="960" alt="killi's banner, then killi fixing a failing Rust test: it reads the project, runs the tests, thinks, edits src/lib.rs with a numbered line diff, reruns the tests and explains the fix; the status line shows the model, thinking effort, a context gauge, tokens with 80% cached and the git branch">
 </p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/benchmarks-dark.svg">
+    <img src="docs/benchmarks-light.svg" width="960" alt="Every benchmark in one chart: installed size, peak memory running one prompt and tokens sent before you type for killi, Kimi Code, Claude Code and opencode 2; then capability-test runs passed, input tokens, time and peak memory per run for killi, Kimi Code and Claude Code">
+  </picture>
+</p>
+
+How these were measured: [Size and memory](#size-and-memory) · [Capability tests](#capability-tests).
 
 > **Status: early.** Apple silicon Macs only. Used daily by its author; expect rough edges.
 
@@ -56,12 +65,7 @@ time, so the provider's prompt cache keeps hitting. It is the sibling of the
 
 ## Size and memory
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/bench-dark.svg">
-  <img src="docs/bench-light.svg" width="960" alt="Installed size, peak memory for one prompt, and tokens sent before you type, for killi, Kimi Code, Claude Code and opencode 2">
-</picture>
-
-Measured with [`scripts/bench.py`](scripts/bench.py); the versions and models are in
+The top half of the chart above. Measured with [`scripts/bench.py`](scripts/bench.py); the versions and models are in
 [`docs/bench.json`](docs/bench.json). killi, Kimi Code and opencode 2 ran the same model,
 MiMo-V2.6-Pro; Claude Code ran its default, Claude Sonnet 5.5. killi, Kimi Code and Claude Code
 loaded this machine's skills, global instructions and MCP servers; opencode 2 ran with a fresh
@@ -71,12 +75,7 @@ Claude Code the day before, on the same machine.
 
 ## Capability tests
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/eval-dark.svg">
-  <img src="docs/eval-light.svg" width="960" alt="Tasks passed, input tokens, time and peak memory per task for killi, Kimi Code and Claude Code">
-</picture>
-
-Fourteen Rust and TypeScript tasks in [`evals/tasks`](evals/tasks): fixing bugs (one hidden in
+The bottom half of the chart above. Fourteen Rust and TypeScript tasks in [`evals/tasks`](evals/tasks): fixing bugs (one hidden in
 a 1,400-line file), implementing features from a spec, clearing compiler and clippy errors,
 a multi-file refactor, a concurrency bug, JSON escaping with no dependencies allowed, a fix
 that must leave a shared file untouched, and a question answered from the code rather than a

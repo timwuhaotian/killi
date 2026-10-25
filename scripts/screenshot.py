@@ -76,7 +76,7 @@ def run(args):
 
     for _ in range(100):
         pump(0.2)
-        if "ask, or /" in text(screen):
+        if "/ for commands" in text(screen):
             break
     else:
         sys.exit("killi showed no prompt within 20 s:\n" + text(screen).rstrip())
@@ -111,7 +111,10 @@ def cells(screen):
         rows.append([(c.data, c.fg, c.bg, c.bold, c.blink) for c in (line[x] for x in range(screen.columns))])
     while rows and all(ch in (" ", "") and bg == "default" for ch, _, bg, _, _ in rows[-1]):
         rows.pop()
-    return rows
+    # The prompt is pinned to the bottom of the tall screen, leaving a long empty stretch
+    # between the conversation and it; collapse any run of blank rows to one.
+    blank = lambda row: all(ch in (" ", "") and bg == "default" for ch, _, bg, _, _ in row)
+    return [row for i, row in enumerate(rows) if not blank(row) or i == 0 or not blank(rows[i - 1])]
 
 
 def color(name, default):

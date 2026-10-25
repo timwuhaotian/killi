@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Draws docs/bench-light.svg and docs/bench-dark.svg from docs/bench.json."""
+"""Draws docs/bench-{light,dark}.svg from docs/bench.json, docs/eval-{light,dark}.svg from
+
+docs/eval.json, and docs/benchmarks-{light,dark}.svg with both charts in one image."""
 
 import json
 from html import escape
@@ -36,7 +38,14 @@ PANELS = [
 ]
 
 
-def render(data, c):
+def wrap(lines, height, c, label):
+    head = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{height}" viewBox="0 0 {WIDTH} {height}" '
+            f'font-family="-apple-system, BlinkMacSystemFont, \'Segoe UI\', Helvetica, Arial, sans-serif" role="img" aria-label="{escape(label)}">\n'
+            f'<rect x="0.5" y="0.5" width="{WIDTH - 1}" height="{height - 1}" rx="12" fill="{c["bg"]}" stroke="{c["border"]}"/>')
+    return "\n".join([head, *lines, "</svg>\n"])
+
+
+def bench_body(data, c):
     tools = data["tools"]
     killi, kimi = tools[0], tools[1]
     out = []
@@ -78,12 +87,13 @@ def render(data, c):
     for note in notes:
         out.append(f'<text x="32" y="{y}" font-size="12" fill="{c["muted"]}">{escape(note)}</text>')
         y += 18
-    height = y + 6
     label = "; ".join(f'{t["name"]} {mb(t["size_mb"])} installed, {mb(t["memory_mb"])} memory, {tokens(t["tokens"])}' for t in tools)
-    head = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{height}" viewBox="0 0 {WIDTH} {height}" '
-            f'font-family="-apple-system, BlinkMacSystemFont, \'Segoe UI\', Helvetica, Arial, sans-serif" role="img" aria-label="{escape(label)}">\n'
-            f'<rect x="0.5" y="0.5" width="{WIDTH - 1}" height="{height - 1}" rx="12" fill="{c["bg"]}" stroke="{c["border"]}"/>')
-    return "\n".join([head, *out, "</svg>\n"])
+    return out, y + 6, label
+
+
+def render(data, c):
+    lines, height, label = bench_body(data, c)
+    return wrap(lines, height, c, label)
 
 
 def kilo(value):
@@ -100,7 +110,7 @@ EVAL_PANELS = [
 ]
 
 
-def render_eval_svg(summary, c):
+def eval_body(summary, c):
     tools = [summary[k] for k in ("killi", "kimi", "claude") if k in summary]
     killi = tools[0]
     others = " · ".join(f'{t["name"]}: {t["passed"]} of {t["runs"]}, {kilo(t["avg_input"])} tokens' for t in tools[1:])
@@ -140,24 +150,41 @@ def render_eval_svg(summary, c):
     for note in notes:
         out.append(f'<text x="32" y="{y}" font-size="12" fill="{c["muted"]}">{escape(note)}</text>')
         y += 18
-    height = y + 6
     label = "; ".join(f'{t["name"]}: {t["passed"]} of {t["runs"]} passed, {kilo(t["avg_input"])} input tokens per run' for t in tools)
-    head = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{height}" viewBox="0 0 {WIDTH} {height}" '
-            f'font-family="-apple-system, BlinkMacSystemFont, \'Segoe UI\', Helvetica, Arial, sans-serif" role="img" aria-label="{escape(label)}">\n'
-            f'<rect x="0.5" y="0.5" width="{WIDTH - 1}" height="{height - 1}" rx="12" fill="{c["bg"]}" stroke="{c["border"]}"/>')
-    return "\n".join([head, *out, "</svg>\n"])
+    return out, y + 6, label
+
+
+def render_eval_svg(summary, c):
+    lines, height, label = eval_body(summary, c)
+    return wrap(lines, height, c, label)
+
+
+def render_combined(data, summary, c):
+    """The size/memory chart and the capability chart stacked in one image, for the README's top."""
+    bench, bench_h, bench_label = bench_body(data, c)
+    ev, eval_h, eval_label = eval_body(summary, c)
+    lines = [
+        "<g>", *bench, "</g>",
+        f'<line x1="20" y1="{bench_h + 8}" x2="940" y2="{bench_h + 8}" stroke="{c["border"]}"/>',
+        f'<g transform="translate(0,{bench_h + 16})">', *ev, "</g>",
+    ]
+    return wrap(lines, bench_h + 16 + eval_h, c, f"{bench_label}. Capability tests: {eval_label}")
 
 
 def render_eval(summary):
+    data = json.loads((ROOT / "docs/bench.json").read_text())
     for name, colors in THEMES.items():
         (ROOT / f"docs/eval-{name}.svg").write_text(render_eval_svg(summary, colors))
+        (ROOT / f"docs/benchmarks-{name}.svg").write_text(render_combined(data, summary, colors))
 
 
 def main():
     data = json.loads((ROOT / "docs/bench.json").read_text())
+    summary = json.loads((ROOT / "docs/eval.json").read_text())["summary"]
     for name, colors in THEMES.items():
         (ROOT / f"docs/bench-{name}.svg").write_text(render(data, colors))
-    print("wrote docs/bench-light.svg and docs/bench-dark.svg")
+    render_eval(summary)
+    print("wrote docs/bench-{light,dark}.svg, docs/eval-{light,dark}.svg and docs/benchmarks-{light,dark}.svg")
 
 
 if __name__ == "__main__":
