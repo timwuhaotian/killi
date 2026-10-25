@@ -156,6 +156,7 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
         Rc::new(move |event| printer.borrow_mut().event(event))
     };
     let controls = Controls::default();
+    controls.swarm.set(setup.config().agent.swarm_on());
     let mut agent = match &resume {
         Some(log) => setup.resume(log, controls, sink)?,
         None => setup.start(controls, sink)?,
@@ -315,17 +316,18 @@ impl Printer {
                 self.end_text();
                 eprintln!("{}{text}{}", self.dim, self.reset);
             }
-            Event::Sub { label, event } => {
-                if matches!(*event, Event::ToolStart { .. } | Event::ToolEnd { is_error: true, .. }) && std::mem::take(&mut self.tool_open) {
+            Event::Sub { label, event, .. } => {
+                if matches!(*event, Event::ToolStart { .. } | Event::ToolEnd { is_error: true, .. } | Event::Finished { .. }) && std::mem::take(&mut self.tool_open) {
                     eprintln!();
                 }
                 match *event {
                     Event::ToolStart { summary, .. } => eprintln!("  {}↳ {label}: {summary}{}", self.dim, self.reset),
                     Event::ToolEnd { is_error: true, brief, .. } => eprintln!("  {}↳ {label}: ✗ {brief}{}", self.red, self.reset),
+                    Event::Finished { is_error } => eprintln!("  {}↳ {label}: {}{}", self.dim, if is_error { "failed" } else { "done" }, self.reset),
                     _ => {}
                 }
             }
-            Event::Reasoning(_) | Event::Usage(_) | Event::Todos(_) | Event::Ask(_) => {}
+            Event::Reasoning(_) | Event::Usage(_) | Event::Todos(_) | Event::Ask(_) | Event::Swarm { .. } | Event::Started | Event::Finished { .. } => {}
         }
     }
 

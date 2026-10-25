@@ -68,8 +68,23 @@ pub enum Event {
     Todos(Vec<Todo>),
     Ask(Question),
     Notice(String),
-    /// Something a subagent did, labeled with its description.
-    Sub { label: String, event: Box<Event> },
+    /// An `agent_swarm` call began: its tool call id, its description, and each subagent's item
+    /// in order. Subagents are told apart from the call's other work by their `Slot`.
+    Swarm { id: String, description: String, items: Vec<String> },
+    /// A subagent began its work. Only seen inside `Sub`.
+    Started,
+    /// A subagent ended, and whether it failed. Only seen inside `Sub`.
+    Finished { is_error: bool },
+    /// Something a subagent did, labeled with its description, and where it sits in an
+    /// `agent_swarm` call when it belongs to one.
+    Sub { label: String, slot: Option<Slot>, event: Box<Event> },
+}
+
+/// A subagent's place in an `agent_swarm` call: the call's tool id and its item's index.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slot {
+    pub swarm: String,
+    pub index: usize,
 }
 
 /// A question for the user. `plan` marks a plan waiting for approval.
@@ -1046,7 +1061,7 @@ impl Agent {
             if prompt.trim().is_empty() {
                 jobs.push(Err(tools::Output::error("agent needs a `prompt`.")));
             } else {
-                jobs.push(self.child(&label, args["fork"].as_bool().unwrap_or(false), prompt));
+                jobs.push(self.child(&label, None, args["fork"].as_bool().unwrap_or(false), prompt));
             }
         }
         self.run_children(jobs, MAX_PARALLEL_AGENTS).await
@@ -1073,12 +1088,14 @@ impl Agent {
         }
         self.swarm_used += prompts.len();
         let description = args["description"].as_str().map(str::trim).filter(|d| !d.is_empty()).unwrap_or("swarm");
+        let items: Vec<String> = prompts.iter().map(|(item, _)| item.clone()).collect();
+        (self.sink)(Event::Swarm { id: id.into(), description: description.into(), items: items.clone() });
         let mut jobs = Vec::new();
-        for (n, (_, prompt)) in prompts.iter().enumerate() {
-            jobs.push(self.child(&format!("{description} #{}", n + 1), false, prompt.clone()));
+        for (n, (_, prompt)) in prompts.into_iter().enumerate() {
+            let slot = Slot { swarm: id.into(), index: n };
+            jobs.push(self.child(&format!("{description} #{}", n + 1), Some(slot), false, prompt));
         }
         let outputs = self.run_children(jobs, self.settings.swarm_parallel).await;
-        let items: Vec<String> = prompts.into_iter().map(|(item, _)| item).collect();
         swarm::report(&self.ctx, &items, &outputs, MAX_RESULT_CHARS)
     }
 
@@ -1090,11 +1107,13 @@ impl Agent {
                 Ok(job) => job,
                 Err(output) => return (index, output, None),
             };
+            (agent.sink)(Event::Started);
             let output = match agent.run(&prompt, &[]).await {
                 Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => tools::Output::ok(text),
                 Ok((_, stop)) => tools::Output::error(format!("The subagent stopped without a final report ({stop:?}).")),
                 Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
             };
+            (agent.sink)(Event::Finished { is_error: output.is_error });
             // Only its counts outlive it: its conversation and log file are freed here, not
             // when the slowest sibling of a swarm finishes.
             (index, output, Some(std::mem::take(&mut agent.stats)))
@@ -1125,15 +1144,15 @@ impl Agent {
     }
 
     /// A subagent ready to run `prompt`, or why it couldn't start.
-    fn child(&mut self, label: &str, fork: bool, prompt: String) -> Job {
-        self.subagent(label, fork)
+    fn child(&mut self, label: &str, slot: Option<Slot>, fork: bool, prompt: String) -> Job {
+        self.subagent(label, slot, fork)
             .map(|agent| (agent, prompt))
             .map_err(|e| tools::Output::error(format!("Could not start the subagent: {e:#}")))
     }
 
     /// A subagent with the same model, system prompt and tools, so its requests hit the same
     /// cached prefix. A fork also starts with this conversation so far.
-    fn subagent(&mut self, label: &str, fork: bool) -> Result<Agent> {
+    fn subagent(&mut self, label: &str, slot: Option<Slot>, fork: bool) -> Result<Agent> {
         self.children += 1;
         let mut session = self.session.child(self.children)?;
         let history: Vec<Value> =
@@ -1142,7 +1161,7 @@ impl Agent {
         session.record(&json!({"type": "compaction", "messages": history}))?;
         let parent = self.sink.clone();
         let label = label.to_string();
-        let sink: Sink = Rc::new(move |event| parent(Event::Sub { label: label.clone(), event: Box::new(event) }));
+        let sink: Sink = Rc::new(move |event| parent(Event::Sub { label: label.clone(), slot: slot.clone(), event: Box::new(event) }));
         Ok(Agent {
             client: self.client.clone(),
             tools: self.tools.clone(),

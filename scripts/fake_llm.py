@@ -6,7 +6,9 @@ without a model (see frames.py).
 
 The prompt picks the scenario: one containing "FIX" or "slugify" is a bug fix (a task list, a
 read, a failing run, a thought, an edit with a diff, a passing run and a Markdown answer),
-one containing "QUESTION" is an `ask_user_question`, anything else a one-line answer. The
+one containing "QUESTION" is an `ask_user_question`, "SWARM" an `agent_swarm` of five subagents
+("SWARMBIG": forty) whose prompts say "SWARMCHILD" and that each run a few slow commands,
+anything else a one-line answer. The
 step is the number of assistant messages since the last real user message, so the reminders
 killi appends as user messages (`<system-reminder>`) don't restart the script.
 """
@@ -69,6 +71,25 @@ QUESTION = [{"calls": [call(1, "ask_user_question", {
     "options": ["Drop them: don't becomes dont", "Separator: don't becomes don-t", "Keep the current behavior"]})]}]
 SHORT = [{"text": "Hello! Ask me to read, change or run something in this folder."}]
 
+PRS = ["pr-1581", "pr-1594", "pr-1602", "pr-1611", "pr-1617"]
+MODULES = [f"packages/service-{n:02d}" for n in range(1, 41)]
+
+
+def swarm(items):
+    return [{"calls": [call(1, "agent_swarm", {"description": "Review modules" if len(items) > 5 else "Review PRs batch 1",
+                                              "prompt_template": "SWARMCHILD review {{item}} and report what you find.",
+                                              "items": items})]},
+            {"text": f"All {len(items)} reviewed; nothing blocks a merge."}]
+
+
+def child(prompt):
+    """Each subagent's pace follows its item, so a screen drawn mid-swarm has all four states."""
+    n = sum(i * ord(c) for i, c in enumerate(prompt.split("review ")[1].split(" ")[0]))
+    return [{"calls": [call(1, "bash", {"command": f"sleep {1 + n % 3} && git log --oneline -3"})]},
+            {"calls": [call(2, "read", {"path": "slug.py"})]},
+            {"calls": [call(3, "bash", {"command": f"sleep {1 + n % 4} && python3 test_slug.py"})]},
+            {"text": "Reviewed: no problems found."}]
+
 
 def text_of(message):
     content = message.get("content", "")
@@ -81,7 +102,14 @@ def step_for(messages):
     real = [i for i, m in enumerate(messages) if m.get("role") == "user" and not text_of(m).lstrip().startswith("<system-reminder>")]
     start = real[-1] if real else 0
     prompt = text_of(messages[start]) if messages else ""
-    steps = FIX if "FIX" in prompt or "slugify" in prompt else QUESTION if "QUESTION" in prompt else SHORT
+    if "SWARMCHILD" in prompt:
+        steps = child(prompt)
+    elif "SWARMBIG" in prompt:
+        steps = swarm(MODULES)
+    elif "SWARM" in prompt:
+        steps = swarm(PRS)
+    else:
+        steps = FIX if "FIX" in prompt or "slugify" in prompt else QUESTION if "QUESTION" in prompt else SHORT
     index = sum(1 for m in messages[start:] if m.get("role") == "assistant")
     return steps[min(index, len(steps) - 1)]
 

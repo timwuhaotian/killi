@@ -4,7 +4,7 @@ members = ["crates/killi"]
 exclude = ["evals"]
 
 [workspace.package]
-version = "0.4.12"
+version = "0.4.13"
 edition = "2024"
 rust-version = "1.94"
 license = "MIT"

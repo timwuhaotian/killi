@@ -45,7 +45,8 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
 - `[agent]`: `compact_at` (compact once a request passes this many input tokens; unset: 60%
   of the model's `max_context_size`, or 256000 when the window is unknown), `plan_allow = ["make -n"]` (extra command prefixes bash may run in plan mode),
   `notify_after` (seconds a turn takes before a desktop notification, default 10),
-  `swarm_parallel` (subagents one `agent_swarm` call runs at once, default 8).
+  `swarm_parallel` (subagents one `agent_swarm` call runs at once, default 8),
+  `swarm = false` (start sessions with swarm mode off; it is on by default, and `/swarm on|off` changes it).
 - `[skills] dirs = ["~/other/skills"]`: skill folders used instead of `~/.agents/skills`; the
   project's own folders are always read.
 - `[[hooks.<Event>]]` with `matcher` (a regex over tool names; none matches every tool),

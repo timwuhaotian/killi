@@ -53,8 +53,9 @@ How these were measured: [Size and memory](#size-and-memory) · [Capability test
   matches when only trailing spaces, smart quotes or dashes differ. Long output keeps its useful
   end and saves the rest to a file. Slightly broken tool-call JSON is repaired, not dropped.
 - **Subagents** run in parallel on the same model and cached prompt. **Swarms** run one subagent
-  per item of a prompt template, up to 128, several at a time; `/swarm` tells the agent to split
-  its work that way. **Background tasks** keep servers and slow builds running. **Undo** puts
+  per item of a prompt template, up to 128, several at a time, shown as one live panel (how many,
+  which are working on what, how long each has run); swarm mode, on by default and set with
+  `[agent] swarm` or `/swarm`, tells the agent to split its work that way. **Background tasks** keep servers and slow builds running. **Undo** puts
   your files back as they were before a turn, including what commands changed.
 - **Your setup, carried over.** Kimi Code's config layout (`killi import-kimi` copies it),
   skills from `~/.agents/skills`, MCP servers from `mcp.json`, Claude Code-style hooks, and

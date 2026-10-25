@@ -5,6 +5,19 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.13 — 2026-10-25
+
+- **A swarm is one live panel, not a scroll of subagent calls.** While `agent_swarm` runs, the
+  live area shows a header with a progress meter and the counts (`3/40 done · 8 running · 29
+  queued`), then a row per subagent in item order: its item, how long it has run, its calls so far
+  and what it is doing now. A swarm too big to list shows a strip of one mark per subagent
+  (`✓ ◐ ○ ✗`) and rows for the ones working. The subagents' calls no longer print a line each;
+  a subagent that ends leaves one (`↳ ✓ pr-1581 · 3m02s · 12 calls`).
+- **Swarm mode is on by default.** The agent is told to split work across `agent_swarm`
+  subagents from the first prompt of every session, when the task splits into independent
+  parts; a small or single-part task is done directly (the reminder used to tell it to say why
+  it needed no subagents and wait). `[agent] swarm = false` starts sessions with it off;
+  `/swarm on|off` still switches it.
 - **The desktop notification says what happened.** A finished turn no longer posts a bare
   "Done": the headline carries the outcome and how long the turn took, and under it the
   first line of the reply (or the reason it stopped). A question waiting for an answer

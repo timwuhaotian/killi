@@ -105,6 +105,15 @@ pub struct AgentConfig {
     pub notify_after: Option<u64>,
     /// Subagents an `agent_swarm` call runs at once (default 8).
     pub swarm_parallel: Option<usize>,
+    /// Start every session in swarm mode (default true); `/swarm on|off` still changes it.
+    pub swarm: Option<bool>,
+}
+
+impl AgentConfig {
+    /// Whether a session starts in swarm mode.
+    pub fn swarm_on(&self) -> bool {
+        self.swarm.unwrap_or(true)
+    }
 }
 
 /// `[skills]`: where skills are found besides the project's own folders.
@@ -344,6 +353,9 @@ default_model = "openai/gpt-5.5"
 
 [thinking]
 effort = "high"                 # or: enabled = false
+
+[agent]
+swarm = true                    # start in swarm mode: split work across subagents; false turns it off
 
 [providers.openai]
 type = "openai"                 # OpenAI chat completions, and compatible APIs
@@ -1433,11 +1445,19 @@ mod tests {
     fn template_parses_and_resolves() {
         let config: super::Config = toml::from_str(super::TEMPLATE).unwrap();
         assert_eq!(config.models.len(), 2);
+        assert_eq!(config.agent.swarm, Some(true));
         // SAFETY: tests that read this variable don't run concurrently with one that changes it.
         unsafe { std::env::set_var("OPENAI_API_KEY", "test-key") };
         let model = config.resolve(None).unwrap();
         assert_eq!(model.protocol, super::Protocol::Responses);
         assert_eq!(model.thinking, super::Thinking::Effort("high".into()));
+    }
+
+    #[test]
+    fn swarm_mode_starts_on_unless_the_config_says_off() {
+        assert!(super::AgentConfig::default().swarm_on());
+        let off: super::Config = toml::from_str("[agent]\nswarm = false\n").unwrap();
+        assert!(!off.agent.swarm_on());
     }
 
     #[test]

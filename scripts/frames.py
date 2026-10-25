@@ -10,7 +10,8 @@ scratch HOME, and each screen is written as an SVG painted on the theme's own pa
 The themes are Kil's five (crates/kil/src/theme.rs in the Kil repo): killi asks the terminal
 for its background and foreground, and the pseudo-terminal answers with the theme's. SGR dim is
 drawn as Kil draws it, each channel scaled to two thirds. Scenes: start, menu, files (the `@`
-menu), picker, conv (a bug fix with a diff), question, plan, busy (mid-turn). `--inline` runs killi as it runs outside
+menu), picker, conv (a bug fix with a diff), question, plan, busy (mid-turn), swarm and swarm-big (an
+`agent_swarm` of 5 and of 40 subagents, mid-run) and swarm-done (the same five, finished). `--inline` runs killi as it runs outside
 Kil, in the terminal's scrollback; `--colors 256` hides COLORTERM; `--no-osc` never answers the
 color queries, like a terminal that doesn't know them; `--no-color` sets NO_COLOR.
 
@@ -61,6 +62,9 @@ SCENES = {
     "plan": dict(keys=["\x1b[Z", "add a flag"]),
     "busy": dict(keys=[FIX, "WAIT:1.5", "also keep it small"], settle=0.2),
     "drop": dict(keys=["look at", "DROP:slug.py", "DROP:shot.png", "together"]),
+    "swarm": dict(keys=["SWARM review the open PRs\r", "WAIT:4.5"], settle=0.2),
+    "swarm-big": dict(keys=["SWARMBIG review every service\r", "WAIT:7"], settle=0.2),
+    "swarm-done": dict(keys=["SWARM review the open PRs\r"], until="nothing blocks"),
 }
 
 # A 1x1 PNG, the file the drop scene drags in.

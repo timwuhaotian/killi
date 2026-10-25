@@ -14,6 +14,7 @@ mod menu;
 mod mention;
 mod palette;
 mod paste;
+mod swarm;
 pub(crate) mod text;
 
 use std::io::{Stdout, Write, stdout};
@@ -38,7 +39,7 @@ use crossterm::{execute, queue};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
-use crate::agent::{Agent, Controls, Event, Image, Question, Sink, Steered, Stop, Todo};
+use crate::agent::{Agent, Controls, Event, Image, Question, Sink, Slot, Steered, Stop, Todo};
 use crate::config::{Config, Thinking};
 use crate::setup::{Overview, Setup};
 use crate::llm::{Client, Usage};
@@ -95,6 +96,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         let _ = tx.send(event);
     });
     let controls = Controls { interactive: true, ..Controls::default() };
+    controls.swarm.set(config.agent.swarm_on());
     let fullscreen = wants_fullscreen(config.ui.fullscreen, &std::env::var("TERM_PROGRAM").unwrap_or_default());
     let ground = if config.ui.theme.is_none() { query_ground() } else { None };
     text::init_theme(config.ui.theme.as_deref(), ground);
@@ -748,6 +750,8 @@ struct App {
     last_kind: Kind,
     thinking: Option<(Instant, String)>,
     running: Vec<Running>,
+    /// The `agent_swarm` call in flight, whose subagents the live area lists.
+    swarm: Option<swarm::Swarm>,
     todos: Vec<Todo>,
     asking: Option<Asking>,
     picker: Option<Picker>,
@@ -856,6 +860,7 @@ impl App {
             last_kind: Kind::None,
             thinking: None,
             running: Vec::new(),
+            swarm: None,
             todos: Vec::new(),
             asking: None,
             picker: None,
@@ -1631,6 +1636,7 @@ impl App {
         self.flush_partial();
         self.end_thinking();
         self.running.clear();
+        self.swarm = None;
         self.aside = None;
         self.retry = None;
         self.busy = None;
@@ -1750,6 +1756,9 @@ impl App {
                 self.running.push(Running { id, summary, label: None, started: Instant::now() });
             }
             Event::ToolEnd { id, is_error, brief, display, output } => {
+                if self.swarm.as_ref().is_some_and(|s| s.id == id) {
+                    self.swarm = None;
+                }
                 let running = self.take_running(&id);
                 let elapsed = running.as_ref().map(|r| r.started.elapsed());
                 let summary = running.map(|r| r.summary).unwrap_or_default();
@@ -1798,22 +1807,46 @@ impl App {
                 notify("Waiting for your answer", &asked);
             }
             Event::Notice(text) => self.notice(&text),
-            Event::Sub { label, event } => self.on_sub(label, *event),
+            Event::Swarm { id, description, items } => {
+                self.flush_partial();
+                self.end_thinking();
+                self.swarm = Some(swarm::Swarm::new(id, description, items));
+            }
+            Event::Started | Event::Finished { .. } => {}
+            Event::Sub { label, slot, event } => self.on_sub(label, slot, *event),
         }
     }
 
-    fn on_sub(&mut self, label: String, event: Event) {
+    fn on_sub(&mut self, label: String, slot: Option<Slot>, event: Event) {
+        // A swarm's subagents show in its panel and leave a line when they end, not a line per call.
+        let member = slot.filter(|slot| self.swarm.as_ref().is_some_and(|s| s.id == slot.swarm)).map(|slot| slot.index);
         match event {
-            Event::ToolStart { id, summary, .. } => {
-                self.running.push(Running { id, summary, label: Some(label), started: Instant::now() });
-            }
-            Event::ToolEnd { id, is_error, brief, .. } => {
+            Event::ToolStart { id, summary, .. } => match (member, &mut self.swarm) {
+                (Some(index), Some(swarm)) => {
+                    if !is_bookkeeping(&summary, false) {
+                        swarm.call(index, &summary);
+                    }
+                }
+                _ => self.running.push(Running { id, summary, label: Some(label), started: Instant::now() }),
+            },
+            Event::ToolEnd { id, is_error, brief, .. } if member.is_none() => {
                 let running = self.take_running(&id);
                 let elapsed = running.as_ref().map(|r| r.started.elapsed());
                 let summary = running.map(|r| r.summary).unwrap_or_default();
                 if !is_bookkeeping(&summary, is_error) {
                     self.tool_line(Some(&label), &summary, is_error, &brief, elapsed);
                 }
+            }
+            Event::Started => {
+                if let (Some(index), Some(swarm)) = (member, &mut self.swarm) {
+                    swarm.start(index);
+                }
+            }
+            Event::Finished { is_error } => {
+                let Some((index, swarm)) = member.zip(self.swarm.as_mut()) else { return };
+                let Some((item, calls, took)) = swarm.finish(index, is_error) else { return };
+                self.begin(Kind::Tool);
+                self.emit(Line::block(move |width| vec![swarm::finished_row(&item, is_error, calls, took, width)]));
             }
             Event::Usage(usage) => self.add_usage(&usage, false),
             Event::Notice(text) => self.notice(&format!("{label}: {text}")),
@@ -2385,6 +2418,10 @@ impl App {
             }
             let waiting_on_you = |running: &Running| self.asking.is_some() && running.summary.starts_with("ask_user_question");
             for running in self.running.iter().filter(|r| !waiting_on_you(r)).take(5) {
+                if let Some(swarm) = self.swarm.as_ref().filter(|s| s.id == running.id) {
+                    rows.extend(swarm.rows(width, self.spinner, (self.height / 3).clamp(6, 14)));
+                    continue;
+                }
                 let took = format!(" {DIM}· {}{RESET}", clock(running.started.elapsed()));
                 let line = match &running.label {
                     Some(label) => format!("  {DIM}↳ {label}:{RESET} {LAGOON}{frame}{RESET} {DIM}{}{RESET}{took}", tool_text(&running.summary)),

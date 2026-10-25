@@ -1,6 +1,7 @@
 //! Swarms: one `agent_swarm` call runs a subagent per item of a prompt template, and swarm
-//! mode (`/swarm`) tells the agent to work that way. Like plan mode, the mode reaches the model
-//! as appended reminders, so the system prompt and tool list stay as they are.
+//! mode (`/swarm`, on unless `[agent] swarm = false`) tells the agent to split work that way.
+//! Like plan mode, the mode reaches the model as appended reminders, so the system prompt and
+//! tool list stay as they are.
 
 use std::collections::HashMap;
 
@@ -11,7 +12,7 @@ use crate::tools::{self, Output};
 pub const ITEM: &str = "{{item}}";
 pub const MAX_ITEMS: usize = 128;
 
-pub const ON: &str = "<system-reminder>Swarm mode is on. Explore only as much as you need to split the work, then hand the main work to agent_swarm: a prompt_template with {{item}} and one item per distinct part, with no two subagents making conflicting changes. Don't do the main work yourself, and don't hold back on the number of subagents (up to 128) unless the user sets a limit; give each only the background it needs. If the task doesn't need subagents, say why and wait.</system-reminder>";
+pub const ON: &str = "<system-reminder>Swarm mode is on. When a task splits into independent parts (several files, PRs, modules, questions), explore only as much as you need to split it, then hand the parts to agent_swarm: a prompt_template with {{item}} and one item per part, with no two subagents touching the same thing. Give each only the background it needs, and don't hold back on the number of subagents (up to 128) unless the user sets a limit. A task with one part, or a small one, you do yourself.</system-reminder>";
 
 pub const OFF: &str = "<system-reminder>Swarm mode is off. Use agent_swarm only when a request clearly benefits from it.</system-reminder>";
 
