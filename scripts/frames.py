@@ -60,7 +60,11 @@ SCENES = {
     "question": dict(keys=["QUESTION please\r"], until="Esc dismisses"),
     "plan": dict(keys=["\x1b[Z", "add a flag"]),
     "busy": dict(keys=[FIX, "WAIT:1.5", "also keep it small"], settle=0.2),
+    "drop": dict(keys=["look at", "DROP:slug.py", "DROP:shot.png", "together"]),
 }
+
+# A 1x1 PNG, the file the drop scene drags in.
+PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7369a5e0000000049454e44ae426082")
 
 CELL, ROW, PAD, FONT = 7.8, 20, 14, 13
 
@@ -79,7 +83,7 @@ provider = "minimax"
 model = "MiniMax-M3.1-Flash"
 max_context_size = 1000000
 max_output_size = 128000
-capabilities = ["thinking", "tool_use"]
+capabilities = ["image_in", "thinking", "tool_use"]
 
 [models."zai/glm-5.3"]
 provider = "minimax"
@@ -144,6 +148,7 @@ class Scratch:
         self.project.mkdir(parents=True)
         (self.project / "slug.py").write_text(SLUG)
         (self.project / "test_slug.py").write_text(TEST)
+        (self.project / "shot.png").write_bytes(PNG)
         git = ["git", "-c", "user.email=a@b", "-c", "user.name=a"]
         subprocess.run(["git", "init", "-q", "-b", "master"], cwd=self.project, check=True)
         subprocess.run([*git, "add", "-A"], cwd=self.project, check=True)
@@ -223,6 +228,11 @@ def run_scene(args, scratch, scene, cols, rows, theme):
     for key in scene["keys"]:
         if key.startswith("WAIT:"):
             pump(float(key[5:]))
+        elif key.startswith("DROP:"):
+            # A file dropped on the terminal arrives as a bracketed paste of its escaped path.
+            path = str(scratch.project / key[5:]).replace(" ", "\\ ")
+            os.write(fd, f"\x1b[200~{path} \x1b[201~".encode())
+            pump(0.6)
         else:
             os.write(fd, key.encode())
             pump(0.6)

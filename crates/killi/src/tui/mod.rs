@@ -45,6 +45,7 @@ use crate::llm::{Client, Usage};
 use crate::mcp::Mcp;
 use crate::session::{Choice, Replayed};
 use crate::snapshot::Snapshots;
+use crate::tools::{image_type, image_url};
 use editor::Editor;
 use history::{Entry as Line, History};
 use menu::{Entry, Fill, Item, Suggestions};
@@ -1200,8 +1201,8 @@ impl App {
         let with = match menu.fill {
             Fill::Command => format!("/{value} "),
             Fill::Argument => value.clone(),
-            Fill::File if value.ends_with('/') => format!("@{value}"),
-            Fill::File => format!("@{value} "),
+            Fill::File if value.ends_with('/') => format!("@{}", mention::escape(value)),
+            Fill::File => format!("@{} ", mention::escape(value)),
         };
         self.editor.replace_before(menu.start, &with);
     }
@@ -1502,23 +1503,43 @@ impl App {
     }
 
     /// A paste goes in as text, except an empty one, which Kil sends for Cmd+V when the
-    /// clipboard holds only an image: that attaches the image.
+    /// clipboard holds only an image: that attaches the image. A paste of file paths is a
+    /// drop on the terminal: an image is attached like a pasted one, any other file is
+    /// named with `@` so its contents go with the message.
     fn paste(&mut self, text: &str) {
         if text.is_empty() {
             return self.paste_clipboard_image();
         }
-        self.editor.insert(text);
+        let Some(files) = paste::dropped_files(text) else { return self.editor.insert(text) };
+        for file in files {
+            match image_type(&file) {
+                Some(media_type) => {
+                    let name = file.file_name().map_or_else(|| file.display().to_string(), |n| n.to_string_lossy().into_owned());
+                    self.attach_image(|| image_url(&name, &file, media_type).map(|(url, _)| url));
+                }
+                None => {
+                    let shown = file.strip_prefix(&self.cwd).unwrap_or(&file);
+                    self.editor.insert_word(&format!("@{}", mention::escape(&shown.display().to_string())));
+                }
+            }
+        }
     }
 
     /// Ctrl+V: attaches the clipboard's image to the prompt as an `[Image #N]` placeholder.
     fn paste_clipboard_image(&mut self) {
+        self.attach_image(paste::clipboard_image);
+    }
+
+    /// Attaches the image `read` gives to the prompt as an `[Image #N]` placeholder, when the
+    /// model can see it and the prompt is not an answer to a question.
+    fn attach_image(&mut self, read: impl FnOnce() -> Result<String, String>) {
         if !self.sees_images {
             return self.notice(&format!("{} can't see images; /model switches to one that can.", self.status.model));
         }
         if self.asking.is_some() {
             return self.notice("An answer is text only; send the image with your next message.");
         }
-        match paste::clipboard_image() {
+        match read() {
             Ok(url) => self.editor.attach(url),
             Err(why) => self.notice(&why),
         }

@@ -54,12 +54,18 @@ impl Editor {
         self.browsing = None;
     }
 
+    /// Inserts `word` at the cursor as a word of its own: a space before it when the cursor
+    /// follows one, and a space after.
+    pub fn insert_word(&mut self, word: &str) {
+        let lead = if self.before_cursor().ends_with(|c: char| !c.is_whitespace()) { " " } else { "" };
+        self.insert(&format!("{lead}{word} "));
+    }
+
     /// Puts an image in at the cursor as an `[Image #N]` placeholder, set off by spaces.
     pub fn attach(&mut self, url: String) {
         self.pasted += 1;
         let label = format!("[Image #{}]", self.pasted);
-        let lead = if self.before_cursor().ends_with(|c: char| !c.is_whitespace()) { " " } else { "" };
-        self.insert(&format!("{lead}{label} "));
+        self.insert_word(&label);
         self.images.push(Image { label, url });
     }
 

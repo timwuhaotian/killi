@@ -72,18 +72,48 @@ pub fn attachment(cwd: &Path, text: &str) -> Option<String> {
 /// The `@path` words of `text`, as typed and resolved against `cwd`. Punctuation that ends a
 /// sentence after the path is left out unless the path exists with it.
 fn mentions(cwd: &Path, text: &str) -> Vec<(String, PathBuf)> {
-    text.split_whitespace()
-        .filter_map(|word| word.strip_prefix('@'))
+    words(text)
+        .into_iter()
+        .filter_map(|word| word.strip_prefix('@').map(str::to_string))
         .filter(|path| !path.is_empty())
         .map(|path| {
-            let full = cwd.join(path);
+            let full = cwd.join(&path);
             if full.exists() {
-                return (path.to_string(), full);
+                return (path, full);
             }
             let bare = path.trim_end_matches(['.', ',', ';', ':', '!', '?', ')']);
             (bare.to_string(), cwd.join(bare))
         })
         .collect()
+}
+
+/// The words of `text`, split at whitespace the way a shell does: a backslash keeps the next
+/// character, and quotes keep the spaces between them. This is how a path with spaces is
+/// written after `@`, and how a terminal pastes a dropped file.
+pub fn words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word: Option<String> = None;
+    let mut quote = None;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => word.get_or_insert_default().push(chars.next().unwrap_or(c)),
+            q if quote == Some(q) => quote = None,
+            '\'' | '"' if quote.is_none() => {
+                quote = Some(c);
+                word.get_or_insert_default();
+            }
+            c if c.is_whitespace() && quote.is_none() => words.extend(word.take()),
+            c => word.get_or_insert_default().push(c),
+        }
+    }
+    words.extend(word);
+    words
+}
+
+/// `path` written as one word: a backslash before each space, so `words` reads it back whole.
+pub fn escape(path: &str) -> String {
+    path.chars().flat_map(|c| if c.is_whitespace() { vec!['\\', c] } else { vec![c] }).collect()
 }
 
 #[cfg(test)]
@@ -122,9 +152,21 @@ mod tests {
         );
         assert_eq!(expand(&root, "look in @src/ and @nope.rs or me@home"), "look in @src/ and @nope.rs or me@home");
         assert!(expand(&root, "@logo.png").ends_with("<file path=\"logo.png\" binary=\"true\" bytes=\"7\"/></system-reminder>"));
+        fs::write(root.join("my notes.txt"), "hi").unwrap();
+        assert!(expand(&root, "read @my\\ notes.txt").ends_with("<file path=\"my notes.txt\">\nhi\n</file></system-reminder>"));
         fs::write(root.join("big.txt"), "x".repeat(MAX_BYTES + 10)).unwrap();
         let sent = expand(&root, "@big.txt");
         assert!(sent.contains(&format!("\n[cut here at {MAX_BYTES} of {} bytes; the read tool shows the rest]\n</file>", MAX_BYTES + 10)));
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn words_keep_escaped_and_quoted_spaces() {
+        assert_eq!(words("fix @a\\ b.rs  'c d' \"e f\"g\n"), ["fix", "@a b.rs", "c d", "e fg"]);
+        assert_eq!(words("  "), Vec::<String>::new());
+        assert_eq!(words("''"), [""], "an empty quote is still a word");
+        assert_eq!(words("tail\\"), ["tail\\"], "a backslash at the end stands");
+        assert_eq!(escape("my notes.txt"), "my\\ notes.txt");
+        assert_eq!(words(&escape("a b\tc")), ["a b\tc"]);
     }
 }

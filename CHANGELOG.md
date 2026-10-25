@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.10 — 2026-10-25
+
+- **Drag a file into the prompt.** A file dropped on the terminal arrives as a paste of its
+  path; killi now reads it as one. An image (png, jpg, gif, webp) is attached as `[Image #N]`,
+  the way Ctrl+V attaches the clipboard's, and any other file is named as `@path`, so its
+  contents go to the model with the message. A path with spaces works for `@` now too, written
+  `@my\ notes.txt` as a shell would, by the drop and by the `@` menu. Terminal.app and iTerm2
+  deliver drops this way today; Kil doesn't forward a drop to its pty yet.
+
 ## 0.4.9 — 2026-10-25
 
 - **Compaction scales with the model's context window, and a summary no longer carries a pasted
