@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- **The desktop notification says what happened.** A finished turn no longer posts a bare
+  "Done": the headline carries the outcome and how long the turn took, and under it the
+  first line of the reply (or the reason it stopped). A question waiting for an answer
+  names the question. In Kil, which shows the notification itself, Kil adds the tab and
+  folder; clicking it goes to the pane. (Kil before 0.0.18 could report an old version
+  from its long-lived session server, sending killi down the `osascript` path whose
+  notifications opened Script Editor; Kil 0.0.18 fixed the server's version stamp.)
+
 ## 0.4.12 — 2026-10-25
 
 - **Whether billed reasoning was kept is recorded with each request's usage.** One

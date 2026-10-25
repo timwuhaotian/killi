@@ -1643,6 +1643,8 @@ impl App {
             let _ = asking.question.reply.send(String::new());
         }
         self.queued.clear();
+        // The one line of the outcome worth putting in the notification, when there is one.
+        let mut notice_line = String::new();
         match ended {
             Ended::Interrupted => {
                 self.last_end = Some(LastEnd::Interrupted);
@@ -1656,10 +1658,13 @@ impl App {
             }
             Ended::Done(Err(e)) => {
                 self.last_end = Some(LastEnd::Interrupted);
-                self.error(&gist(&format!("{e:#}")));
+                let why = gist(&format!("{e:#}"));
+                notice_line = first_line(&why, 120);
+                self.error(&why);
             }
             Ended::Done(Ok((text, stop))) => {
                 self.last_end = Some(LastEnd::Done);
+                notice_line = first_line(&text, 120);
                 match stop {
                     Stop::MaxTokens => self.notice("The reply hit the output token limit."),
                     Stop::RepeatBreaker => self.notice("Stopped: the agent kept repeating the same tool call. Tell it what to read or run instead, or pick another model with /model."),
@@ -1687,10 +1692,11 @@ impl App {
         }
         self.last_kind = Kind::None;
         if elapsed >= self.notify_after && !self.send_now {
-            notify(match self.last_end {
+            let what = match self.last_end {
                 Some(LastEnd::Done) => "Done",
                 _ => "Stopped",
-            });
+            };
+            notify(&format!("{what} · {}", clock(elapsed)), &notice_line);
         }
     }
 
@@ -1787,8 +1793,9 @@ impl App {
                 } else {
                     self.emit(Line::Words(format!("{BOLD}{FIN}?{RESET} {BOLD}{}{RESET}", question.text), 2));
                 }
+                let asked = first_line(&question.text, 120);
                 self.asking = Some(Asking { question, selected: 0, internal: false, secret: false });
-                notify("Waiting for your answer");
+                notify("Waiting for your answer", &asked);
             }
             Event::Notice(text) => self.notice(&text),
             Event::Sub { label, event } => self.on_sub(label, *event),
@@ -3285,19 +3292,25 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// A desktop notification: the terminal's own when it supports OSC 9, otherwise macOS's,
-/// posted in the name of the app the terminal runs in, so clicking it brings that app to the
-/// front rather than Script Editor. An app that can't be told falls back to a plain one.
-fn notify(body: &str) {
+/// A desktop notification, `headline` over a line of `detail`: the terminal's own when it
+/// supports OSC 9 (Kil, iTerm2, WezTerm, Ghostty, kitty show it in their name, so a click
+/// comes back to the pane), otherwise macOS's through `osascript`, relayed by the app the
+/// terminal runs in where that app takes the telling.
+fn notify(headline: &str, detail: &str) {
     let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
     let kil = program == "kil" && kil_takes_osc9(&std::env::var("TERM_PROGRAM_VERSION").unwrap_or_default());
     if kil || ["iTerm.app", "WezTerm", "ghostty"].contains(&program.as_str()) || std::env::var_os("KITTY_WINDOW_ID").is_some() {
         let mut out = stdout();
+        let body = if detail.is_empty() { headline.to_string() } else { format!("{headline} — {detail}") };
         let _ = write!(out, "\x1b]9;killi: {body}\x07");
         let _ = out.flush();
         return;
     }
-    let plain = format!("display notification \"{}\" with title \"killi\"", body.replace('"', "'"));
+    let plain = if detail.is_empty() {
+        format!("display notification \"{}\" with title \"killi\"", headline.replace('"', "'"))
+    } else {
+        format!("display notification \"{}\" with title \"killi\" subtitle \"{}\"", detail.replace('"', "'"), headline.replace('"', "'"))
+    };
     let mut command = std::process::Command::new("/usr/bin/osascript");
     match host_app(&program) {
         Some(id) => command.args(["-e", "try", "-e", &format!("tell application id \"{id}\" to {plain}"), "-e", "on error", "-e", &plain, "-e", "end try"]),
@@ -3306,8 +3319,35 @@ fn notify(body: &str) {
     let _ = command.spawn();
 }
 
+/// The first line of `text` that says something, markdown marks dropped, cut to `chars`:
+/// what a notification shows of a reply or a question.
+fn first_line(text: &str, chars: usize) -> String {
+    let mut fenced = false;
+    let mut line = String::new();
+    for raw in text.lines() {
+        let raw = raw.trim();
+        if raw.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced || raw.is_empty() {
+            continue;
+        }
+        let plain: String = raw.chars().filter(|c| !matches!(c, '*' | '`')).collect();
+        line = plain.trim_start_matches(['#', '>', '-', ' ']).to_string();
+        if !line.is_empty() {
+            break;
+        }
+    }
+    if line.chars().count() <= chars {
+        return line;
+    }
+    let cut: String = line.chars().take(chars - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
 /// Whether this Kil shows OSC 9 notifications itself and goes to the pane when one is
-/// clicked: from 0.0.11. Older ones get the notification posted in Kil's name instead.
+/// clicked: from 0.0.11. Older ones fall back to the `osascript` path.
 fn kil_takes_osc9(version: &str) -> bool {
     let mut parts = version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
     let v = (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0));
@@ -3771,6 +3811,17 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"killi session"), "a2lsbGkgc2Vzc2lvbg==");
+    }
+
+    #[test]
+    fn a_notifications_line_is_the_first_words_of_the_text() {
+        assert_eq!(first_line("修好了：见下方。\n详情略。", 120), "修好了：见下方。");
+        assert_eq!(first_line("\n\n  ## 结论\n 正文", 120), "结论");
+        assert_eq!(first_line("```rust\nfn x() {}\n```\n改完了。", 120), "改完了。");
+        assert_eq!(first_line("- **完成** 三项", 120), "完成 三项");
+        assert_eq!(first_line("0123456789", 5), "0123…");
+        assert_eq!(first_line("", 120), "");
+        assert_eq!(first_line("\n   \n", 120), "");
     }
 
     #[test]
