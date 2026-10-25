@@ -664,7 +664,7 @@ impl Agent {
                 return Err(error);
             }
         };
-        self.account(&reply.usage, Some(&reply.finish_reason), Some(took))?;
+        self.account(&reply.usage, Some(&reply.finish_reason), Some(took), reply.reasoning_kept())?;
         self.note_hidden_reasoning(&reply)?;
         Ok(reply)
     }
@@ -685,7 +685,9 @@ impl Agent {
         Ok(())
     }
 
-    fn account(&mut self, usage: &Usage, finish_reason: Option<&Option<String>>, took: Option<Duration>) -> Result<()> {
+    /// `reasoning_kept` says whether this reply's reasoning came back in a form the log holds;
+    /// billed but not kept is the dialect-agnostic mark of a provider hiding it on this API.
+    fn account(&mut self, usage: &Usage, finish_reason: Option<&Option<String>>, took: Option<Duration>, reasoning_kept: bool) -> Result<()> {
         self.stats.first_prompt.get_or_insert(usage.prompt);
         self.stats.context = usage.prompt;
         self.accounted_messages = self.messages.len();
@@ -702,6 +704,7 @@ impl Agent {
             "cached": usage.cached,
             "completion": usage.completion,
             "reasoning": usage.reasoning,
+            "reasoning_kept": reasoning_kept,
             "finish_reason": finish_reason.cloned().flatten(),
             "ms": took.map(millis),
         }))
@@ -1203,7 +1206,7 @@ impl Agent {
             reply => reply?,
         };
         self.stats.requests += 1;
-        self.account(&reply.usage, None, None)?;
+        self.account(&reply.usage, None, None, reply.reasoning_kept())?;
         if reply.text.trim().is_empty() {
             let instead = if reply.tool_calls.is_empty() {
                 match reply.reasoning.is_empty() {
@@ -1454,9 +1457,9 @@ fn cut_middle(text: &str, limit: usize) -> String {
     format!("{head}{MARK}{}", &text[start..])
 }
 
-/// Whether a reply was billed for reasoning that never came back.
+/// Whether a reply was billed for reasoning that never came back, on either channel.
 fn hides_reasoning(reply: &Reply) -> bool {
-    reply.usage.reasoning > 0 && reply.reasoning.is_empty() && reply.reasoning_items.is_empty()
+    reply.usage.reasoning > 0 && !reply.reasoning_kept()
 }
 
 fn millis(took: Duration) -> u64 {

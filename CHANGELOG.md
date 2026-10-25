@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.12 — 2026-10-25
+
+- **Whether billed reasoning was kept is recorded with each request's usage.** One
+  dialect-agnostic verdict — reasoning text or structured items, whichever the provider
+  sent — now rides on the `usage` log entry itself, so a provider that starts hiding
+  reasoning on one API shows up as a falling kept-rate in `scripts/sessions.py` instead of
+  having to be reconstructed from dialect field names.
+
 ## 0.4.11 — 2026-10-25
 
 - **A failed edit points at the closest line.** `edit` failed 8% of the time in the newest

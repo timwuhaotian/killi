@@ -70,7 +70,7 @@ def analyze(path):
             if role == "assistant":
                 kept = bool(message.get("reasoning_content") or message.get("reasoning") or message.get("reasoning_details")
                             or message.get("reasoning_items"))
-                if awaiting:  # a request's `usage` is logged just before its assistant message
+                if isinstance(awaiting, str):  # logs without `reasoning_kept`: pair with this reply
                     s["per_model"][awaiting]["reasoning_lost"] += not kept
                     awaiting = None
                 for call in message.get("tool_calls") or []:
@@ -110,7 +110,12 @@ def analyze(path):
             awaiting = None
             if entry.get("reasoning", 0) > 0:
                 stats["billed_reasoning"] += 1
-                awaiting = current
+                # `reasoning_kept` (logged with the usage since 0.4.12) settles it at once; older
+                # logs wait for the assistant message that follows and pair by dialect fields.
+                if "reasoning_kept" in entry:
+                    stats["reasoning_lost"] += not entry["reasoning_kept"]
+                else:
+                    awaiting = current
         elif kind == "compaction":
             # A subagent's log opens with its starting history as a cause-free compaction;
             # only a real one (from compact_with) carries `cause`.

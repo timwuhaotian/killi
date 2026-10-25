@@ -48,6 +48,15 @@ pub struct Reply {
     pub usage: Usage,
 }
 
+impl Reply {
+    /// Whether anything came back to keep on either reasoning channel: the scalar text or the
+    /// structured items, whichever dialect the provider spoke. The channels must be judged
+    /// together — an items-only reply kept its reasoning with no scalar text at all.
+    pub fn reasoning_kept(&self) -> bool {
+        !self.reasoning.is_empty() || !self.reasoning_items.is_empty()
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ToolCall {
     pub id: String,
