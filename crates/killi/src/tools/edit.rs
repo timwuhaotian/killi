@@ -107,8 +107,9 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
         }
         match found.len() {
             0 => {
+                let hint = nearest_line(text, &old).map(|line| format!(" The closest line is line {line}; read from there.")).unwrap_or_default();
                 return Err(format!(
-                    "Could not find {} in {path}. It must match the file exactly, including indentation and line breaks; read the file again if unsure.",
+                    "Could not find {} in {path}. It must match the file exactly, including indentation and line breaks; read the file again if unsure.{hint}",
                     label(i)
                 ));
             }
@@ -216,6 +217,36 @@ fn line_diff(old: &str, new: &str, old_line: usize, new_line: usize) -> (String,
     (out, count('+'), count('-'))
 }
 
+/// The 1-based line of `text` closest to `old`'s first non-empty line, trimmed on both sides,
+/// for pointing a failed edit at where the model most likely meant. `None` when nothing is
+/// within half the needle's length, so an unrelated file gets no hint.
+fn nearest_line(text: &str, old: &str) -> Option<usize> {
+    let needle = old.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let limit = (needle.chars().count() / 2).max(1);
+    text.lines()
+        .enumerate()
+        .map(|(i, line)| (i + 1, edit_distance(needle, line.trim())))
+        .min_by_key(|(_, distance)| *distance)
+        .filter(|(_, distance)| *distance <= limit)
+        .map(|(line, _)| line)
+}
+
+/// Levenshtein distance between two strings, over characters.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = if ca == *cb { diagonal } else { 1 + diagonal.min(row[j]).min(above) };
+            diagonal = above;
+        }
+    }
+    row[b.len()]
+}
+
 /// Text with trailing whitespace removed from each line and look-alike characters folded,
 /// plus a map from each byte of it back to a byte offset in the original.
 struct Normalized {
@@ -287,6 +318,15 @@ mod tests {
         assert!(run("x x", json!({"old_string": "x", "new_string": "y"})).unwrap_err().contains("Found 2 matches"));
         assert_eq!(run("x x", json!({"old_string": "x", "new_string": "y", "replace_all": true})).unwrap(), "y y");
         assert!(run("abc", json!({"old_string": "zzz", "new_string": "y"})).unwrap_err().contains("Could not find"));
+    }
+
+    #[test]
+    fn a_missing_match_points_at_the_closest_line() {
+        let text = "fn main() {\n    let credits_balance = 0;\n}\n";
+        let err = run(text, json!({"old_string": "\tlet credits_balanc = 0;", "new_string": "x"})).unwrap_err();
+        assert!(err.contains("closest line is line 2"), "{err}");
+        let far = run(text, json!({"old_string": "something unrelated entirely", "new_string": "x"})).unwrap_err();
+        assert!(!far.contains("closest line"), "{far}");
     }
 
     #[test]

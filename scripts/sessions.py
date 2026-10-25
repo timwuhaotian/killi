@@ -51,15 +51,16 @@ def parse_args(arguments):
 
 def analyze(path):
     s = {"path": str(path), "project": path.parent.name, "id": path.stem, "models": [], "turns": 0, "prompt": 0,
-         "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0,
+         "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0, "version": None,
          "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [],
-         "tool_ms": [], "slept": [0, 0], "per_model": collections.defaultdict(lambda: collections.Counter())}
+         "tool_ms": [], "slept": [0, 0], "compactions": [], "per_model": collections.defaultdict(lambda: collections.Counter())}
     model, awaiting, calls, answered, sleeping = None, None, {}, set(), set()
     for entry in read(path):
         kind = entry.get("type")
         message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
         if kind in ("session", "model"):
             model = entry.get("model") or model
+            s["version"] = entry.get("version") or s["version"]
             if model and model not in s["models"]:
                 s["models"].append(model)
         elif kind == "message":
@@ -88,7 +89,7 @@ def analyze(path):
                 failed = meta["is_error"] if meta else looks_failed(message.get("content") or "")
                 s["tool_errors"] += bool(failed)
                 if meta and meta.get("ms") is not None:
-                    s["tool_ms"].append((meta["ms"], calls.get(message.get("tool_call_id"), "?")))
+                    s["tool_ms"].append((meta["ms"], meta.get("name") or calls.get(message.get("tool_call_id"), "?")))
                     if message.get("tool_call_id") in sleeping and not failed:
                         s["slept"][0] += 1
                         s["slept"][1] += meta["ms"]
@@ -101,14 +102,20 @@ def analyze(path):
             s["max_context"] = max(s["max_context"], entry.get("prompt", 0))
             if entry.get("ms") is not None:
                 s["request_ms"].append(entry["ms"])
-            stats = s["per_model"][model or "unknown"]
+            current = entry.get("model") or model or "unknown"
+            stats = s["per_model"][current]
             stats["turns"] += 1
             stats["prompt"] += entry.get("prompt", 0)
             stats["cached"] += entry.get("cached", 0)
             awaiting = None
             if entry.get("reasoning", 0) > 0:
                 stats["billed_reasoning"] += 1
-                awaiting = model or "unknown"
+                awaiting = current
+        elif kind == "compaction":
+            # A subagent's log opens with its starting history as a cause-free compaction;
+            # only a real one (from compact_with) carries `cause`.
+            if entry.get("cause"):
+                s["compactions"].append(entry["cause"])
         elif kind == "error":
             s["errors"].append(str(entry.get("message"))[:160])
             s["ended"] = "error"
@@ -149,6 +156,11 @@ def findings(sessions, models):
         if ms >= SLEPT * 1000:
             found.append(f"`{name}` spent {ms / 1000:.0f}s in {count} commands that open with a fixed `sleep`: it waits the full time "
                          "however soon the job ends. `task_output` with `wait` or an `until <check>; do sleep 5; done` loop ends with the job.")
+        if len(s["compactions"]) >= 3:
+            c = s["compactions"][-1]
+            found.append(f"`{name}` compacted {len(s['compactions'])} times (last: context {c.get('context', '?')}, "
+                         f"suffix {c.get('suffix', '?')}, limit {c.get('limit', '?')}, reserve {c.get('reserve', '?')}, "
+                         f"kept {c.get('kept_chars', '?')} chars): which part kept forcing it is in the causes.")
         if s["ended"] in ("tool", "unanswered tool call"):
             found.append(f"`{name}` stopped right after a tool call ({s['ended']}): interrupted, killed or stopped by the repeat breaker.")
         for error in sorted(set(s["errors"])):

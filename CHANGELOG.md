@@ -5,6 +5,19 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.11 — 2026-10-25
+
+- **A failed edit points at the closest line.** `edit` failed 8% of the time in the newest
+  sessions, mostly on a stale `old_string` in a long multi-file session. When nothing matches,
+  the error now names the line nearest the first line of what was looked for, so the model's
+  next step is a targeted read instead of a blind one; an unrelated file gets no hint.
+- **The session log says which binary and model produced each number, and why a compaction
+  fired.** The `session` entry records the killi version and the model's context window,
+  each `usage` the model it ran on, each tool result the tool's name, and each real
+  compaction its cause: billed context, estimated suffix, limit, reserve and the summary's
+  size, taken before the summary request overwrites them. `scripts/sessions.py` reads all of
+  it and flags a session that compacts three or more times.
+
 ## 0.4.10 — 2026-10-25
 
 - **Drag a file into the prompt.** A file dropped on the terminal arrives as a paste of its

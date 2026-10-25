@@ -298,8 +298,10 @@ impl Agent {
         agent.session.record(&json!({
             "type": "session",
             "id": agent.session.id,
+            "version": env!("CARGO_PKG_VERSION"),
             "cwd": cwd,
             "model": agent.client.model.alias,
+            "context_window": agent.client.model.context_window,
             "effort": agent.client.model.thinking.label(),
             "tools": *agent.tools,
         }))?;
@@ -616,6 +618,14 @@ impl Agent {
     }
 
     fn compaction_due(&self) -> bool {
+        self.compaction_pressure().is_some_and(|(context, suffix, limit, reserve)| context.saturating_add(suffix) > limit - reserve)
+    }
+
+    /// Why compaction is or isn't due: billed context and estimated suffix against the limit
+    /// minus room for one reply (capped at a quarter of the limit, since the output cap already
+    /// fits each request into the window). The log keeps these numbers at each compaction so a
+    /// session that compacts too often shows which part forced it. `None` at limit 0 (off).
+    fn compaction_pressure(&self) -> Option<(u64, u64, u64, u64)> {
         // A share of the window by default, an explicit `compact_at` instead, and never above
         // 85%, where the reply and the framing overhead start to squeeze the request.
         let limit = match self.client.model.context_window {
@@ -627,13 +637,11 @@ impl Agent {
             None => self.settings.compact_at.unwrap_or(DEFAULT_COMPACT_AT),
         };
         if limit == 0 {
-            return false;
+            return None;
         }
         let suffix = estimate_tokens(&self.messages[self.accounted_messages.min(self.messages.len())..]);
-        // Room for one reply, capped at a quarter of the limit: the output cap already fits
-        // each request into the window, so this only keeps a full-size answer from squeezing.
         let reserve = self.client.model.max_output.unwrap_or(DEFAULT_OUTPUT_RESERVE).min(limit / 4);
-        self.stats.context.saturating_add(suffix) > limit - reserve
+        Some((self.stats.context, suffix, limit, reserve))
     }
 
     async fn request(&mut self) -> Result<Reply> {
@@ -689,6 +697,7 @@ impl Agent {
         (self.sink)(Event::Usage(usage.clone()));
         self.session.record(&json!({
             "type": "usage",
+            "model": self.client.model.alias,
             "prompt": usage.prompt,
             "cached": usage.cached,
             "completion": usage.completion,
@@ -928,7 +937,7 @@ impl Agent {
                 call.name
             ));
         }
-        let meta = json!({"is_error": output.is_error, "brief": output.brief, "ms": millis(took)});
+        let meta = json!({"name": call.name, "is_error": output.is_error, "brief": output.brief, "ms": millis(took)});
         self.push_meta(json!({"role": "tool", "tool_call_id": id, "content": output.text}), Some(meta))?;
         Ok(same && count >= REPEAT_STOP)
     }
@@ -1126,7 +1135,7 @@ impl Agent {
         let mut session = self.session.child(self.children)?;
         let history: Vec<Value> =
             if fork { self.messages[..self.current_reply].to_vec() } else { vec![self.messages[0].clone()] };
-        session.record(&json!({"type": "session", "id": session.id, "model": self.client.model.alias, "tools": *self.tools}))?;
+        session.record(&json!({"type": "session", "id": session.id, "version": env!("CARGO_PKG_VERSION"), "model": self.client.model.alias, "context_window": self.client.model.context_window, "tools": *self.tools}))?;
         session.record(&json!({"type": "compaction", "messages": history}))?;
         let parent = self.sink.clone();
         let label = label.to_string();
@@ -1172,6 +1181,8 @@ impl Agent {
 
     async fn compact_with(&mut self, focus: Option<&str>, mode: CompactMode) -> Result<()> {
         (self.sink)(Event::Notice("Compacting the conversation…".into()));
+        // Taken before the summary request accounts its own usage over these numbers.
+        let (context, suffix, limit, reserve) = self.compaction_pressure().unwrap_or_default();
         let mut request = match mode {
             CompactMode::Full => self.messages.to_vec(),
             CompactMode::Reduced => reduced(&self.messages),
@@ -1224,7 +1235,11 @@ impl Agent {
         );
         self.messages = Rc::new(vec![self.messages[0].clone(), json!({"role": "user", "content": summary})]);
         self.share();
-        self.session.record(&json!({"type": "compaction", "messages": *self.messages}))?;
+        self.session.record(&json!({
+            "type": "compaction",
+            "cause": {"context": context, "suffix": suffix, "limit": limit, "reserve": reserve, "kept_chars": summary.chars().count()},
+            "messages": *self.messages,
+        }))?;
         self.stats.context = 0;
         self.accounted_messages = self.messages.len();
         (self.sink)(Event::Notice("Compacted.".into()));
