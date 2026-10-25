@@ -14,10 +14,10 @@ behind it are in `docs/decisions.md`.
   Use it after any change to `tui/`; a layout is only checked once it has been drawn at 80x24 and 60 columns.
 - Re-measure size, memory and tokens and redraw the charts and README numbers: the
   `refresh-metrics` skill; it also says how `scripts/screenshot.py` redraws the README's
-  screenshots from a real run. Find bugs and optimizations from real use: the `review-sessions`
-  skill, with `scripts/sessions.py` (reads `~/.killi/sessions`) and `scripts/probe.py` (asks a
-  provider how it behaves). Run the whole loop — measure, fix, verify, record, ship: the
-  `self-eval-improve` skill. All live in `.agents/skills/`.
+  screenshots from a real run. Evaluate and improve killi from its own session logs
+  (`scripts/sessions.py` reads `~/.killi/sessions`, `scripts/probe.py` asks a provider how it
+  behaves): the `self-eval-improve` skill — review mode reports, improve mode runs the whole
+  loop (measure, fix, verify, record, ship). Both live in `.agents/skills/`.
 
 ## Rules that keep the prompt cache hitting
 
