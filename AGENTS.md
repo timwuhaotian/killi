@@ -16,7 +16,8 @@ behind it are in `docs/decisions.md`.
   `refresh-metrics` skill; it also says how `scripts/screenshot.py` redraws the README's
   screenshots from a real run. Find bugs and optimizations from real use: the `review-sessions`
   skill, with `scripts/sessions.py` (reads `~/.killi/sessions`) and `scripts/probe.py` (asks a
-  provider how it behaves). Both live in `.agents/skills/`.
+  provider how it behaves). Run the whole loop — measure, fix, verify, record, ship: the
+  `self-eval-improve` skill. All live in `.agents/skills/`.
 
 ## Rules that keep the prompt cache hitting
 
