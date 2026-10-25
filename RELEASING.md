@@ -5,7 +5,9 @@ Releases are built locally on an Apple silicon Mac; CI only checks. Users instal
 `releases/latest.toml` for the version and SHA-256.
 
 1. **Start clean and green.** Everything to ship is committed on `main`.
-2. **Bump the version** in the root `Cargo.toml` (`[workspace.package] version`).
+2. **Bump the version** in the root `Cargo.toml` (`[workspace.package] version`), then
+   `cargo update -p killi --offline` so `Cargo.lock` carries it; the release script builds
+   with `--locked` and refuses a stale lock file.
 3. **Changelog.** In `CHANGELOG.md`, put a `## x.y.z — YYYY-MM-DD` heading under
    `## Unreleased`, so the release takes its entries and `Unreleased` starts empty.
 4. **Build:** `scripts/release.sh`. It runs clippy and the tests, builds the release binary,
