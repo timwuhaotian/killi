@@ -198,11 +198,11 @@ pub fn user_prompts(messages: &[Value]) -> Vec<String> {
             while let Some(start) = rest.find("<request>\n") {
                 let body = &rest[start + 10..];
                 let end = body.find("\n</request>").unwrap_or(body.len());
-                prompts.push(body[..end].to_string());
+                prompts.extend(typed(&body[..end]));
                 rest = &body[end..];
             }
-        } else if let Some(prompt) = strip_reminders(text) {
-            prompts.push(prompt.to_string());
+        } else if let Some(prompt) = typed(text) {
+            prompts.push(prompt);
         }
     }
     prompts
@@ -236,8 +236,8 @@ pub fn replay(loaded: &Loaded, cwd: &Path, keep: usize) -> Vec<Replayed> {
                 if text.starts_with(COMPACTED_MARK) {
                     shown.push(Replayed::Note("The conversation before this was compacted into a summary.".into()));
                     shown.extend(user_prompts(std::slice::from_ref(message)).into_iter().map(Replayed::Prompt));
-                } else if let Some(prompt) = strip_reminders(text) {
-                    shown.push(Replayed::Prompt(prompt.to_string()));
+                } else if let Some(prompt) = typed(text) {
+                    shown.push(Replayed::Prompt(prompt));
                 }
             }
             Some("assistant") => {
@@ -279,6 +279,18 @@ fn guess_end(output: &str) -> (bool, String) {
         (false, 0 | 1) => (false, String::new()),
         (false, n) => (false, format!("{n} lines")),
     }
+}
+
+/// What the user typed for a message killi sent as `text`: without the reminders before it or
+/// the files it named with `@` after it, which a compaction may have cut before their end, and
+/// a skill run as the `/name request` that started it. `None` if it is only reminders.
+fn typed(text: &str) -> Option<String> {
+    let prompt = strip_reminders(text)?;
+    let mut prompt = crate::skills::typed(prompt).unwrap_or_else(|| prompt.to_string());
+    if let Some(at) = prompt.find("\n\n<system-reminder>") {
+        prompt.truncate(at);
+    }
+    Some(prompt)
 }
 
 /// A user message without the reminders in front of it, or `None` if it is only reminders.
@@ -463,6 +475,25 @@ mod tests {
         let compacted = format!("{COMPACTED_MARK} to save space.</system-reminder>\n\n<user-requests>\n<request>\none\n</request>\n<request>\ntwo\n</request>\n</user-requests>");
         let messages = vec![json!({"role": "user", "content": compacted}), json!({"role": "user", "content": "three"})];
         assert_eq!(user_prompts(&messages), ["one", "two", "three"]);
+    }
+
+    #[test]
+    fn a_skill_run_comes_back_as_the_command_that_started_it() {
+        let skill = "Use the pr-review skill for this.\n\n<skill name=\"pr-review\" folder=\"/s/pr-review\">\n---\nname: pr-review\n---\nReview it.\n</skill>";
+        let files = "<system-reminder>The files the user named with @, as they are now:\n\n<file path=\"a.rs\">\nfn a() {}\n</file></system-reminder>";
+        let messages = vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": format!("<system-reminder>Plan mode is on.</system-reminder>\n\n{skill}\n\nreview 42")}),
+            json!({"role": "user", "content": format!("{skill}\n\nFollow the skill.")}),
+            json!({"role": "user", "content": format!("{skill}\n\nlook at @a.rs\n\n{files}")}),
+            json!({"role": "user", "content": format!("explain @a.rs\n\n{files}")}),
+        ];
+        let shown = ["/pr-review review 42", "/pr-review", "/pr-review look at @a.rs", "explain @a.rs"];
+        assert_eq!(user_prompts(&messages), shown);
+        assert_eq!(replay(&loaded(messages), Path::new("/w"), 8), shown.map(|p| Replayed::Prompt(p.into())));
+        // Requests a compaction kept before it kept them short: cut inside the files, or the skill.
+        let cut = format!("{COMPACTED_MARK} to save space.</system-reminder>\n\n<user-requests>\n<request>\nexplain @a.rs\n\n{}\n[… 900 characters cut]\n</request>\n<request>\n{}\n[… 900 characters cut]\n</request>\n</user-requests>", &files[..60], &skill[..60]);
+        assert_eq!(user_prompts(&[json!({"role": "user", "content": cut})]), ["explain @a.rs", "/pr-review"]);
     }
 
     #[test]

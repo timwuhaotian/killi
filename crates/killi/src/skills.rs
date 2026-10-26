@@ -146,9 +146,22 @@ impl Skills {
     pub fn invocation(&self, name: &str, args: &str) -> Option<String> {
         let skill = self.find(name)?;
         let content = Skills::content(skill)?;
-        let request = if args.trim().is_empty() { "Follow the skill." } else { args.trim() };
+        let request = if args.trim().is_empty() { FOLLOW } else { args.trim() };
         Some(format!("Use the {} skill for this.\n\n{content}\n\n{request}", skill.name))
     }
+}
+
+/// The request `invocation` sends when `/name` comes without one.
+const FOLLOW: &str = "Follow the skill.";
+
+/// The `/name request` that `invocation` turned into `prompt`, or `None` for any other prompt.
+/// A prompt that compaction cut inside the skill's text has lost its request and gives `/name`.
+pub fn typed(prompt: &str) -> Option<String> {
+    let (name, rest) = prompt.strip_prefix("Use the ")?.split_once(" skill for this.\n\n<skill name=\"")?;
+    rest.strip_prefix(name)?.strip_prefix('"')?;
+    let request = rest.rsplit_once("\n</skill>\n\n").map_or("", |(_, request)| request.trim());
+    let request = if request == FOLLOW { "" } else { request };
+    Some(format!("/{name} {request}").trim_end().to_string())
 }
 
 fn tokens(text: &str) -> Vec<String> {
@@ -227,6 +240,10 @@ mod tests {
         assert!(found.text.starts_with("- ios-shots:"), "{}", found.text);
         assert!(skills.run(&json!({"name": "pdf"})).text.contains("Body of pdf."));
         assert!(skills.invocation("pdf", "merge a.pdf b.pdf").unwrap().ends_with("merge a.pdf b.pdf"));
+        assert_eq!(typed(&skills.invocation("pdf", "merge a.pdf b.pdf").unwrap()).as_deref(), Some("/pdf merge a.pdf b.pdf"));
+        assert_eq!(typed(&skills.invocation("pdf", "").unwrap()).as_deref(), Some("/pdf"));
+        assert_eq!(typed(&format!("{}\n[… 900 characters cut]", &skills.invocation("pdf", "merge").unwrap()[..60])).as_deref(), Some("/pdf"));
+        assert_eq!(typed("Use the pdf skill for this.\n\nmerge them"), None);
         fs::remove_dir_all(root).unwrap();
     }
 

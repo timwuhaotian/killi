@@ -179,7 +179,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     agent = resumed;
                     app.show_model(&agent, session.config());
                     app.status.context = agent.stats.context;
-                    app.notice(&format!("Resumed the session started with “{}”.", agent.user_prompts().first().map_or("", |s| s.as_str())));
+                    app.notice(&format!("Resumed the session started with “{}”.", agent.user_prompts().first().map_or("", |s| s.lines().next().unwrap_or(""))));
                     if let Some(note) = stopped_note(&stopped) {
                         app.notice(&note);
                     }

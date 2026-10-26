@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.18 — 2026-10-26
+
+- A resumed session shows a skill run as the `/name request` that started it, not the skill's
+  whole text: in the replay, the banner, `/resume`'s note, the session list and the prompt
+  history. The files a prompt named with `@` are left out the same way. A compaction keeps that
+  short form of each request too, so a long skill no longer cuts the user's request out of the
+  summary.
+
 ## 0.4.17 — 2026-10-26
 
 - **Sessions know about each other.** Every killi on the machine is listed in `~/.killi/live`
