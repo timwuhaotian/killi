@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::{Delta, Failure, Prepared, Reply, StreamParser, ToolCall, Usage, cap_output, truncate};
 use crate::config::{ResolvedModel, Thinking};
@@ -32,7 +32,10 @@ struct StreamOptions {
 
 pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value], cache_key: &str) -> Result<Prepared> {
     let max_output = model.max_output.map(|n| cap_output(model, messages, tools, n).clamp(1, 131_072));
-    let messages = replay_history(messages);
+    let mut messages = replay_history(messages);
+    if model.cache_control {
+        mark_cache_breakpoints(&mut messages);
+    }
     let completion_style = model.model.starts_with("gpt-5")
         || (model.model.starts_with('o') && model.model[1..].starts_with(|c: char| c.is_ascii_digit()));
     // Some gateways reject reasoning in history unless reasoning is switched on.
@@ -61,6 +64,34 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
             ("content-type".into(), "application/json".into()),
         ],
     })
+}
+
+/// Puts `cache_control` on the system message and the newest message, on the copy being sent.
+/// A gateway in front of a model with explicit prompt caching (Claude on Bedrock) reads the
+/// prefix up to the newest mark from the cache, and finds the previous request's prefix by
+/// looking back from it, so history itself stays unmarked and byte-for-byte as stored.
+fn mark_cache_breakpoints(messages: &mut [Value]) {
+    let last = messages.len().saturating_sub(1);
+    for (i, message) in messages.iter_mut().enumerate() {
+        if i == last || (i == 0 && message["role"] == "system") {
+            mark_content(message);
+        }
+    }
+}
+
+fn mark_content(message: &mut Value) {
+    let mark = json!({"type": "ephemeral"});
+    match &mut message["content"] {
+        Value::String(text) if !text.is_empty() => {
+            message["content"] = json!([{"type": "text", "text": text.clone(), "cache_control": mark}]);
+        }
+        Value::Array(blocks) => {
+            if let Some(block) = blocks.iter_mut().rev().find(|b| b["type"] == "text") {
+                block["cache_control"] = mark;
+            }
+        }
+        _ => {}
+    }
 }
 
 fn replay_history(messages: &[Value]) -> Vec<Value> {
@@ -346,6 +377,61 @@ mod tests {
     }
 
     #[test]
+    fn cache_breakpoints_mark_the_system_and_newest_message_on_the_copy_only() {
+        let history = vec![
+            json!({"role": "system", "content": "rules"}),
+            json!({"role": "user", "content": "run it"}),
+            json!({"role": "assistant", "content": null, "tool_calls": [{"id": "c", "type": "function", "function": {"name": "bash", "arguments": "{}"}}]}),
+            json!({"role": "tool", "tool_call_id": "c", "content": "done"}),
+        ];
+        let original = history.clone();
+        let mut sent = history.clone();
+        mark_cache_breakpoints(&mut sent);
+        let mark = json!({"type": "ephemeral"});
+        assert_eq!(sent[0]["content"], json!([{"type": "text", "text": "rules", "cache_control": mark}]));
+        assert_eq!(sent[1]["content"], "run it");
+        assert!(sent[2]["content"].is_null());
+        assert_eq!(sent[3]["content"], json!([{"type": "text", "text": "done", "cache_control": mark}]));
+        assert_eq!(history, original);
+        assert_eq!(sent.iter().filter(|m| m["content"].is_array()).count(), 2);
+    }
+
+    #[test]
+    fn cache_breakpoints_go_on_the_last_text_block_and_skip_images() {
+        let mut sent = vec![json!({"role": "user", "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}},
+        ]})];
+        mark_cache_breakpoints(&mut sent);
+        assert_eq!(sent[0]["content"][0]["cache_control"], json!({"type": "ephemeral"}));
+        assert!(sent[0]["content"][1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn prepare_marks_breakpoints_only_when_the_model_asks() {
+        let mut model = ResolvedModel {
+            alias: "m".into(),
+            model: "claude".into(),
+            protocol: crate::config::Protocol::OpenAi,
+            base_url: "http://localhost".into(),
+            api_key: String::new(),
+            headers: Default::default(),
+            max_output: None,
+            context_window: None,
+            images: false,
+            thinking: Thinking::Off,
+            cache_control: false,
+        };
+        let messages = vec![json!({"role": "system", "content": "rules"}), json!({"role": "user", "content": "hi"})];
+        let plain: Value = serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
+        assert_eq!(plain["messages"][1]["content"], "hi");
+        model.cache_control = true;
+        let marked: Value = serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
+        assert_eq!(marked["messages"][1]["content"][0]["cache_control"], json!({"type": "ephemeral"}));
+        assert_eq!(messages[1]["content"], "hi");
+    }
+
+    #[test]
     fn prepare_caps_output_from_context_and_preserves_string_reasoning() {
         let model = ResolvedModel {
             alias: "m".into(),
@@ -358,6 +444,7 @@ mod tests {
             context_window: Some(2_000),
             images: false,
             thinking: Thinking::Off,
+            cache_control: false,
         };
         let messages = vec![
             json!({"role": "user", "content": "hello"}),

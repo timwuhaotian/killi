@@ -423,6 +423,7 @@ mod tests {
             context_window: Some(2_000),
             images: false,
             thinking: crate::config::Thinking::Off,
+            cache_control: false,
         };
         let messages = vec![serde_json::json!({"role": "user", "content": "x".repeat(4_000)})];
         let input = estimated_input_tokens(&messages, &[]);

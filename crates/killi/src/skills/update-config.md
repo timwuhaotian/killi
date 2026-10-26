@@ -36,7 +36,10 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   or `api_key_env` (the name of an environment variable, which wins when both are set), and
   `custom_headers = { "X-Name" = "value" }`.
 - `[models."<provider>/<model>"]`: `provider` (a `[providers]` name), `model` (the API's
-  model id), `protocol` (overrides the provider's `type` for this model), `max_context_size`
+  model id), `protocol` (overrides the provider's `type` for this model), `cache_control = true`
+  (Chat Completions only: mark the system message and the newest message for a gateway that
+  passes it to Claude on Bedrock; without it that model re-bills the whole prompt each turn),
+  `max_context_size`
   and `max_output_size` (tokens), `capabilities` (`"image_in"` lets the model take images;
   other entries are kept but unused), `default_effort` and `support_efforts = [...]` (what
   `/effort` offers; without them: off, on, low, medium, high).

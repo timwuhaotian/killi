@@ -872,10 +872,11 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn every_source_failing_names_them_all() {
-        // Nothing listens on port 1, so the instance fails at once; the public page is the
-        // only other source and its failure is reported beside the instance's.
-        let settings = super::SearchSettings { provider: "searxng".into(), url: Some("http://127.0.0.1:1".into()), ..super::SearchSettings::default() };
-        let err = super::search(&settings, "a", 5).await.unwrap_err();
+        // Nothing listens on port 1, so the instance fails at once. The second source is a
+        // keyed Brave call, which fails with or without a network (a bad key or no route);
+        // the public page isn't in the chain because it answers for real when online.
+        let chain = [super::Source::Searxng { base: "http://127.0.0.1:1".into(), key: None }, super::Source::BraveApi("k".into())];
+        let err = super::search_chain(&chain, "a", 5).await.unwrap_err();
         assert!(err.contains("every source") && err.contains("SearXNG") && err.contains("Brave"), "{err}");
     }
 
@@ -912,7 +913,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn searxng_points_at_the_format_setting_when_refused() {
         let url = serve_body("HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\n\r\n", "not allowed").await;
-        let err = super::search(&searxng(Some(url)), "a", 5).await.unwrap_err();
+        let err = super::search_chain(&[super::Source::Searxng { base: url, key: None }], "a", 5).await.unwrap_err();
         assert!(err.contains("json format"), "{err}");
     }
 }

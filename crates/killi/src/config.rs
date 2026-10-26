@@ -157,6 +157,10 @@ pub struct Model {
     #[serde(default)]
     pub capabilities: Vec<String>,
     pub protocol: Option<String>,
+    /// Mark the system message and the newest message with `cache_control` on Chat Completions,
+    /// for gateways that pass it to a model with explicit prompt caching (Claude on Bedrock).
+    #[serde(default)]
+    pub cache_control: bool,
     pub default_effort: Option<String>,
     #[serde(default)]
     pub support_efforts: Vec<String>,
@@ -181,6 +185,8 @@ pub struct ResolvedModel {
     pub context_window: Option<u64>,
     pub images: bool,
     pub thinking: Thinking,
+    /// Chat Completions requests carry `cache_control` breakpoints.
+    pub cache_control: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -289,6 +295,7 @@ impl Config {
             context_window: model.max_context_size,
             images: model.capabilities.iter().any(|c| c == "image_in"),
             thinking: self.thinking_for(model),
+            cache_control: model.cache_control,
         })
     }
 

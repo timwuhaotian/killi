@@ -156,7 +156,9 @@ provider = "minimax"
 model = "MiniMax-M3.1-Flash"
 ```
 
-A model can use OpenAI's Responses API with `protocol = "openai_responses"`.
+A model can use OpenAI's Responses API with `protocol = "openai_responses"`. A Claude model
+behind an OpenAI-compatible gateway (Bedrock through LiteLLM) caches nothing unless the request
+marks it: set `cache_control = true` on that model, and check with `scripts/probe.py cache`.
 
 ### Working with it
 

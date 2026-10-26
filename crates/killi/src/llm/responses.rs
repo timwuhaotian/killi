@@ -269,6 +269,7 @@ mod tests {
             context_window: Some(2_000),
             images: false,
             thinking: Thinking::Off,
+            cache_control: false,
         };
         let messages = vec![json!({"role": "user", "content": "hello"})];
         let prepared = prepare(&model, &messages, &[], "cache").unwrap();

@@ -1855,6 +1855,7 @@ mod tests {
             context_window: None,
             images: false,
             thinking: Thinking::Off,
+            cache_control: false,
         };
         let client = Client::new(model).unwrap();
         Agent::assemble(client, &dir, Vec::new(), Settings::default(), controls, sink, Session::open(&log).unwrap())

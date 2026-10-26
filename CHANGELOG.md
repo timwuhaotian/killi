@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.14 — 2026-10-26
+
+- **Claude behind an OpenAI-compatible gateway can use its prompt cache.** Bedrock caches
+  only what a request marks, so such a model was billed for its whole prompt on every turn
+  (0% cached over 71 turns in the logs). `cache_control = true` on a `[models]` entry marks the
+  system message and the newest message of each Chat Completions request; the stored history
+  is left as it is. Measured through the SPH gateway: a second request read 8,898 of 8,909
+  tokens from the cache at a tenth of the cost.
+
 ## 0.4.13 — 2026-10-25
 
 - **A swarm is one live panel, not a scroll of subagent calls.** While `agent_swarm` runs, the
