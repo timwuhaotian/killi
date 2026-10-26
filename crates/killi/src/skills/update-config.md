@@ -53,7 +53,8 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   of the model's `max_context_size`, or 256000 when the window is unknown), `plan_allow = ["make -n"]` (extra command prefixes bash may run in plan mode),
   `notify_after` (seconds a turn takes before a desktop notification, default 10),
   `swarm_parallel` (subagents one `agent_swarm` call runs at once, default 8),
-  `swarm = false` (start sessions with swarm mode off; it is on by default, and `/swarm on|off` changes it).
+  `swarm = false` (start sessions with swarm mode off; it is on by default, and `/swarm on|off` changes it),
+  `peers = false` (keep this machine's other killi sessions from seeing this one, asking it about its work and messaging it, and don't tell the model about the sessions in its repository; on by default).
 - `[skills] dirs = ["~/other/skills"]`: skill folders used instead of `~/.agents/skills`; the
   project's own folders are always read.
 - `[[hooks.<Event>]]` with `matcher` (a regex over tool names; none matches every tool),

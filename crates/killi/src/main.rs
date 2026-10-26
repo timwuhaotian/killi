@@ -3,6 +3,7 @@ mod broker;
 mod config;
 mod hooks;
 mod later;
+mod live;
 mod llm;
 mod login;
 mod mcp;
@@ -43,6 +44,9 @@ Usage:
   killi login [chatgpt | opencode-go]          Sign in to a subscription and add its models
   killi logout [chatgpt | opencode-go]         Sign out of one
   killi update                                 Install the latest published version
+  killi sessions [<pid>] [--json]              The killi sessions running on this machine, or what one is doing
+  killi ask <pid> <question>                   Ask another session about its work; its model answers
+  killi tell <pid> <message>                   Leave another session a message for its next step
   killi --version
 
 Config: ~/.killi/config.toml";
@@ -76,6 +80,7 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
         Some("login") => login::login(args.get(1).map(String::as_str)).await.map(|()| ExitCode::SUCCESS),
         Some("logout") => login::logout(args.get(1).map(String::as_str)).await.map(|()| ExitCode::SUCCESS),
         Some("mcp-serve") => broker::serve(&broker::socket_path()).await.map(|()| ExitCode::SUCCESS),
+        Some("sessions" | "ask" | "tell") => live::command(&args).await,
         Some("-V" | "--version") => {
             println!("killi {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
@@ -127,6 +132,7 @@ fn quit_on_signals() {
             _ = interrupt.recv() => 130,
         };
         tools::kill_all();
+        live::leave();
         tui::restore_terminal();
         std::process::exit(code);
     });
@@ -161,12 +167,24 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
         let printer = printer.clone();
         Rc::new(move |event| printer.borrow_mut().event(event))
     };
-    let controls = Controls::default();
+    let mut controls = Controls::default();
     controls.swarm.set(setup.config().agent.swarm_on());
+    // A headless run is listed, so sessions in its tree leave its work alone, but takes no
+    // questions or messages: nothing would read them while it runs.
+    let mut live = setup.config().agent.peers_on().then(|| live::join(&cwd, false)).flatten().map(|(registration, _)| registration);
+    controls.here = live.as_ref().map(|l| Rc::new(l.here()));
     let mut agent = match &resume {
         Some(log) => setup.resume(log, controls, sink)?,
         None => setup.start(controls, sink)?,
     };
+    if let Some(live) = &mut live {
+        live.update(|e| {
+            e.model = agent.model_alias().to_string();
+            e.log = agent.session.log_path.clone();
+            e.working = true;
+            e.prompt = crate::llm::truncate(prompt.lines().next().unwrap_or_default(), 200).to_string();
+        });
+    }
     if !json_mode {
         let p = printer.borrow();
         let info = setup.describe();

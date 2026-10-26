@@ -198,6 +198,7 @@ impl Process {
             .env("TERM", "dumb")
             .env("PAGER", "cat")
             .env("GIT_PAGER", "cat")
+            .env(crate::live::PID_VAR, std::process::id().to_string())
             .own_session()
             .spawn()?;
         let pgid = child.id().unwrap_or_default();

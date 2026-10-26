@@ -11,6 +11,7 @@ const READ_ONLY: &[&str] = &[
     "cargo check", "cargo clippy", "cargo tree", "cargo metadata", "cargo --version", "rustc --version",
     "npm ls", "npm view", "npm --version", "node --version", "pnpm ls", "tsc --noEmit", "go vet", "go list",
     "python3 --version", "swift --version", "xcodebuild -list",
+    "killi sessions", "killi ask",
 ];
 
 /// Whether `command` may run in plan mode, given extra allowed prefixes from config.
@@ -56,6 +57,8 @@ mod tests {
             "cargo check 2>&1 | tail -30",
             "find . -name '*.rs'",
             "sed -n 1,40p src/lib.rs",
+            "killi sessions",
+            "killi ask 4321 \"which files are you changing?\"",
         ] {
             assert!(bash_allowed(command, &[]), "{command}");
         }
@@ -73,6 +76,7 @@ mod tests {
             "ls $(touch x)",
             "cargo test",
             "npm install",
+            "killi tell 4321 'I pushed the base'",
         ] {
             assert!(!bash_allowed(command, &[]), "{command}");
         }

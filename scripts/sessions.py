@@ -7,8 +7,8 @@ Logs are ~/.killi/sessions/<project>/<time>-<pid>.jsonl (--home changes ~/.killi
 session it counts turns, input tokens and how much came from the cache, tool calls, repeated
 calls, errors and how the session ended. Per model it shows the cache hit rate and whether the
 reasoning the provider billed was kept. Logs written since 0.2.16 also carry timestamps and
-durations, which add the slowest requests and tools. Findings at the end are the things to look
-at first; each is a lead to confirm in the log, not a verdict. The sessions that scripts/bench.py
+durations, which add the slowest requests and tools, and how often sessions ran side by side. Findings
+at the end are the things to look at first; each is a lead to confirm in the log, not a verdict. The sessions that scripts/bench.py
 and scripts/eval.py leave behind are left out unless --all is given.
 """
 
@@ -25,6 +25,12 @@ SLEPT = 120  # seconds in commands that open with `sleep N` before a session is 
 LOW_CACHE = 0.5  # share of input tokens from the cache below which a model is flagged
 FIXED_SLEEP = re.compile(r"\s*sleep\s+(\d+(?:\.\d+)?)")  # a command's opening `sleep N`
 MEASURING = re.compile(r"-T-(bench|eval-)")  # where bench.py and eval.py run killi: a temporary folder
+IDLE_GAP = 300_000  # ms without a log line that end a stretch of activity
+# Commands that move or rewrite a work tree another session may be working in.
+TREE_MOVING = re.compile(r"\bgit\s+(checkout|switch|stash|reset\s+--hard|clean|restore)\b")
+# The notes killi appends when the other sessions in a repository change (live.rs, tree_note).
+PEERS_ON = ("<system-reminder>Another killi session works", "<system-reminder>Other killi sessions work")
+PEERS_OFF = "<system-reminder>No other killi session works"
 
 
 def read(path):
@@ -53,10 +59,16 @@ def analyze(path):
     s = {"path": str(path), "project": path.parent.name, "id": path.stem, "models": [], "turns": 0, "prompt": 0,
          "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0, "version": None,
          "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [],
-         "tool_ms": [], "slept": [0, 0], "compactions": [], "per_model": collections.defaultdict(lambda: collections.Counter())}
-    model, awaiting, calls, answered, sleeping = None, None, {}, set(), set()
+         "tool_ms": [], "slept": [0, 0], "compactions": [], "per_model": collections.defaultdict(lambda: collections.Counter()),
+         "active": [], "peer_git": []}
+    model, awaiting, calls, answered, sleeping, peers = None, None, {}, set(), set(), False
     for entry in read(path):
         kind = entry.get("type")
+        if isinstance(entry.get("ts"), int):
+            if s["active"] and entry["ts"] - s["active"][-1][1] <= IDLE_GAP:
+                s["active"][-1][1] = entry["ts"]
+            else:
+                s["active"].append([entry["ts"], entry["ts"]])
         message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
         if kind in ("session", "model"):
             model = entry.get("model") or model
@@ -67,6 +79,8 @@ def analyze(path):
             role = message.get("role")
             if role == "user" and isinstance(message.get("content"), str) and not message["content"].startswith("<system-reminder>"):
                 s["prompts"] += 1
+            if role == "user" and isinstance(message.get("content"), str):
+                peers = message["content"].startswith(PEERS_ON) or (peers and not message["content"].startswith(PEERS_OFF))
             if role == "assistant":
                 kept = bool(message.get("reasoning_content") or message.get("reasoning") or message.get("reasoning_details")
                             or message.get("reasoning_items"))
@@ -80,6 +94,8 @@ def analyze(path):
                         command = parse_args(call["function"]["arguments"]).get("command")
                         if isinstance(command, str) and (wait := FIXED_SLEEP.match(command)) and float(wait[1]) >= 30:
                             sleeping.add(call["id"])
+                        if peers and isinstance(command, str) and TREE_MOVING.search(command):
+                            s["peer_git"].append(command[:120])
                     s["tools"][name] += 1
                     if name != "task_output":  # asking again is how a wait on a task works
                         s["repeats"][(name, call["function"]["arguments"])] += 1
@@ -172,7 +188,31 @@ def findings(sessions, models):
             found.append(f"`{name}` hit an error: {error}")
         for warn in sorted(set(s["warns"])):
             found.append(f"`{name}` logged a warning: {warn}")
+        for command in s["peer_git"]:
+            found.append(f"`{name}` ran `{command}` after being told another session works in its repository: if this recurs, "
+                         "block such commands in code while a session shares the tree.")
     return found
+
+
+def side_by_side(sessions):
+    """Hours with a session active, hours with two or more at once, the most at once, and the
+    pairs that overlapped in one project folder."""
+    edges = sorted((t, d) for s in sessions for start, end in s["active"] for t, d in ((start, 1), (end, -1)))
+    active = together = 0
+    running = most = 0
+    last = None
+    for t, d in edges:
+        if last is not None:
+            active += (t - last) * (running >= 1)
+            together += (t - last) * (running >= 2)
+        running += d
+        most = max(most, running)
+        last = t
+    pairs = 0
+    for i, a in enumerate(sessions):
+        for b in sessions[i + 1:]:
+            pairs += a["project"] == b["project"] and any(min(e1, e2) > max(s1, s2) for s1, e1 in a["active"] for s2, e2 in b["active"])
+    return active / 3.6e6, together / 3.6e6, most, pairs
 
 
 def main():
@@ -217,6 +257,10 @@ def main():
         print("Slowest tool calls: " + ", ".join(f"{name} {ms / 1000:.1f} s" for ms, name in runs[-5:][::-1]))
     if not requests and not runs:
         print("\n(No durations: only logs from 0.2.16 on have them.)")
+    active, together, most, pairs = side_by_side(sessions)
+    if active:
+        print(f"\n## Side by side\n\n{active:.1f} h with a session active, {together:.1f} h ({pct(together, active)}) with two or more; "
+              f"at most {most} at once; {pairs} pairs overlapped in one project folder.")
     print("\n## Findings\n")
     for line in findings(sessions, models) or ["None."]:
         print(f"- {line}")

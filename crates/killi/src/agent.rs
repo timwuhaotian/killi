@@ -20,7 +20,7 @@ use crate::llm::{Client, Delta, IMAGE_TOKEN_RESERVE, Reply, ToolCall, Usage, tru
 use crate::session::Session;
 use crate::hooks::{HooksConfig, tool_payload};
 use crate::skills::Skills;
-use crate::{plan, swarm, tools};
+use crate::{live, plan, swarm, tools};
 
 const MAX_CONTINUATIONS: u32 = 3;
 const REPEAT_WARNINGS: [u32; 3] = [3, 5, 7];
@@ -124,6 +124,11 @@ pub struct Controls {
     pub interactive: bool,
     /// The conversation as it stands, for /btw while the agent works.
     pub aside: Rc<RefCell<Aside>>,
+    /// Where this session works among the live ones, so the model hears about the others in
+    /// its tree; none for subagents and with `[agent] peers = false`.
+    pub here: Option<Rc<live::Here>>,
+    /// Messages from other sessions, as reminders, for the model's next step or prompt.
+    pub peer_notes: Rc<RefCell<VecDeque<String>>>,
 }
 
 /// What a side question needs: the model, the tools (sent unchanged so the cached prefix
@@ -142,8 +147,12 @@ impl Aside {
     /// Asks `question` about the conversation so far without adding to it. The answer and the
     /// request's usage come back; tool calls in the reply are ignored.
     pub fn ask(&self, question: &str) -> impl Future<Output = Result<(String, Usage)>> + 'static {
-        let running = self.ctx.upgrade().and_then(|ctx| ctx.running.borrow().describe());
-        let answer = self.side(BTW_NOTE, question, running.as_deref());
+        self.ask_with(BTW_NOTE, question)
+    }
+
+    /// Like `ask`, under another note: for a question from another session.
+    pub fn ask_with(&self, note: &str, question: &str) -> impl Future<Output = Result<(String, Usage)>> + 'static {
+        let answer = self.side(note, question, self.waiting().as_deref());
         async move {
             let (text, usage) = answer.await?;
             Ok((if text.trim().is_empty() { "(No answer: the model tried to use tools.)".to_string() } else { text }, usage))
@@ -162,6 +171,11 @@ impl Aside {
             }
             Ok((text, usage))
         }
+    }
+
+    /// What the calls in flight are waiting on, as `/btw` is told it.
+    pub fn waiting(&self) -> Option<String> {
+        self.ctx.upgrade().and_then(|ctx| ctx.running.borrow().describe())
     }
 
     fn side(&self, note: &str, question: &str, running: Option<&str>) -> impl Future<Output = Result<(String, Usage)>> + 'static + use<> {
@@ -289,6 +303,8 @@ pub struct Agent {
     todos: Vec<Todo>,
     plan_announced: bool,
     swarm_announced: bool,
+    /// The other sessions in this tree the model was last told about, by pid.
+    peers_announced: Vec<u32>,
     interrupted: bool,
     depth: u8,
     children: usize,
@@ -383,6 +399,7 @@ impl Agent {
             todos: Vec::new(),
             plan_announced: false,
             swarm_announced: false,
+            peers_announced: Vec::new(),
             interrupted: false,
             depth: 0,
             children: 0,
@@ -523,6 +540,8 @@ impl Agent {
             return Err(anyhow!("a hook blocked this prompt: {reason}"));
         }
         notes.extend(submitted.context);
+        // Messages left while the session was idle come before the prompt, so it stays last.
+        self.push_peer_notes()?;
         let content = if notes.is_empty() {
             user.to_string()
         } else {
@@ -612,6 +631,10 @@ impl Agent {
             self.swarm_announced = swarming;
             self.push(json!({"role": "user", "content": if swarming { swarm::ON } else { swarm::OFF }}))?;
         }
+        self.push_peer_notes()?;
+        if let Some(note) = self.peers_note() {
+            self.push(json!({"role": "user", "content": note}))?;
+        }
         let finished = self.ctx.tasks.borrow_mut().newly_finished();
         if !finished.is_empty() && self.depth == 0 {
             let text = format!("<system-reminder>{} Read the output with task_output.</system-reminder>", finished.join(" "));
@@ -630,6 +653,34 @@ impl Agent {
             (self.sink)(Event::Notice(format!("Compaction failed: {error:#}. Continuing without it.")));
         }
         Ok(())
+    }
+
+    /// Appends the messages other sessions left since the last step.
+    fn push_peer_notes(&mut self) -> Result<()> {
+        let notes: Vec<String> = self.controls.peer_notes.borrow_mut().drain(..).collect();
+        for note in notes {
+            self.push(json!({"role": "user", "content": note}))?;
+        }
+        Ok(())
+    }
+
+    /// A note for the model when the other sessions working in its tree have changed since it
+    /// was last told: someone started or ended. A session alone costs nothing.
+    fn peers_note(&mut self) -> Option<String> {
+        let here = self.controls.here.as_ref().filter(|_| self.depth == 0)?;
+        let peers = here.others();
+        let pids: Vec<u32> = peers.iter().map(|e| e.pid).collect();
+        if pids == self.peers_announced {
+            return None;
+        }
+        self.peers_announced = pids;
+        let shown = match peers.as_slice() {
+            [] => "No other killi session works in this repository now; told the agent.".to_string(),
+            [one] => format!("Session {} also works in this repository; told the agent to leave its changes alone.", one.pid),
+            many => format!("{} other sessions also work in this repository; told the agent to leave their changes alone.", many.len()),
+        };
+        (self.sink)(Event::Notice(shown));
+        Some(live::tree_note(&peers, live::now()))
     }
 
     fn compaction_due(&self) -> bool {
@@ -1175,6 +1226,8 @@ impl Agent {
                 swarm: Rc::default(),
                 interactive: false,
                 aside: Rc::default(),
+                here: None,
+                peer_notes: Rc::default(),
             },
             settings: self.settings.clone(),
             sink,
@@ -1186,6 +1239,7 @@ impl Agent {
             todos: Vec::new(),
             plan_announced: self.plan_announced,
             swarm_announced: false,
+            peers_announced: Vec::new(),
             interrupted: false,
             depth: self.depth + 1,
             children: 0,
@@ -1256,6 +1310,11 @@ impl Agent {
             mark = crate::session::COMPACTED_MARK,
         );
         self.messages = Rc::new(vec![self.messages[0].clone(), json!({"role": "user", "content": summary})]);
+        // The reminders for plan mode, swarm mode and the other sessions went with the old
+        // messages: the next step tells the model again what is still on.
+        self.plan_announced = false;
+        self.swarm_announced = false;
+        self.peers_announced.clear();
         self.share();
         self.session.record(&json!({
             "type": "compaction",
@@ -2057,6 +2116,45 @@ mod tests {
         assert_eq!(agent.controls.steer.borrow().len(), 1, "the message waits for the next request");
         agent.before_request().await.unwrap();
         assert_eq!(agent.messages.last().unwrap(), &json!({"role": "user", "content": "stop"}));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_model_hears_once_when_the_sessions_in_its_tree_change_and_gets_their_messages() {
+        let dir = std::env::temp_dir().join(format!("killi-peers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let entry = |pid, tree: &str| live::Entry { pid, tree: tree.into(), cwd: tree.into(), ..live::Entry::default() };
+        let me = live::Registration::open_in(&dir, entry(1, "/w")).unwrap();
+        let other = live::Registration::open_in(&dir, entry(2, "/w")).unwrap();
+        let _elsewhere = live::Registration::open_in(&dir, entry(3, "/x")).unwrap();
+        let notices = Rc::new(RefCell::new(Vec::new()));
+        let seen = notices.clone();
+        let sink: Sink = Rc::new(move |event| {
+            if let Event::Notice(text) = event {
+                seen.borrow_mut().push(text);
+            }
+        });
+        let controls = Controls { here: Some(Rc::new(me.here())), ..Controls::default() };
+        let mut agent = idle_agent("peers", controls.clone(), sink);
+        let last = |agent: &Agent| agent.messages.last().and_then(|m| m["content"].as_str()).unwrap_or_default().to_string();
+
+        agent.before_request().await.unwrap();
+        assert!(last(&agent).starts_with("<system-reminder>Another killi session works in this repository too: 2 · idle"), "{}", last(&agent));
+        assert_eq!(notices.borrow().len(), 1);
+        agent.before_request().await.unwrap();
+        assert_eq!(agent.messages.len(), 1, "nothing new while nothing changes");
+
+        controls.peer_notes.borrow_mut().push_back(live::tell_note("killi session 2", Some(2), "pushed"));
+        drop(other);
+        agent.before_request().await.unwrap();
+        assert!(agent.messages[1]["content"].as_str().unwrap().contains("<message>\npushed\n</message>"));
+        assert!(last(&agent).contains("No other killi session works in this repository now"));
+        assert!(controls.peer_notes.borrow().is_empty());
+
+        let mut child = agent.subagent("child", None, false).unwrap();
+        let _again = live::Registration::open_in(&dir, entry(4, "/w")).unwrap();
+        child.before_request().await.unwrap();
+        assert_eq!(child.messages.len(), 1, "a subagent is never told: only its system prompt");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Runs one `bash` call while a message from the user is typed, for an agent at `depth`.

@@ -5,6 +5,23 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.17 — 2026-10-26
+
+- **Sessions know about each other.** Every killi on the machine is listed in `~/.killi/live`
+  (a file it holds locked, so one that crashed drops out). The banner names the sessions working
+  in the same repository, `/sessions` lists them all, and the agent is told once when one starts
+  or stops in its repository: to leave changes it didn't make alone and to switch branches in a
+  worktree. `killi sessions [<pid>]` shows what each is doing; `killi ask <pid> "…"` has
+  another session's model answer from its conversation, the way `/btw` does, without keeping
+  it; `killi tell <pid> "…"` leaves it a message, marked as not from the user, for its next
+  step or its next prompt. No new tool and no change to the system prompt, so the cache holds.
+  `[agent] peers = false` opts out. About 130 KB of binary.
+- `/undo` says when another session in the repository worked since the snapshot, since undo
+  would put its files back too; `/undo` again goes ahead. A snapshot that meets another
+  session's `index.lock` waits for it instead of turning undo off for the session.
+- After a compaction the agent is told again that plan mode or swarm mode is on. Before, the
+  compaction summarized the reminder away and nothing said it again.
+
 ## 0.4.16 — 2026-10-26
 
 - **`killi login` asks which subscription to sign in to**, or takes its name: `killi login

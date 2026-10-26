@@ -11,7 +11,9 @@ The themes are Kil's five (crates/kil/src/theme.rs in the Kil repo): killi asks 
 for its background and foreground, and the pseudo-terminal answers with the theme's. SGR dim is
 drawn as Kil draws it, each channel scaled to two thirds. Scenes: start, menu, files (the `@`
 menu), picker, conv (a bug fix with a diff), question, plan, busy (mid-turn), swarm and swarm-big (an
-`agent_swarm` of 5 and of 40 subagents, mid-run) and swarm-done (the same five, finished). `--inline` runs killi as it runs outside
+`agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), peers (the banner
+with another session in the repository), sessions (`/sessions`) and peer (that session's question and
+message arriving through `killi ask` and `killi tell`). `--inline` runs killi as it runs outside
 Kil, in the terminal's scrollback; `--colors 256` hides COLORTERM; `--no-osc` never answers the
 color queries, like a terminal that doesn't know them; `--no-color` sets NO_COLOR.
 
@@ -65,7 +67,14 @@ SCENES = {
     "swarm": dict(keys=["SWARM review the open PRs\r", "WAIT:4.5"], settle=0.2),
     "swarm-big": dict(keys=["SWARMBIG review every service\r", "WAIT:7"], settle=0.2),
     "swarm-done": dict(keys=["SWARM review the open PRs\r"], until="nothing blocks"),
+    "peers": dict(keys=[], peer=True),
+    "sessions": dict(keys=["/sessions\r"], peer=True),
+    "peer": dict(keys=["ASK:Which files are you changing, and is anything committed?", "TELL:The base branch is pushed and green; rebase on it when you get there."], peer=True),
 }
+
+# The other session the peer scenes show: a file in ~/.killi/live that frames.py keeps locked,
+# which is all a live session is to the others.
+PEER_PID = 48213
 
 # A 1x1 PNG, the file the drop scene drags in.
 PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7369a5e0000000049454e44ae426082")
@@ -162,7 +171,7 @@ class Scratch:
         """The project as committed, and no sessions: every scene starts the same."""
         subprocess.run(["git", "checkout", "-q", "--", "."], cwd=self.project, check=True)
         subprocess.run(["git", "clean", "-qfdx"], cwd=self.project, check=True)
-        for name in ("sessions", "snapshots"):
+        for name in ("sessions", "snapshots", "live"):
             shutil.rmtree(self.home / ".killi" / name, ignore_errors=True)
         (self.home / ".killi" / "last-model.json").unlink(missing_ok=True)
 
@@ -175,9 +184,25 @@ def osc(code, hex_color):
     return f"\x1b]{code};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\".encode()
 
 
+def hold_peer(scratch):
+    """Registers PEER_PID as a session working in the scratch project, locked until closed."""
+    live = scratch.home / ".killi" / "live"
+    live.mkdir(parents=True, exist_ok=True)
+    now = int(time.time() * 1000)
+    entry = {"pid": PEER_PID, "version": "0.4.16", "cwd": str(scratch.project), "tree": str(scratch.project), "branch": "fix-slug",
+             "model": "zai/glm-5.3", "started": now - 600_000, "working": True, "since": now - 252_000,
+             "prompt": "review the open PRs", "socket": str(scratch.dir / f"{PEER_PID}.sock")}
+    held = open(live / f"{PEER_PID}.json", "w+")
+    held.write(json.dumps(entry))
+    held.flush()
+    fcntl.flock(held, fcntl.LOCK_EX)
+    return held
+
+
 def run_scene(args, scratch, scene, cols, rows, theme):
     """Runs killi through `scene` and returns the screen as rows of (char, fg, bg, bold, dim)."""
     background, foreground, _ = THEMES[theme]
+    peer = hold_peer(scratch) if scene.get("peer") else None
     screen = pyte.Screen(cols, rows)
     stream = pyte.ByteStream(screen)
     pid, fd = pty.fork()
@@ -232,6 +257,14 @@ def run_scene(args, scratch, scene, cols, rows, theme):
     for key in scene["keys"]:
         if key.startswith("WAIT:"):
             pump(float(key[5:]))
+        elif key.startswith(("ASK:", "TELL:")):
+            # Another session's `killi ask` or `killi tell`, sent while this one is drawn.
+            verb, text = key.split(":", 1)
+            env = {**os.environ, "HOME": str(scratch.home), "KILLI_PID": str(PEER_PID)}
+            cli = subprocess.Popen([args.killi, verb.lower(), str(pid), text], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            while cli.poll() is None:
+                pump(0.1)
+            pump(0.6)
         elif key.startswith("DROP:"):
             # A file dropped on the terminal arrives as a bracketed paste of its escaped path.
             path = str(scratch.project / key[5:]).replace(" ", "\\ ")
@@ -257,6 +290,8 @@ def run_scene(args, scratch, scene, cols, rows, theme):
         os.waitpid(pid, os.WNOHANG)
     except OSError:
         pass
+    if peer:
+        peer.close()
     return cells
 
 

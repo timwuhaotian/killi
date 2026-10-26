@@ -57,6 +57,10 @@ How these were measured: [Size and memory](#size-and-memory) · [Capability test
   which are working on what, how long each has run); swarm mode, on by default and set with
   `[agent] swarm` or `/swarm`, tells the agent to split its work that way. **Background tasks** keep servers and slow builds running. **Undo** puts
   your files back as they were before a turn, including what commands changed.
+- **Sessions that know about each other.** Run several killi at once and each knows where the
+  others work and what they are doing. The agent is told when another session works in its
+  repository, to leave that session's changes alone, and how to ask it about its work or leave
+  it a message. Nothing is added to the system prompt or the tool list.
 - **Your setup, carried over.** Kimi Code's config layout (`killi import-kimi` copies it),
   skills from `~/.agents/skills`, MCP servers from `mcp.json`, Claude Code-style hooks, and
   `AGENTS.md` (or `CLAUDE.md`) files, including ones in subfolders.
@@ -205,7 +209,8 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 
 Commands: `/model [alias]`, `/effort [level]` (thinking effort), `/new` (or `/clear`),
 `/resume`, `/compact [focus]`, `/recap`, `/undo`, `/plan`, `/swarm [task|on|off]`, `/usage`, `/session`
-(copies the session's id, log path and summary for another agent to read), `/prune [keep]`
+(copies the session's id, log path and summary for another agent to read), `/sessions` (the
+other killi sessions running on this machine), `/prune [keep]`
 (deletes every session on the machine but the newest few), `/reload`,
 `/help`, `/exit`, and
 `/<skill-name> [request]` for any skill. The menu matches loosely, the way Kimi Code's does:
@@ -223,6 +228,22 @@ it won't do now, it notes it with its `later` tool right then, instead of holdin
 final message, one list per folder in `~/.killi/sessions/<folder>/later.md` with open items
 only. `/later` shows the list, `/later done 3` crosses one off, and the banner says how many
 are open.
+
+**Other sessions.** Every killi running on the machine is listed in `~/.killi/live`, and the
+banner names the ones working in the same repository. When one starts or stops there, the
+agent is told once: changes it didn't make may be theirs, and branch switches, stashes and
+resets belong in a worktree. `/undo` says when it would also undo another session's work. From
+the agent's shell, or yours:
+
+```sh
+killi sessions                 # every session: pid, working or idle, folder, branch, prompt
+killi sessions 4321            # what one is doing now: its task list, what it waits on
+killi ask 4321 "which files are you changing?"   # its model answers from its conversation; nothing is kept
+killi tell 4321 "the base branch is pushed"      # a message for its next step, or its next prompt when idle
+```
+
+A message is marked as not coming from the user, never starts a turn, and a session takes at
+most three between two prompts. `[agent] peers = false` keeps a session to itself.
 
 ### System prompt, instructions, skills, MCP and hooks
 

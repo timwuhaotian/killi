@@ -37,11 +37,14 @@ use crossterm::terminal::{
 };
 use crossterm::{execute, queue};
 use futures_util::StreamExt;
-use tokio::sync::mpsc;
+use futures_util::stream::FuturesUnordered;
+use serde_json::{Value, json};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::{Agent, Controls, Event, Image, Question, Sink, Slot, Steered, Stop, Todo};
 use crate::config::{Config, Thinking};
 use crate::setup::{Overview, Setup};
+use crate::live;
 use crate::llm::{Client, Usage};
 use crate::mcp::Mcp;
 use crate::session::{Choice, Replayed};
@@ -83,6 +86,25 @@ type PendingAside = (String, Pin<Box<dyn Future<Output = Result<(String, Usage)>
 /// user sends anything else.
 type PendingRecap = Pin<Box<dyn Future<Output = Result<(String, Usage)>>>>;
 
+/// A question from another session on its way to an answer from this conversation.
+type PendingPeerAsk = Pin<Box<dyn Future<Output = PeerAnswer>>>;
+
+/// Another session's question, answered or not, and where the answer goes.
+struct PeerAnswer {
+    id: u64,
+    from: Option<u32>,
+    question: String,
+    answer: Result<(String, Usage)>,
+    reply: oneshot::Sender<Value>,
+}
+
+/// Questions from other sessions answered at once; more wait for one to finish.
+const MAX_PEER_ASKS: usize = 2;
+
+/// Messages from other sessions taken between two prompts, so two running sessions can't keep
+/// each other going.
+const MAX_PEER_TELLS: usize = 3;
+
 /// What `run_turn` ended with.
 enum Ended {
     Done(Result<(String, Stop)>),
@@ -95,8 +117,13 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     let sink: Sink = Rc::new(move |event| {
         let _ = tx.send(event);
     });
-    let controls = Controls { interactive: true, ..Controls::default() };
+    let mut controls = Controls { interactive: true, ..Controls::default() };
     controls.swarm.set(config.agent.swarm_on());
+    let (live, peers) = match config.agent.peers_on().then(|| live::join(&cwd, true)).flatten() {
+        Some((registration, peers)) => (Some(registration), peers),
+        None => (None, None),
+    };
+    controls.here = live.as_ref().map(|l| Rc::new(l.here()));
     let fullscreen = wants_fullscreen(config.ui.fullscreen, &std::env::var("TERM_PROGRAM").unwrap_or_default());
     let ground = if config.ui.theme.is_none() { query_ground() } else { None };
     text::init_theme(config.ui.theme.as_deref(), ground);
@@ -109,6 +136,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     };
     let mut snapshots = Snapshots::new(&cwd);
     let mut app = App::new(&agent, controls.clone(), &cwd);
+    app.live = live;
+    app.peers = peers;
+    app.live_sync(&agent);
     app.entries = entries(&session);
     app.refresh_choices(session.config());
     app.notify_after = Duration::from_secs(session.config().agent.notify_after.unwrap_or(10));
@@ -142,6 +172,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             }
             Input::Resume(path) => match session.resume(&path, controls.clone(), sink.clone()) {
                 Ok(resumed) => {
+                    // Messages from other sessions were about the conversation being left.
+                    controls.peer_notes.borrow_mut().clear();
                     let stopped = agent.stop_tasks();
                     agent.discard_if_unused();
                     agent = resumed;
@@ -225,6 +257,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             }
         }
         app.refresh_branch();
+        app.live_sync(&agent);
         app.draw()?;
     }
     app.finish_screen()?;
@@ -343,6 +376,27 @@ fn resume_command(log: &Path) -> String {
     if plain { format!("killi -r {path}") } else { format!("killi -r '{}'", path.replace('\'', r"'\''")) }
 }
 
+/// The next request from another session; never, for a session that takes none.
+async fn next_incoming(peers: &mut Option<mpsc::UnboundedReceiver<live::Incoming>>) -> Option<live::Incoming> {
+    match peers {
+        Some(peers) => peers.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Who a question or message came from, in two words.
+fn peer_label(from: Option<u32>) -> String {
+    from.map_or_else(|| "a shell".to_string(), |pid| format!("session {pid}"))
+}
+
+/// The other live sessions in `tree` that worked since `since` (ms since the epoch), or still
+/// do: an undo back to then would undo their changes too.
+fn worked_since(tree: &Path, since: Option<u64>) -> Vec<live::Entry> {
+    let Some(since) = since else { return Vec::new() };
+    let me = std::process::id();
+    live::list().into_iter().filter(|e| e.pid != me && e.tree == tree && (e.working || e.since >= since)).collect()
+}
+
 /// Runs one future that drives the agent, showing its events and handling keys meanwhile.
 async fn run_turn<F>(
     app: &mut App,
@@ -377,6 +431,8 @@ where
                 }
             }
             result = &mut future, if done.is_none() => done = Some(result),
+            Some(incoming) = next_incoming(&mut app.peers) => app.on_peer(incoming),
+            Some(answered) = app.peer_asks.next(), if !app.peer_asks.is_empty() => app.on_peer_answer(answered),
             answer = async { aside.as_mut().expect("a question is asked").1.as_mut().await }, if aside.is_some() => {
                 let (question, _) = aside.take().expect("a question is asked");
                 app.show_aside(&question, answer);
@@ -454,17 +510,30 @@ async fn handle_command(
             app.controls.swarm.set(was_on);
             result?;
         }
-        "undo" => match snapshots.undo() {
-            Ok(changes) if changes.is_empty() => app.notice("Undone. No files had changed in the last turn."),
-            Ok(changes) => {
-                app.notice(&format!("Undone: {} restored to how they were before the last turn.", crate::tools::count(changes.len(), "file")));
-                for change in changes.iter().take(20) {
-                    app.commit(format!("  {DIM}{change}{RESET}"));
-                }
-                agent.mark_interrupted();
+        "undo" => {
+            // Said once: the next /undo goes ahead.
+            let others = if app.undo_warned { Vec::new() } else { worked_since(snapshots.work_tree(), snapshots.last_taken()) };
+            app.undo_warned = !others.is_empty();
+            if !others.is_empty() {
+                let who: Vec<String> = others.iter().map(|e| format!("session {}", e.pid)).collect();
+                app.notice(&format!(
+                    "{} also worked in this repository since the last turn began. Undo puts every file back as it was then, so those changes go too. /undo again to undo anyway.",
+                    who.join(" and ")
+                ));
+                return Ok(true);
             }
-            Err(e) => app.error(&format!("Can't undo: {e:#}")),
-        },
+            match snapshots.undo() {
+                Ok(changes) if changes.is_empty() => app.notice("Undone. No files had changed in the last turn."),
+                Ok(changes) => {
+                    app.notice(&format!("Undone: {} restored to how they were before the last turn.", crate::tools::count(changes.len(), "file")));
+                    for change in changes.iter().take(20) {
+                        app.commit(format!("  {DIM}{change}{RESET}"));
+                    }
+                    agent.mark_interrupted();
+                }
+                Err(e) => app.error(&format!("Can't undo: {e:#}")),
+            }
+        }
         "compact" => {
             let focus = arg.to_string();
             app.begin_busy();
@@ -476,6 +545,8 @@ async fn handle_command(
         }
         "clear" | "new" => match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
             Ok(fresh) => {
+                // Messages from other sessions were about the conversation being left.
+                app.controls.peer_notes.borrow_mut().clear();
                 let saved = !agent.user_prompts().is_empty();
                 let stopped = agent.stop_tasks();
                 agent.discard_if_unused();
@@ -559,10 +630,17 @@ async fn prompt_turn(
     app.begin_turn(shown);
     app.draw()?;
     snapshots.take();
+    app.undo_warned = false;
+    app.peer_tells = 0;
+    app.live_turn(Some(shown));
     let before = Totals::of(agent);
     let ended = run_turn(app, keys, rx, agent.run(prompt, images)).await?;
     let completed = matches!(ended, Ended::Done(Ok((_, Stop::Completed))));
     app.finish_turn(ended, before, Totals::of(agent));
+    app.live_turn(None);
+    if !app.controls.peer_notes.borrow().is_empty() {
+        app.notice("A message from another session came as the turn ended; the agent gets it with your next prompt.");
+    }
     if matches!(app.last_end, Some(LastEnd::Interrupted)) {
         agent.recover()?;
     }
@@ -818,6 +896,19 @@ struct App {
     view_rows: usize,
     /// Whether the banner says it is a resumed session, for drawing it again.
     banner_resumed: bool,
+    /// This session's file among the live sessions; none with `[agent] peers = false`.
+    live: Option<live::Registration>,
+    /// Requests from other sessions; none when this one takes none.
+    peers: Option<mpsc::UnboundedReceiver<live::Incoming>>,
+    /// Questions from other sessions being answered, and what the live area shows of each:
+    /// its id, who asked, the question and since when.
+    peer_asks: FuturesUnordered<PendingPeerAsk>,
+    peer_asking: Vec<(u64, String, String, Instant)>,
+    peer_ask_id: u64,
+    /// Messages from other sessions taken since the last prompt.
+    peer_tells: usize,
+    /// /undo said it would undo another session's work too; the next /undo goes ahead.
+    undo_warned: bool,
 }
 
 /// The lines printed from the banner on, so it can be drawn again in place.
@@ -907,6 +998,13 @@ impl App {
             history: History::new(usize::from(columns).max(20)),
             view_rows: usize::from(rows).max(5),
             banner_resumed: false,
+            live: None,
+            peers: None,
+            peer_asks: FuturesUnordered::new(),
+            peer_asking: Vec::new(),
+            peer_ask_id: 0,
+            peer_tells: 0,
+            undo_warned: false,
         };
         app.refresh_branch();
         app
@@ -959,6 +1057,9 @@ impl App {
         }
         if let Some(why) = &snapshots.disabled {
             self.commit(format!("{DIM}{why}{RESET}"));
+        }
+        if let Some(line) = self.peers_line() {
+            self.emit(Line::block(move |width| wrap_words(&line, width, 0)));
         }
         if resumed {
             let prompts = agent.user_prompts();
@@ -1025,6 +1126,22 @@ impl App {
             let event = tokio::select! {
                 event = keys.next() => event,
                 () = resumed() => {
+                    self.draw()?;
+                    continue;
+                }
+                Some(incoming) = next_incoming(&mut self.peers) => {
+                    self.on_peer(incoming);
+                    self.draw()?;
+                    continue;
+                }
+                Some(answered) = self.peer_asks.next(), if !self.peer_asks.is_empty() => {
+                    self.on_peer_answer(answered);
+                    self.draw()?;
+                    continue;
+                }
+                // Keeps the clock on a question from another session moving while idle.
+                () = tokio::time::sleep(Duration::from_secs(1)), if !self.peer_asking.is_empty() => {
+                    self.spinner += 1;
                     self.draw()?;
                     continue;
                 }
@@ -2002,6 +2119,7 @@ impl App {
             ("swarm", "on") => self.set_swarm(true),
             ("swarm", "off") => self.set_swarm(false),
             ("later", "") => self.show_later(),
+            ("sessions", _) => self.show_sessions(),
             ("later", arg) => match arg.strip_prefix("done").and_then(|rest| rest.trim().parse::<usize>().ok()) {
                 Some(number) => match crate::later::done(&self.cwd, number) {
                     Ok(item) => self.notice(&format!("Crossed off: {item}")),
@@ -2031,8 +2149,147 @@ impl App {
         let cached = usage.cached * 100 / usage.prompt.max(1);
         let note = format!("Not kept in the conversation · {} in · {cached}% cached", short(usage.prompt));
         let question = question.to_string();
-        self.held_asides.push(Line::block(move |width| aside_rows(&question, &text, &note, width)));
+        self.held_asides.push(Line::block(move |width| aside_rows("btw", &question, &text, &note, width)));
         self.release_asides(false);
+    }
+
+    /// Answers another session: what this one is doing at once, a question from this
+    /// conversation through a side request that keeps nothing, and a message by queueing it
+    /// for the model's next step, or for the next prompt while idle.
+    fn on_peer(&mut self, incoming: live::Incoming) {
+        let live::Incoming { request, reply } = incoming;
+        let working = self.live.as_ref().is_some_and(|l| l.entry.working);
+        match request {
+            live::Request::Status => {
+                let todos: Vec<Value> = self.todos.iter().map(|t| json!({"content": t.content, "status": t.status})).collect();
+                let waiting = self.controls.aside.borrow().waiting();
+                let _ = reply.send(json!({"ok": true, "working": working, "plan": self.controls.plan.get(), "todos": todos, "waiting": waiting}));
+            }
+            live::Request::Ask { from, text } => {
+                if self.peer_asking.len() >= MAX_PEER_ASKS {
+                    let _ = reply.send(json!({"error": "it is answering other sessions' questions; ask again in a minute"}));
+                    return;
+                }
+                let ask = self.controls.aside.borrow().ask_with(&live::ask_note(&live::sender(from)), &text);
+                self.peer_ask_id += 1;
+                let id = self.peer_ask_id;
+                self.peer_asking.push((id, peer_label(from), text.clone(), Instant::now()));
+                self.peer_asks.push(Box::pin(async move { PeerAnswer { id, from, question: text, answer: ask.await, reply } }));
+            }
+            live::Request::Tell { from, text } => {
+                if self.peer_tells >= MAX_PEER_TELLS {
+                    let _ = reply.send(json!({"error": format!("it has taken {MAX_PEER_TELLS} messages since its user's last prompt; send this one after the next")}));
+                    return;
+                }
+                self.peer_tells += 1;
+                self.controls.peer_notes.borrow_mut().push_back(live::tell_note(&live::sender(from), from, &text));
+                let (delivered, note) = if working {
+                    ("It is working: its model reads the message at its next step, or with its user's next prompt if the turn ends first.", "For the agent's next step")
+                } else {
+                    ("It is idle: its user sees the message now, and its model gets it with their next prompt.", "For the agent, with your next prompt")
+                };
+                let _ = reply.send(json!({"ok": true, "delivered": delivered}));
+                let who = peer_label(from);
+                if !working {
+                    notify(&format!("Message from {who}"), &first_line(&text, 120));
+                }
+                let tag = format!("{who} says");
+                self.held_asides.push(Line::block(move |width| aside_rows(&tag, "", &text, note, width)));
+                self.release_asides(!working);
+            }
+        }
+    }
+
+    /// Sends another session the answer to its question and shows both here.
+    fn on_peer_answer(&mut self, answered: PeerAnswer) {
+        let PeerAnswer { id, from, question, answer, reply } = answered;
+        self.peer_asking.retain(|(asked, ..)| *asked != id);
+        let tag = format!("{} asks", peer_label(from));
+        match answer {
+            Ok((text, usage)) => {
+                let _ = reply.send(json!({"ok": true, "answer": text}));
+                let cached = usage.cached * 100 / usage.prompt.max(1);
+                let note = format!("Answered from this conversation, not kept · {} in · {cached}% cached", short(usage.prompt));
+                self.held_asides.push(Line::block(move |width| aside_rows(&tag, &question, &text, &note, width)));
+                self.release_asides(self.busy.is_none());
+            }
+            Err(e) => {
+                let why = format!("{e:#}");
+                self.notice(&format!("{tag} “{}”; no answer: {why}", first_line(&question, 80)));
+                let _ = reply.send(json!({"error": why}));
+            }
+        }
+    }
+
+    /// The live area's rows for questions from other sessions being answered.
+    fn peer_rows(&self, frame: char, width: usize) -> Vec<String> {
+        self.peer_asking
+            .iter()
+            .map(|(_, who, question, since)| {
+                let question = clip(&question.split_whitespace().collect::<Vec<_>>().join(" "), width.saturating_sub(who.len() + 16));
+                fit(&format!("{LAGOON}{frame}{RESET} {BOLD}{FIN}{who} asks{RESET} {question}{DIM} · {}{RESET}", clock(since.elapsed())), width)
+            })
+            .collect()
+    }
+
+    /// Brings this session's file up to date with its model, log and branch.
+    fn live_sync(&mut self, agent: &Agent) {
+        let branch = self.status.branch.as_ref().map(|b| b.trim_end_matches('*').to_string());
+        if let Some(live) = &mut self.live {
+            live.update(|e| {
+                e.model = agent.model_alias().to_string();
+                e.log = agent.session.log_path.clone();
+                e.branch = branch;
+            });
+        }
+    }
+
+    /// Says in this session's file that a turn started on `prompt`, or that it ended.
+    fn live_turn(&mut self, prompt: Option<&str>) {
+        if let Some(live) = &mut self.live {
+            live.update(|e| {
+                e.working = prompt.is_some();
+                e.since = live::now();
+                if let Some(prompt) = prompt {
+                    e.prompt = first_line(prompt, 200);
+                }
+            });
+        }
+    }
+
+    /// The banner's line about the other sessions working in this repository, if any.
+    fn peers_line(&self) -> Option<String> {
+        let others = self.live.as_ref()?.here().others();
+        if others.is_empty() {
+            return None;
+        }
+        let now = live::now();
+        let list: Vec<String> = others.iter().map(|e| live::describe(e, now)).collect();
+        Some(format!("{DIM}Also in this repository: {}. /sessions lists every session.{RESET}", list.join("; ")))
+    }
+
+    /// Lists the other live sessions, those in this repository first.
+    fn show_sessions(&mut self) {
+        let tree = live::work_tree(&self.cwd);
+        let me = std::process::id();
+        let mut others: Vec<live::Entry> = live::list().into_iter().filter(|e| e.pid != me).collect();
+        if others.is_empty() {
+            return self.notice("No other killi session is running on this machine.");
+        }
+        others.sort_by_key(|e| e.tree != tree);
+        let now = live::now();
+        let rows: Vec<String> = others
+            .iter()
+            .map(|e| {
+                let mark = if e.tree == tree { format!("{LAGOON}●{RESET}") } else { format!("{FAINT}○{RESET}") };
+                let headless = if e.socket.is_none() { format!(" {DIM}· headless{RESET}") } else { String::new() };
+                format!("{mark} {}{headless}", live::describe(e, now))
+            })
+            .collect();
+        let here = if others.iter().any(|e| e.tree == tree) { format!("{LAGOON}●{RESET}{DIM} works in this repository. ") } else { DIM.to_string() };
+        let hint = format!("{here}Ask the agent to ask one about its work or to leave it a message; it uses `killi ask` and `killi tell`.{RESET}");
+        self.begin(Kind::Note);
+        self.emit(Line::block(move |width| rows.iter().flat_map(|row| wrap_words(row, width, 2)).chain(wrap_words(&hint, width, 0)).collect()));
     }
 
     /// A recap, printed as a block of its own with what asking for it cost.
@@ -2433,6 +2690,7 @@ impl App {
                 let question = clip(&question.split_whitespace().collect::<Vec<_>>().join(" "), width.saturating_sub(14));
                 rows.push(fit(&format!("{LAGOON}{frame}{RESET} {BOLD}{FIN}btw{RESET} {question}{DIM} · {}{RESET}", clock(since.elapsed())), width));
             }
+            rows.extend(self.peer_rows(frame, width));
             if self.asking.is_none() {
                 // Tool rows keep their list together, but the wordmark never touches them or the conversation.
                 space(&mut rows);
@@ -2442,6 +2700,9 @@ impl App {
             for queued in &self.queued {
                 rows.push(fit(&queued_row(queued), width));
             }
+        } else if !self.peer_asking.is_empty() {
+            space(&mut rows);
+            rows.extend(self.peer_rows(QUARTER[self.spinner % QUARTER.len()], width));
         }
         if self.todos.iter().any(|t| t.status != "completed") {
             space(&mut rows);
@@ -2767,9 +3028,10 @@ fn prompt_rows(prompt: &str, width: usize) -> Vec<String> {
 
 /// A /btw question and its answer as one block: the question, the answer hung off the output
 /// gutter like a tool's output, and `note` last, so it reads as set aside from the conversation.
-fn aside_rows(question: &str, answer: &str, note: &str, width: usize) -> Vec<String> {
+fn aside_rows(tag: &str, question: &str, answer: &str, note: &str, width: usize) -> Vec<String> {
     let question = question.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut rows = wrap_words(&format!("{BOLD}{FIN}btw{RESET} {BOLD}{question}{RESET}"), width, 4);
+    let head = if question.is_empty() { format!("{BOLD}{FIN}{tag}{RESET}") } else { format!("{BOLD}{FIN}{tag}{RESET} {BOLD}{question}{RESET}") };
+    let mut rows = wrap_words(&head, width, 4);
     let gutter = format!("  {FAINT}│{RESET}");
     let inner = width.saturating_sub(4);
     let mut markdown = Markdown::new(inner);
@@ -2788,7 +3050,9 @@ fn aside_rows(question: &str, answer: &str, note: &str, width: usize) -> Vec<Str
         }
     }
     rows.push(gutter.clone());
-    rows.push(format!("{gutter} {DIM}{note}{RESET}"));
+    for wrapped in wrap_words(note, inner, 0) {
+        rows.push(format!("{gutter} {DIM}{wrapped}{RESET}"));
+    }
     rows
 }
 
@@ -3477,7 +3741,7 @@ fn runs_at_once(menu: &Suggestions, index: usize) -> bool {
 
 /// The commands that also work while the agent works: they need nothing the running turn holds,
 /// except /effort, which waits for the turn to end (see `App::effort_after_turn`).
-const BUSY_COMMANDS: &[&str] = &["btw", "plan", "swarm", "later", "help", "effort"];
+const BUSY_COMMANDS: &[&str] = &["btw", "plan", "swarm", "later", "sessions", "help", "effort"];
 
 /// The effort `arg` names among those `model` takes, or what to tell the user.
 fn effort_named(model: &str, efforts: &[&str], arg: &str) -> Result<String, String> {
@@ -3513,6 +3777,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "swarm", aliases: &[], args: "[task|on|off]", about: "Swarm mode: split work across many subagents" },
     Command { name: "usage", aliases: &["cost"], args: "", about: "Tokens and requests this session" },
     Command { name: "session", aliases: &["share"], args: "", about: "Copy this session's id, log path and summary, to paste into another agent" },
+    Command { name: "sessions", aliases: &[], args: "", about: "The other killi sessions running on this machine, and what each is doing" },
     Command { name: "later", aliases: &[], args: "[done N]", about: "What the agent noted for later in this folder; done N crosses one off" },
     Command { name: "prune", aliases: &[], args: "[keep]", about: "Delete every session on this machine but the newest few" },
     Command { name: "reload", aliases: &[], args: "", about: "Re-read [prompt], AGENTS.md files and skills" },
@@ -4214,12 +4479,14 @@ mod tests {
 
     #[test]
     fn a_side_answer_is_one_block_hung_off_the_gutter() {
-        let rows = aside_rows("what\nnow?", "It **reads** first.\n\n- one\n- two\n", "Not kept · 4k in", 40);
+        let rows = aside_rows("btw", "what\nnow?", "It **reads** first.\n\n- one\n- two\n", "Not kept · 4k in", 40);
         let rows: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
         assert_eq!(rows, ["btw what now?", "  │ It reads first.", "  │", "  │ • one", "  │ • two", "  │", "  │ Not kept · 4k in"]);
-        let long = aside_rows("q", &"word ".repeat(30), "n", 30);
+        let long = aside_rows("btw", "q", &"word ".repeat(30), "a note too long for one row of thirty", 30);
         assert!(long.iter().all(|row| text::width(row) <= 30));
-        assert!(long.iter().skip(1).all(|row| unstyled(row).starts_with("  │")));
+        assert!(long.iter().skip(1).all(|row| unstyled(row).starts_with("  │")), "the note stays inside the gutter too");
+        let told = aside_rows("session 7 says", "", "pushed", "For the agent's next step", 40);
+        assert_eq!(told.iter().map(|row| unstyled(row)).collect::<Vec<_>>(), ["session 7 says", "  │ pushed", "  │", "  │ For the agent's next step"]);
     }
 
     #[test]

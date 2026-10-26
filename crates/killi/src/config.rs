@@ -107,12 +107,20 @@ pub struct AgentConfig {
     pub swarm_parallel: Option<usize>,
     /// Start every session in swarm mode (default true); `/swarm on|off` still changes it.
     pub swarm: Option<bool>,
+    /// Let the other killi sessions on this machine see this one, ask it about its work and
+    /// leave it messages, and tell the model about those working in its tree (default true).
+    pub peers: Option<bool>,
 }
 
 impl AgentConfig {
     /// Whether a session starts in swarm mode.
     pub fn swarm_on(&self) -> bool {
         self.swarm.unwrap_or(true)
+    }
+
+    /// Whether a session joins the live sessions (`live.rs`).
+    pub fn peers_on(&self) -> bool {
+        self.peers.unwrap_or(true)
     }
 }
 
@@ -396,6 +404,7 @@ effort = "high"                 # or: enabled = false
 
 [agent]
 swarm = true                    # start in swarm mode: split work across subagents; false turns it off
+peers = true                    # other killi sessions here can see this one, ask it and message it
 
 [providers.openai]
 type = "openai"                 # OpenAI chat completions, and compatible APIs

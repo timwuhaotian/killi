@@ -12,6 +12,9 @@ behind it are in `docs/decisions.md`.
 - See the TUI without a model: `scripts/frames.py out/` draws every screen at 118, 80 and 60 columns
   on Kil's themes, from a scripted provider and a pty (`--png`, `--inline`, `--colors 256`; needs `pyte`).
   Use it after any change to `tui/`; a layout is only checked once it has been drawn at 80x24 and 60 columns.
+- Live sessions: `scripts/live_check.py` runs two real sessions against each other (the list,
+  `killi ask` and `killi tell`, the model's reminders, undo's warning) from a scripted provider.
+  Use it after changes to `live.rs` or the code that answers other sessions.
 - Re-measure size, memory and tokens and redraw the charts and README numbers: the
   `refresh-metrics` skill; it also says how `scripts/screenshot.py` redraws the README's
   screenshots from a real run. Evaluate and improve killi from its own session logs
