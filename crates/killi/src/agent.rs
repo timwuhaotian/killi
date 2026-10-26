@@ -189,14 +189,21 @@ impl Aside {
     }
 }
 
-/// A recap on one line of whitespace-collapsed text, at most `RECAP_CHARS` characters: the
-/// limit holds whatever the model sent, so a long one is cut with an ellipsis.
+/// A recap on one line of whitespace-collapsed text, at most `RECAP_MAX` characters. Models
+/// overshoot the `RECAP_CHARS` they are asked for, so the hard limit leaves room, and a recap
+/// beyond it keeps the sentences that fit whole; only when not even the first fits is it cut
+/// with an ellipsis.
 fn fit_recap(text: &str) -> String {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.chars().count() <= RECAP_CHARS {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= RECAP_MAX {
         return text;
     }
-    let cut: String = text.chars().take(RECAP_CHARS - 1).collect();
+    let ends = |i: usize| matches!(chars[i], '.' | '!' | '?' | '。' | '！' | '？') && chars.get(i + 1).is_none_or(|c| *c == ' ' || !c.is_ascii());
+    if let Some(end) = (0..RECAP_MAX).rev().find(|&i| ends(i)) {
+        return chars[..=end].iter().collect();
+    }
+    let cut: String = chars[..RECAP_MAX - 1].iter().collect();
     format!("{}…", cut.trim_end())
 }
 
@@ -1669,8 +1676,12 @@ const SKIPPED_FOR_MESSAGE: &str = "Not run: the user sent a message first, which
 
 const LEFT_RUNNING: &str = "Stop with task_stop what nothing needs anymore, such as a server or watcher started for a test or a check. If one should keep running, say so in your reply.";
 
-/// Longest recap, in characters.
-pub const RECAP_CHARS: usize = 100;
+/// Length `RECAP_NOTE` asks the model to keep a recap to, in characters.
+#[cfg(test)]
+const RECAP_CHARS: usize = 100;
+
+/// Longest recap shown, in characters; see `fit_recap`.
+const RECAP_MAX: usize = 160;
 
 const RECAP_NOTE: &str = "<system-reminder>The user is back at this session and wants a recap. Reply with the recap only: what they are after, what was done, and the latest result or what is left. Use their language, at most 100 characters, one or two plain sentences, no markdown. Don't call tools. This request and your reply won't be kept in the conversation.</system-reminder>";
 
@@ -1782,11 +1793,16 @@ mod tests {
     #[test]
     fn a_recap_is_one_line_within_the_limit() {
         assert_eq!(fit_recap("  Fixed it.\n\nTests pass. "), "Fixed it. Tests pass.");
-        let long = "字".repeat(RECAP_CHARS + 30);
+        let long = "字".repeat(RECAP_MAX + 30);
         let cut = fit_recap(&long);
-        assert_eq!(cut.chars().count(), RECAP_CHARS);
+        assert_eq!(cut.chars().count(), RECAP_MAX);
         assert!(cut.ends_with('…'));
-        assert_eq!(fit_recap(&"字".repeat(RECAP_CHARS)).chars().count(), RECAP_CHARS);
+        assert_eq!(fit_recap(&"字".repeat(RECAP_MAX)).chars().count(), RECAP_MAX);
+        let over_ask = format!("{}。", "字".repeat(RECAP_CHARS + 20));
+        assert_eq!(fit_recap(&over_ask), over_ask, "between the ask and the hard limit nothing is cut");
+        let two = format!("{}. {}", "a".repeat(100), "b".repeat(100));
+        assert_eq!(fit_recap(&two), format!("{}.", "a".repeat(100)), "whole sentences only");
+        assert_eq!(fit_recap(&format!("{} v1.2 {}", "a".repeat(100), "b".repeat(100))).chars().count(), RECAP_MAX);
         assert!(RECAP_NOTE.contains(&format!("{RECAP_CHARS} characters")));
     }
 

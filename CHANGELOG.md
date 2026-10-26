@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.19 — 2026-10-26
+
+- A recap is no longer cut mid-sentence with `…`: it may run to 160 characters (the model is
+  still asked for 100), and a longer one keeps the whole sentences that fit.
+
 ## 0.4.18 — 2026-10-26
 
 - A resumed session shows a skill run as the `/name request` that started it, not the skill's
