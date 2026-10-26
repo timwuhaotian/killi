@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.15 — 2026-10-26
+
+- **Use your ChatGPT plan instead of an API key.** `killi login` signs in with ChatGPT in the
+  browser, through OpenAI's Sign in with ChatGPT for open-source tools: killi registers as your
+  own client, keeps the credentials in `~/.killi/chatgpt.json` (owner-only), and adds a
+  `type = "chatgpt"` provider with your plan's models to the config. Requests go to
+  `api.openai.com/v1/responses` on the plan; the hourly token is refreshed five minutes early
+  and after a 401, under a lock so several killi processes never spend the same rotating
+  refresh token. A spent plan says so with a link to ChatGPT's usage settings, and `killi
+  logout` ends the session. Starting on a ChatGPT model without a sign-in offers one. About
+  82 KB of binary and 0.1 MB of peak memory.
+
 ## 0.4.14 — 2026-10-26
 
 - **Claude behind an OpenAI-compatible gateway can use its prompt cache.** Bedrock caches

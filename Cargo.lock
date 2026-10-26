@@ -753,9 +753,10 @@ dependencies = [
 
 [[package]]
 name = "killi"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "crossterm",
  "dom_smoothie",
  "futures-util",
@@ -764,6 +765,7 @@ dependencies = [
  "libc",
  "regex",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "tokio",

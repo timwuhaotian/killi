@@ -10,6 +10,7 @@ readme = "../../README.md"
 
 [dependencies]
 anyhow.workspace = true
+base64 = "0.22.1"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 dom_smoothie = "0.18.2"
 futures-util.workspace = true
@@ -18,6 +19,7 @@ ignore.workspace = true
 libc.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+ring = { version = "0.17.14", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

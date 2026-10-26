@@ -107,6 +107,15 @@ impl Failure {
     }
 }
 
+impl From<crate::login::TokenError> for Failure {
+    fn from(error: crate::login::TokenError) -> Self {
+        match error {
+            crate::login::TokenError::SignIn(message) => Failure::fatal(message),
+            crate::login::TokenError::Transient(message) => Failure::transient(message),
+        }
+    }
+}
+
 impl Client {
     pub fn new(model: ResolvedModel) -> Result<Self> {
         let http = reqwest::Client::builder()
@@ -131,13 +140,15 @@ impl Client {
             Protocol::Responses => responses::prepare(&self.model, messages, tools, cache_key),
         }?;
         let mut attempt = 1;
+        let mut renewed = false;
         loop {
-            let failure = match self.attempt(&prepared, on_delta).await {
+            let failure = match self.attempt(&prepared, &mut renewed, on_delta).await {
                 Ok(reply) => return Ok(reply),
                 Err(failure) => failure,
             };
             if !failure.retryable || attempt == MAX_ATTEMPTS {
-                return Err(anyhow!("{} (after {attempt} attempt(s))", failure.message));
+                let advice = if self.model.chatgpt { crate::login::advice(&failure.message) } else { String::new() };
+                return Err(anyhow!("{} (after {attempt} attempt(s)){advice}", failure.message));
             }
             let wait = failure.retry_after.unwrap_or_else(|| backoff(attempt));
             on_delta(Delta::Retry { attempt, wait, reason: &failure.message });
@@ -146,8 +157,17 @@ impl Client {
         }
     }
 
-    async fn attempt(&self, prepared: &Prepared, on_delta: &mut dyn FnMut(Delta)) -> Result<Reply, Failure> {
+    /// One request. On a ChatGPT plan it carries the current token, and the first 401 of a
+    /// `complete` call refreshes that token and is retried at once (`renewed` records it).
+    async fn attempt(&self, prepared: &Prepared, renewed: &mut bool, on_delta: &mut dyn FnMut(Delta)) -> Result<Reply, Failure> {
         let mut request = self.http.post(&prepared.url).body(prepared.body.clone());
+        let token = match self.model.chatgpt {
+            true => Some(crate::login::access_token(&self.http, None).await?),
+            false => None,
+        };
+        if let Some(token) = &token {
+            request = request.header("authorization", format!("Bearer {token}"));
+        }
         for (name, value) in &prepared.headers {
             request = request.header(name.as_str(), value.as_str());
         }
@@ -164,6 +184,12 @@ impl Client {
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .map(Duration::from_secs);
             let text = response.text().await.unwrap_or_default();
+            if let Some(token) = token.as_deref().filter(|_| status == StatusCode::UNAUTHORIZED && !*renewed) {
+                crate::login::access_token(&self.http, Some(token)).await?;
+                *renewed = true;
+                let message = format!("HTTP {status}: the ChatGPT token was turned away, so it was refreshed");
+                return Err(Failure { retryable: true, retry_after: Some(Duration::ZERO), message });
+            }
             return Err(classify(status, retry_after, &text));
         }
 
@@ -284,7 +310,7 @@ fn retryable_status(status: StatusCode) -> bool {
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
 
 /// Words in a 429 body that say a usage quota ran out, not that requests came too fast.
-const QUOTA_WORDS: [&str; 4] = ["usage limit", "quota", "reset at", "exceeded your current"];
+const QUOTA_WORDS: [&str; 5] = ["usage limit", "quota", "reset at", "exceeded your current", "usage_limit_exceeded"];
 
 /// What a failed HTTP response means: retried, unless waiting won't help. A spent quota
 /// (a 5-hour or monthly limit) resets in hours, so it fails at once with the server's message.
@@ -356,6 +382,12 @@ mod tests {
     }
 
     #[test]
+    fn a_spent_chatgpt_plan_is_not_retried() {
+        let body = r#"{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"Try again later"}}"#;
+        assert!(!classify(StatusCode::TOO_MANY_REQUESTS, None, body).retryable);
+    }
+
+    #[test]
     fn rate_limits_and_server_errors_are_retried() {
         assert!(classify(StatusCode::TOO_MANY_REQUESTS, Some(Duration::from_secs(5)), "slow down").retryable);
         assert!(classify(StatusCode::BAD_GATEWAY, None, "bad gateway").retryable);
@@ -424,6 +456,7 @@ mod tests {
             images: false,
             thinking: crate::config::Thinking::Off,
             cache_control: false,
+            chatgpt: false,
         };
         let messages = vec![serde_json::json!({"role": "user", "content": "x".repeat(4_000)})];
         let input = estimated_input_tokens(&messages, &[]);

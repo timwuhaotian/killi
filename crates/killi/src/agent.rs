@@ -1856,6 +1856,7 @@ mod tests {
             images: false,
             thinking: Thinking::Off,
             cache_control: false,
+            chatgpt: false,
         };
         let client = Client::new(model).unwrap();
         Agent::assemble(client, &dir, Vec::new(), Settings::default(), controls, sink, Session::open(&log).unwrap())

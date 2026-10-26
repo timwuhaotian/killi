@@ -527,6 +527,7 @@ mod tests {
             images: false,
             thinking: Thinking::Off,
             cache_control: false,
+            chatgpt: false,
         };
         let messages = vec![json!({"role": "user", "content": "hello"})];
         let expected = super::cap_output(&model, &messages, &[], 4_000);

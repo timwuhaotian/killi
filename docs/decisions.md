@@ -19,7 +19,7 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
 5. **Workflow:** plan mode (read-only), todo list, desktop notification when a turn finishes, undo via file history.
 6. **Permissions:** no approval prompts by default. The only other mode is plan mode.
 7. **Extensions:** MCP (servers start lazily, tools load on demand), skills (names only in the prompt), hooks (Claude Code event names: `PreToolUse`, `PostToolUse`, `Stop`, `SessionStart`, `SubagentStop`, `UserPromptSubmit`).
-8. **Dropped:** web UI, kap-server, remote control, vis / inspect, VS Code extension, ACP, klient / node-sdk, minidb search, transcript store, OAuth, telemetry, legacy migration, plugins and marketplace, custom agent profiles, tower / cron / goal / btw, smart bash approval (tree-sitter-bash), session index and export.
+8. **Dropped:** web UI, kap-server, remote control, vis / inspect, VS Code extension, ACP, klient / node-sdk, minidb search, transcript store, OAuth (except Sign in with ChatGPT, decision 14), telemetry, legacy migration, plugins and marketplace, custom agent profiles, tower / cron / goal / btw, smart bash approval (tree-sitter-bash), session index and export.
 
 9. **Caching: the cached prefix must never break.** The token plan discounts cached input, so keeping the start of the prompt stable comes before cutting prompt size. Measured on the MiMo endpoint on 2026-10-21:
    - Automatic prefix caching, reported in `usage.prompt_tokens_details.cached_tokens`, in blocks of about 128 tokens, lasting at least several minutes.
@@ -51,6 +51,11 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
     - `killi import-kimi` copies providers and models once from `~/.kimi-code/config.toml`. It skips providers that sign in through Kimi's account login (`type = "kimi"`) and reports them. Started in a terminal without a config, `killi` offers this import, or `killi init`'s template when there's no Kimi Code config.
     - API keys: `api_key = "..."` or `api_key_env = "NAME"`.
     - Adapters kept: OpenAI chat (`openai`), OpenAI Responses (`openai_responses`), Anthropic (`anthropic`). Models can pick one with `protocol = ...`.
+    - `type = "chatgpt"`: Responses on the user's ChatGPT plan, through OpenAI's Sign in with ChatGPT for open-source tools (developers.openai.com/siwc). `killi login` registers killi as the user's own client (`dynamic_agent_client`, a stable `ext_agent_host_id`, PKCE on a `127.0.0.1` callback), keeps the tokens in `~/.killi/chatgpt.json` (0600) and adds the plan's models from `/v1/models` to the config.
+      - Requests go to `https://api.openai.com/v1/responses` with the access token, never to ChatGPT's `backend-api` (Codex's private endpoint, which OpenAI tells third-party tools not to use); reusing `~/.codex/auth.json` would borrow Codex's client, so it was ruled out.
+      - The token is added per attempt, not when the request is prepared: it lasts an hour and is refreshed five minutes early, and once more after a 401. Refresh tokens rotate, so refreshes take an `flock` on `chatgpt.lock` and re-read the file; a second killi takes the first one's token instead of spending the old refresh token.
+      - The plan rejects `max_output_tokens` and system-role input items; killi sends the system prompt as `instructions` already. The ID token's signature isn't verified: it comes straight from the token endpoint over TLS and only names the account.
+      - Cost: about 82 KB of binary (`ring` and `base64` were already linked through rustls and reqwest) and about 0.1 MB peak memory on a one-prompt run.
     - The user's default model is `minimax/MiniMax-M3.1-Flash`, which uses the Anthropic API. That API only caches where the request marks it, so cache breakpoints are needed from day one. Run the same cache probe on MiniMax when building that adapter.
 
 15. **Quality checks: `killi eval` over the user's own Rust and TypeScript tasks, with Kimi Code as the baseline.**

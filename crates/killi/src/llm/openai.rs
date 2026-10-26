@@ -421,6 +421,7 @@ mod tests {
             images: false,
             thinking: Thinking::Off,
             cache_control: false,
+            chatgpt: false,
         };
         let messages = vec![json!({"role": "system", "content": "rules"}), json!({"role": "user", "content": "hi"})];
         let plain: Value = serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
@@ -445,6 +446,7 @@ mod tests {
             images: false,
             thinking: Thinking::Off,
             cache_control: false,
+            chatgpt: false,
         };
         let messages = vec![
             json!({"role": "user", "content": "hello"}),

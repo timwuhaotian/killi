@@ -26,7 +26,8 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
         })
         .collect();
     body.insert("prompt_cache_key".into(), cache_key.into());
-    if let Some(max) = model.max_output {
+    // A ChatGPT plan turns `max_output_tokens` away.
+    if let Some(max) = model.max_output.filter(|_| !model.chatgpt) {
         body.insert("max_output_tokens".into(), cap_output(model, messages, &tools, max).clamp(1, 131_072).into());
     }
     body.insert("tools".into(), tools.into());
@@ -42,14 +43,12 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
     if model.thinking != Thinking::Off {
         body.insert("include".into(), json!(["reasoning.encrypted_content"]));
     }
-    Ok(Prepared {
-        url: format!("{}/responses", model.base_url),
-        body: serde_json::to_vec(&body)?,
-        headers: vec![
-            ("authorization".into(), format!("Bearer {}", model.api_key)),
-            ("content-type".into(), "application/json".into()),
-        ],
-    })
+    let mut headers = vec![("content-type".into(), "application/json".into())];
+    // A plan's token is added as each attempt is sent, since it is refreshed as it expires.
+    if !model.chatgpt {
+        headers.push(("authorization".into(), format!("Bearer {}", model.api_key)));
+    }
+    Ok(Prepared { url: format!("{}/responses", model.base_url), body: serde_json::to_vec(&body)?, headers })
 }
 
 fn convert_input(history: &[Value]) -> Vec<Value> {
@@ -178,7 +177,7 @@ impl StreamParser for Parser {
                 let error = if event["type"] == "error" { event.clone() } else { event["response"]["error"].clone() };
                 let message = format!("provider error mid-stream: {}", truncate(&error.to_string(), 2000));
                 let code = error["code"].as_str().unwrap_or_default();
-                return Err(if code.contains("rate_limit") || code.contains("server_error") || code.is_empty() {
+                return Err(if code.contains("rate_limit") || code.contains("server_error") || code.ends_with("_unavailable") || code.is_empty() {
                     Failure::transient(message)
                 } else {
                     Failure::fatal(message)
@@ -270,11 +269,45 @@ mod tests {
             images: false,
             thinking: Thinking::Off,
             cache_control: false,
+            chatgpt: false,
         };
         let messages = vec![json!({"role": "user", "content": "hello"})];
         let prepared = prepare(&model, &messages, &[], "cache").unwrap();
         let body: Value = serde_json::from_slice(&prepared.body).unwrap();
         let expected = super::cap_output(&model, &messages, &[], 4_000);
         assert_eq!(body["max_output_tokens"], expected);
+    }
+
+    #[test]
+    fn a_chatgpt_plan_request_has_no_output_cap_and_no_key() {
+        let model = ResolvedModel {
+            alias: "m".into(),
+            model: "gpt-5".into(),
+            protocol: crate::config::Protocol::Responses,
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: String::new(),
+            headers: Default::default(),
+            max_output: Some(4_000),
+            context_window: Some(272_000),
+            images: false,
+            thinking: Thinking::Effort("high".into()),
+            cache_control: false,
+            chatgpt: true,
+        };
+        let prepared = prepare(&model, &[json!({"role": "system", "content": "sys"}), json!({"role": "user", "content": "hi"})], &[], "cache").unwrap();
+        let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+        assert!(body.get("max_output_tokens").is_none());
+        assert_eq!((body["store"].clone(), body["stream"].clone(), body["instructions"].clone()), (json!(false), json!(true), json!("sys")));
+        assert!(body["input"].as_array().unwrap().iter().all(|item| item["role"] != "system"), "the plan rejects system items");
+        assert!(prepared.headers.iter().all(|(name, _)| name != "authorization"), "the token is added per attempt");
+    }
+
+    #[test]
+    fn plan_errors_mid_stream_retry_only_when_temporary() {
+        let mut sink = |_: Delta| {};
+        let failed = |code: &str| json!({"type": "response.failed", "response": {"error": {"code": code}}});
+        let mut reply = Reply::default();
+        assert!(Parser::default().event(&failed("subscription_sharing_usage_unavailable"), &mut reply, &mut sink).unwrap_err().retryable);
+        assert!(!Parser::default().event(&failed("subscription_sharing_usage_limit_exceeded"), &mut reply, &mut sink).unwrap_err().retryable);
     }
 }

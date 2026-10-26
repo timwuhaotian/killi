@@ -126,6 +126,8 @@ pub struct SkillsConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct Provider {
+    /// "openai" (Chat Completions), "anthropic" (Messages), "openai_responses" (Responses),
+    /// or "chatgpt": Responses on the user's ChatGPT plan, signed in with `killi login`.
     #[serde(rename = "type")]
     pub kind: String,
     pub base_url: Option<String>,
@@ -187,6 +189,9 @@ pub struct ResolvedModel {
     pub thinking: Thinking,
     /// Chat Completions requests carry `cache_control` breakpoints.
     pub cache_control: bool,
+    /// On the user's ChatGPT plan: requests carry the token `killi login` saved, refreshed as
+    /// it expires, in place of `api_key`.
+    pub chatgpt: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -270,20 +275,27 @@ impl Config {
         let Some(provider) = self.providers.get(&model.provider) else {
             bail!("model `{alias}` names provider `{}`, which isn't configured", model.provider);
         };
+        let chatgpt = provider.kind == "chatgpt";
         let protocol = match model.protocol.as_deref().unwrap_or(&provider.kind) {
             "openai" => Protocol::OpenAi,
             "anthropic" => Protocol::Anthropic,
-            "openai_responses" => Protocol::Responses,
+            "openai_responses" | "chatgpt" => Protocol::Responses,
             other => bail!(
-                "model `{alias}` uses the `{other}` API, which killi doesn't support; use openai, anthropic or openai_responses"
+                "model `{alias}` uses the `{other}` API, which killi doesn't support; use openai, anthropic, openai_responses or chatgpt"
             ),
         };
+        if chatgpt && protocol != Protocol::Responses {
+            bail!("model `{alias}` runs on a ChatGPT plan, which takes only the Responses API; remove its `protocol`");
+        }
         let base_url = match (&provider.base_url, protocol) {
             (Some(url), _) => url.clone(),
             (None, Protocol::Anthropic) => "https://api.anthropic.com".to_string(),
             (None, _) => "https://api.openai.com/v1".to_string(),
         };
-        let Some(api_key) = provider.key() else { bail!("{}", no_key(alias, &model.provider, provider)) };
+        let api_key = match chatgpt {
+            true => String::new(),
+            false => provider.key().ok_or_else(|| anyhow::anyhow!("{}", no_key(alias, &model.provider, provider)))?,
+        };
         Ok(ResolvedModel {
             alias: alias.to_string(),
             model: model.model.clone(),
@@ -296,6 +308,7 @@ impl Config {
             images: model.capabilities.iter().any(|c| c == "image_in"),
             thinking: self.thinking_for(model),
             cache_control: model.cache_control,
+            chatgpt,
         })
     }
 
@@ -306,7 +319,14 @@ impl Config {
         let alias = requested.or(self.default_model.as_deref())?;
         let model = self.models.get(alias)?;
         let provider = self.providers.get(&model.provider)?;
-        provider.key().is_none().then(|| MissingKey { alias: alias.to_string(), provider: model.provider.clone() })
+        (provider.kind != "chatgpt" && provider.key().is_none()).then(|| MissingKey { alias: alias.to_string(), provider: model.provider.clone() })
+    }
+
+    /// The model killi would start on, when it runs on a ChatGPT plan.
+    pub fn chatgpt_model<'a>(&'a self, requested: Option<&'a str>) -> Option<&'a str> {
+        let alias = requested.or(self.default_model.as_deref())?;
+        let model = self.models.get(alias)?;
+        (self.providers.get(&model.provider)?.kind == "chatgpt").then_some(alias)
     }
 
     /// Kimi Code's order: `thinking.enabled = false` turns reasoning off, then the configured
@@ -372,6 +392,9 @@ api_key_env = "OPENAI_API_KEY"  # or: api_key = "..."
 [providers.anthropic]
 type = "anthropic"              # Anthropic Messages, and compatible APIs
 api_key_env = "ANTHROPIC_API_KEY"
+
+# To use your ChatGPT plan instead of an API key, run `killi login`: it signs in and adds a
+# `type = "chatgpt"` provider with your plan's models here.
 
 [models."openai/gpt-5.5"]
 provider = "openai"
@@ -512,6 +535,7 @@ fn pick_model(config: &Config, path: &Path) -> Result<bool> {
     for (index, alias) in aliases.iter().enumerate() {
         let note = match config.missing_key(Some(alias)) {
             Some(missing) => key_reason(&config.providers[&missing.provider]),
+            None if config.chatgpt_model(Some(alias)).is_some() && !crate::login::signed_in() => "needs `killi login`".to_string(),
             None => "ready".to_string(),
         };
         eprintln!("  {}. {alias} — {note}", index + 1);
@@ -556,6 +580,105 @@ fn set_provider_key(path: &Path, provider: &str, key: &str) -> Result<()> {
         out.insert(at + 1, key_line);
     }
     fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))
+}
+
+/// A model the ChatGPT plan offers, from its catalog.
+#[derive(Debug, Default)]
+pub struct PlanModel {
+    pub slug: String,
+    pub context: Option<u64>,
+    pub efforts: Vec<String>,
+    pub default_effort: Option<String>,
+    pub images: bool,
+}
+
+/// After `killi login`: adds a `type = "chatgpt"` provider and the plan's models that the
+/// config doesn't have yet. A new config, or one without `default_model`, starts on the first.
+pub fn add_plan_models(models: &[PlanModel]) -> Result<()> {
+    let dir = killi_home();
+    let path = dir.join("config.toml");
+    let text = match fs::read_to_string(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        read => Some(read.with_context(|| format!("could not read {}", path.display()))?),
+    };
+    let (out, added) = with_plan_models(text.as_deref().unwrap_or_default(), models)?;
+    if added.is_empty() {
+        println!("Your plan's models are already in {}.", path.display());
+        return Ok(());
+    }
+    match text {
+        Some(_) => fs::write(&path, &out).with_context(|| format!("could not write {}", path.display()))?,
+        None => {
+            fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+            let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+            file.write_all(out.as_bytes())?;
+            file.write_all(prompt_section().as_bytes())?;
+        }
+    }
+    println!("Added to {}: {}.", path.display(), added.join(", "));
+    let config: Config = toml::from_str(&out)?;
+    match config.default_model.as_deref() {
+        Some(default) if added.iter().any(|alias| alias == default) => println!("killi starts on `{default}`; /model picks another."),
+        _ => println!("Start on one with `killi -m {}`, or pick it with /model.", added[0]),
+    }
+    Ok(())
+}
+
+/// The config text with the plan's models added at the end, the rest left as it is, and the
+/// aliases added. The provider is the config's `type = "chatgpt"` one, or a new `chatgpt`.
+fn with_plan_models(text: &str, models: &[PlanModel]) -> Result<(String, Vec<String>)> {
+    let config: Config = toml::from_str(text).context("invalid config")?;
+    let existing = config.providers.iter().find(|(_, provider)| provider.kind == "chatgpt").map(|(name, _)| name.clone());
+    let name = existing.clone().unwrap_or_else(|| if config.providers.contains_key("chatgpt") { "chatgpt-plan" } else { "chatgpt" }.to_string());
+    let strings = |items: Vec<&str>| toml::Value::Array(items.into_iter().map(|item| toml::Value::String(item.to_string())).collect());
+    let mut entries = toml::Table::new();
+    let mut added = Vec::new();
+    for model in models {
+        let alias = format!("{name}/{}", model.slug);
+        if config.models.contains_key(&alias) || entries.contains_key(&alias) {
+            continue;
+        }
+        let mut entry = toml::Table::new();
+        entry.insert("provider".into(), name.clone().into());
+        entry.insert("model".into(), model.slug.clone().into());
+        if let Some(context) = model.context {
+            entry.insert("max_context_size".into(), toml_int(context));
+        }
+        let mut capabilities = vec!["thinking", "tool_use"];
+        if model.images {
+            capabilities.insert(0, "image_in");
+        }
+        entry.insert("capabilities".into(), strings(capabilities));
+        if let Some(effort) = &model.default_effort {
+            entry.insert("default_effort".into(), effort.clone().into());
+        }
+        if !model.efforts.is_empty() {
+            entry.insert("support_efforts".into(), strings(model.efforts.iter().map(String::as_str).collect()));
+        }
+        entries.insert(alias.clone(), entry.into());
+        added.push(alias);
+    }
+    if added.is_empty() {
+        return Ok((text.to_string(), added));
+    }
+    let mut out = String::new();
+    if config.default_model.is_none() {
+        out.push_str(&format!("default_model = {}\n", toml::Value::String(added[0].clone())));
+    }
+    out.push_str(text);
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("\n# Your ChatGPT plan, signed in with `killi login`.\n");
+    if existing.is_none() {
+        let provider = toml::Table::from_iter([("type".to_string(), toml::Value::from("chatgpt"))]);
+        let providers = toml::Table::from_iter([(name.clone(), toml::Value::Table(provider))]);
+        out.push_str(&toml::to_string(&toml::Table::from_iter([("providers".to_string(), toml::Value::Table(providers))]))?);
+        out.push('\n');
+    }
+    out.push_str(&toml::to_string(&toml::Table::from_iter([("models".to_string(), toml::Value::Table(entries))]))?);
+    toml::from_str::<Config>(&out).context("adding the plan's models would break the config")?;
+    Ok((out, added))
 }
 
 /// Makes `alias` the `default_model` of the config file: the line is replaced where the file
@@ -722,7 +845,7 @@ fn command_on_path(name: &str, except: &Path) -> Option<PathBuf> {
 }
 
 /// Asks a yes/no question on the terminal; Enter means yes.
-fn confirm(question: &str) -> Result<bool> {
+pub(crate) fn confirm(question: &str) -> Result<bool> {
     Ok(matches!(read_line(&format!("{question} [Y/n] "))?.to_ascii_lowercase().as_str(), "" | "y" | "yes"))
 }
 
@@ -1458,6 +1581,58 @@ mod tests {
         let model = config.resolve(None).unwrap();
         assert_eq!(model.protocol, super::Protocol::Responses);
         assert_eq!(model.thinking, super::Thinking::Effort("high".into()));
+    }
+
+    #[test]
+    fn a_chatgpt_model_needs_no_key_and_speaks_responses() {
+        let source = "[providers.plan]\ntype = \"chatgpt\"\n\n[models.\"plan/gpt-a\"]\nprovider = \"plan\"\nmodel = \"gpt-a\"\nmax_output_size = 1000\n";
+        let config: super::Config = toml::from_str(source).unwrap();
+        let model = config.resolve(Some("plan/gpt-a")).unwrap();
+        assert_eq!(model.protocol, super::Protocol::Responses);
+        assert!(model.chatgpt && model.api_key.is_empty());
+        assert_eq!(model.base_url, "https://api.openai.com/v1");
+        assert!(config.missing_key(Some("plan/gpt-a")).is_none(), "the first-run guide doesn't ask for a key");
+        assert_eq!(config.chatgpt_model(Some("plan/gpt-a")), Some("plan/gpt-a"));
+
+        let chat: super::Config = toml::from_str(&format!("{source}protocol = \"openai\"\n")).unwrap();
+        assert!(chat.resolve(Some("plan/gpt-a")).unwrap_err().to_string().contains("only the Responses API"));
+        let template: super::Config = toml::from_str(super::TEMPLATE).unwrap();
+        assert_eq!(template.chatgpt_model(None), None);
+    }
+
+    fn plan_model(slug: &str) -> super::PlanModel {
+        super::PlanModel { slug: slug.into(), context: Some(272000), efforts: vec!["low".into(), "high".into()], default_effort: Some("low".into()), images: true }
+    }
+
+    #[test]
+    fn signing_in_adds_the_plan_and_its_models_once() {
+        let (text, added) = super::with_plan_models("", &[plan_model("gpt-a"), plan_model("gpt-b")]).unwrap();
+        assert_eq!(added, ["chatgpt/gpt-a", "chatgpt/gpt-b"]);
+        let config: super::Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.default_model.as_deref(), Some("chatgpt/gpt-a"));
+        assert_eq!(config.providers["chatgpt"].kind, "chatgpt");
+        let model = &config.models["chatgpt/gpt-a"];
+        assert_eq!((model.max_context_size, model.default_effort.as_deref()), (Some(272000), Some("low")));
+        assert_eq!(model.support_efforts, ["low", "high"]);
+        assert_eq!(model.capabilities, ["image_in", "thinking", "tool_use"]);
+        assert!(config.resolve(None).unwrap().chatgpt);
+
+        let (again, none) = super::with_plan_models(&text, &[plan_model("gpt-a")]).unwrap();
+        assert!(none.is_empty() && again == text, "nothing is added twice");
+        let (more, added) = super::with_plan_models(&text, &[plan_model("gpt-a"), plan_model("gpt-c")]).unwrap();
+        assert_eq!(added, ["chatgpt/gpt-c"]);
+        assert_eq!(more.matches("[providers.chatgpt]").count(), 1, "the provider is reused: {more}");
+    }
+
+    #[test]
+    fn plan_models_go_after_the_users_config_and_keep_it() {
+        let mine = "# mine\ndefault_model = \"openai/gpt-5.5\"\n\n[providers.chatgpt]\ntype = \"openai\"\napi_key = \"k\"";
+        let (text, added) = super::with_plan_models(mine, &[plan_model("gpt-a")]).unwrap();
+        assert!(text.starts_with(mine), "{text}");
+        assert_eq!(added, ["chatgpt-plan/gpt-a"], "a `chatgpt` provider of another type keeps its name");
+        let config: super::Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.default_model.as_deref(), Some("openai/gpt-5.5"));
+        assert_eq!(config.providers["chatgpt-plan"].kind, "chatgpt");
     }
 
     #[test]

@@ -31,7 +31,8 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
 
 - `default_model = "alias"` names an entry under `[models]`. Without it, `-m` is required.
 - `[providers.<name>]`: `type` ("openai" for Chat Completions and compatible APIs,
-  "anthropic" for Messages, "openai_responses" for Responses), `base_url` (default
+  "anthropic" for Messages, "openai_responses" for Responses, "chatgpt" for the user's
+  ChatGPT plan: no key, `killi login` signs in and adds the plan's models), `base_url` (default
   `https://api.openai.com/v1`, or `https://api.anthropic.com` for anthropic), one of `api_key`
   or `api_key_env` (the name of an environment variable, which wins when both are set), and
   `custom_headers = { "X-Name" = "value" }`.
