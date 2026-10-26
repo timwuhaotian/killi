@@ -2676,6 +2676,9 @@ impl App {
             let waiting_on_you = |running: &Running| self.asking.is_some() && running.summary.starts_with("ask_user_question");
             for running in self.running.iter().filter(|r| !waiting_on_you(r)).take(5) {
                 if let Some(swarm) = self.swarm.as_ref().filter(|s| s.id == running.id) {
+                    // A panel, not one more tool row: the lines its finished subagents left
+                    // above look like its own rows.
+                    space(&mut rows);
                     rows.extend(swarm.rows(width, self.spinner, (self.height / 3).clamp(6, 14)));
                     continue;
                 }

@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.20 — 2026-10-26
+
+- A running swarm's panel has a blank row above it, so the lines its finished subagents left
+  in the conversation no longer run into the panel's own rows.
+
 ## 0.4.19 — 2026-10-26
 
 - A recap is no longer cut mid-sentence with `…`: it may run to 160 characters (the model is
