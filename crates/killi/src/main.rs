@@ -40,8 +40,8 @@ Usage:
   killi -p <prompt> [-m <model>] [-c] [--json] Run one task, print the answer and exit
   killi init                                   Write a starting ~/.killi/config.toml, or add [prompt] to yours
   killi import-kimi [--force]                  Copy providers, models and MCP servers from Kimi Code
-  killi login                                  Sign in with ChatGPT to use your plan's models
-  killi logout                                 Sign out of ChatGPT
+  killi login [chatgpt | opencode-go]          Sign in to a subscription and add its models
+  killi logout [chatgpt | opencode-go]         Sign out of one
   killi update                                 Install the latest published version
   killi --version
 
@@ -73,8 +73,8 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
         Some("init") => config::init().map(|()| ExitCode::SUCCESS),
         Some("import-kimi") => config::import_kimi(args.iter().any(|a| a == "--force")).map(|()| ExitCode::SUCCESS),
         Some("update") => update::update().await.map(|()| ExitCode::SUCCESS),
-        Some("login") => login::login().await.map(|()| ExitCode::SUCCESS),
-        Some("logout") => login::logout().await.map(|()| ExitCode::SUCCESS),
+        Some("login") => login::login(args.get(1).map(String::as_str)).await.map(|()| ExitCode::SUCCESS),
+        Some("logout") => login::logout(args.get(1).map(String::as_str)).await.map(|()| ExitCode::SUCCESS),
         Some("mcp-serve") => broker::serve(&broker::socket_path()).await.map(|()| ExitCode::SUCCESS),
         Some("-V" | "--version") => {
             println!("killi {}", env!("CARGO_PKG_VERSION"));
@@ -90,7 +90,7 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
             if options.prompt.is_none() {
                 config::set_up_if_missing()?;
                 config::guide_model(options.model.as_deref())?;
-                login::offer(options.model.as_deref()).await?;
+                login::chatgpt::offer(options.model.as_deref()).await?;
             }
             let config = config::Config::load()?;
             let cwd = std::env::current_dir()?;

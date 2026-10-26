@@ -32,12 +32,15 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
 - `default_model = "alias"` names an entry under `[models]`. Without it, `-m` is required.
 - `[providers.<name>]`: `type` ("openai" for Chat Completions and compatible APIs,
   "anthropic" for Messages, "openai_responses" for Responses, "chatgpt" for the user's
-  ChatGPT plan: no key, `killi login` signs in and adds the plan's models), `base_url` (default
-  `https://api.openai.com/v1`, or `https://api.anthropic.com` for anthropic), one of `api_key`
-  or `api_key_env` (the name of an environment variable, which wins when both are set), and
-  `custom_headers = { "X-Name" = "value" }`.
+  ChatGPT plan: no key, `killi login chatgpt` signs in and adds the plan's models), `base_url`
+  (default `https://api.openai.com/v1`, or `https://api.anthropic.com` for anthropic), one of
+  `api_key` or `api_key_env` (the name of an environment variable, which wins when both are
+  set), `custom_headers = { "X-Name" = "value" }`, and `session_header` (a header that carries
+  the conversation's ID on every request, such as OpenCode Go's `x-opencode-session`).
+  `killi login opencode-go` writes an OpenCode Go provider and its models from the key.
 - `[models."<provider>/<model>"]`: `provider` (a `[providers]` name), `model` (the API's
-  model id), `protocol` (overrides the provider's `type` for this model), `cache_control = true`
+  model id), `protocol` (overrides the provider's `type` for this model), `base_url` (overrides
+  the provider's, for a gateway with a URL per API), `cache_control = true`
   (Chat Completions only: mark the system message and the newest message for a gateway that
   passes it to Claude on Bedrock; without it that model re-bills the whole prompt each turn),
   `max_context_size`

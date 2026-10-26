@@ -1851,6 +1851,7 @@ mod tests {
             base_url: String::new(),
             api_key: String::new(),
             headers: Default::default(),
+            session_header: None,
             max_output: None,
             context_window: None,
             images: false,

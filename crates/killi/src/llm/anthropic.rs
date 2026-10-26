@@ -522,6 +522,7 @@ mod tests {
             base_url: String::new(),
             api_key: String::new(),
             headers: Default::default(),
+            session_header: None,
             max_output: Some(4_000),
             context_window: Some(2_000),
             images: false,

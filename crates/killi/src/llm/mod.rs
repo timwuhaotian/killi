@@ -19,6 +19,9 @@ pub use openai::REASONING_KEYS;
 
 const MAX_ATTEMPTS: u32 = 10;
 
+/// How killi names itself to the servers it calls.
+pub const USER_AGENT: &str = concat!("killi/", env!("CARGO_PKG_VERSION"));
+
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -107,11 +110,11 @@ impl Failure {
     }
 }
 
-impl From<crate::login::TokenError> for Failure {
-    fn from(error: crate::login::TokenError) -> Self {
+impl From<crate::login::chatgpt::TokenError> for Failure {
+    fn from(error: crate::login::chatgpt::TokenError) -> Self {
         match error {
-            crate::login::TokenError::SignIn(message) => Failure::fatal(message),
-            crate::login::TokenError::Transient(message) => Failure::transient(message),
+            crate::login::chatgpt::TokenError::SignIn(message) => Failure::fatal(message),
+            crate::login::chatgpt::TokenError::Transient(message) => Failure::transient(message),
         }
     }
 }
@@ -119,6 +122,7 @@ impl From<crate::login::TokenError> for Failure {
 impl Client {
     pub fn new(model: ResolvedModel) -> Result<Self> {
         let http = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(30))
             .read_timeout(Duration::from_secs(300))
             .build()?;
@@ -134,11 +138,14 @@ impl Client {
         cache_key: &str,
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<Reply> {
-        let prepared = match self.model.protocol {
+        let mut prepared = match self.model.protocol {
             Protocol::OpenAi => openai::prepare(&self.model, messages, tools, cache_key),
             Protocol::Anthropic => anthropic::prepare(&self.model, messages, tools),
             Protocol::Responses => responses::prepare(&self.model, messages, tools, cache_key),
         }?;
+        if let Some(name) = &self.model.session_header {
+            prepared.headers.push((name.clone(), cache_key.to_string()));
+        }
         let mut attempt = 1;
         let mut renewed = false;
         loop {
@@ -147,7 +154,7 @@ impl Client {
                 Err(failure) => failure,
             };
             if !failure.retryable || attempt == MAX_ATTEMPTS {
-                let advice = if self.model.chatgpt { crate::login::advice(&failure.message) } else { String::new() };
+                let advice = if self.model.chatgpt { crate::login::chatgpt::advice(&failure.message) } else { String::new() };
                 return Err(anyhow!("{} (after {attempt} attempt(s)){advice}", failure.message));
             }
             let wait = failure.retry_after.unwrap_or_else(|| backoff(attempt));
@@ -162,7 +169,7 @@ impl Client {
     async fn attempt(&self, prepared: &Prepared, renewed: &mut bool, on_delta: &mut dyn FnMut(Delta)) -> Result<Reply, Failure> {
         let mut request = self.http.post(&prepared.url).body(prepared.body.clone());
         let token = match self.model.chatgpt {
-            true => Some(crate::login::access_token(&self.http, None).await?),
+            true => Some(crate::login::chatgpt::access_token(&self.http, None).await?),
             false => None,
         };
         if let Some(token) = &token {
@@ -185,7 +192,7 @@ impl Client {
                 .map(Duration::from_secs);
             let text = response.text().await.unwrap_or_default();
             if let Some(token) = token.as_deref().filter(|_| status == StatusCode::UNAUTHORIZED && !*renewed) {
-                crate::login::access_token(&self.http, Some(token)).await?;
+                crate::login::chatgpt::access_token(&self.http, Some(token)).await?;
                 *renewed = true;
                 let message = format!("HTTP {status}: the ChatGPT token was turned away, so it was refreshed");
                 return Err(Failure { retryable: true, retry_after: Some(Duration::ZERO), message });
@@ -451,6 +458,7 @@ mod tests {
             base_url: String::new(),
             api_key: String::new(),
             headers: Default::default(),
+            session_header: None,
             max_output: Some(8_000),
             context_window: Some(2_000),
             images: false,

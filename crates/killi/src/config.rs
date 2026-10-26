@@ -135,6 +135,9 @@ pub struct Provider {
     pub api_key_env: Option<String>,
     #[serde(default)]
     pub custom_headers: BTreeMap<String, String>,
+    /// A header that carries the conversation's ID on every request, for a gateway that routes
+    /// and caches by it (OpenCode Go reads `x-opencode-session`).
+    pub session_header: Option<String>,
 }
 
 impl Provider {
@@ -159,6 +162,8 @@ pub struct Model {
     #[serde(default)]
     pub capabilities: Vec<String>,
     pub protocol: Option<String>,
+    /// Overrides the provider's `base_url`, for a gateway that serves each API at its own URL.
+    pub base_url: Option<String>,
     /// Mark the system message and the newest message with `cache_control` on Chat Completions,
     /// for gateways that pass it to a model with explicit prompt caching (Claude on Bedrock).
     #[serde(default)]
@@ -183,6 +188,8 @@ pub struct ResolvedModel {
     pub base_url: String,
     pub api_key: String,
     pub headers: BTreeMap<String, String>,
+    /// The provider's `session_header`, sent with the session's ID.
+    pub session_header: Option<String>,
     pub max_output: Option<u64>,
     pub context_window: Option<u64>,
     pub images: bool,
@@ -287,7 +294,7 @@ impl Config {
         if chatgpt && protocol != Protocol::Responses {
             bail!("model `{alias}` runs on a ChatGPT plan, which takes only the Responses API; remove its `protocol`");
         }
-        let base_url = match (&provider.base_url, protocol) {
+        let base_url = match (model.base_url.as_ref().or(provider.base_url.as_ref()), protocol) {
             (Some(url), _) => url.clone(),
             (None, Protocol::Anthropic) => "https://api.anthropic.com".to_string(),
             (None, _) => "https://api.openai.com/v1".to_string(),
@@ -303,6 +310,7 @@ impl Config {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             headers: provider.custom_headers.clone(),
+            session_header: provider.session_header.clone(),
             max_output: model.max_output_size,
             context_window: model.max_context_size,
             images: model.capabilities.iter().any(|c| c == "image_in"),
@@ -320,6 +328,11 @@ impl Config {
         let model = self.models.get(alias)?;
         let provider = self.providers.get(&model.provider)?;
         (provider.kind != "chatgpt" && provider.key().is_none()).then(|| MissingKey { alias: alias.to_string(), provider: model.provider.clone() })
+    }
+
+    /// The configured provider `ours` picks out: its name, and whether it has a key.
+    pub fn find_provider(&self, ours: fn(&Provider) -> bool) -> Option<(&str, bool)> {
+        self.providers.iter().find(|(_, provider)| ours(provider)).map(|(name, provider)| (name.as_str(), provider.key().is_some()))
     }
 
     /// The model killi would start on, when it runs on a ChatGPT plan.
@@ -393,8 +406,8 @@ api_key_env = "OPENAI_API_KEY"  # or: api_key = "..."
 type = "anthropic"              # Anthropic Messages, and compatible APIs
 api_key_env = "ANTHROPIC_API_KEY"
 
-# To use your ChatGPT plan instead of an API key, run `killi login`: it signs in and adds a
-# `type = "chatgpt"` provider with your plan's models here.
+# To use your ChatGPT plan or an OpenCode Go subscription, run `killi login`: it signs in and
+# adds that provider with its models here.
 
 [models."openai/gpt-5.5"]
 provider = "openai"
@@ -535,7 +548,7 @@ fn pick_model(config: &Config, path: &Path) -> Result<bool> {
     for (index, alias) in aliases.iter().enumerate() {
         let note = match config.missing_key(Some(alias)) {
             Some(missing) => key_reason(&config.providers[&missing.provider]),
-            None if config.chatgpt_model(Some(alias)).is_some() && !crate::login::signed_in() => "needs `killi login`".to_string(),
+            None if config.chatgpt_model(Some(alias)).is_some() && !crate::login::chatgpt::signed_in() => "needs `killi login chatgpt`".to_string(),
             None => "ready".to_string(),
         };
         eprintln!("  {}. {alias} — {note}", index + 1);
@@ -582,31 +595,48 @@ fn set_provider_key(path: &Path, provider: &str, key: &str) -> Result<()> {
     fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))
 }
 
-/// A model the ChatGPT plan offers, from its catalog.
+/// A model a sign-in adds to the config, as its `[models]` table will say it.
 #[derive(Debug, Default)]
-pub struct PlanModel {
-    pub slug: String,
+pub struct NewModel {
+    pub id: String,
+    /// When it isn't the provider's `type`.
+    pub protocol: Option<&'static str>,
+    /// When it isn't the provider's `base_url`.
+    pub base_url: Option<String>,
     pub context: Option<u64>,
-    pub efforts: Vec<String>,
-    pub default_effort: Option<String>,
+    pub output: Option<u64>,
     pub images: bool,
+    pub thinking: bool,
+    pub tools: bool,
+    pub default_effort: Option<String>,
+    pub efforts: Vec<String>,
 }
 
-/// After `killi login`: adds a `type = "chatgpt"` provider and the plan's models that the
-/// config doesn't have yet. A new config, or one without `default_model`, starts on the first.
-pub fn add_plan_models(models: &[PlanModel]) -> Result<()> {
+/// What a sign-in adds to the config: its provider and models.
+pub struct Additions {
+    /// The provider's name, when the config doesn't have it yet.
+    pub name: &'static str,
+    /// Finds the provider in a config that has it already, under any name.
+    pub ours: fn(&Provider) -> bool,
+    pub provider: toml::Table,
+    pub models: Vec<NewModel>,
+    /// The comment above the added tables.
+    pub comment: &'static str,
+}
+
+/// Adds a sign-in's provider and the models the config doesn't have yet, and says what it
+/// added. A provider already there keeps its table, except for a new `api_key`. A new config,
+/// or one without `default_model`, starts on the first model added.
+pub fn add_models(additions: &Additions) -> Result<()> {
     let dir = killi_home();
     let path = dir.join("config.toml");
     let text = match fs::read_to_string(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         read => Some(read.with_context(|| format!("could not read {}", path.display()))?),
     };
-    let (out, added) = with_plan_models(text.as_deref().unwrap_or_default(), models)?;
-    if added.is_empty() {
-        println!("Your plan's models are already in {}.", path.display());
-        return Ok(());
-    }
-    match text {
+    let (out, name, existed, added) = with_models(text.as_deref().unwrap_or_default(), additions)?;
+    match &text {
+        Some(text) if *text == out => {}
         Some(_) => fs::write(&path, &out).with_context(|| format!("could not write {}", path.display()))?,
         None => {
             fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
@@ -614,6 +644,13 @@ pub fn add_plan_models(models: &[PlanModel]) -> Result<()> {
             file.write_all(out.as_bytes())?;
             file.write_all(prompt_section().as_bytes())?;
         }
+    }
+    if existed && let Some(toml::Value::String(key)) = additions.provider.get("api_key") {
+        set_provider_key(&path, &name, key)?;
+    }
+    if added.is_empty() {
+        println!("Its models are already in {}.", path.display());
+        return Ok(());
     }
     println!("Added to {}: {}.", path.display(), added.join(", "));
     let config: Config = toml::from_str(&out)?;
@@ -624,31 +661,40 @@ pub fn add_plan_models(models: &[PlanModel]) -> Result<()> {
     Ok(())
 }
 
-/// The config text with the plan's models added at the end, the rest left as it is, and the
-/// aliases added. The provider is the config's `type = "chatgpt"` one, or a new `chatgpt`.
-fn with_plan_models(text: &str, models: &[PlanModel]) -> Result<(String, Vec<String>)> {
+/// The config text with the additions at the end and the rest left as it is, the provider's
+/// name, whether the config had it already, and the aliases added.
+fn with_models(text: &str, additions: &Additions) -> Result<(String, String, bool, Vec<String>)> {
     let config: Config = toml::from_str(text).context("invalid config")?;
-    let existing = config.providers.iter().find(|(_, provider)| provider.kind == "chatgpt").map(|(name, _)| name.clone());
-    let name = existing.clone().unwrap_or_else(|| if config.providers.contains_key("chatgpt") { "chatgpt-plan" } else { "chatgpt" }.to_string());
+    let existing = config.find_provider(additions.ours).map(|(name, _)| name.to_string());
+    let name = existing.clone().unwrap_or_else(|| {
+        let taken = |name: &String| config.providers.contains_key(name);
+        std::iter::once(additions.name.to_string()).chain((2..).map(|n| format!("{}-{n}", additions.name))).find(|name| !taken(name)).unwrap_or_default()
+    });
     let strings = |items: Vec<&str>| toml::Value::Array(items.into_iter().map(|item| toml::Value::String(item.to_string())).collect());
     let mut entries = toml::Table::new();
     let mut added = Vec::new();
-    for model in models {
-        let alias = format!("{name}/{}", model.slug);
+    for model in &additions.models {
+        let alias = format!("{name}/{}", model.id);
         if config.models.contains_key(&alias) || entries.contains_key(&alias) {
             continue;
         }
         let mut entry = toml::Table::new();
         entry.insert("provider".into(), name.clone().into());
-        entry.insert("model".into(), model.slug.clone().into());
+        entry.insert("model".into(), model.id.clone().into());
+        if let Some(protocol) = model.protocol {
+            entry.insert("protocol".into(), protocol.into());
+        }
+        if let Some(url) = &model.base_url {
+            entry.insert("base_url".into(), url.clone().into());
+        }
         if let Some(context) = model.context {
             entry.insert("max_context_size".into(), toml_int(context));
         }
-        let mut capabilities = vec!["thinking", "tool_use"];
-        if model.images {
-            capabilities.insert(0, "image_in");
+        if let Some(output) = model.output {
+            entry.insert("max_output_size".into(), toml_int(output));
         }
-        entry.insert("capabilities".into(), strings(capabilities));
+        let capabilities = [(model.images, "image_in"), (model.thinking, "thinking"), (model.tools, "tool_use")];
+        entry.insert("capabilities".into(), strings(capabilities.into_iter().filter(|(has, _)| *has).map(|(_, name)| name).collect()));
         if let Some(effort) = &model.default_effort {
             entry.insert("default_effort".into(), effort.clone().into());
         }
@@ -658,27 +704,52 @@ fn with_plan_models(text: &str, models: &[PlanModel]) -> Result<(String, Vec<Str
         entries.insert(alias.clone(), entry.into());
         added.push(alias);
     }
-    if added.is_empty() {
-        return Ok((text.to_string(), added));
+    if added.is_empty() && existing.is_some() {
+        return Ok((text.to_string(), name, true, added));
     }
     let mut out = String::new();
-    if config.default_model.is_none() {
+    if config.default_model.is_none() && !added.is_empty() {
         out.push_str(&format!("default_model = {}\n", toml::Value::String(added[0].clone())));
     }
     out.push_str(text);
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str("\n# Your ChatGPT plan, signed in with `killi login`.\n");
+    out.push_str(&format!("\n# {}\n", additions.comment));
     if existing.is_none() {
-        let provider = toml::Table::from_iter([("type".to_string(), toml::Value::from("chatgpt"))]);
-        let providers = toml::Table::from_iter([(name.clone(), toml::Value::Table(provider))]);
+        let providers = toml::Table::from_iter([(name.clone(), toml::Value::Table(additions.provider.clone()))]);
         out.push_str(&toml::to_string(&toml::Table::from_iter([("providers".to_string(), toml::Value::Table(providers))]))?);
-        out.push('\n');
     }
-    out.push_str(&toml::to_string(&toml::Table::from_iter([("models".to_string(), toml::Value::Table(entries))]))?);
-    toml::from_str::<Config>(&out).context("adding the plan's models would break the config")?;
-    Ok((out, added))
+    if !entries.is_empty() {
+        out.push('\n');
+        out.push_str(&toml::to_string(&toml::Table::from_iter([("models".to_string(), toml::Value::Table(entries))]))?);
+    }
+    toml::from_str::<Config>(&out).context("adding the models would break the config")?;
+    Ok((out, name, existing.is_some(), added))
+}
+
+/// Takes the `api_key` and `api_key_env` lines out of `provider`'s table, leaving the rest of
+/// the file as it is. False when it had neither.
+pub fn remove_provider_key(path: &Path, provider: &str) -> Result<bool> {
+    let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let header = format!("[providers.{provider}]");
+    let mut in_provider = false;
+    let mut removed = false;
+    let mut out: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_provider = trimmed == header;
+        } else if in_provider && trimmed.starts_with("api_key") {
+            removed = true;
+            continue;
+        }
+        out.push(line);
+    }
+    if removed {
+        fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))?;
+    }
+    Ok(removed)
 }
 
 /// Makes `alias` the `default_model` of the config file: the line is replaced where the file
@@ -851,7 +922,7 @@ pub(crate) fn confirm(question: &str) -> Result<bool> {
 
 /// Prints `prompt` and reads one line from the terminal, trimmed; end of input reads as no
 /// answer.
-fn read_line(prompt: &str) -> Result<String> {
+pub(crate) fn read_line(prompt: &str) -> Result<String> {
     eprint!("{prompt}");
     std::io::stderr().flush()?;
     let mut answer = String::new();
@@ -864,7 +935,7 @@ fn read_line(prompt: &str) -> Result<String> {
 /// Reads one line with the terminal's echo off, so a pasted key stays out of the scrollback.
 /// Ctrl+C cancels the paste: with signals off for the read it arrives as a byte, and reads as
 /// no answer rather than ending killi with the echo still off.
-fn read_secret(prompt: &str) -> Result<String> {
+pub(crate) fn read_secret(prompt: &str) -> Result<String> {
     let mut settings = unsafe { std::mem::zeroed::<libc::termios>() };
     // SAFETY: stdin is a terminal here and `settings` is initialized before it is read into.
     let terminal = unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut settings) } == 0;
@@ -1600,13 +1671,33 @@ mod tests {
         assert_eq!(template.chatgpt_model(None), None);
     }
 
-    fn plan_model(slug: &str) -> super::PlanModel {
-        super::PlanModel { slug: slug.into(), context: Some(272000), efforts: vec!["low".into(), "high".into()], default_effort: Some("low".into()), images: true }
+    fn plan_model(id: &str) -> super::NewModel {
+        super::NewModel {
+            id: id.into(),
+            context: Some(272000),
+            images: true,
+            thinking: true,
+            tools: true,
+            efforts: vec!["low".into(), "high".into()],
+            default_effort: Some("low".into()),
+            ..super::NewModel::default()
+        }
+    }
+
+    fn chatgpt(models: Vec<super::NewModel>) -> super::Additions {
+        super::Additions {
+            name: "chatgpt",
+            ours: |provider| provider.kind == "chatgpt",
+            provider: toml::Table::from_iter([("type".to_string(), toml::Value::from("chatgpt"))]),
+            models,
+            comment: "Your ChatGPT plan.",
+        }
     }
 
     #[test]
-    fn signing_in_adds_the_plan_and_its_models_once() {
-        let (text, added) = super::with_plan_models("", &[plan_model("gpt-a"), plan_model("gpt-b")]).unwrap();
+    fn signing_in_adds_the_provider_and_its_models_once() {
+        let (text, name, existed, added) = super::with_models("", &chatgpt(vec![plan_model("gpt-a"), plan_model("gpt-b")])).unwrap();
+        assert_eq!((name.as_str(), existed), ("chatgpt", false));
         assert_eq!(added, ["chatgpt/gpt-a", "chatgpt/gpt-b"]);
         let config: super::Config = toml::from_str(&text).unwrap();
         assert_eq!(config.default_model.as_deref(), Some("chatgpt/gpt-a"));
@@ -1617,22 +1708,49 @@ mod tests {
         assert_eq!(model.capabilities, ["image_in", "thinking", "tool_use"]);
         assert!(config.resolve(None).unwrap().chatgpt);
 
-        let (again, none) = super::with_plan_models(&text, &[plan_model("gpt-a")]).unwrap();
-        assert!(none.is_empty() && again == text, "nothing is added twice");
-        let (more, added) = super::with_plan_models(&text, &[plan_model("gpt-a"), plan_model("gpt-c")]).unwrap();
+        let (again, _, existed, none) = super::with_models(&text, &chatgpt(vec![plan_model("gpt-a")])).unwrap();
+        assert!(existed && none.is_empty() && again == text, "nothing is added twice");
+        let (more, _, _, added) = super::with_models(&text, &chatgpt(vec![plan_model("gpt-a"), plan_model("gpt-c")])).unwrap();
         assert_eq!(added, ["chatgpt/gpt-c"]);
         assert_eq!(more.matches("[providers.chatgpt]").count(), 1, "the provider is reused: {more}");
     }
 
     #[test]
-    fn plan_models_go_after_the_users_config_and_keep_it() {
+    fn added_models_go_after_the_users_config_and_keep_it() {
         let mine = "# mine\ndefault_model = \"openai/gpt-5.5\"\n\n[providers.chatgpt]\ntype = \"openai\"\napi_key = \"k\"";
-        let (text, added) = super::with_plan_models(mine, &[plan_model("gpt-a")]).unwrap();
+        let (text, name, _, added) = super::with_models(mine, &chatgpt(vec![plan_model("gpt-a")])).unwrap();
         assert!(text.starts_with(mine), "{text}");
-        assert_eq!(added, ["chatgpt-plan/gpt-a"], "a `chatgpt` provider of another type keeps its name");
+        assert_eq!((name.as_str(), added.as_slice()), ("chatgpt-2", ["chatgpt-2/gpt-a".to_string()].as_slice()), "a `chatgpt` provider of another type keeps its name");
         let config: super::Config = toml::from_str(&text).unwrap();
         assert_eq!(config.default_model.as_deref(), Some("openai/gpt-5.5"));
-        assert_eq!(config.providers["chatgpt-plan"].kind, "chatgpt");
+        assert_eq!(config.providers["chatgpt-2"].kind, "chatgpt");
+    }
+
+    #[test]
+    fn a_model_can_answer_on_its_own_url_and_protocol() {
+        let source = "[providers.go]\ntype = \"openai\"\nbase_url = \"https://gateway.example/openai/v1\"\napi_key = \"k\"\nsession_header = \"x-opencode-session\"\n\n\
+                      [models.\"go/kimi\"]\nprovider = \"go\"\nmodel = \"kimi\"\n\n\
+                      [models.\"go/haiku\"]\nprovider = \"go\"\nmodel = \"haiku\"\nprotocol = \"anthropic\"\nbase_url = \"https://gateway.example/anthropic\"\n";
+        let config: super::Config = toml::from_str(source).unwrap();
+        let kimi = config.resolve(Some("go/kimi")).unwrap();
+        assert_eq!((kimi.protocol, kimi.base_url.as_str()), (super::Protocol::OpenAi, "https://gateway.example/openai/v1"));
+        assert_eq!(kimi.session_header.as_deref(), Some("x-opencode-session"));
+        let haiku = config.resolve(Some("go/haiku")).unwrap();
+        assert_eq!((haiku.protocol, haiku.base_url.as_str(), haiku.api_key.as_str()), (super::Protocol::Anthropic, "https://gateway.example/anthropic", "k"));
+    }
+
+    #[test]
+    fn signing_out_takes_only_that_providers_key_lines() {
+        let root = std::env::temp_dir().join(format!("killi-unkey-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        std::fs::write(&path, "# mine\n[providers.go]\ntype = \"openai\"\napi_key = \"secret\"\nbase_url = \"u\"\n\n[providers.other]\napi_key = \"keep\"\n").unwrap();
+        assert!(super::remove_provider_key(&path, "go").unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("secret") && text.contains("keep") && text.contains("base_url = \"u\"") && text.contains("# mine"), "{text}");
+        assert!(!super::remove_provider_key(&path, "go").unwrap());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

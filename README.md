@@ -156,12 +156,20 @@ provider = "minimax"
 model = "MiniMax-M3.1-Flash"
 ```
 
-To use your ChatGPT plan instead of an API key, run `killi login`. It signs in with ChatGPT in
-the browser (OpenAI's [sign-in for open-source tools](https://developers.openai.com/siwc/token-sharing-open-source)),
-keeps the credentials in `~/.killi/chatgpt.json`, and adds a `type = "chatgpt"` provider with
-your plan's models to the config. Requests then go to `api.openai.com/v1/responses` on your
-plan, and killi refreshes the hourly token itself; [ChatGPT settings → Usage](https://chatgpt.com/settings/usage)
-shows and limits what killi uses. `killi logout` signs out.
+To use a subscription instead of a pay-as-you-go key, run `killi login` and pick one, or name
+it: `killi login chatgpt` or `killi login opencode-go`. Either way killi adds the provider and
+its models to the config; `killi logout` signs out.
+
+- **ChatGPT** (Plus or Pro) signs in in the browser, through OpenAI's [sign-in for open-source
+  tools](https://developers.openai.com/siwc/token-sharing-open-source), and keeps the credentials
+  in `~/.killi/chatgpt.json`. Requests go to `api.openai.com/v1/responses` on your plan, and
+  killi refreshes the hourly token itself; [ChatGPT settings → Usage](https://chatgpt.com/settings/usage)
+  shows and limits what killi uses.
+- **[OpenCode Go](https://opencode.ai/docs/go/)** takes the API key from the [OpenCode
+  Console](https://opencode.ai/console) (or `$OPENCODE_API_KEY`). Its models answer on Chat
+  Completions, Responses or Anthropic Messages; killi writes each with the API and URL
+  [models.dev](https://models.dev) gives it, and leaves out the ones on Gemini's API. Requests
+  carry `x-opencode-session` with the session's ID, as OpenCode asks.
 
 A model can use OpenAI's Responses API with `protocol = "openai_responses"`. A Claude model
 behind an OpenAI-compatible gateway (Bedrock through LiteLLM) caches nothing unless the request

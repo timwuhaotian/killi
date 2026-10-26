@@ -5,6 +5,17 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.4.16 — 2026-10-26
+
+- **`killi login` asks which subscription to sign in to**, or takes its name: `killi login
+  chatgpt` or `killi login opencode-go`. `killi logout` lists the ones killi is signed in to.
+- **OpenCode Go.** `killi login opencode-go` takes the API key from the OpenCode Console (or
+  `$OPENCODE_API_KEY`) and adds Go's models to the config, each on the API it answers on: Chat
+  Completions, Responses or Anthropic Messages, with the limits and inputs models.dev lists.
+  Models on Gemini's API are left out. A model can now set its own `base_url`, and a provider's
+  `session_header` sends the session's ID on each request (`x-opencode-session` for Go, which
+  routes and caches by it). Every request names killi in its user agent.
+
 ## 0.4.15 — 2026-10-26
 
 - **Use your ChatGPT plan instead of an API key.** `killi login` signs in with ChatGPT in the
