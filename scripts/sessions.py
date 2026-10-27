@@ -27,7 +27,11 @@ FIXED_SLEEP = re.compile(r"\s*sleep\s+(\d+(?:\.\d+)?)")  # a command's opening `
 MEASURING = re.compile(r"-T-(bench|eval-)")  # where bench.py and eval.py run killi: a temporary folder
 IDLE_GAP = 300_000  # ms without a log line that end a stretch of activity
 # Commands that move or rewrite a work tree another session may be working in.
-TREE_MOVING = re.compile(r"\bgit\s+(checkout|switch|stash|reset\s+--hard|clean|restore)\b")
+# `git stash list`/`show` only read, so they don't count.
+TREE_MOVING = re.compile(r"\bgit\s+(checkout|switch|stash(?!\s+(list|show)\b)|reset\s+--hard|clean|restore)\b")
+# The refusal the peer guard (0.6.8) answers a tree-moving command with.
+PEER_REFUSAL = "Not run: another killi session"
+MISS_STREAK = 3  # consecutive uncached requests on a growing prompt before it is reported
 # The notes killi appends when the other sessions in a repository change (live.rs, tree_note).
 PEERS_ON = ("<system-reminder>Another killi session works", "<system-reminder>Other killi sessions work")
 PEERS_OFF = "<system-reminder>No other killi session works"
@@ -60,8 +64,9 @@ def analyze(path):
          "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0, "version": None,
          "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [],
          "tool_ms": [], "slept": [0, 0], "compactions": [], "per_model": collections.defaultdict(lambda: collections.Counter()),
-         "active": [], "peer_git": []}
+         "active": [], "peer_git": [], "peer_refusals": 0, "miss_streak": []}
     model, awaiting, calls, answered, sleeping, peers = None, None, {}, set(), set(), False
+    streak, grew_from = 0, None
     for entry in read(path):
         kind = entry.get("type")
         if isinstance(entry.get("ts"), int):
@@ -73,6 +78,7 @@ def analyze(path):
         if kind in ("session", "model"):
             model = entry.get("model") or model
             s["version"] = entry.get("version") or s["version"]
+            streak, grew_from = 0, None
             if model and model not in s["models"]:
                 s["models"].append(model)
         elif kind == "message":
@@ -104,6 +110,8 @@ def analyze(path):
                 meta = entry.get("tool")
                 failed = meta["is_error"] if meta else looks_failed(message.get("content") or "")
                 s["tool_errors"] += bool(failed)
+                if (message.get("content") or "").startswith(PEER_REFUSAL):
+                    s["peer_refusals"] += 1
                 if meta and meta.get("ms") is not None:
                     s["tool_ms"].append((meta["ms"], meta.get("name") or calls.get(message.get("tool_call_id"), "?")))
                     if message.get("tool_call_id") in sleeping and not failed:
@@ -116,6 +124,14 @@ def analyze(path):
             s["cached"] += entry.get("cached", 0)
             s["completion"] += entry.get("completion", 0)
             s["max_context"] = max(s["max_context"], entry.get("prompt", 0))
+            # A cache-miss streak: uncached requests on a prompt that keeps growing, the shape
+            # of a provider that bills every request in full. A model switch or a compaction
+            # rewrites history, so both start the count over.
+            grew = grew_from is not None and entry.get("prompt", 0) > grew_from
+            streak = streak + 1 if entry.get("cached", 0) == 0 and grew else 0
+            if streak >= MISS_STREAK:
+                s["miss_streak"].append((streak, entry.get("prompt", 0)))
+            grew_from = entry.get("prompt", 0)
             if entry.get("ms") is not None:
                 s["request_ms"].append(entry["ms"])
             current = entry.get("model") or model or "unknown"
@@ -144,6 +160,7 @@ def analyze(path):
                 else:
                     awaiting = current
         elif kind == "compaction":
+            streak, grew_from = 0, None
             # A subagent's log opens with its starting history as a cause-free compaction;
             # only a real one (from compact_with) carries `cause`.
             if entry.get("cause"):
@@ -170,11 +187,16 @@ def table(head, rows):
     return "\n".join(out)
 
 
-def findings(sessions, models):
+def findings(sessions, models, versions_of):
     found = []
+
+    def tag(versions):
+        listed = sorted(v for v in versions if v)
+        return f"[v{','.join(listed)}] " if listed else ""
+
     for model, m in models.items():
         if m["turns"] >= 5 and m["cached"] / max(m["prompt"], 1) < LOW_CACHE:
-            found.append(f"**{model}: only {pct(m['cached'], m['prompt'])} of input came from the cache over {m['turns']} turns.** "
+            found.append(f"{tag(versions_of[model])}**{model}: only {pct(m['cached'], m['prompt'])} of input came from the cache over {m['turns']} turns.** "
                          "Probe the provider with `scripts/probe.py cache`.")
         if m["billed_reasoning"] and m["reasoning_lost"] == m["billed_reasoning"]:
             split = ", ".join(filter(None, [
@@ -182,32 +204,39 @@ def findings(sessions, models):
                 f"{m['lost_empty_field']} with an empty field" if m["lost_empty_field"] else "",
                 f"{m['lost_unread']} carrying unread stream fields" if m["lost_unread"] else "",
             ]))
-            found.append(f"**{model}: reasoning was billed on {m['billed_reasoning']} turns but never kept.** "
+            found.append(f"{tag(versions_of[model])}**{model}: reasoning was billed on {m['billed_reasoning']} turns but never kept.** "
                          + (f"Lost turns: {split}. " if split else "")
                          + "Probe with `scripts/probe.py stream` and `responses`; a provider that hides it on chat/completions may return "
                          "it on the Responses API (`type = \"openai_responses\"`).")
     for s in sessions:
         name = f"{s['project'][-24:]}/{s['id']}"
+        who = tag([s["version"]])
         for call, count in s["repeats"].items():
-            found.append(f"`{name}` made `{call}` {count} times.")
+            found.append(f"{who}`{name}` made `{call}` {count} times.")
         count, ms = s["slept"]
         if ms >= SLEPT * 1000:
-            found.append(f"`{name}` spent {ms / 1000:.0f}s in {count} commands that open with a fixed `sleep`: it waits the full time "
+            found.append(f"{who}`{name}` spent {ms / 1000:.0f}s in {count} commands that open with a fixed `sleep`: it waits the full time "
                          "however soon the job ends. `task_output` with `wait` or an `until <check>; do sleep 5; done` loop ends with the job.")
+        if s["miss_streak"]:
+            longest, reached = max(s["miss_streak"])
+            found.append(f"{who}`{name}` ran {longest} requests in a row at 0% cached while the prompt kept growing "
+                         f"(reaching {reached:,} tokens): a provider shape, not noise. `scripts/probe.py cache` says which half is broken.")
+        if s["peer_refusals"]:
+            found.append(f"{who}`{name}` had {s['peer_refusals']} tree-moving git command(s) refused by the peer guard.")
         if len(s["compactions"]) >= 3:
             c = s["compactions"][-1]
-            found.append(f"`{name}` compacted {len(s['compactions'])} times (last: context {c.get('context', '?')}, "
+            found.append(f"{who}`{name}` compacted {len(s['compactions'])} times (last: context {c.get('context', '?')}, "
                          f"suffix {c.get('suffix', '?')}, limit {c.get('limit', '?')}, reserve {c.get('reserve', '?')}, "
                          f"kept {c.get('kept_chars', '?')} chars): which part kept forcing it is in the causes.")
         if s["ended"] in ("tool", "unanswered tool call"):
-            found.append(f"`{name}` stopped right after a tool call ({s['ended']}): interrupted, killed or stopped by the repeat breaker.")
+            found.append(f"{who}`{name}` stopped right after a tool call ({s['ended']}): interrupted, killed or stopped by the repeat breaker.")
         for error in sorted(set(s["errors"])):
-            found.append(f"`{name}` hit an error: {error}")
+            found.append(f"{who}`{name}` hit an error: {error}")
         for warn in sorted(set(s["warns"])):
-            found.append(f"`{name}` logged a warning: {warn}")
+            found.append(f"{who}`{name}` logged a warning: {warn}")
         for command in s["peer_git"]:
-            found.append(f"`{name}` ran `{command}` after being told another session works in its repository: if this recurs, "
-                         "block such commands in code while a session shares the tree.")
+            found.append(f"{who}`{name}` ran `{command}` after being told another session works in its repository; "
+                         "versions since 0.6.8 refuse these while a peer shares the tree.")
     return found
 
 
@@ -246,11 +275,13 @@ def main():
     sessions = [analyze(p) for p in logs]
     sessions = [s for s in sessions if s["turns"] and s["started"] >= args.since]
     models = collections.defaultdict(collections.Counter)
+    versions_of = collections.defaultdict(set)
     for s in sessions:
         for model, stats in s["per_model"].items():
             models[model].update(stats)
+            versions_of[model].add(s["version"] or "?")
     if args.json:
-        print(json.dumps({"sessions": sessions, "models": models, "findings": findings(sessions, models)}, indent=1))
+        print(json.dumps({"sessions": sessions, "models": models, "findings": findings(sessions, models, versions_of)}, indent=1))
         return
 
     print(f"# killi sessions: {len(sessions)} with requests, {len(logs) - len(sessions)} empty or filtered out\n")
@@ -261,6 +292,15 @@ def main():
     print(table(["model", "turns", "cached", "reasoning billed", "…and kept"],
                 [(m, c["turns"], pct(c["cached"], c["prompt"]), c["billed_reasoning"], c["billed_reasoning"] - c["reasoning_lost"])
                  for m, c in sorted(models.items(), key=lambda kv: -kv[1]["turns"])]))
+    by_version = collections.defaultdict(lambda: [0, 0, 0])
+    for s in sessions:
+        row = by_version[s["version"] or "?"]
+        row[0] += 1
+        row[1] += s["turns"]
+        row[2] += s["tool_errors"]
+    print("\n## By version\n")
+    print(table(["version", "sessions", "turns", "failed tool calls"],
+                [(v, *row) for v, row in sorted(by_version.items())]))
     tools, errors = collections.Counter(), 0
     for s in sessions:
         tools.update(s["tools"])
@@ -279,7 +319,7 @@ def main():
         print(f"\n## Side by side\n\n{active:.1f} h with a session active, {together:.1f} h ({pct(together, active)}) with two or more; "
               f"at most {most} at once; {pairs} pairs overlapped in one project folder.")
     print("\n## Findings\n")
-    for line in findings(sessions, models) or ["None."]:
+    for line in findings(sessions, models, versions_of) or ["None."]:
         print(f"- {line}")
 
 

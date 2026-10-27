@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- Scripts only: `sessions.py` reports cache-miss streaks (3+ uncached requests
+  on a growing prompt), a per-version table, a `[vX]` tag on every finding, no
+  longer flags read-only `git stash list|show`, and counts refusals from the
+  peer guard; `probe.py cache` retries a 429 and can end "inconclusive".
+
 ## 0.6.8 — 2026-10-27
 
 - While another killi session works in the same git work tree, tree-moving git

@@ -40,21 +40,33 @@ def provider_of(config, alias):
     return model["model"], kind, base, headers
 
 
-def post(url, headers, body):
-    """Yields each server-sent event's JSON of a streamed request."""
+class RateLimited(Exception):
+    """A 429 that outlived its retries."""
+
+
+def post(url, headers, body, rate_limit_retries=0):
+    """Yields each server-sent event's JSON of a streamed request. A 429 is retried
+    up to `rate_limit_retries` times, waiting 20/40/60 s between tries."""
     request = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=180) as reply:
-            for raw in reply:
-                line = raw.decode("utf-8", "replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    return
-                yield json.loads(data)
-    except urllib.error.HTTPError as e:
-        raise SystemExit(f"HTTP {e.code}: {e.read()[:300].decode('utf-8', 'replace')}")
+    for try_n in range(rate_limit_retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=180) as reply:
+                for raw in reply:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        return
+                    yield json.loads(data)
+            return
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and try_n < rate_limit_retries:
+                time.sleep(20 * (try_n + 1))
+                continue
+            if e.code == 429 and rate_limit_retries:
+                raise RateLimited(str(e)) from None
+            raise SystemExit(f"HTTP {e.code}: {e.read()[:300].decode('utf-8', 'replace')}")
 
 
 def stream(model, kind, base, headers, effort):
@@ -120,8 +132,14 @@ def cache(model, kind, base, headers, cache_control):
     reads = []
     for attempt in (1, 2):
         usage = None
-        for event in post(base + "/chat/completions", headers, body):
-            usage = event.get("usage") or usage
+        try:
+            # The second request is the answer, so it alone retries a rate limit (20/40/60 s);
+            # the first stands as sent, like the request it stands in for.
+            for event in post(base + "/chat/completions", headers, body, rate_limit_retries=3 if attempt == 2 else 0):
+                usage = event.get("usage") or usage
+        except RateLimited:
+            print("inconclusive: provider rate-limited, so the cache can't be judged this run. Try again later.")
+            return
         print(f"request {attempt}:", json.dumps(usage))
         details = (usage or {}).get("prompt_tokens_details") or {}
         reads.append(max(details.get("cached_tokens", 0), (usage or {}).get("cache_read_input_tokens", 0),
