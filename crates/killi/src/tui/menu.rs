@@ -51,6 +51,11 @@ pub fn suggest(before: &str, entries: &[Entry], arguments: impl Fn(&str) -> Vec<
     let word = word_start(before);
     if let Some(typed) = before[word..].strip_prefix('/') {
         let items = commands(entries, typed);
+        // A complete name is typed: no menu, so Enter sends the prompt (as the `@` menu gives
+        // none for the one path it matches) — a skill runs at once, also while the agent works.
+        if items.first().is_some_and(|item| item.value == typed) {
+            return None;
+        }
         return (!items.is_empty()).then_some(Suggestions { items, start: word, fill: Fill::Command });
     }
     let typed = before.strip_prefix('/')?;
@@ -229,7 +234,7 @@ mod tests {
     fn fuzzy_matches_anywhere_in_the_name_and_ranks_tight_matches_first() {
         let s = suggest("/rev", &entries(), |_| Vec::new()).unwrap();
         assert_eq!(values(&s)[0], "code-review");
-        let s = suggest("/pdf", &entries(), |_| Vec::new()).unwrap();
+        let s = suggest("/pd", &entries(), |_| Vec::new()).unwrap();
         assert_eq!(values(&s)[..2], ["pdf", "make-pdf-report"]);
         let s = suggest("/cr", &entries(), |_| Vec::new()).unwrap();
         assert_eq!(values(&s)[0], "code-review");
@@ -248,6 +253,17 @@ mod tests {
         let s = suggest("/bugs", &entries(), |_| Vec::new()).unwrap();
         assert_eq!(values(&s), ["code-review"]);
         assert!(suggest("/zzz", &entries(), |_| Vec::new()).is_none());
+    }
+
+    #[test]
+    fn a_name_typed_in_full_gets_no_menu_so_enter_sends() {
+        let none = |_: &str| Vec::new();
+        assert!(suggest("/pdf", &entries(), none).is_none(), "a skill typed in full sends");
+        assert!(suggest("/exit", &entries(), none).is_none(), "a command typed in full sends");
+        assert!(suggest("/clear", &entries(), none).is_none(), "an alias typed in full sends");
+        assert!(suggest("use /pdf now", &entries(), none).is_none());
+        assert!(suggest("/pd", &entries(), none).is_some(), "a prefix still completes");
+        assert!(suggest("/pdf ", &entries(), none).is_none(), "a skill has no argument choices");
     }
 
     #[test]
