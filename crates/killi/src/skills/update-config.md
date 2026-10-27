@@ -16,7 +16,7 @@ first few characters. `~` is `$HOME`; nothing else moves these paths.
 | `~/.killi/config.toml` | the config, TOML; everything under "Keys". `killi init` writes a starting one (mode 0600), `killi import-kimi` copies Kimi Code's, and the first-run guide can import Kimi Code's, pi's or opencode's |
 | `~/.killi/mcp.json` | user MCP servers, `{"mcpServers": {...}}` as Claude Code and Kimi Code write it |
 | `<project>/.mcp.json` | project MCP servers, same format; the project is the nearest folder with `.git` |
-| `<project>/.killi/config.toml` | project config; only `[mcp] eager = ["name"]` is read: servers to start with the session, with native tools |
+| `<project>/.killi/config.toml` | project config; only `[mcp] eager = ["name"]` is read: servers to start with the session, with native tools, after a one-time trust check per repo (kept in `~/.killi/trusted.json`) |
 | `~/.killi/mcp-off.json` | servers turned off with `/mcp`, kept for later sessions |
 | `~/.killi/command-guide.json` | that the first-run guide already asked which command name to install killi under |
 | `~/.killi/last-model.json` | the last `/model` and `/effort` pick; new sessions start on it unless `-m` names a model |

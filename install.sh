@@ -10,8 +10,8 @@ dest="${KILLI_INSTALL_DIR:-$HOME/.local/bin}"
 
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
-curl -fsSL "$base/killi-arm64" -o "$tmp"
-expected=$(curl -fsSL "$base/latest.toml" | sed -n 's/^sha256 = "\(.*\)"/\1/p')
+curl -fsSL --connect-timeout 10 --max-time 300 "$base/killi-arm64" -o "$tmp"
+expected=$(curl -fsSL --connect-timeout 10 --max-time 300 "$base/latest.toml" | sed -n 's/^sha256 = "\(.*\)"/\1/p')
 actual=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
 [ -n "$expected" ] && [ "$expected" = "$actual" ] || { echo "checksum mismatch; not installing" >&2; exit 1; }
 

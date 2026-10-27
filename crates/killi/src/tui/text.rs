@@ -119,11 +119,11 @@ impl fmt::Display for Sgr {
 // where the terminal shows 24-bit color, else its nearest 256-color shade.
 
 /// Killi: running work, the active mode, commands, links and the selected row's mark.
-pub const LAGOON: Sgr = Sgr::fixed("\x1b[38;5;80m", "\x1b[38;5;30m", "\x1b[38;2;79;209;197m", "\x1b[38;2;10;110;101m");
+pub const LAGOON: Sgr = Sgr::fixed("\x1b[38;5;80m", "\x1b[38;5;23m", "\x1b[38;2;79;209;197m", "\x1b[38;2;10;110;101m");
 /// The human: your messages, the prompt, questions and anything else waiting on you.
 pub const FIN: Sgr = Sgr::fixed("\x1b[38;5;209m", "\x1b[38;5;130m", "\x1b[38;2;255;140;90m", "\x1b[38;2;173;63;20m");
 /// Retries, a context window nearly full, an interrupted turn.
-pub const WARN: Sgr = Sgr::fixed("\x1b[38;5;221m", "\x1b[38;5;136m", "\x1b[38;2;242;193;78m", "\x1b[38;2;138;90;0m");
+pub const WARN: Sgr = Sgr::fixed("\x1b[38;5;221m", "\x1b[38;5;94m", "\x1b[38;2;242;193;78m", "\x1b[38;2;138;90;0m");
 /// Failed tool calls, errors and removed lines.
 pub const DANGER: Sgr = Sgr::fixed("\x1b[38;5;204m", "\x1b[38;5;124m", "\x1b[38;2;255;111;125m", "\x1b[38;2;179;38;30m");
 /// Marks the eye may skip: a finished call's tick, gutters, hints, the empty part of a meter.
@@ -236,6 +236,124 @@ pub fn width(text: &str) -> usize {
         columns += c.width().unwrap_or(0);
     }
     columns
+}
+
+/// The column a tab expands to next.
+const TAB: usize = 4;
+
+/// `text` as it may go to the terminal: escape sequences (CSI, OSC, DCS and a lone ESC) and
+/// C0/C1 control characters other than a line break go, and a tab becomes the spaces to the
+/// next 4-column stop, counted from the text's own first column. Untrusted text is cleaned
+/// here, before killi adds its own styling, so what this leaves is what `width` and the wrap
+/// functions see.
+pub fn sanitize(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(|c| c.is_control() && c != '\n') {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut column = 0;
+    sanitize_body(text, &mut column, &mut out);
+    Cow::Owned(out)
+}
+
+/// `sanitize` for a field that has one row: each line break becomes ` ⏎ ` instead.
+pub fn sanitize_row(text: &str) -> Cow<'_, str> {
+    let clean = sanitize(text);
+    if !clean.contains('\n') {
+        return clean;
+    }
+    Cow::Owned(clean.replace('\n', " ⏎ "))
+}
+
+/// Writes what stays of `text` to `out`, tracking the column for tab stops, and returns what
+/// it left unjudged: an escape sequence the text ends in the middle of, which the caller drops
+/// or holds for what follows.
+fn sanitize_body<'a>(mut text: &'a str, column: &mut usize, out: &mut String) -> &'a str {
+    while let Some(c) = text.chars().next() {
+        let after = &text[c.len_utf8()..];
+        match c {
+            '\t' => {
+                let spaces = TAB - *column % TAB;
+                out.push_str(&" ".repeat(spaces));
+                *column += spaces;
+                text = after;
+            }
+            '\n' => {
+                out.push('\n');
+                *column = 0;
+                text = after;
+            }
+            '\x1b' => match after.chars().next() {
+                None => return text,
+                // CSI: parameter and intermediate bytes through a final one in 0x40–0x7E. A byte
+                // outside them ends the sequence without being part of it.
+                Some('[') => {
+                    let mut rest = &after[1..];
+                    text = loop {
+                        match rest.chars().next() {
+                            Some(c) if ('\x30'..='\x3f').contains(&c) || ('\x20'..='\x2f').contains(&c) => rest = &rest[c.len_utf8()..],
+                            Some(c) if ('\x40'..='\x7e').contains(&c) => break &rest[c.len_utf8()..],
+                            Some(_) => break rest,
+                            None => return text,
+                        }
+                    };
+                }
+                // OSC, DCS, SOS, PM and APC: strings through BEL or ST (ESC \).
+                Some(opener @ (']' | 'P' | 'X' | '^' | '_')) => {
+                    let mut rest = &after[opener.len_utf8()..];
+                    text = loop {
+                        match rest.chars().next() {
+                            Some(c) if c == '\x07' => break &rest[c.len_utf8()..],
+                            Some(c) if c == '\x1b' && rest[1..].starts_with('\\') => break &rest[2..],
+                            Some(c) if c.is_control() => break rest,
+                            Some(c) => rest = &rest[c.len_utf8()..],
+                            None => return text,
+                        }
+                    };
+                }
+                Some(second) => text = &after[second.len_utf8()..],
+            },
+            c if c.is_control() => text = after,
+            c => {
+                out.push(c);
+                *column += c.width().unwrap_or(0);
+                text = after;
+            }
+        }
+    }
+    ""
+}
+
+/// `sanitize` across the deltas a reply streams in: an escape sequence one delta ends in the
+/// middle of waits inside for the next, and tab stops count from the text that already went
+/// through. `finish` ends the text; a sequence still waiting at the end goes, since nothing
+/// the terminal should act on is left half-written.
+#[derive(Default)]
+pub struct Sanitizer {
+    /// The tail of the last push: an escape sequence that may continue.
+    held: String,
+    column: usize,
+}
+
+impl Sanitizer {
+    /// Cleans `delta`, holding back what may still grow into an escape sequence.
+    pub fn push(&mut self, delta: &str) -> String {
+        self.held.push_str(delta);
+        let mut out = String::with_capacity(self.held.len());
+        let rest = sanitize_body(&self.held, &mut self.column, &mut out);
+        self.held = rest.to_string();
+        out
+    }
+
+    /// Ends the text and gives back what `push` had held, as far as it can be judged.
+    pub fn finish(&mut self) -> String {
+        let held = std::mem::take(&mut self.held);
+        self.column = 0;
+        let mut out = String::new();
+        let mut column = 0;
+        sanitize_body(&held, &mut column, &mut out);
+        out
+    }
 }
 
 /// Splits a styled line into rows of at most `max` columns. Each row ends with a reset and
@@ -379,6 +497,19 @@ impl Rows {
     }
 }
 
+/// A code row wrapped for `max` columns: continuation rows keep the `▏` gutter, four columns
+/// wide like the indent they stand in for. Too narrow to hang the gutter, the row stays whole.
+pub fn wrap_code(line: &str, max: usize) -> Vec<String> {
+    if max < 8 {
+        return vec![line.to_string()];
+    }
+    let gutter = format!("  {FAINT}▏{RESET} ");
+    wrap_words(line, max, 4).into_iter().map(|row| match row.strip_prefix("    ") {
+        Some(rest) => format!("{gutter}{rest}"),
+        None => row,
+    }).collect()
+}
+
 /// The columns a line's leading spaces and list marker take, for wrapping its later rows
 /// under its text.
 pub fn hanging_indent(line: &str) -> usize {
@@ -400,10 +531,11 @@ pub fn hanging_indent(line: &str) -> usize {
     lead + marker.unwrap_or(0)
 }
 
-/// What a line of Markdown adds: a styled row, or a finished table, left as its source rows so
-/// it can be laid out for any width.
+/// What a line of Markdown adds: a styled row, a code row wrapped with its gutter kept, or
+/// a finished table, left as its source rows so it can be laid out for any width.
 pub enum Part {
     Row(String),
+    Code(String),
     Table(Vec<String>),
 }
 
@@ -416,6 +548,8 @@ pub struct Markdown {
     in_code: bool,
     lang: Lang,
     table: Vec<String>,
+    /// Bumped on every styling step, so a cached preview knows the state it was made from.
+    generation: u64,
 }
 
 impl Markdown {
@@ -425,22 +559,42 @@ impl Markdown {
 
     /// What `line` adds. A table row adds nothing until a line that isn't one follows.
     pub fn parts(&mut self, line: &str) -> Vec<Part> {
+        self.generation += 1;
         let trimmed = line.trim_start();
         if !self.in_code && is_table_row(trimmed) {
             self.table.push(trimmed.to_string());
             return Vec::new();
         }
         let mut parts = self.finish_parts();
-        parts.extend(self.block(line, trimmed).map(Part::Row));
+        if let Some(part) = self.block(line, trimmed) {
+            parts.push(part);
+        }
         parts
     }
 
     /// The table still being held, at the end of the text or a blank line.
     pub fn finish_parts(&mut self) -> Vec<Part> {
+        self.generation += 1;
         if self.table.is_empty() {
             return Vec::new();
         }
         vec![Part::Table(std::mem::take(&mut self.table))]
+    }
+
+    /// The message is over: lays out the table still being held, and closes an unclosed
+    /// fence, so the next message doesn't inherit this one's code styling.
+    pub fn end_message(&mut self) -> Vec<Part> {
+        self.generation += 1;
+        let parts = self.finish_parts();
+        self.in_code = false;
+        self.lang = Lang::Plain;
+        parts
+    }
+
+    /// How many styling steps went into the state: a preview styled from it is fresh while
+    /// this, its text and its width are unchanged.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The rows `line` adds, a table laid out for `width`.
@@ -460,6 +614,7 @@ impl Markdown {
             .into_iter()
             .flat_map(|part| match part {
                 Part::Row(row) => vec![row],
+                Part::Code(row) => wrap_code(&row, self.width),
                 Part::Table(rows) => render_table(&rows, self.width),
             })
             .collect()
@@ -467,27 +622,27 @@ impl Markdown {
 
     /// The row a line becomes; None for a code fence with nothing to say (no language, or the
     /// one that closes the block), so the block starts and ends on its code.
-    fn block(&mut self, line: &str, trimmed: &str) -> Option<String> {
+    fn block(&mut self, line: &str, trimmed: &str) -> Option<Part> {
         if let Some(info) = trimmed.strip_prefix("```") {
             let lang = info.trim().split(|c: char| c.is_whitespace() || c == ',').next().unwrap_or("");
             self.in_code = !self.in_code;
             self.lang = if self.in_code { Lang::of(lang) } else { Lang::Plain };
             let label = if self.in_code { lang } else { "" };
-            return (!label.is_empty()).then(|| format!("  {FAINT}▏{RESET} {DIM}{label}{RESET}"));
+            return (!label.is_empty()).then(|| Part::Row(format!("  {FAINT}▏{RESET} {DIM}{label}{RESET}")));
         }
         if self.in_code {
             let code = match self.lang {
                 Lang::Plain => line.to_string(),
                 lang => highlight(lang, line),
             };
-            return Some(format!("  {FAINT}▏{RESET} {code}"));
+            return Some(Part::Code(format!("  {FAINT}▏{RESET} {code}")));
         }
         if let Some((level, rest)) = heading(trimmed) {
             let color = if level <= 2 { LAGOON.to_string() } else { String::new() };
-            return Some(format!("{BOLD}{color}{}{RESET}", inline(rest)));
+            return Some(Part::Row(format!("{BOLD}{color}{}{RESET}", inline(rest))));
         }
         if let Some(rest) = trimmed.strip_prefix("> ") {
-            return Some(format!("{FAINT}│{RESET} {DIM}{}{RESET}", inline(rest)));
+            return Some(Part::Row(format!("{FAINT}│{RESET} {DIM}{}{RESET}", inline(rest))));
         }
         let indent = &line[..line.len() - trimmed.len()];
         for bullet in ["- ", "* ", "+ "] {
@@ -497,17 +652,17 @@ impl Markdown {
                     r if r.starts_with("[x] ") || r.starts_with("[X] ") => ("☑", &r[4..]),
                     r => (if indent.is_empty() { "•" } else { "◦" }, r),
                 };
-                return Some(format!("{indent}{mark} {}", inline(rest)));
+                return Some(Part::Row(format!("{indent}{mark} {}", inline(rest))));
             }
         }
         let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
         if digits > 0 && trimmed[digits..].starts_with(". ") {
-            return Some(format!("{indent}{DIM}{}.{RESET} {}", &trimmed[..digits], inline(&trimmed[digits + 2..])));
+            return Some(Part::Row(format!("{indent}{DIM}{}.{RESET} {}", &trimmed[..digits], inline(&trimmed[digits + 2..]))));
         }
         if matches!(trimmed, "---" | "***" | "___") {
-            return Some(format!("{RULE}{}{RESET}", "─".repeat(self.width.clamp(10, 60))));
+            return Some(Part::Row(format!("{RULE}{}{RESET}", "─".repeat(self.width.clamp(10, 60)))));
         }
-        Some(inline(line))
+        Some(Part::Row(inline(line)))
     }
 }
 
@@ -861,6 +1016,112 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_takes_out_escape_sequences_and_controls() {
+        assert_eq!(&*sanitize("plain, 中文 and ✓"), "plain, 中文 and ✓");
+        assert_eq!(&*sanitize("a\x1b[31mred\x1b[0mb"), "aredb");
+        assert_eq!(&*sanitize("a\x1b[2Jbc"), "abc");
+        assert_eq!(&*sanitize("\x1b[3;7Hx"), "x");
+        assert_eq!(&*sanitize("\x1b]0;title\x07rest"), "rest");
+        assert_eq!(&*sanitize("\x1b]8;;http://a\x1b\\link\x1b]8;;\x1b\\!"), "link!");
+        assert_eq!(&*sanitize("a\x1bPq;1;2\x1b\\b"), "ab");
+        assert_eq!(&*sanitize("a\x1bMb"), "ab");
+        assert_eq!(&*sanitize("a\x1b"), "a", "a lone escape goes");
+        assert_eq!(&*sanitize("a\x1b[31"), "a", "so does one the text ends in the middle of");
+        assert_eq!(&*sanitize("x\u{9b}31my"), "x31my", "a C1 control is no safer");
+        assert_eq!(&*sanitize("a\x07b\rc\x7fd"), "abcd", "other C0 controls go, line breaks stay");
+        assert_eq!(&*sanitize("a\nb"), "a\nb");
+        // A tab that would eat the line break neither eats it nor the text after it.
+        assert_eq!(&*sanitize("a\x1b[\nb"), "a\nb");
+        assert_eq!(&*sanitize("\x1b]0;still open\nb"), "\nb");
+    }
+
+    #[test]
+    fn sanitize_expands_tabs_to_the_next_four_column_stop() {
+        assert_eq!(&*sanitize("a\tb"), "a   b");
+        assert_eq!(&*sanitize("ab\tc"), "ab  c");
+        assert_eq!(&*sanitize("abc\td"), "abc d");
+        assert_eq!(&*sanitize("\tx"), "    x");
+        assert_eq!(&*sanitize("a\n\tb"), "a\n    b", "the column starts over on each line");
+        assert_eq!(&*sanitize("中文\t."), "中文    .");
+        assert_eq!(&*sanitize_row("one\ntwo"), "one ⏎ two");
+        assert_eq!(&*sanitize_row("a\tb"), "a   b");
+        assert_eq!(&*sanitize_row("plain"), "plain");
+    }
+
+    #[test]
+    fn a_sequence_split_across_deltas_is_still_taken_out() {
+        let mut stream = Sanitizer::default();
+        assert_eq!(stream.push("ok \x1b["), "ok ");
+        assert_eq!(stream.push("31;41mred"), "red");
+        assert_eq!(stream.push("\x1b]0;ti"), "");
+        assert_eq!(stream.push("tle\x07!"), "!");
+        assert_eq!(stream.push("ab"), "ab");
+        assert_eq!(stream.push("\tc"), "   c", "a tab counts every column before it, delta or not");
+        assert_eq!(stream.push("d\x1b"), "d");
+        assert_eq!(stream.push("[2K"), "");
+        assert_eq!(stream.finish(), "");
+        let mut ending = Sanitizer::default();
+        assert_eq!(ending.push("end\x1b[12"), "end");
+        assert_eq!(ending.finish(), "", "a sequence still waiting at the end goes");
+    }
+
+    #[test]
+    fn wrapped_code_rows_keep_the_gutter() {
+        let rows = wrap_code(&format!("  {FAINT}▏{RESET} {}", "let x = 1;".repeat(20)), 30);
+        assert!(rows.len() > 1);
+        assert!(rows.iter().all(|row| width(row) <= 30), "{rows:?}");
+        assert!(rows.iter().all(|row| row.contains('▏')), "{rows:?}");
+    }
+
+    #[test]
+    fn code_marks_a_part_that_wraps_with_its_gutter() {
+        let mut md = Markdown::new(30);
+        md.line("```rust");
+        let parts = md.parts(&"let x = 1;".repeat(20));
+        assert!(matches!(parts.as_slice(), [Part::Code(_)]));
+        let rows = md.rows(parts);
+        assert!(rows.len() > 1 && rows.iter().all(|row| width(row) <= 30 && row.contains('▏')), "{rows:?}");
+    }
+
+    #[test]
+    fn the_256_color_light_shades_read_at_four_point_five_to_one() {
+        for sgr in [LAGOON, WARN] {
+            let index: u8 = sgr.light["\x1b[38;5;".len()..sgr.light.len() - 1].parse().unwrap();
+            let ratio = contrast_256(index, (245, 247, 244));
+            assert!(ratio >= 4.5, "{index}: {ratio}");
+        }
+    }
+
+    /// The RGB of a 256-color palette index.
+    fn palette_256(index: u8) -> (u8, u8, u8) {
+        match index {
+            16..=231 => {
+                let n = index - 16;
+                let level = |k: u8| [0, 95, 135, 175, 215, 255][usize::from(k)];
+                (level(n / 36), level((n % 36) / 6), level(n % 6))
+            }
+            232..=255 => {
+                let v = 8 + 10 * (index - 232);
+                (v, v, v)
+            }
+            _ => (0, 0, 0),
+        }
+    }
+
+    /// The WCAG contrast ratio of a palette index on a background color.
+    fn contrast_256(index: u8, background: (u8, u8, u8)) -> f64 {
+        let luminance = |(r, g, b): (u8, u8, u8)| {
+            let linear = |c: u8| {
+                let c = f64::from(c) / 255.0;
+                if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+        };
+        let (a, b) = (luminance(palette_256(index)), luminance(background));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
     fn wrap_carries_styles_across_rows() {
         let rows = wrap(&format!("{DANGER}abcdef{RESET}"), 4);
         assert_eq!(rows.len(), 2);
@@ -927,6 +1188,19 @@ mod tests {
         narrow.line("| aaaaaaaaaa | bbbbbbbbbb |");
         let rows = narrow.finish();
         assert!(rows.iter().all(|r| width(r) <= 14), "{rows:?}");
+    }
+
+    #[test]
+    fn an_unclosed_fence_does_not_leak_into_the_next_message() {
+        let mut md = Markdown::default();
+        assert!(md.line("```rust").iter().any(|row| row.contains("rust")));
+        assert!(md.line("let x = 1;").iter().all(|row| row.contains('▏')));
+        let held = md.end_message();
+        assert!(held.is_empty(), "no table was held");
+        assert_eq!(md.line("plain"), ["plain"]);
+        let reopened = md.line("```rust");
+        assert!(reopened.iter().any(|row| row.contains("rust")), "a fence still opens after the reset: {reopened:?}");
+        assert!(md.line("let y = 2;").iter().all(|row| row.contains('▏')));
     }
 
     #[test]
@@ -1000,6 +1274,19 @@ mod tests {
         assert_eq!(lines(&mut md, "```\nx\n```").len(), 1);
         assert_eq!(lines(&mut md, "```rust\nlet a = 1;\nlet b = 2;\n```").len(), 3, "the label and two lines");
         assert_eq!(lines(&mut md, "after").len(), 1);
+    }
+
+    #[test]
+    fn styling_steps_bump_the_generation() {
+        let mut md = Markdown::new(80);
+        assert_eq!(md.generation(), 0);
+        md.line("```rust");
+        let styled = md.generation();
+        assert!(styled > 0);
+        md.line("let x = 1;");
+        assert!(md.generation() > styled);
+        md.finish();
+        assert!(md.generation() > styled);
     }
 
     #[test]

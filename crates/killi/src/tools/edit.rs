@@ -31,6 +31,12 @@ pub fn edit(ctx: &Context, args: &Value) -> Output {
     if is_binary(&bytes) {
         return Output::error(format!("{path} is a binary file; edit only works on text."));
     }
+    if let Err(e) = std::str::from_utf8(&bytes) {
+        return Output::error(format!(
+            "{path} isn't valid UTF-8 (first bad byte at offset {}); edit would rewrite bytes it can't show. Use bash (e.g. iconv) or write.",
+            e.valid_up_to()
+        ));
+    }
     let file = TextFile::decode(&bytes);
     match apply(&file.text, &edits, path) {
         Ok(applied) => match fs::write(&full, file.encode(&applied.text)) {
@@ -370,5 +376,20 @@ mod tests {
     fn edits_sent_as_a_json_string_are_accepted() {
         let out = run("one", json!({"edits": "[{\"old_string\":\"one\",\"new_string\":\"two\"}]"}));
         assert_eq!(out.unwrap(), "two");
+    }
+
+    #[test]
+    fn a_latin1_file_is_left_untouched() {
+        let dir = crate::test_temp::TempDir::new("killi-edit");
+        let file = dir.join("latin1.txt");
+        fs::write(&file, b"caf\xe9 au lait\n").unwrap();
+        let ctx = Context::new(dir.path().to_path_buf(), dir.join("spill"));
+        let out = edit(&ctx, &json!({"path": "latin1.txt", "old_string": "caf", "new_string": "tea"}));
+        assert!(out.is_error, "{}", out.text);
+        assert_eq!(
+            out.text,
+            "latin1.txt isn't valid UTF-8 (first bad byte at offset 3); edit would rewrite bytes it can't show. Use bash (e.g. iconv) or write."
+        );
+        assert_eq!(fs::read(&file).unwrap(), b"caf\xe9 au lait\n");
     }
 }

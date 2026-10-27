@@ -7,12 +7,14 @@ mod files;
 mod search;
 mod web;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-pub use bash::{OwnSession, Running, Tasks, kill_all};
+pub use bash::{OwnSession, Running, Tasks, Tracked, kill_all, track};
+#[cfg(test)]
+pub(crate) use bash::registered;
 pub use files::{image_type, image_url};
 
 pub const MAX_LINES: usize = 2000;
@@ -36,9 +38,13 @@ pub struct Context {
     /// The calls waiting on a command now.
     pub running: RefCell<Running>,
     /// Whether the model can see images.
-    pub images: bool,
+    pub images: Cell<bool>,
     /// Which service `web_search` asks; /web-search-config swaps it while the session runs.
     pub search: RefCell<SearchSettings>,
+    /// Test-only scratch folder removed when the context drops, so `cargo test` leaves
+    /// no `killi-*` folders behind in the temporary folder.
+    #[cfg(test)]
+    pub temp: Option<crate::test_temp::TempDir>,
 }
 
 impl Context {
@@ -48,8 +54,10 @@ impl Context {
             spill_dir,
             tasks: RefCell::new(Tasks::default()),
             running: RefCell::default(),
-            images: true,
+            images: Cell::new(true),
             search: RefCell::default(),
+            #[cfg(test)]
+            temp: None,
         }
     }
 }
@@ -101,6 +109,15 @@ pub async fn run(ctx: &Context, name: &str, args: Value, wake: bash::Wake<'_>) -
     }
 }
 
+/// A `u64` tool argument, whether the model sent a number or a string holding one.
+pub fn uint(args: &Value, key: &str) -> Option<u64> {
+    match args.get(key) {
+        Some(Value::Number(n)) => n.as_u64(),
+        Some(Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
 /// One line for the terminal: what the call touches, with paths relative to `cwd` and a
 /// leading `cd <cwd> &&` left out.
 /// `n` and `noun`, the noun made plural unless `n` is 1: "1 file", "3 files".
@@ -136,8 +153,20 @@ pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
         "ask_user_question" => field("question").to_string(),
         _ => String::new(),
     };
-    let detail = detail.replace(&format!("{cwd}/"), "").replace(&cwd, ".");
+    let detail = strip_cwd(&detail, &cwd);
     format!("{name} {}", crate::llm::truncate(&detail, 120)).trim_end().to_string()
+}
+
+/// `cwd` out of a summary, only as a path prefix at a `/` boundary, so `/x/killi-old`
+/// survives intact next to `/x/killi`, and a `/` root leaves `etc/hosts`, not `.etc.hosts`.
+fn strip_cwd(detail: &str, cwd: &str) -> String {
+    if detail == cwd {
+        return ".".to_string();
+    }
+    if cwd == "/" {
+        return detail.strip_prefix('/').unwrap_or(detail).to_string();
+    }
+    detail.strip_prefix(&format!("{cwd}/")).unwrap_or(detail).to_string()
 }
 
 fn tool(name: &str, description: &str, parameters: Value) -> Value {
@@ -316,9 +345,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn string_numbers_parse_where_a_u64_is_expected() {
+        assert_eq!(uint(&json!({"n": 300}), "n"), Some(300));
+        assert_eq!(uint(&json!({"n": "300"}), "n"), Some(300));
+        assert_eq!(uint(&json!({"n": " 300 "}), "n"), Some(300));
+        assert_eq!(uint(&json!({}), "n"), None);
+        assert_eq!(uint(&json!({"n": true}), "n"), None);
+        assert_eq!(uint(&json!({"n": "many"}), "n"), None);
+        assert_eq!(uint(&json!({"n": "-3"}), "n"), None);
+        assert_eq!(uint(&json!({"n": 1.5}), "n"), None);
+    }
+
+    #[test]
     fn a_bash_summary_shows_where_it_ran_and_drops_a_leading_cd() {
         let cwd = Path::new("/w/app");
         assert_eq!(summary("bash", &json!({"command": "cd /w/app && cargo test"}), cwd), "bash cargo test");
         assert_eq!(summary("bash", &json!({"command": "git status", "cwd": "../other"}), cwd), "bash [../other] git status");
+    }
+
+    #[test]
+    fn a_summary_strips_the_cwd_only_as_a_path_prefix() {
+        let cwd = Path::new("/x/killi");
+        assert_eq!(summary("read", &json!({"path": "/x/killi/src/a.rs"}), cwd), "read src/a.rs");
+        assert_eq!(summary("read", &json!({"path": "/x/killi-old/src/a.rs"}), cwd), "read /x/killi-old/src/a.rs");
+        assert_eq!(summary("read", &json!({"path": "/x/killi"}), cwd), "read .");
+        let root = Path::new("/");
+        assert_eq!(summary("read", &json!({"path": "/etc/hosts"}), root), "read etc/hosts");
     }
 }

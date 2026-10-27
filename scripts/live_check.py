@@ -3,7 +3,7 @@
 pseudo-terminal under a scratch HOME, a scripted provider that logs every request, and the
 `killi sessions`, `killi ask` and `killi tell` commands between them.
 
-    scripts/live_check.py                       # target/release/killi
+    scripts/live_check.py                       # the newer of target/debug/killi and target/release/killi
     scripts/live_check.py --killi target/debug/killi
 
 Prints PASS or FAIL for each check and exits non-zero if any failed. What it covers: the list
@@ -38,6 +38,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def newest_killi():
+    """Whichever of the debug and release binaries is newer; a fixed default goes stale."""
+    built = [p for p in (ROOT / "target/debug/killi", ROOT / "target/release/killi") if p.exists()]
+    if not built:
+        sys.exit("no killi binary yet; run cargo build first")
+    return max(built, key=lambda p: p.stat().st_mtime)
 
 
 def text_of(message):
@@ -145,8 +153,11 @@ class Session:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--killi", default=str(ROOT / "target/release/killi"))
+    parser.add_argument("--killi", default=None, help="killi binary (default: whichever of target/debug/killi and target/release/killi is newer)")
     args = parser.parse_args()
+    if args.killi is None:
+        args.killi = str(newest_killi())
+        print(f"using {args.killi}")
     killi = str(Path(args.killi).resolve())
 
     scratch = Path(tempfile.mkdtemp(prefix="killi-live-check-")).resolve()

@@ -22,9 +22,12 @@ const KEY_ENV: &str = "OPENCODE_API_KEY";
 /// The header OpenCode routes and caches a conversation by.
 const SESSION_HEADER: &str = "x-opencode-session";
 
+/// Every model Go serves answers under this prefix; the key goes nowhere else.
+const GO_PREFIX: &str = "https://opencode.ai/inference/go/";
+
 /// The configured provider that is OpenCode Go: the one on its URL.
 fn ours(provider: &Provider) -> bool {
-    provider.base_url.as_deref().is_some_and(|url| url.starts_with("https://opencode.ai/inference/go/"))
+    provider.base_url.as_deref().is_some_and(|url| url.starts_with(GO_PREFIX))
 }
 
 /// Whether the config has OpenCode Go with a key.
@@ -56,7 +59,7 @@ pub(super) async fn login() -> Result<()> {
         }
     };
     let catalog = catalog(&http).await.context("could not read OpenCode Go's models from models.dev")?;
-    let (models, skipped) = go_models(&catalog, served.as_deref());
+    let (models, skipped, dropped) = go_models(&catalog, served.as_deref());
     let mut provider = toml::Table::new();
     provider.insert("type".into(), "openai".into());
     provider.insert("base_url".into(), OPENAI_URL.into());
@@ -74,6 +77,9 @@ pub(super) async fn login() -> Result<()> {
     })?;
     if !skipped.is_empty() {
         println!("Left out, as they take Gemini's API, which killi doesn't speak: {}.", skipped.join(", "));
+    }
+    if !dropped.is_empty() {
+        println!("Left out, as their URLs are outside OpenCode Go: {}.", dropped.join(", "));
     }
     println!("The key isn't checked here; a wrong one shows as HTTP 401 on the first request. Usage: {CONSOLE}");
     Ok(())
@@ -117,15 +123,17 @@ async fn catalog(http: &reqwest::Client) -> Result<BTreeMap<String, Value>> {
 }
 
 /// The models to add, in the order Go serves them (models.dev's when that list is missing),
-/// each on the API and URL models.dev names, and the ones left out for taking Gemini's API.
-/// A model Go serves that models.dev doesn't know is left out as well: its API can't be told.
-fn go_models(catalog: &BTreeMap<String, Value>, served: Option<&[String]>) -> (Vec<NewModel>, Vec<String>) {
+/// each on the API and URL models.dev names, and the ones left out: Gemini's API, and URLs
+/// outside OpenCode Go, which the key must not be sent to. A model Go serves that
+/// models.dev doesn't know is left out as well: its API can't be told.
+fn go_models(catalog: &BTreeMap<String, Value>, served: Option<&[String]>) -> (Vec<NewModel>, Vec<String>, Vec<String>) {
     let ids: Vec<&String> = match served {
         Some(served) => served.iter().filter(|id| catalog.contains_key(*id)).collect(),
         None => catalog.keys().collect(),
     };
     let mut models = Vec::new();
     let mut skipped = Vec::new();
+    let mut dropped = Vec::new();
     for id in ids {
         let entry = &catalog[id];
         let api = entry["provider"]["api"].as_str().unwrap_or(OPENAI_URL).trim_end_matches('/');
@@ -140,6 +148,10 @@ fn go_models(catalog: &BTreeMap<String, Value>, served: Option<&[String]>) -> (V
             Some("@ai-sdk/openai") => (Some("openai_responses"), elsewhere),
             _ => (None, elsewhere),
         };
+        if !base_url.as_deref().unwrap_or(OPENAI_URL).starts_with(GO_PREFIX) {
+            dropped.push(id.clone());
+            continue;
+        }
         let options = entry["reasoning_options"].as_array().into_iter().flatten().filter(|option| option["type"] == "effort");
         let efforts = options.flat_map(|option| option["values"].as_array().into_iter().flatten()).filter_map(Value::as_str);
         models.push(NewModel {
@@ -156,7 +168,7 @@ fn go_models(catalog: &BTreeMap<String, Value>, served: Option<&[String]>) -> (V
             efforts: efforts.filter(|effort| *effort != "none").map(String::from).collect(),
         });
     }
-    (models, skipped)
+    (models, skipped, dropped)
 }
 
 #[cfg(test)]
@@ -181,10 +193,11 @@ mod tests {
     #[test]
     fn each_model_gets_the_api_and_url_it_answers_on() {
         let served: Vec<String> = ["kimi-k3", "gpt-6-luna", "claude-haiku-5-5", "gemini-4-argon", "glm-5.1"].map(String::from).to_vec();
-        let (models, skipped) = go_models(&catalog(), Some(&served));
+        let (models, skipped, dropped) = go_models(&catalog(), Some(&served));
         let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
         assert_eq!(ids, ["kimi-k3", "gpt-6-luna", "claude-haiku-5-5"], "Go's order; unknown and codename models left out");
         assert_eq!(skipped, ["gemini-4-argon"]);
+        assert!(dropped.is_empty(), "the fixture stays on {GO_PREFIX}");
 
         assert_eq!((models[0].protocol, models[0].base_url.as_deref()), (None, None), "Chat Completions on the provider's URL");
         assert_eq!((models[1].protocol, models[1].base_url.as_deref()), (Some("openai_responses"), None));
@@ -197,10 +210,22 @@ mod tests {
     }
 
     #[test]
+    fn a_model_on_an_outside_url_is_dropped() {
+        let mut entries = catalog();
+        entries.insert("rogue-1".to_string(), json!({"provider": {"npm": "@ai-sdk/openai", "api": "https://rogue.example/v1"}, "tool_call": true}));
+        let served: Vec<String> = ["rogue-1", "kimi-k3"].map(String::from).to_vec();
+        let (models, _, dropped) = go_models(&entries, Some(&served));
+        assert_eq!(dropped, ["rogue-1"]);
+        assert!(models.iter().all(|model| model.id != "rogue-1"), "the key would be sent to {}", models.iter().find(|model| model.id == "rogue-1").and_then(|model| model.base_url.as_deref()).unwrap_or("(provider url)"));
+        assert!(models.iter().any(|model| model.id == "kimi-k3"));
+    }
+
+    #[test]
     fn without_gos_list_models_dev_names_the_models() {
-        let (models, skipped) = go_models(&catalog(), None);
+        let (models, skipped, dropped) = go_models(&catalog(), None);
         assert_eq!(models.len(), 4);
         assert_eq!(skipped, ["gemini-4-argon"]);
+        assert!(dropped.is_empty());
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-use super::{Delta, Failure, Prepared, Reply, StreamParser, ToolCall, arguments_object, cap_output, content_text, system_text, truncate};
+use super::{Delta, ErrorKind, Failure, Prepared, Reply, StreamParser, ToolCall, IMAGE_OMITTED, arguments_object, cap_output, content_text, system_text, truncate};
 use crate::config::{ResolvedModel, Thinking};
 
 const VERSION: &str = "2023-06-01";
@@ -23,7 +23,7 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
         body.insert("system".into(), json!([{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]));
     }
     body.insert("tools".into(), convert_tools(tools));
-    body.insert("messages".into(), convert_messages(history, claude.is_some()).into());
+    body.insert("messages".into(), convert_messages(history, claude.is_some(), model.images).into());
     let budget = claude.is_some_and(|v| v.budget_thinking());
     for (key, value) in thinking_params(&model.thinking, budget, max_tokens) {
         body.insert(key, value);
@@ -146,7 +146,7 @@ fn convert_tools(tools: &[Value]) -> Value {
 
 /// Converts OpenAI-format history: tool results become user `tool_result` blocks, consecutive
 /// user turns merge (tool results first), and the last block carries a cache breakpoint.
-fn convert_messages(history: &[Value], claude: bool) -> Vec<Value> {
+fn convert_messages(history: &[Value], claude: bool, images: bool) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for message in history {
         match message["role"].as_str() {
@@ -169,7 +169,7 @@ fn convert_messages(history: &[Value], claude: bool) -> Vec<Value> {
                 push_user(&mut out, vec![json!({"type": "text", "text": format!("<system>{}</system>", content_text(message))})], false);
             }
             _ => {
-                let blocks = user_blocks(message);
+                let blocks = user_blocks(message, images);
                 if !blocks.is_empty() {
                     push_user(&mut out, blocks, false);
                 }
@@ -195,14 +195,16 @@ fn push_user(out: &mut Vec<Value>, blocks: Vec<Value>, tool_result: bool) {
     out.push(json!({"role": "user", "content": blocks}));
 }
 
-fn user_blocks(message: &Value) -> Vec<Value> {
+fn user_blocks(message: &Value, images: bool) -> Vec<Value> {
     match &message["content"] {
         Value::String(text) if !text.is_empty() => vec![json!({"type": "text", "text": text})],
         Value::Array(parts) => parts
             .iter()
             .filter_map(|part| match part["type"].as_str() {
                 Some("text") => part["text"].as_str().filter(|t| !t.is_empty()).map(|t| json!({"type": "text", "text": t})),
-                Some("image_url") => image_block(part["image_url"]["url"].as_str()?),
+                Some("image_url") => match images {
+                    true => image_block(part["image_url"]["url"].as_str()?),                    false => Some(json!({"type": "text", "text": IMAGE_OMITTED})),
+                },
                 _ => None,
             })
             .collect(),
@@ -235,7 +237,7 @@ fn assistant_blocks(message: &Value, claude: bool) -> Vec<Value> {
     {
         blocks.push(json!({"type": "thinking", "thinking": text}));
     }
-    if let Some(text) = message["content"].as_str().filter(|t| !t.is_empty()) {
+    if let Some(text) = message["content"].as_str().filter(|t| !t.trim().is_empty()) {
         blocks.push(json!({"type": "text", "text": text}));
     }
     for call in message["tool_calls"].as_array().into_iter().flatten() {
@@ -375,9 +377,8 @@ impl StreamParser for Parser {
                 let error = &event["error"];
                 let message = format!("provider error mid-stream: {}", truncate(&error.to_string(), 2000));
                 return Err(match error["type"].as_str() {
-                    Some("invalid_request_error" | "authentication_error" | "permission_error" | "not_found_error") => {
-                        Failure::fatal(message)
-                    }
+                    Some("authentication_error") => Failure::of(ErrorKind::Auth, None, false, message),
+                    Some("invalid_request_error" | "permission_error" | "not_found_error") => Failure::fatal(message),
                     _ => Failure::transient(message),
                 });
             }
@@ -388,7 +389,12 @@ impl StreamParser for Parser {
 
     fn finish(&mut self, reply: &mut Reply) -> Result<(), Failure> {
         if !self.message_stop {
-            return Err(Failure::transient("Anthropic stream ended without message_stop".into()));
+            return Err(Failure::of(
+                ErrorKind::BadResponse,
+                None,
+                true,
+                "Anthropic stream ended without message_stop".into(),
+            ));
         }
         for call in &mut reply.tool_calls {
             if call.arguments.trim().is_empty() {
@@ -426,7 +432,7 @@ mod tests {
             json!({"role": "tool", "tool_call_id": "b", "content": ""}),
             json!({"role": "user", "content": "<system-reminder>note</system-reminder>"}),
         ];
-        let out = convert_messages(&history, true);
+        let out = convert_messages(&history, true, true);
         assert_eq!(out.len(), 3);
         assert_eq!(out[1]["content"][0], json!({"type": "thinking", "thinking": "hm", "signature": "sig"}));
         assert_eq!(out[1]["content"][1]["input"], json!({"path": "x"}));
@@ -445,11 +451,24 @@ mod tests {
                 {"type": "text", "text": "[Image #1]:"},
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]}),
         ];
-        let out = convert_messages(&history, true);
+        let out = convert_messages(&history, true, true);
         assert_eq!(out.len(), 1);
         let blocks = out[0]["content"].as_array().unwrap();
         assert_eq!(blocks[1], json!({"type": "text", "text": "[Image #1]:"}));
         assert_eq!(blocks[2]["source"], json!({"type": "base64", "media_type": "image/png", "data": "AAAA"}));
+    }
+
+    #[test]
+    fn images_become_text_when_the_model_cannot_see_them() {
+        let history = vec![json!({"role": "user", "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ]})];
+        let out = convert_messages(&history, true, false);
+        let blocks = out[0]["content"].as_array().unwrap();
+        assert!(blocks.iter().all(|block| block["type"] != "image"), "{blocks:?}");
+        assert!(blocks.iter().any(|block| block["text"] == super::IMAGE_OMITTED), "{blocks:?}");
+        assert_eq!(history[0]["content"][1]["type"], "image_url", "history itself stays as sent");
     }
 
     #[test]
@@ -468,6 +487,21 @@ mod tests {
             "content": "ok"
         });
         assert_eq!(assistant_blocks(&message, false)[0], json!({"type": "thinking", "thinking": "plan"}));
+    }
+
+    #[test]
+    fn whitespace_only_assistant_text_is_skipped() {
+        let message = json!({
+            "role": "assistant",
+            "content": "  \n  ",
+            "tool_calls": [
+                {"id": "a", "type": "function", "function": {"name": "read", "arguments": "{\"path\":\"x\"}"}}
+            ]
+        });
+        let blocks = assistant_blocks(&message, true);
+        assert_eq!(blocks.len(), 1, "whitespace text is not a block Anthropics accepts: {blocks:?}");
+        assert_eq!(blocks[0]["type"], "tool_use");
+        assert!(assistant_blocks(&json!({"role": "assistant", "content": " \n "}), true).is_empty());
     }
 
     #[test]

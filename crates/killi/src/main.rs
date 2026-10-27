@@ -1,6 +1,7 @@
 mod agent;
 mod broker;
 mod config;
+mod fs_atomic;
 mod hooks;
 mod later;
 mod live;
@@ -14,6 +15,8 @@ mod setup;
 mod skills;
 mod snapshot;
 mod swarm;
+#[cfg(test)]
+mod test_temp;
 mod tools;
 mod tui;
 mod update;
@@ -23,6 +26,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Instant;
 
 use anyhow::{Result, bail};
@@ -91,15 +95,17 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
         }
         _ => {
             let options = parse(args)?;
-            quit_on_signals();
+            // The first-run guides read stdin with the terminal's own Ctrl+C and end of
+            // input, before the signal handlers below replace them.
             if options.prompt.is_none() {
                 config::set_up_if_missing()?;
                 config::guide_model(options.model.as_deref())?;
                 login::chatgpt::offer(options.model.as_deref()).await?;
             }
+            quit_on_signals();
             let config = config::Config::load()?;
             let cwd = std::env::current_dir()?;
-            let last = || session::list(&cwd).into_iter().next().map(|s| s.path);
+            let last = || newest_available(session::list(&cwd));
             let resume = match (&options.resume, options.continue_last) {
                 (Some(Some(path)), _) => Some(path.clone()),
                 (_, true) => Some(last().ok_or_else(|| anyhow::anyhow!("no earlier session in this folder to continue"))?),
@@ -119,18 +125,68 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
 /// Quitting on a signal runs no destructors, so this first ends what killi started and gives
 /// the terminal back: closing the window sends SIGHUP, `kill` SIGTERM, Ctrl+C under `-p` SIGINT.
 fn quit_on_signals() {
-    use tokio::signal::unix::{SignalKind, signal};
-    let (Ok(mut hangup), Ok(mut terminate), Ok(mut interrupt)) =
-        (signal(SignalKind::hangup()), signal(SignalKind::terminate()), signal(SignalKind::interrupt()))
-    else {
-        return;
-    };
+    quit_on_hangup_or_terminate();
+    // SIGINT stays on the runtime: nothing blocks its thread while `-p` runs.
     tokio::spawn(async move {
-        let code = tokio::select! {
-            _ = hangup.recv() => 129,
-            _ = terminate.recv() => 143,
-            _ = interrupt.recv() => 130,
+        use tokio::signal::unix::{SignalKind, signal};
+        let Ok(mut interrupt) = signal(SignalKind::interrupt()) else {
+            return;
         };
+        interrupt.recv().await;
+        tools::kill_all();
+        live::leave();
+        tui::restore_terminal();
+        std::process::exit(130);
+    });
+}
+
+/// The write end of the pipe a hangup/terminate handler pokes.
+static QUIT_PIPE: AtomicI32 = AtomicI32::new(-1);
+
+extern "C" fn on_quit_signal(signal: libc::c_int) {
+    let fd = QUIT_PIPE.load(Ordering::Relaxed);
+    if fd >= 0 {
+        // SAFETY: a one-byte write to a pipe this process opened; async-signal-safe.
+        unsafe { libc::write(fd, [signal as u8].as_ptr().cast(), 1) };
+    }
+}
+
+/// SIGHUP and SIGTERM arrive on a dedicated thread with its own pipe, independent of Tokio:
+/// an async handler can't run while a blocking read (startup, a tool, the TUI) holds the
+/// runtime's only thread. The handler only writes the signal's number; the thread ends what
+/// killi started, gives the terminal back, and exits with the signal's usual code.
+fn quit_on_hangup_or_terminate() {
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: pipe fills the two descriptors.
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return;
+    }
+    let [reader, writer] = fds;
+    // SAFETY: acts on a descriptor this function owns.
+    unsafe { libc::fcntl(writer, libc::F_SETFL, libc::O_NONBLOCK) };
+    QUIT_PIPE.store(writer, Ordering::Relaxed);
+    // SAFETY: a zeroed sigaction is valid; the handler only writes a byte to the pipe.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = on_quit_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(libc::SIGHUP, &action, std::ptr::null_mut());
+        libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
+    }
+    std::thread::spawn(move || {
+        let mut byte = [0u8; 1];
+        // SAFETY: reads into a buffer of the given length.
+        let n = loop {
+            let n = unsafe { libc::read(reader, byte.as_mut_ptr().cast(), byte.len()) };
+            if n >= 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                break n;
+            }
+        };
+        if n != 1 {
+            return;
+        }
+        let code = if byte[0] == libc::SIGHUP as u8 { 129 } else { 143 };
         tools::kill_all();
         live::leave();
         tui::restore_terminal();
@@ -157,7 +213,15 @@ fn parse(args: Vec<String>) -> Result<Options> {
     Ok(options)
 }
 
+/// The newest log no live session holds: `-c` continues it, skipping the ones that are
+/// still running. A log nobody holds may still belong to a session that ended.
+fn newest_available(sessions: Vec<session::Listed>) -> Option<PathBuf> {
+    sessions.into_iter().find(|s| !session::is_locked(&s.path)).map(|s| s.path)
+}
+
 async fn run_once(config: config::Config, model: &Option<String>, resume: Option<PathBuf>, prompt: String, json_mode: bool) -> Result<ExitCode> {
+    // A panic under `-p` has no TUI to install the crash hook: install it here.
+    tui::install_crash_hook();
     let cwd = std::env::current_dir()?;
     let setup = Setup::new(config, &cwd, model.as_deref()).await?;
     let printer = Rc::new(RefCell::new(Printer::new(&cwd)));
@@ -266,7 +330,10 @@ enum Last {
 struct Printer {
     cwd: String,
     last: Last,
-    /// The model's text is mid-line on stdout.
+    /// The current attempt's text, held back so a retried attempt never reaches stdout: only
+    /// the final reply is printed, when the attempt ends.
+    attempt: String,
+    /// The model's text is mid-line in the attempt.
     line_open: bool,
     /// Newlines at the end of the text so far, printed only if more text follows.
     held_newlines: usize,
@@ -286,6 +353,7 @@ impl Printer {
         Self {
             cwd: cwd.display().to_string(),
             last: Last::Nothing,
+            attempt: String::new(),
             line_open: false,
             held_newlines: 0,
             tool_open: false,
@@ -308,17 +376,23 @@ impl Printer {
                     return;
                 }
                 if self.last == Last::Tool {
-                    println!();
+                    self.attempt.push('\n');
                 }
-                print!("{}{body}", "\n".repeat(self.held_newlines));
-                let _ = std::io::stdout().flush();
+                self.attempt.push_str(&"\n".repeat(self.held_newlines));
+                self.attempt.push_str(body);
                 self.held_newlines = text.len() - body.len();
                 self.line_open = true;
                 self.last = Last::Text;
             }
             Event::Retry { attempt, wait, reason } => {
-                self.end_text();
+                let dropped = self.line_open || self.held_newlines > 0 || !self.attempt.is_empty();
+                self.attempt.clear();
+                self.line_open = false;
+                self.held_newlines = 0;
                 eprintln!("{}retry {attempt} in {:.1}s: {}{}", self.dim, wait.as_secs_f32(), llm::truncate(&reason, 300), self.reset);
+                if dropped {
+                    eprintln!("{}the partial reply above was discarded; retrying …{}", self.dim, self.reset);
+                }
             }
             Event::ToolStart { summary, .. } => {
                 if self.last == Last::Text {
@@ -355,8 +429,18 @@ impl Printer {
         }
     }
 
+    /// Prints the attempt's text so far.
+    fn flush_attempt(&mut self) {
+        if !self.attempt.is_empty() {
+            print!("{}", self.attempt);
+            let _ = std::io::stdout().flush();
+            self.attempt.clear();
+        }
+    }
+
     /// Ends the model's text with exactly one newline, dropping any it held back.
     fn end_text(&mut self) {
+        self.flush_attempt();
         if self.line_open {
             println!();
             self.line_open = false;
@@ -371,6 +455,8 @@ impl Printer {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn system_prompt_and_tools_fit_the_token_budget() {
         let base = crate::prompt::DEFAULT;
@@ -380,5 +466,37 @@ mod tests {
         let chars = base.len() + tools.len();
         println!("system prompt + tools = {chars} chars");
         assert!(chars <= 12_000, "system prompt + tools = {chars} chars, over the ~3k-token budget");
+    }
+
+    fn listed(path: PathBuf) -> session::Listed {
+        session::Listed { path, modified: std::time::SystemTime::now(), first_prompt: String::new(), prompts: 1 }
+    }
+
+    #[test]
+    fn a_locked_log_counts_as_running_and_is_skipped_by_continue() {
+        let dir = crate::test_temp::TempDir::new("killi-continue");
+        let (old, new) = (dir.join("1-1.jsonl"), dir.join("2-2.jsonl"));
+        std::fs::write(&old, "x").unwrap();
+        std::fs::write(&new, "x").unwrap();
+        assert!(!session::is_locked(&old));
+        assert!(!session::is_locked(&dir.join("missing.jsonl")));
+        assert_eq!(newest_available(vec![listed(new.clone()), listed(old.clone())]), Some(new.clone()));
+        let held = session::Session::open(&new).unwrap();
+        assert!(session::is_locked(&new), "the log is locked while its session runs");
+        assert_eq!(newest_available(vec![listed(new.clone()), listed(old.clone())]), Some(old.clone()));
+        drop(held);
+        // Another test forking at this moment can pin the lock past the drop, so the
+        // release is awaited instead of assumed instant; a leaked lock still fails.
+        let mut unlocked = false;
+        for _ in 0..100 {
+            if !session::is_locked(&new) {
+                unlocked = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(unlocked, "the lock goes when the session ends");
+        assert_eq!(newest_available(vec![listed(new.clone())]), Some(new.clone()));
+        assert_eq!(newest_available(Vec::new()), None);
     }
 }

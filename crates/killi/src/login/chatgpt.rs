@@ -585,11 +585,8 @@ mod tests {
         format!("{}.{}.sig", URL_SAFE_NO_PAD.encode(b"{\"alg\":\"RS256\"}"), URL_SAFE_NO_PAD.encode(claims.to_string()))
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("killi-login-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir.join("chatgpt.json")
+    fn scratch(name: &str) -> crate::test_temp::TempDir {
+        crate::test_temp::TempDir::new(&format!("killi-login-{name}"))
     }
 
     fn signed_in_at_time(saved_at: u64) -> Credentials {
@@ -769,20 +766,21 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn a_fresh_token_is_sent_without_asking_the_server() {
-        let path = scratch("fresh");
+        let tmp = scratch("fresh");
+        let path = tmp.join("chatgpt.json");
         signed_in_at_time(now()).save(&path).unwrap();
         let http = reqwest::Client::new();
         let token = access_token_at(&http, &path, "http://127.0.0.1:9/unreachable", None).await.unwrap();
         assert_eq!(token, "old-access");
-        let none = scratch("none");
+        let none_tmp = scratch("none");
+        let none = none_tmp.join("chatgpt.json");
         assert!(matches!(access_token_at(&http, &none, "http://127.0.0.1:9/", None).await, Err(TokenError::SignIn(_))));
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
-        fs::remove_dir_all(none.parent().unwrap()).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn an_expiring_or_rejected_token_is_refreshed_and_saved() {
-        let path = scratch("refresh");
+        let tmp = scratch("refresh");
+        let path = tmp.join("chatgpt.json");
         signed_in_at_time(now() - 3500).save(&path).unwrap();
         let (url, bodies) = token_server(vec![
             (200, r#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#),
@@ -800,24 +798,24 @@ mod tests {
         assert_eq!(access_token_at(&http, &path, &url, None).await.unwrap(), "new-access", "a fresh token is reused");
         assert_eq!(access_token_at(&http, &path, &url, Some("new-access")).await.unwrap(), "newer-access");
         assert!(bodies.lock().unwrap()[1].contains("refresh_token=new-refresh"), "the rotated token is the one spent");
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn requests_waiting_on_one_refresh_take_its_token() {
-        let path = scratch("race");
+        let tmp = scratch("race");
+        let path = tmp.join("chatgpt.json");
         signed_in_at_time(now() - 3500).save(&path).unwrap();
         let (url, bodies) = token_server(vec![(200, r#"{"access_token":"shared","refresh_token":"r2","expires_in":3600}"#)]).await;
         let http = reqwest::Client::new();
         let (first, second) = tokio::join!(access_token_at(&http, &path, &url, None), access_token_at(&http, &path, &url, None));
         assert_eq!((first.unwrap(), second.unwrap()), ("shared".to_string(), "shared".to_string()));
         assert_eq!(bodies.lock().unwrap().len(), 1, "the refresh token is spent once");
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn an_unusable_refresh_token_signs_out_and_a_server_error_does_not() {
-        let path = scratch("unusable");
+        let tmp = scratch("unusable");
+        let path = tmp.join("chatgpt.json");
         signed_in_at_time(now() - 3500).save(&path).unwrap();
         let (url, _) = token_server(vec![(503, r#"{"error":"temporarily_unavailable"}"#), (400, r#"{"error":"refresh_token_reused"}"#)]).await;
         let http = reqwest::Client::new();
@@ -828,6 +826,5 @@ mod tests {
         let saved = Credentials::load(&path).unwrap().unwrap();
         assert!(!saved.signed_in() && saved.refresh_token.is_empty());
         assert_eq!((saved.client_id.as_str(), saved.ext_agent_host_id.as_str()), ("oaiapp_1", "urn:uuid:x"), "the registration stays");
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

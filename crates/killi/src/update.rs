@@ -19,6 +19,13 @@ use crate::tui::text::{DIM, LAGOON, RESET, plain, width, wrap};
 const RELEASES_URL: &str = "https://github.com/timwuhaotian/killi/raw/main/releases";
 const BINARY: &str = "killi-arm64";
 
+/// How long a connection may take to start, and how long the body may stall between
+/// reads: without them a stuck server hangs the update for a minute or more.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// The largest download accepted: the binary is a few megabytes, so anything past this
+/// is not killi.
+const MAX_DOWNLOAD: u64 = 64 * 1024 * 1024;
 /// How often the status line is redrawn; the wave advances a frame each time.
 const FRAME: Duration = Duration::from_millis(100);
 /// The shortest time a download's speed is averaged over, so the first chunk doesn't read as a spike.
@@ -39,7 +46,7 @@ pub async fn update() -> Result<()> {
 
 async fn run(status: &mut Status) -> Result<()> {
     let base = std::env::var("KILLI_RELEASES_URL").unwrap_or_else(|_| RELEASES_URL.to_string());
-    let http = reqwest::Client::new();
+    let http = http_client()?;
     let (version, sha256) = status.during("checking for updates", latest(&http, &base)).await?;
     let current = env!("CARGO_PKG_VERSION");
     if parse(&version) <= parse(current) {
@@ -51,7 +58,7 @@ async fn run(status: &mut Status) -> Result<()> {
     let staging = exe.with_file_name(format!(".killi-update-{}", std::process::id()));
     let bytes = download(status, &http, &format!("{base}/{BINARY}"), &format!("downloading {version}")).await?;
     fs::write(&staging, &bytes).with_context(|| format!("could not write {}", staging.display()))?;
-    let result = verify_and_install(&staging, &sha256, &exe);
+    let result = verify_and_install(&staging, &sha256, &version, &exe);
     if result.is_err() {
         let _ = fs::remove_file(&staging);
     }
@@ -71,6 +78,16 @@ async fn latest(http: &reqwest::Client, base: &str) -> Result<(String, String)> 
     Ok((version, sha256))
 }
 
+/// The HTTP client for the version check and the download, bounded on connects and
+/// on stalled reads.
+fn http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
+        .build()
+        .context("could not create an HTTP client")
+}
+
 /// The binary at `url`, drawing its progress as it arrives.
 async fn download(status: &mut Status, http: &reqwest::Client, url: &str, label: &str) -> Result<Vec<u8>> {
     let response = status.during(label, http.get(url).send()).await?.error_for_status()?;
@@ -82,7 +99,12 @@ async fn download(status: &mut Status, http: &reqwest::Client, url: &str, label:
     loop {
         tokio::select! {
             chunk = stream.next() => match chunk {
-                Some(chunk) => bytes.extend_from_slice(&chunk?),
+                Some(chunk) => {
+                bytes.extend_from_slice(&chunk?);
+                if bytes.len() as u64 > MAX_DOWNLOAD {
+                    bail!("the download passed the {} MB limit; refusing it", MAX_DOWNLOAD / 1024 / 1024);
+                }
+            }
                 None => return Ok(bytes),
             },
             _ = tick.tick() => {
@@ -94,15 +116,27 @@ async fn download(status: &mut Status, http: &reqwest::Client, url: &str, label:
     }
 }
 
-fn verify_and_install(staging: &std::path::Path, expected: &str, exe: &std::path::Path) -> Result<()> {
+fn verify_and_install(staging: &std::path::Path, sha256: &str, version: &str, exe: &std::path::Path) -> Result<()> {
     let output = Command::new("/usr/bin/shasum").arg("-a").arg("256").arg(staging).output()?;
     let actual = String::from_utf8_lossy(&output.stdout);
     let actual = actual.split_whitespace().next().unwrap_or_default();
-    if !actual.eq_ignore_ascii_case(expected) {
-        bail!("checksum mismatch: expected {expected}, downloaded {actual}");
+    if !actual.eq_ignore_ascii_case(sha256) {
+        bail!("checksum mismatch: expected {sha256}, downloaded {actual}");
     }
     fs::set_permissions(staging, fs::Permissions::from_mode(0o755))?;
+    check_version(staging, version)?;
     fs::rename(staging, exe).with_context(|| format!("could not replace {}", exe.display()))
+}
+
+/// Runs the staged binary and requires it to say the published version: a download that
+/// matches the checksum but isn't killi is refused before it replaces the binary.
+fn check_version(staging: &std::path::Path, expected: &str) -> Result<()> {
+    let output = Command::new(staging).arg("--version").output()?;
+    let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    if output.status.success() && text.trim() == format!("killi {expected}") {
+        return Ok(());
+    }
+    bail!("the download reports {text:?} instead of version {expected}; refusing to install it")
 }
 
 fn parse(version: &str) -> Vec<u64> {
@@ -212,6 +246,49 @@ fn progress(Transfer { done, total, per_second }: Transfer, room: usize) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_published_version_is_installed() {
+        let tmp = crate::test_temp::TempDir::new("killi-update-version");
+        let right = tmp.join("killi-right");
+        let wrong = tmp.join("killi-wrong");
+        std::fs::write(&right, "#!/bin/sh\necho 'killi 0.2.31'\n").unwrap();
+        std::fs::write(&wrong, "#!/bin/sh\necho 'something else'\n").unwrap();
+        for path in [&right, &wrong] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(super::check_version(&right, "0.2.31").is_ok());
+        let longer = tmp.join("killi-longer");
+        std::fs::write(&longer, "#!/bin/sh\necho 'killi 0.2.310'\n").unwrap();
+        std::fs::set_permissions(&longer, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(super::check_version(&longer, "0.2.31").is_err(), "a version that only starts with the expected one is not it");
+        let err = super::check_version(&wrong, "0.2.31").unwrap_err().to_string();
+        assert!(err.contains("something else") && err.contains("0.2.31"), "{err}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_download_past_the_limit_is_refused() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut discard = [0u8; 1024];
+            let _ = socket.read(&mut discard).await;
+            let _ = socket.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\n\r\n").await;
+            let chunk = vec![b'a'; 1024 * 1024];
+            for _ in 0..70 {
+                if socket.write_all(&chunk).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let http = super::http_client().unwrap();
+        let mut status = super::Status::new();
+        let err = super::download(&mut status, &http, &url, "downloading").await.unwrap_err().to_string();
+        assert!(err.contains("64 MB"), "{err}");
+    }
 
     #[test]
     fn versions_compare_numerically() {

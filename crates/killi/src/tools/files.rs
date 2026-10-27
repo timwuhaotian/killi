@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
@@ -27,7 +28,7 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
         && meta.len() > MAX_READ
     {
         return Output::error(format!(
-            "{path} is {} MB, too large to read whole. Search it with grep, or read part of it with bash (`sed -n '1000,1100p'`, `head`, `tail`).",
+            "{path} is {} MB, too large to read whole. Search or read part of it with bash (`rg`/`grep`, `sed -n '1000,1100p'`, `head`, `tail`).",
             meta.len() / (1024 * 1024)
         ));
     }
@@ -45,11 +46,11 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
 
     let lines = || text.split_terminator('\n');
     let total = lines().count();
-    let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
+    let offset = super::uint(args, "offset").unwrap_or(1).max(1) as usize;
     if offset > total {
         return Output::error(format!("Offset {offset} is beyond the end of {path} ({total} lines)."));
     }
-    let limit = args.get("limit").and_then(Value::as_u64).map_or(MAX_LINES, |l| (l as usize).clamp(1, MAX_LINES));
+    let limit = super::uint(args, "limit").map_or(MAX_LINES, |l| (l as usize).clamp(1, MAX_LINES));
 
     let mut out = String::new();
     let mut last = offset - 1;
@@ -94,7 +95,7 @@ pub fn image_type(path: &Path) -> Option<&'static str> {
 const SHRINK_ABOVE: u64 = 500 * 1024;
 
 pub(super) fn read_image(ctx: &Context, path: &str, full: &Path, media_type: &str) -> Output {
-    if !ctx.images {
+    if !ctx.images.get() {
         return Output::error(format!("{path} is an image, and this model can't see images."));
     }
     match image_url(path, full, media_type) {
@@ -108,9 +109,53 @@ pub(super) fn read_image(ctx: &Context, path: &str, full: &Path, media_type: &st
     }
 }
 
+/// What the first bytes of a file say it is, when it claims to be `media_type`.
+fn detected_kind(head: &[u8]) -> Option<&'static str> {
+    if head.starts_with(b"\x89PNG") {
+        return Some("PNG");
+    }
+    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("JPEG");
+    }
+    if head.starts_with(b"GIF8") {
+        return Some("GIF");
+    }
+    if head.len() >= 12 && head.starts_with(b"RIFF") && &head[8..12] == b"WEBP" {
+        return Some("WebP");
+    }
+    None
+}
+
+/// Refuses a file whose magic bytes don't match the media type its extension claimed. A Git
+/// LFS pointer says so explicitly, so the user pulls the real file instead of sending text.
+fn check_magic(name: &str, full: &Path, media_type: &str) -> Result<(), String> {
+    let mut head = [0u8; 256];
+    let n = fs::File::open(full)
+        .and_then(|mut file| file.read(&mut head))
+        .map_err(|e| format!("Could not read {name}: {e}"))?;
+    let head = &head[..n];
+    if head.starts_with(b"version https://git-lfs") {
+        return Err(format!("{name} is a Git LFS pointer, not the image itself; fetch it with `git lfs pull` and try again."));
+    }
+    let expected = match media_type {
+        "image/png" => "PNG",
+        "image/jpeg" => "JPEG",
+        "image/gif" => "GIF",
+        "image/webp" => "WebP",
+        _ => return Ok(()),
+    };
+    match detected_kind(head) {
+        Some(found) if found == expected => Ok(()),
+        Some(found) => Err(format!("{name} claims to be {media_type} but its bytes look like {found}; rename it or save it in the right format.")),
+        None if head.iter().all(|b| b.is_ascii_graphic() || b.is_ascii_whitespace()) => Err(format!("{name} claims to be {media_type} but its contents look like text; save it in the right format or fix the extension.")),
+        None => Err(format!("{name} claims to be {media_type} but its magic bytes don't match; save it in the right format or fix the extension.")),
+    }
+}
+
 /// An image file as a data URL for the model, and how many bytes it holds; a large one is
 /// sent as a JPEG that `sips` made. `name` is how errors refer to it.
 pub fn image_url(name: &str, full: &Path, media_type: &str) -> Result<(String, usize), String> {
+    check_magic(name, full, media_type)?;
     let size = fs::metadata(full).map_err(|e| format!("Could not read {name}: {e}"))?.len();
     let (bytes, media_type) = if size > SHRINK_ABOVE {
         let out = std::env::temp_dir().join(format!("killi-image-{}.jpg", std::process::id()));
@@ -219,19 +264,24 @@ mod tests {
 
     #[test]
     fn read_numbers_lines_and_points_to_the_rest() {
-        let dir = std::env::temp_dir().join(format!("killi-read-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_temp::TempDir::new("killi-read");
         let body: String = (1..=5).map(|n| format!("line {n}\r\n")).collect();
         fs::write(dir.join("a.txt"), body).unwrap();
         let out = read(&ctx(&dir), &json!({"path": "a.txt", "offset": 2, "limit": 2}));
         assert_eq!(out.text, "2\tline 2\n3\tline 3\n[Showing lines 2-3 of 5. Use offset=4 to continue.]");
-        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn offset_and_limit_arrive_as_strings_too() {
+        let dir = crate::test_temp::TempDir::new("killi-read-str");
+        fs::write(dir.join("a.txt"), "a\nb\nc\n").unwrap();
+        let out = read(&ctx(&dir), &json!({"path": "a.txt", "offset": "2", "limit": "1"}));
+        assert_eq!(out.text, "2\tb\n[Showing lines 2-2 of 3. Use offset=3 to continue.]");
     }
 
     #[test]
     fn a_file_too_large_to_read_whole_is_not_read() {
-        let dir = std::env::temp_dir().join(format!("killi-bigread-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_temp::TempDir::new("killi-bigread");
         let file = fs::File::create(dir.join("big.log")).unwrap();
         file.set_len(MAX_READ + 1).unwrap();
         let out = read(&ctx(&dir), &json!({"path": "big.log"}));
@@ -239,7 +289,30 @@ mod tests {
         fs::write(dir.join("ok.txt"), "a\nb\n").unwrap();
         assert_eq!(read(&ctx(&dir), &json!({"path": "ok.txt", "offset": 2})).text, "2\tb\n");
         assert!(read(&ctx(&dir), &json!({"path": "ok.txt", "offset": 3})).is_error);
-        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn image_bytes_must_match_the_claimed_media_type() {
+        let dir = crate::test_temp::TempDir::new("killi-magic");
+        let png = dir.join("a.png");
+        fs::write(&png, [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00]).unwrap();
+        let (url, _) = image_url("a.png", &png, "image/png").unwrap();
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+
+        let jpeg = dir.join("b.png");
+        fs::write(&jpeg, [0xFF, 0xD8, 0xFF, 0xE0, 0x00]).unwrap();
+        let err = image_url("b.png", &jpeg, "image/png").unwrap_err();
+        assert!(err.contains("JPEG") && err.contains("image/png"), "{err}");
+
+        let lfs = dir.join("c.png");
+        fs::write(&lfs, "version https://git-lfs/spec/v1\noid sha256:abc\nsize 12\n").unwrap();
+        let err = image_url("c.png", &lfs, "image/png").unwrap_err();
+        assert!(err.contains("Git LFS"), "{err}");
+
+        let text = dir.join("d.png");
+        fs::write(&text, "just some words").unwrap();
+        let err = image_url("d.png", &text, "image/png").unwrap_err();
+        assert!(err.contains("text"), "{err}");
     }
 
     #[test]

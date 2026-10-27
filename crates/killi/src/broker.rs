@@ -8,6 +8,7 @@
 //! back to the client that asked, and drops what servers send unasked.
 
 use std::collections::{BTreeMap, HashMap};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -54,13 +55,38 @@ impl Launch {
     }
 }
 
-/// The broker's socket, in the temporary folder because socket paths are limited to about
-/// 100 bytes. The user and version are in the name, so a killi only talks to its own user's
-/// broker of the same version.
+/// The broker's socket, in a folder of this user's own in the temporary folder because
+/// socket paths are limited to about 100 bytes. The user and version are in the name, so a
+/// killi only talks to its own user's broker of the same version.
 pub fn socket_path() -> PathBuf {
     // SAFETY: getuid has no preconditions and can't fail.
     let uid = unsafe { libc::getuid() };
-    std::env::temp_dir().join(format!("killi-mcp-{uid}-{}.sock", env!("CARGO_PKG_VERSION")))
+    std::env::temp_dir().join(format!("killi-mcp-{uid}-{}", env!("CARGO_PKG_VERSION"))).join("broker.sock")
+}
+
+/// Creates the broker socket's folder for this user alone, like the live sessions' sockets.
+/// The folder's path is predictable, so an existing one only counts when it is this user's
+/// own private folder: another user who pre-creates it loose could otherwise replace the
+/// socket inside it with a fake broker.
+fn ensure_socket_dir(socket: &Path) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let Some(dir) = socket.parent() else { return Ok(()) };
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).with_context(|| format!("could not create {}", dir.display()))?;
+    let meta = std::fs::symlink_metadata(dir).with_context(|| format!("could not check {}", dir.display()))?;
+    // SAFETY: getuid has no preconditions and can't fail.
+    if meta.file_type().is_symlink() || !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } {
+        bail!("{} is not this user's own folder; refusing to put the broker socket there", dir.display());
+    }
+    if meta.permissions().mode() & 0o777 != 0o700 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).with_context(|| format!("could not tighten {}", dir.display()))?;
+    }
+    Ok(())
+}
+
+/// Whether `stream` comes from this user's own process, like the live sessions' socket check.
+fn own_user(stream: &UnixStream) -> bool {
+    // SAFETY: getuid has no preconditions and can't fail.
+    stream.peer_cred().is_ok_and(|cred| cred.uid() == unsafe { libc::getuid() })
 }
 
 /// Connects to the broker at `socket` for `launch`, starting the broker when `start` is set and
@@ -203,6 +229,9 @@ impl Server {
 #[derive(Default)]
 struct Broker {
     servers: tokio::sync::Mutex<HashMap<Launch, Arc<Server>>>,
+    /// One start at a time per launch, so simultaneous attaches share one spawn instead of
+    /// racing two servers (the loser of which could fail on a port or leak its children).
+    starts: Mutex<HashMap<Launch, Arc<tokio::sync::Mutex<()>>>>,
     clients: AtomicUsize,
     last_left: Mutex<Option<Instant>>,
 }
@@ -212,6 +241,7 @@ pub async fn serve(socket: &Path) -> Result<()> {
     if UnixStream::connect(socket).await.is_ok() {
         return Ok(());
     }
+    ensure_socket_dir(socket)?;
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket).with_context(|| format!("could not listen on {}", socket.display()))?;
     let broker = Arc::new(Broker { last_left: Mutex::new(Some(Instant::now())), ..Broker::default() });
@@ -247,6 +277,9 @@ pub async fn serve(socket: &Path) -> Result<()> {
 
 /// Serves one attached killi until it disconnects.
 async fn client(broker: &Broker, stream: UnixStream) -> Result<()> {
+    if !own_user(&stream) {
+        bail!("a process of another user connected");
+    }
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let launch: Launch = serde_json::from_str(&lines.next_line().await?.ok_or_else(|| anyhow!("no launch line"))?)?;
@@ -285,13 +318,89 @@ async fn client(broker: &Broker, stream: UnixStream) -> Result<()> {
     Ok(())
 }
 
-/// The running server for `launch`, started on first use and again after it exits.
+/// The running server for `launch`, started on first use and again after it exits. Starts
+/// of the same launch are serialized (different launches still start in parallel), and the
+/// map lock only guards the lookup and the insert, so one slow server doesn't hold every
+/// other attach behind it.
 async fn server(broker: &Broker, launch: &Launch) -> Result<Arc<Server>> {
-    let mut servers = broker.servers.lock().await;
-    if let Some(server) = servers.get(launch).filter(|s| !*s.exited.borrow()) {
-        return Ok(server.clone());
+    if let Some(server) = broker.servers.lock().await.get(launch).filter(|s| !*s.exited.borrow()).cloned() {
+        return Ok(server);
+    }
+    let start = broker.starts.lock().expect("starts").entry(launch.clone()).or_default().clone();
+    let _starting = start.lock().await;
+    if let Some(server) = broker.servers.lock().await.get(launch).filter(|s| !*s.exited.borrow()).cloned() {
+        return Ok(server);
     }
     let server = Arc::new(Server::start(launch).await?);
-    servers.insert(launch.clone(), server.clone());
+    broker.servers.lock().await.insert(launch.clone(), server.clone());
     Ok(server)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_brokers_socket_lives_in_a_private_versioned_folder() {
+        let socket = socket_path();
+        assert_eq!(socket.file_name().unwrap(), "broker.sock");
+        let dir = socket.parent().unwrap().file_name().unwrap().to_string_lossy();
+        assert!(dir.contains(env!("CARGO_PKG_VERSION")), "{dir}");
+    }
+
+    #[test]
+    fn a_loose_existing_socket_folder_is_tightened() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("killi-broker-loose-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ensure_socket_dir(&dir.join("broker.sock")).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_socket_folder_is_created_for_this_user_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let socket = std::env::temp_dir().join(format!("killi-broker-test-{}", std::process::id())).join("broker.sock");
+        ensure_socket_dir(&socket).unwrap();
+        let mode = std::fs::metadata(socket.parent().unwrap()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+
+    /// A stdio server that answers the broker's initialize handshake and nothing else.
+    const SERVER: &str = r#"while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+  esac
+done"#;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_running_server_is_reused() {
+        let dir = std::env::temp_dir().join(format!("killi-broker-reuse-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let launch = Launch { command: "/bin/bash".into(), args: vec!["-c".into(), SERVER.into()], env: Default::default(), cwd: dir.clone() };
+        let broker = Broker::default();
+        let first = server(&broker, &launch).await.unwrap();
+        let second = server(&broker, &launch).await.unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(broker.servers.lock().await.len(), 1);
+        first.kill();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn only_this_users_processes_pass_the_peer_check() {
+        let dir = std::env::temp_dir().join(format!("killi-broker-peer-{}", std::process::id()));
+        ensure_socket_dir(&dir.join("broker.sock")).unwrap();
+        let socket = dir.join("test.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let accepted = tokio::spawn(async move { listener.accept().await.map(|(stream, _)| stream) });
+        let _connecting = UnixStream::connect(&socket).await.unwrap();
+        assert!(own_user(&accepted.await.unwrap().unwrap()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

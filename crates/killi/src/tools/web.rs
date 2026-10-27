@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::process::Command;
 
 use super::{Context, MAX_BYTES, Output, SearchSettings, files};
-use super::bash::OwnSession;
+use super::bash::{OwnSession, Tracked, track};
 use crate::llm::truncate;
 
 const MAX_DOWNLOAD: usize = 10 * 1024 * 1024;
@@ -35,7 +35,7 @@ pub async fn fetch_url(ctx: &Context, args: &Value) -> Output {
     }
     if flag("render") {
         return match render(&url).await {
-            Ok(dom) => page(dom, &url, raw).await,
+            Ok(dom) => page(ctx, dom, &url, raw).await,
             Err(e) => Output::error(e),
         };
     }
@@ -80,20 +80,20 @@ pub async fn fetch_url(ctx: &Context, args: &Value) -> Output {
     let text = String::from_utf8_lossy(&bytes).into_owned();
     if kind.contains("html") || (kind.is_empty() && looks_like_html(&bytes)) {
         if raw {
-            return shown(&text);
+            return shown(ctx, &text);
         }
         if let Some(article) = extract(text, final_url.clone()).await.filter(|a| a.len() >= MIN_READABLE) {
-            return shown(&article);
+            return shown(ctx, &article);
         }
         // Little or nothing in the static HTML: the page probably builds itself with
         // JavaScript, so let a real browser run it, if there is one.
         return match render(&final_url).await {
-            Ok(dom) => page(dom, &final_url, false).await,
+            Ok(dom) => page(ctx, dom, &final_url, false).await,
             Err(_) => Output::error(format!("Could not find readable text in {url}. It may need JavaScript; try render.")),
         };
     }
     if kind.is_empty() || is_text(&kind) {
-        return shown(&text);
+        return shown(ctx, &text);
     }
     Output::error(format!("{url} is `{kind}`, not text."))
 }
@@ -101,13 +101,7 @@ pub async fn fetch_url(ctx: &Context, args: &Value) -> Output {
 /// Why a request failed, with the whole cause chain and what to do about it: a name that
 /// does not resolve means the address itself is invented, so guessing spellings is wasted.
 fn fetch_error(error: &reqwest::Error) -> String {
-    let mut causes = vec![error.to_string()];
-    let mut source = std::error::Error::source(error);
-    while let Some(cause) = source {
-        causes.push(cause.to_string());
-        source = cause.source();
-    }
-    let detail = causes.join(": ");
+    let detail = crate::llm::error_chain(error);
     let hint = if error.is_timeout() {
         " The site took too long; retry once or try another source."
     } else if detail.contains("dns error") || detail.contains("failed to lookup address") || detail.contains("Name or service not known") || detail.contains("nodename nor servname") {
@@ -128,29 +122,49 @@ fn html_title(html: &str) -> Option<String> {
     title.captures(html).map(|c| plain(&c[1])).filter(|t| !t.is_empty())
 }
 
+/// How long `pdftotext` may take over a PDF before the read gives up and kills it.
+const PDF_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Extracts a downloaded PDF's text with `pdftotext` (poppler) when it is installed.
+/// The run has its own session and a timeout, and is tracked so quitting ends it too.
 async fn pdf_text(ctx: &Context, bytes: &[u8], url: &str) -> Output {
-    let _ = ctx;
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let file = Temp(std::env::temp_dir().join(format!("killi-pdf-{}-{nanos}.pdf", std::process::id())));
     if let Err(e) = tokio::fs::write(&file.0, bytes).await {
         return Output::error(format!("Could not save the PDF from {url}: {e}"));
     }
-    let run = Command::new("pdftotext").arg("-layout").arg(&file.0).arg("-").output().await;
-    match run {
-        Ok(out) if out.status.success() => {
+    let child = match Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&file.0)
+        .arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .own_session()
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Output::error(format!(
+                "{url} is a PDF, and no `pdftotext` (poppler) is installed to read it; install it (e.g. `brew install poppler`) or use the HTML page instead."
+            ));
+        }
+        Err(e) => return Output::error(format!("Could not run pdftotext on {url}: {e}")),
+    };
+    let _tracked = child.id().map(track);
+    match tokio::time::timeout(PDF_TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(out)) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout).into_owned();
             if text.trim().is_empty() {
                 Output::error(format!("{url} is a PDF with no extractable text (scanned images or encrypted); fetch_url cannot read it."))
             } else {
-                shown(text.trim())
+                shown(ctx, text.trim())
             }
         }
-        Ok(out) => Output::error(format!("{url} is a PDF pdftotext could not read: {}", truncate(&String::from_utf8_lossy(&out.stderr), 300))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Output::error(format!(
-            "{url} is a PDF, and no `pdftotext` (poppler) is installed to read it; install it (e.g. `brew install poppler`) or use the HTML page instead."
-        )),
-        Err(e) => Output::error(format!("Could not run pdftotext on {url}: {e}")),
+        Ok(Ok(out)) => Output::error(format!("{url} is a PDF pdftotext could not read: {}", truncate(&String::from_utf8_lossy(&out.stderr), 300))),
+        Ok(Err(e)) => Output::error(format!("Could not run pdftotext on {url}: {e}")),
+        Err(_) => Output::error(format!("{url} is a PDF pdftotext took more than {} s to read.", PDF_TIMEOUT.as_secs())),
     }
 }
 
@@ -185,12 +199,12 @@ fn raw_github(url: &str) -> String {
 }
 
 /// A page's DOM as the model should see it: the raw HTML, or its main text.
-async fn page(dom: String, url: &str, raw: bool) -> Output {
+async fn page(ctx: &Context, dom: String, url: &str, raw: bool) -> Output {
     if raw {
-        return shown(&dom);
+        return shown(ctx, &dom);
     }
     match extract(dom, url.to_string()).await {
-        Some(article) => shown(&article),
+        Some(article) => shown(ctx, &article),
         None => Output::error(format!("Could not find readable text in {url}.")),
     }
 }
@@ -199,11 +213,20 @@ async fn extract(html: String, url: String) -> Option<String> {
     tokio::task::spawn_blocking(move || readable(&html, &url)).await.ok().flatten()
 }
 
-fn shown(text: &str) -> Output {
+/// The text within the display budget; longer text is cut and spilled to a file, like other
+/// tools' truncated output, so the model pages through it with `read`.
+fn shown(ctx: &Context, text: &str) -> Output {
     let shown = truncate(text, MAX_BYTES);
     let more = text.len() - shown.len();
-    let note = if more > 0 { format!("\n\n[Truncated: {more} more characters.]") } else { String::new() };
-    Output::ok(format!("{shown}{note}")).brief(format!("{} KB", text.len() / 1024))
+    if more == 0 {
+        return Output::ok(text.to_string()).brief(format!("{} KB", text.len() / 1024));
+    }
+    let saved = match super::spill(ctx, "fetch", text) {
+        Some(path) => format!(" The full text is saved at {}; read it with offset and limit.", path.display()),
+        None => String::new(),
+    };
+    Output::ok(format!("{shown}\n\n[Showing the first {} of {} bytes.{saved}]", shown.len(), text.len()))
+        .brief(format!("{} KB", text.len() / 1024))
 }
 
 /// The browser killi can drive for pages that need JavaScript and for screenshots.
@@ -242,15 +265,18 @@ fn browser(url: &str, extra: &[String]) -> Result<(Command, PathBuf), String> {
 
 /// A running browser and its profile folder. Dropping it, also when the call is interrupted
 /// and its future dropped, kills the browser and the helpers it started and removes the profile.
+/// The group is tracked while it runs, so quitting on a signal ends it too.
 struct Running {
     child: tokio::process::Child,
     profile: PathBuf,
+    _tracked: Option<Tracked>,
 }
 
 impl Running {
     fn start(command: &mut Command, profile: PathBuf) -> Result<Self, String> {
         let child = command.spawn().map_err(|e| format!("Could not run the browser: {e}"))?;
-        Ok(Self { child, profile })
+        let tracked = child.id().map(track);
+        Ok(Self { child, profile, _tracked: tracked })
     }
 }
 
@@ -328,7 +354,7 @@ impl Drop for Temp {
 }
 
 async fn screenshot(ctx: &Context, url: &str) -> Output {
-    if !ctx.images {
+    if !ctx.images.get() {
         return Output::error("This model can't see images, so a screenshot is no use.");
     }
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -349,7 +375,7 @@ pub async fn web_search(ctx: &Context, args: &Value) -> Output {
     let Some(query) = args.get("query").and_then(Value::as_str).map(str::trim).filter(|q| !q.is_empty()) else {
         return Output::error("web_search needs `query`.");
     };
-    let limit = args.get("limit").and_then(Value::as_u64).map_or(DEFAULT_RESULTS, |l| (l as usize).clamp(1, MAX_RESULTS));
+    let limit = super::uint(args, "limit").map_or(DEFAULT_RESULTS, |l| (l as usize).clamp(1, MAX_RESULTS));
     let settings = ctx.search.borrow().clone();
     let found = match search(&settings, query, limit).await {
         Ok(found) => found,
@@ -674,7 +700,25 @@ mod tests {
     }
 
     fn ctx() -> super::Context {
-        super::Context::new(std::env::temp_dir(), std::env::temp_dir().join("killi-fetch-spill"))
+        let tmp = crate::test_temp::TempDir::new("killi-fetch");
+        let mut ctx = super::Context::new(tmp.path().to_path_buf(), tmp.join("spill"));
+        ctx.temp = Some(tmp);
+        ctx
+    }
+
+    #[test]
+    fn long_text_is_spilled_for_paging_with_read() {
+        let tmp = crate::test_temp::TempDir::new("killi-fetch-shown");
+        let ctx = super::Context::new(tmp.path().to_path_buf(), tmp.join("spill"));
+        let text = "x\n".repeat(30_000);
+        let out = super::shown(&ctx, &text);
+        assert!(!out.is_error);
+        assert!(out.text.contains("The full text is saved at ") && out.text.contains("read it with offset and limit"), "{}", &out.text[out.text.len() - 200..]);
+        let mut spilled = std::fs::read_dir(&ctx.spill_dir).unwrap();
+        let path = spilled.next().expect("one spill file").unwrap().path();
+        assert!(spilled.next().is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert_eq!(super::shown(&ctx, "hi").text, "hi");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -693,13 +737,14 @@ mod tests {
         let url = serve_once(head, size, std::time::Duration::from_secs(20)).await;
         let args = serde_json::json!({"url": url});
         let out = tokio::time::timeout(std::time::Duration::from_secs(10), super::fetch_url(&ctx(), &args)).await.expect("waited for a body with no end");
-        let more = super::MAX_DOWNLOAD - super::MAX_BYTES;
-        assert!(out.text.ends_with(&format!("[Truncated: {more} more characters.]")), "{}", &out.text[out.text.len() - 60..]);
+        assert!(out.text.contains("The full text is saved at "), "{}", &out.text[out.text.len() - 200..]);
+        assert!(out.text.ends_with("read it with offset and limit.]"), "{}", &out.text[out.text.len() - 60..]);
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn dropping_a_browser_kills_its_group_and_removes_its_profile() {
-        let profile = std::env::temp_dir().join(format!("killi-chrome-test-{}", std::process::id()));
+        let tmp = crate::test_temp::TempDir::new("killi-chrome-test");
+        let profile = tmp.join("profile");
         std::fs::create_dir_all(profile.join("Default")).unwrap();
         let mut command = tokio::process::Command::new("/bin/sh");
         command.args(["-c", "sleep 30 & sleep 30"]).process_group(0).kill_on_drop(true);
@@ -872,12 +917,11 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn every_source_failing_names_them_all() {
-        // Nothing listens on port 1, so the instance fails at once. The second source is a
-        // keyed Brave call, which fails with or without a network (a bad key or no route);
-        // the public page isn't in the chain because it answers for real when online.
-        let chain = [super::Source::Searxng { base: "http://127.0.0.1:1".into(), key: None }, super::Source::BraveApi("k".into())];
+        // Nothing listens on ports 1 and 9, so both instances fail at once without a
+        // network; the public page isn't in the chain because it answers for real when online.
+        let chain = [super::Source::Searxng { base: "http://127.0.0.1:1".into(), key: None }, super::Source::Searxng { base: "http://127.0.0.1:9".into(), key: None }];
         let err = super::search_chain(&chain, "a", 5).await.unwrap_err();
-        assert!(err.contains("every source") && err.contains("SearXNG") && err.contains("Brave"), "{err}");
+        assert!(err.contains("every source") && err.contains("SearXNG"), "{err}");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -888,6 +932,15 @@ mod tests {
         let found = super::search_chain(&chain, "a", 5).await.unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn transport_errors_name_their_cause() {
+        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build().unwrap();
+        let error = client.get("http://127.0.0.1:1").send().await.unwrap_err();
+        let text = super::fetch_error(&error);
+        assert!(text.contains(": "), "the cause follows: {text}");
+        assert!(text.to_ascii_lowercase().contains("refused") || text.to_ascii_lowercase().contains("failed"), "{text}");
     }
 
     #[tokio::test(flavor = "current_thread")]

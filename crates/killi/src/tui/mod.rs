@@ -45,7 +45,7 @@ use crate::agent::{Agent, Controls, Event, Image, Question, Sink, Slot, Steered,
 use crate::config::{Config, Thinking};
 use crate::setup::{Overview, Setup};
 use crate::live;
-use crate::llm::{Client, Usage};
+use crate::llm::{Client, ErrorKind, ProviderError, Usage};
 use crate::mcp::Mcp;
 use crate::session::{Choice, Replayed};
 use crate::snapshot::Snapshots;
@@ -54,7 +54,7 @@ use editor::Editor;
 use history::{Entry as Line, History};
 use menu::{Entry, Fill, Item, Suggestions};
 use palette::Ground;
-use text::{ADD, BOLD, BRANCH, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, RULE, SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_words};
+use text::{ADD, BOLD, BRANCH, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, RULE, SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_code, wrap_words};
 
 const MAX_INPUT_ROWS: usize = 10;
 const MENU_ROWS: usize = 8;
@@ -70,6 +70,9 @@ const REPLAY_PROMPTS: usize = 8;
 const REPLAY_PROMPT_ROWS: usize = 6;
 /// The frames of a running tool call's glyph, a step each tick.
 const QUARTER: [char; 4] = ['◐', '◓', '◑', '◒'];
+/// How long a branch reading stays fresh: the status line's two git spawns run at most this
+/// often, and at most once per prompt, instead of after every main-loop iteration.
+const BRANCH_TTL: Duration = Duration::from_secs(5);
 
 pub struct Start {
     pub model: Option<String>,
@@ -125,13 +128,22 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     };
     controls.here = live.as_ref().map(|l| Rc::new(l.here()));
     let fullscreen = wants_fullscreen(config.ui.fullscreen, &std::env::var("TERM_PROGRAM").unwrap_or_default());
+    if terminal_gone(libc::STDIN_FILENO) {
+        return Ok(ExitCode::SUCCESS);
+    }
     let ground = if config.ui.theme.is_none() { query_ground() } else { None };
     text::init_theme(config.ui.theme.as_deref(), ground);
     let mut session = Setup::new(config, &cwd, start.model.as_deref()).await?;
     // Only once killi has a model to start on: a broken config ends on the reason instead.
     crate::config::command_guide_if_first()?;
+    // The log parses once: the items below replay from the same load the resume moves.
+    let mut start_replayed = Vec::new();
     let mut agent = match &start.resume {
-        Some(log) => session.resume(log, controls.clone(), sink.clone())?,
+        Some(log) => {
+            let report = crate::session::load_reported(log)?;
+            start_replayed = crate::session::replay(&report.loaded, &cwd, REPLAY_PROMPTS);
+            session.resume_loaded(report, log, controls.clone(), sink.clone())?
+        }
         None => session.start(controls.clone(), sink.clone())?,
     };
     let mut snapshots = Snapshots::new(&cwd);
@@ -149,8 +161,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         app.locate();
     }
     app.banner(&agent, &session, &snapshots, start.resume.is_some());
-    if let Some(log) = &start.resume {
-        app.replay_log(log);
+    if start.resume.is_some() {
+        app.replay_items(start_replayed);
     }
     if start.pick_session {
         app.open_session_picker(&cwd);
@@ -170,35 +182,43 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     break;
                 }
             }
-            Input::Resume(path) => match session.resume(&path, controls.clone(), sink.clone()) {
-                Ok(resumed) => {
-                    // Messages from other sessions were about the conversation being left.
-                    controls.peer_notes.borrow_mut().clear();
-                    let stopped = agent.stop_tasks();
-                    agent.discard_if_unused();
-                    agent = resumed;
-                    app.show_model(&agent, session.config());
-                    app.status.context = agent.stats.context;
-                    app.notice(&format!("Resumed the session started with “{}”.", agent.user_prompts().first().map_or("", |s| s.lines().next().unwrap_or(""))));
-                    if let Some(note) = stopped_note(&stopped) {
-                        app.notice(&note);
+            Input::Resume(path) if crate::session::is_locked(&path) => {
+                app.notice("that session is still running; continue it there, or start /new");
+            }
+            Input::Resume(path) => match crate::session::load_reported(&path) {
+                Err(e) => app.error_report(&e),
+                Ok(report) => {
+                    let replayed = crate::session::replay(&report.loaded, &cwd, REPLAY_PROMPTS);
+                    match session.resume_loaded(report, &path, controls.clone(), sink.clone()) {
+                        Ok(resumed) => {
+                            app.reset_conversation(&mut snapshots, &cwd);
+                            let stopped = agent.stop_tasks();
+                            agent.discard_if_unused();
+                            agent = resumed;
+                            app.show_model(&agent, session.config());
+                            app.status.context = agent.stats.context;
+                            app.notice(&format!("Resumed the session started with “{}”.", agent.user_prompts().first().map_or("", |s| s.lines().next().unwrap_or(""))));
+                            if let Some(note) = stopped_note(&stopped) {
+                                app.notice(&note);
+                            }
+                            app.replay_items(replayed);
+                            app.editor = Editor::with_history(agent.user_prompts());
+                        }
+                        Err(e) => app.error_report(&e),
                     }
-                    app.replay_log(&path);
-                    app.editor = Editor::with_history(agent.user_prompts());
                 }
-                Err(e) => app.error(&format!("{e:#}")),
             },
             Input::Model(alias) => match session.config().resolve(Some(&alias)).and_then(Client::new) {
                 Ok(client) => {
                     if let Err(e) = agent.switch_model(client) {
-                        app.error(&format!("{e:#}"));
+                        app.error_report(&e);
                     }
                     app.show_model(&agent, session.config());
                     app.redraw_banner(&agent, &session, &snapshots);
                     app.save_choice(&agent);
                     app.notice(&format!("Switched to {alias}, keeping the conversation so far. The cache starts over with the new model."));
                 }
-                Err(e) => app.error(&format!("{e:#}")),
+                Err(e) => app.error_report(&e),
             },
             Input::Search(provider, url, key) => {
                 let path = crate::config::killi_home().join("config.toml");
@@ -216,7 +236,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                         };
                         app.notice(&format!("Web search: {what}, here and in new sessions."));
                     }
-                    Err(e) => app.error(&format!("/web-search-config: {e:#}")),
+                    Err(e) => app.error_from("/web-search-config", &e),
                 }
             }
             Input::Mcp(name, from_list) => match session.mcp().toggle(&name) {
@@ -229,7 +249,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                         app.open_mcp_picker(session.mcp(), Some(&name));
                     }
                 }
-                Err(e) => app.error(&format!("{e:#}")),
+                Err(e) => app.error_report(&e),
             },
             Input::Prune(keep) => match crate::session::prune(keep, &agent.session.log_path) {
                 Ok(pruned) if pruned.sessions == 0 => app.notice("Nothing to prune."),
@@ -245,7 +265,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 let efforts = session.config().efforts(agent.model_alias());
                 if efforts.contains(&effort) {
                     if let Err(e) = agent.set_thinking(Thinking::parse(&effort)) {
-                        app.error(&format!("{e:#}"));
+                        app.error_report(&e);
                     }
                     app.show_model(&agent, session.config());
                     app.redraw_banner(&agent, &session, &snapshots);
@@ -256,7 +276,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 }
             }
         }
-        app.refresh_branch();
+        app.refresh_branch_async().await;
         app.live_sync(&agent);
         app.draw()?;
     }
@@ -369,6 +389,23 @@ fn parse_osc_color(reply: &str, code: u8) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
+/// Whether the terminal is already gone: hung up, or a read gives back nothing or fails. A
+/// pty closed during startup would otherwise leave crossterm's reader spinning on EOF at 100%
+/// CPU, ignoring SIGHUP and SIGTERM while a blocking read holds the runtime's thread.
+fn terminal_gone(fd: libc::c_int) -> bool {
+    if fd < 0 {
+        return true;
+    }
+    let mut poll = libc::pollfd { fd, events: libc::POLLHUP, revents: 0 };
+    // SAFETY: `poll` points at one pollfd that lives for the whole call.
+    if unsafe { libc::poll(&mut poll, 1, 0) } < 0 {
+        return true;
+    }
+    // A hangup is gone even when input is still buffered: probing with a read would eat a
+    // byte of it, and the reader would spin on EOF once the buffer drains anyway.
+    (poll.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL)) != 0
+}
+
 /// The command that reopens the session logged at `log`, quoted for the shell when needed.
 fn resume_command(log: &Path) -> String {
     let path = log.to_string_lossy();
@@ -418,7 +455,7 @@ where
                 app.notice("Still answering the last /btw question.");
             } else {
                 let ask = app.controls.aside.borrow().ask(&question);
-                app.aside = Some((question.clone(), Instant::now()));
+                app.aside = Some((text::sanitize_row(&question).into_owned(), Instant::now()));
                 aside = Some((question, Box::pin(ask)));
             }
         }
@@ -479,6 +516,7 @@ async fn handle_command(
     }
     match command {
         "exit" | "quit" | "q" => return Ok(false),
+        "btw" if agent.user_prompts().is_empty() => app.notice("Nothing to ask about yet."),
         "btw" => {
             app.aside_asked = Some(arg.to_string());
             app.begin_busy();
@@ -500,14 +538,17 @@ async fn handle_command(
             app.end_busy();
             match (ended, used.take()) {
                 (Ended::Done(Ok((text, _))), Some(usage)) => app.show_recap(&text, &usage),
-                (Ended::Done(Err(e)), _) => app.error(&format!("/recap: {e:#}")),
+                (Ended::Done(Err(e)), _) => app.error_from("/recap", &e),
                 _ => {}
             }
         }
         "swarm" => {
             let was_on = app.controls.swarm.replace(true);
             let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {arg}"), &mention::expand(cwd, arg), images).await;
-            app.controls.swarm.set(was_on);
+            // A /swarm off typed mid-turn stays off: only an untouched mode goes back.
+            if app.controls.swarm.get() {
+                app.controls.swarm.set(was_on);
+            }
             result?;
         }
         "undo" => {
@@ -524,36 +565,44 @@ async fn handle_command(
             }
             match snapshots.undo() {
                 Ok(changes) if changes.is_empty() => app.notice("Undone. No files had changed in the last turn."),
+                Err(_) if undo_empty(snapshots) => {
+                    app.notice("Nothing to undo yet.");
+                }
                 Ok(changes) => {
                     app.notice(&format!("Undone: {} restored to how they were before the last turn.", crate::tools::count(changes.len(), "file")));
                     for change in changes.iter().take(20) {
                         app.commit(format!("  {DIM}{change}{RESET}"));
                     }
-                    agent.mark_interrupted();
+                    let first = agent
+                        .user_prompts()
+                        .last()
+                        .map(|prompt| prompt.lines().next().unwrap_or("").trim().to_string())
+                        .unwrap_or_default();
+                    agent.note_for_next_prompt(undo_note(&first, &undo_paths(&changes)));
                 }
                 Err(e) => app.error(&format!("Can't undo: {e:#}")),
             }
         }
+        "compact" if agent.user_prompts().is_empty() => app.notice("Nothing to compact yet."),
         "compact" => {
             let focus = arg.to_string();
             app.begin_busy();
             let ended = run_turn(app, keys, rx, async { agent.compact(Some(&focus)).await.map(|()| (String::new(), Stop::Completed)) }).await?;
             app.end_busy();
-            if let Ended::Done(Err(e)) = ended {
-                app.error(&format!("Compaction failed: {e:#}"));
+            match ended {
+                Ended::Done(Err(e)) => app.error_from("Compaction failed", &e),
+                Ended::Done(Ok(_)) => app.status.context = agent.stats.context,
+                _ => {}
             }
         }
         "clear" | "new" => match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
             Ok(fresh) => {
-                // Messages from other sessions were about the conversation being left.
-                app.controls.peer_notes.borrow_mut().clear();
+                app.reset_conversation(snapshots, cwd);
                 let saved = !agent.user_prompts().is_empty();
                 let stopped = agent.stop_tasks();
                 agent.discard_if_unused();
                 *agent = fresh;
                 app.show_model(agent, session.config());
-                app.todos.clear();
-                app.reset_usage();
                 app.wipe_screen();
                 app.banner(agent, session, snapshots, false);
                 app.notice(if saved { "Started a new session. The last one is saved; /resume picks it up again." } else { "Started a new session." });
@@ -561,7 +610,7 @@ async fn handle_command(
                     app.notice(&note);
                 }
             }
-            Err(e) => app.error(&format!("{e:#}")),
+            Err(e) => app.error_report(&e),
         },
         "resume" => app.open_session_picker(cwd),
         "prune" if arg.is_empty() => app.open_prune_picker(&agent.session.log_path),
@@ -591,7 +640,7 @@ async fn handle_command(
                 app.entries = entries(session);
                 app.refresh_choices(session.config());
                 app.redraw_banner(agent, session, snapshots);
-                app.notice("Reloaded the system prompt ([prompt] in config.toml), AGENTS.md files and skills. The next request starts the cache over.");
+                app.notice("Reloaded the system prompt ([prompt] in config.toml), AGENTS.md files, skills and [search]. The next request starts the cache over; models, MCP servers and tools apply when killi restarts.");
                 if session.skills_need_restart() {
                     app.notice("This session started without skills, so the model can't load them until killi restarts; /name runs one now.");
                 }
@@ -629,14 +678,38 @@ async fn prompt_turn(
 ) -> Result<()> {
     app.begin_turn(shown);
     app.draw()?;
-    snapshots.take();
     app.undo_warned = false;
     app.peer_tells = 0;
     app.live_turn(Some(shown));
     let before = Totals::of(agent);
-    let ended = run_turn(app, keys, rx, agent.run(prompt, images)).await?;
+    // The snapshot's git commands run on a blocking thread while the turn's first request
+    // is already in flight; the agent waits for the tree before its first tool call, so the
+    // tree still predates every change the turn makes.
+    let ended = if let Some(work) = snapshots.start_take() {
+        app.snapshotting = true;
+        let (snap_tx, snap_rx) = oneshot::channel();
+        agent.set_snapshot_wait(snap_rx);
+        let turn = run_turn(app, keys, rx, agent.run(prompt, images));
+        let snap = async {
+            let tree = tokio::task::spawn_blocking(move || work.run())
+                .await
+                .map_err(|e| anyhow::anyhow!("the snapshot task ended: {e}"))
+                .and_then(|tree| tree);
+            snapshots.commit_take(tree);
+            let _ = snap_tx.send(());
+        };
+        let (ended, _) = tokio::join!(turn, snap);
+        app.snapshotting = false;
+        ended?
+    } else {
+        run_turn(app, keys, rx, agent.run(prompt, images)).await?
+    };
+    if let Some(why) = &snapshots.skipped {
+        app.notice(why);
+    }
     let completed = matches!(ended, Ended::Done(Ok((_, Stop::Completed))));
-    app.finish_turn(ended, before, Totals::of(agent));
+    let after = Totals::of(agent);
+    app.finish_turn(agent, ended, before, after);
     app.live_turn(None);
     if !app.controls.peer_notes.borrow().is_empty() {
         app.notice("A message from another session came as the turn ended; the agent gets it with your next prompt.");
@@ -821,6 +894,14 @@ struct App {
     markdown: Markdown,
     /// Streamed text after the last line break.
     partial: String,
+    /// The streaming preview's rows for the unfinished tail, with the tail, the width and the
+    /// Markdown state they were styled from: every tick redraws while it streams otherwise.
+    preview_cache: Option<(String, usize, u64, Vec<String>)>,
+    /// The streaming reply's sanitizer: an escape sequence a delta ends in the middle of waits
+    /// in it for the next one.
+    stream: text::Sanitizer,
+    /// The reasoning stream's sanitizer, one thought at a time.
+    reasoning: text::Sanitizer,
     /// A blank line in the model's text, printed only if more text follows it.
     held_blank: bool,
     /// The last line printed was blank.
@@ -851,9 +932,17 @@ struct App {
     /// The workspace's paths the `@` menu searches, read when an `@` word is at the cursor
     /// and dropped when none is, so each `@` sees the files as they are then.
     files: Option<Vec<String>>,
+    /// Bumped whenever `files` is read or dropped, so the `@` menu's cached filter knows
+    /// the listing it was computed from.
+    files_gen: u64,
+    /// The `@` menu for the text before the cursor and the listing it was filtered from:
+    /// filtering 20k paths reruns on every draw while streaming otherwise.
+    file_menu_cache: Option<(String, u64, Option<Suggestions>)>,
     busy: Option<Instant>,
     /// A request being retried: the attempt and when its wait ends, for the working row.
     retry: Option<(u32, Instant)>,
+    /// A snapshot started with the turn still runs on a blocking thread, for the working row.
+    snapshotting: bool,
     /// The latest tool outputs and thoughts, for Ctrl+O.
     details: Vec<(String, String)>,
     /// How far back Ctrl+O has gone from the newest.
@@ -896,6 +985,8 @@ struct App {
     view_rows: usize,
     /// Whether the banner says it is a resumed session, for drawing it again.
     banner_resumed: bool,
+    /// When the branch was last read, so two git spawns don't run after every input.
+    branch_at: Option<Instant>,
     /// This session's file among the live sessions; none with `[agent] peers = false`.
     live: Option<live::Registration>,
     /// Requests from other sessions; none when this one takes none.
@@ -946,6 +1037,9 @@ impl App {
             editor: Editor::with_history(agent.user_prompts()),
             markdown: Markdown::new(usize::from(columns).max(20)),
             partial: String::new(),
+            preview_cache: None,
+            stream: text::Sanitizer::default(),
+            reasoning: text::Sanitizer::default(),
             held_blank: false,
             last_blank: false,
             last_kind: Kind::None,
@@ -965,6 +1059,8 @@ impl App {
             menu_text: String::new(),
             menu_closed: None,
             files: None,
+            files_gen: 0,
+            file_menu_cache: None,
             busy: None,
             details: Vec::new(),
             detail_back: 0,
@@ -979,6 +1075,7 @@ impl App {
             controls,
             spinner: 0,
             retry: None,
+            snapshotting: false,
             exit_armed: None,
             queued: Vec::new(),
             send_now: false,
@@ -998,6 +1095,7 @@ impl App {
             history: History::new(usize::from(columns).max(20)),
             view_rows: usize::from(rows).max(5),
             banner_resumed: false,
+            branch_at: None,
             live: None,
             peers: None,
             peer_asks: FuturesUnordered::new(),
@@ -1065,7 +1163,7 @@ impl App {
             let prompts = agent.user_prompts();
             self.commit(format!("{DIM}Resumed a session with {} prompt{}; the last was “{}”.{RESET}", prompts.len(), if prompts.len() == 1 { "" } else { "s" }, prompts.last().map_or("", |s| s.lines().next().unwrap_or(""))));
         }
-        self.emit(Line::block(|width| wrap_items(&key_hints(), width)));
+        self.emit(Line::block(|width| wrap_items(&key_hints(ENHANCED.load(Ordering::Relaxed)), width)));
         self.commit(String::new());
         self.last_kind = Kind::None;
         self.history.banner_ends();
@@ -1115,12 +1213,11 @@ impl App {
             self.recap = None;
             return Ok(Some(input));
         }
-        if std::mem::take(&mut self.send_now) {
-            let steered: Vec<_> = self.controls.steer.borrow_mut().drain(..).collect();
-            if let Some((text, images)) = joined(steered) {
-                self.recap = None;
-                return Ok(Some(Input::Prompt(text, images)));
-            }
+        if std::mem::take(&mut self.send_now)
+            && let Some((text, images)) = self.send_now_prompt()
+        {
+            self.recap = None;
+            return Ok(Some(Input::Prompt(text, images)));
         }
         loop {
             let event = tokio::select! {
@@ -1212,8 +1309,9 @@ impl App {
                 } else if self.exit_armed.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
                     return Idle::Exit;
                 } else {
+                    // Armed, not printed: the live area shows it until it lapses, so the
+                    // transcript keeps only what was done.
                     self.exit_armed = Some(Instant::now());
-                    self.notice("Press Ctrl+C again to exit.");
                 }
             }
             KeyCode::Char('d') if ctrl && self.editor.is_empty() => return Idle::Exit,
@@ -1278,6 +1376,12 @@ impl App {
             }
             KeyCode::Enter | KeyCode::Tab => {
                 if let Some(choice) = picker.choice().cloned() {
+                    if let PickerChoice::Session(path) = &choice
+                        && crate::session::is_locked(path)
+                    {
+                        self.notice("that session is still running; continue it there, or start /new");
+                        return Idle::Continue;
+                    }
                     self.picker = None;
                     return match choice {
                         PickerChoice::Session(path) => Idle::Input(Input::Resume(path)),
@@ -1332,17 +1436,26 @@ impl App {
     /// The slash or `@` menu for the prompt as typed. While the agent works the slash menu
     /// offers only the commands that run then, typed at the start of the prompt, and /effort's
     /// choices; files are offered as ever.
-    fn suggestions(&self) -> Option<Suggestions> {
+    fn suggestions(&mut self) -> Option<Suggestions> {
         if self.picker.is_some() || self.asking.is_some() || self.editor.browsing() {
             return None;
         }
         if self.menu_closed.as_deref() == Some(self.editor.text()) {
             return None;
         }
-        if let Some(files) = &self.files
-            && let Some(menu) = menu::files(self.editor.before_cursor(), files)
-        {
-            return Some(menu);
+        if self.files.is_some() {
+            let before = self.editor.before_cursor().to_string();
+            if let Some((cached, listed, menu)) = &self.file_menu_cache
+                && *cached == before
+                && *listed == self.files_gen
+            {
+                return menu.clone();
+            }
+            let menu = self.files.as_ref().and_then(|files| menu::files(&before, files));
+            self.file_menu_cache = Some((before, self.files_gen, menu.clone()));
+            if let Some(menu) = menu {
+                return Some(menu);
+            }
         }
         if self.busy.is_some() {
             let entries: Vec<Entry> = self.entries.iter().filter(|e| BUSY_COMMANDS.contains(&e.name.as_str())).cloned().collect();
@@ -1366,7 +1479,8 @@ impl App {
             return;
         }
         self.menu_text = self.editor.text().to_string();
-        let current = |item: &Item| item.value == self.status.model || item.value == self.status.thinking;
+        let (model, thinking) = (self.status.model.clone(), self.status.thinking.clone());
+        let current = |item: &Item| item.value == model || item.value == thinking;
         self.menu_selected = self.suggestions().filter(|m| m.fill == Fill::Argument).and_then(|m| m.items.iter().position(current)).unwrap_or(0);
     }
 
@@ -1376,8 +1490,14 @@ impl App {
         let before = self.editor.before_cursor();
         let word = before.rsplit(char::is_whitespace).next().unwrap_or(before);
         match (word.starts_with('@'), self.files.is_some()) {
-            (true, false) => self.files = Some(mention::list(&self.cwd)),
-            (false, true) => self.files = None,
+            (true, false) => {
+                self.files = Some(mention::list(&self.cwd));
+                self.files_gen += 1;
+            }
+            (false, true) => {
+                self.files = None;
+                self.files_gen += 1;
+            }
             _ => {}
         }
     }
@@ -1395,7 +1515,7 @@ impl App {
     fn save_choice(&mut self, agent: &Agent) {
         let choice = Choice { model: Some(agent.model_alias().to_string()), effort: Some(agent.thinking().label().to_string()) };
         if let Err(e) = crate::session::save_choice(&choice) {
-            self.error(&format!("{e:#}"));
+            self.error_report(&e);
         }
     }
 
@@ -1498,6 +1618,22 @@ impl App {
         }
     }
 
+    /// The queued messages Ctrl+S sends now, as the next prompt: the typed text with the images
+    /// pasted beside it. `@` files are expanded once, when the prompt is sent.
+    fn send_now_prompt(&mut self) -> Option<(String, Vec<Image>)> {
+        let steered: Vec<Steered> = self.controls.steer.borrow_mut().drain(..).collect();
+        let sent = std::mem::take(&mut self.queued);
+        if sent.is_empty() {
+            return None;
+        }
+        let images = steered
+            .into_iter()
+            .flat_map(|(_, images)| images)
+            .filter(|image| sent.iter().any(|text| text.contains(&image.label)))
+            .collect();
+        Some((sent.join("\n\n"), images))
+    }
+
     /// Moves the queued messages the agent has taken into the conversation from the live area
     /// to the scrollback, so the queue shows only what Ctrl+S can still send.
     fn show_sent(&mut self) {
@@ -1516,6 +1652,11 @@ impl App {
     /// for the turn to end. False when it didn't run.
     fn command_while_busy(&mut self, name: &str, arg: &str) -> bool {
         if matches!(name, "effort" | "thinking") {
+            if arg.trim().is_empty() {
+                self.editor.clear();
+                self.editor.insert("/effort ");
+                return false;
+            }
             self.effort_after_turn(arg);
             return true;
         }
@@ -1527,7 +1668,8 @@ impl App {
     }
 
     /// /effort while the agent works: the running turn holds the agent, so the pick is kept and
-    /// `read_input` applies it as soon as the turn ends.
+    /// `read_input` applies it as soon as the turn ends. A bare /effort never reaches here:
+    /// `command_while_busy` leaves it in the prompt, where the menu offers the levels.
     fn effort_after_turn(&mut self, arg: &str) {
         let efforts: Vec<&str> = self.effort_choices.iter().map(|item| item.value.as_str()).collect();
         match effort_named(&self.status.model, &efforts, arg) {
@@ -1561,7 +1703,8 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.editor.is_empty() => self.editor.clear(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
             KeyCode::Enter if !newline_key(&key) => {
-                let typed = self.editor.take();
+                let secret = self.asking.as_ref().is_some_and(|asking| asking.internal && asking.secret);
+                let typed = if secret { self.editor.take_quiet() } else { self.editor.take() };
                 self.answer(Some(typed).filter(|t| !t.trim().is_empty()));
             }
             _ => self.edit_key(key),
@@ -1575,7 +1718,7 @@ impl App {
         if asking.internal {
             return self.search_answer(&answer, asking.secret);
         }
-        self.commit(format!("  {FIN}↳{RESET} {answer}"));
+        self.commit(format!("  {FIN}↳{RESET} {}", text::sanitize(&answer)));
         let _ = asking.question.reply.send(answer);
     }
 
@@ -1605,6 +1748,7 @@ impl App {
                 self.cursor_row = 0;
                 self.shown.clear();
                 self.since_banner = None;
+                self.content_rows = 0;
             }
             KeyCode::Char(c) if !ctrl => e.insert(c.encode_utf8(&mut [0; 4])),
             KeyCode::Backspace if alt => e.delete_word(),
@@ -1712,12 +1856,9 @@ impl App {
     }
 
     /// Prints a resumed session's conversation into the scrollback, as it read when it ran.
-    fn replay_log(&mut self, log: &Path) {
-        let loaded = match crate::session::load(log) {
-            Ok(loaded) => loaded,
-            Err(e) => return self.error(&format!("{e:#}")),
-        };
-        for shown in crate::session::replay(&loaded, &self.cwd, REPLAY_PROMPTS) {
+    /// The caller loads the log once and replays from its report, so resuming parses once.
+    fn replay_items(&mut self, items: Vec<Replayed>) {
+        for shown in items {
             match shown {
                 Replayed::Note(text) => self.notice(&text),
                 Replayed::Prompt(prompt) => {
@@ -1759,13 +1900,16 @@ impl App {
         self.busy = None;
     }
 
-    fn finish_turn(&mut self, ended: Ended, before: Totals, after: Totals) {
+    fn finish_turn(&mut self, agent: &mut Agent, ended: Ended, before: Totals, after: Totals) {
         let elapsed = self.busy.map(|t| t.elapsed()).unwrap_or_default();
         self.end_busy();
         if let Some(asking) = self.asking.take() {
             let _ = asking.question.reply.send(String::new());
         }
-        self.queued.clear();
+        // The typed copies of queued messages: Ctrl+S still sends them from here, and a
+        // turn that ends without consuming them puts them (not their `@`-expansions) back.
+        let typed = std::mem::take(&mut self.queued);
+        let interrupted = matches!(ended, Ended::Interrupted);
         // The one line of the outcome worth putting in the notification, when there is one.
         let mut notice_line = String::new();
         match ended {
@@ -1783,7 +1927,7 @@ impl App {
                 self.last_end = Some(LastEnd::Interrupted);
                 let why = gist(&format!("{e:#}"));
                 notice_line = first_line(&why, 120);
-                self.error(&why);
+                self.error_report(&e);
             }
             Ended::Done(Ok((text, stop))) => {
                 self.last_end = Some(LastEnd::Done);
@@ -1796,6 +1940,20 @@ impl App {
                 if !self.later_noted && leaves_something_for_later(&text) {
                     self.notice("The reply leaves something for later that wasn't noted; ask killi to note it with `later`, or see /later.");
                 }
+            }
+        }
+        if self.send_now {
+            self.queued = typed;
+        } else if !interrupted && agent.pending_steer() {
+            let steered = agent.take_steered();
+            if !steered.is_empty() {
+                let restored: Vec<Steered> = steered
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (expanded, images))| (typed.get(i).cloned().unwrap_or(expanded), images))
+                    .collect();
+                restore_steered(&mut self.editor, restored);
+                self.notice("Your queued message wasn't sent; it's back in the prompt.");
             }
         }
         let prompt = after.prompt - before.prompt;
@@ -1814,12 +1972,8 @@ impl App {
             ));
         }
         self.last_kind = Kind::None;
-        if elapsed >= self.notify_after && !self.send_now {
-            let what = match self.last_end {
-                Some(LastEnd::Done) => "Done",
-                _ => "Stopped",
-            };
-            notify(&format!("{what} · {}", clock(elapsed)), &notice_line);
+        if self.wants_notify(elapsed) {
+            notify(&format!("Done · {}", clock(elapsed)), &notice_line);
         }
     }
 
@@ -1835,7 +1989,7 @@ impl App {
                 }
                 self.end_thinking();
                 self.begin(Kind::Text);
-                self.partial.push_str(text);
+                self.partial.push_str(&self.stream.push(text));
                 while let Some(end) = self.partial.find('\n') {
                     let line: String = self.partial.drain(..=end).collect();
                     let line = line.trim_end_matches('\n');
@@ -1853,17 +2007,27 @@ impl App {
                     self.commit_parts(styled);
                 }
             }
-            Event::Reasoning(text) => match &mut self.thinking {
-                Some((_, buffer)) => buffer.push_str(&text),
-                None => self.thinking = Some((Instant::now(), text)),
-            },
+            Event::Reasoning(delta) => {
+                let clean = self.reasoning.push(&delta);
+                match &mut self.thinking {
+                    Some((_, buffer)) => buffer.push_str(&clean),
+                    None => self.thinking = Some((Instant::now(), clean)),
+                }
+            }
             Event::Retry { attempt, wait, reason } => {
                 self.retry = Some((attempt, Instant::now() + wait));
-                let line = format!("{WARN}⚠ retry {attempt} in {}:{RESET}{DIM} {}{RESET}", clock(wait), gist(&reason));
+                let discarded = self.flush_partial();
+                self.thinking = None;
+                let _ = self.reasoning.finish();
+                if discarded {
+                    self.notice("the partial reply above was discarded; retrying …");
+                }
+                let line = format!("{WARN}⚠ retry {attempt} in {}:{RESET}{DIM} {}{RESET}", clock(wait), text::sanitize_row(&gist(&reason)));
                 self.begin(Kind::Tool);
                 self.emit(Line::Fit(line));
             }
             Event::ToolStart { id, summary, .. } => {
+                let summary = text::sanitize_row(&summary).into_owned();
                 if summary == "later" || summary.starts_with("later ") {
                     self.later_noted = true;
                 }
@@ -1882,6 +2046,8 @@ impl App {
                 if is_bookkeeping(&summary, is_error) {
                     return;
                 }
+                let brief = text::sanitize_row(&brief);
+                let output = text::sanitize(&output);
                 self.tool_line(None, &summary, is_error, &brief, elapsed);
                 if display.is_none() && summary.starts_with("bash ") {
                     self.output_preview(&output, is_error);
@@ -1890,20 +2056,24 @@ impl App {
                     let shown: Vec<String> = display.lines().take(DIFF_ROWS).map(str::to_string).collect();
                     self.emit(Line::block(move |width| diff_rows(&shown, width)));
                     self.hidden_note(display.lines().count().saturating_sub(DIFF_ROWS), "more");
-                    self.push_detail(summary, display);
+                    let detail = text::sanitize(&display).into_owned();
+                    self.push_detail(summary, detail);
                 } else {
-                    self.push_detail(summary, output);
+                    self.push_detail(summary, output.into_owned());
                 }
             }
             Event::Usage(usage) => self.add_usage(&usage, true),
-            Event::Todos(todos) => self.todos = todos,
+            Event::Todos(mut todos) => {
+                todos.iter_mut().for_each(|todo| todo.content = text::sanitize_row(&todo.content).into_owned());
+                self.todos = todos;
+            }
             Event::Ask(question) => {
                 self.flush_partial();
                 self.end_thinking();
                 self.begin(Kind::Note);
                 if question.plan {
                     self.commit(format!("{BOLD}{FIN}? Plan{RESET}"));
-                    let plan = question.text.clone();
+                    let plan = text::sanitize(&question.text).into_owned();
                     self.emit(Line::block(move |width| {
                         let mut markdown = Markdown::new(width.saturating_sub(2));
                         let mut rows: Vec<String> = plan.lines().flat_map(|line| markdown.line(line)).collect();
@@ -1917,16 +2087,23 @@ impl App {
                     }));
                     self.commit(String::new());
                 } else {
-                    self.emit(Line::Words(format!("{BOLD}{FIN}?{RESET} {BOLD}{}{RESET}", question.text), 2));
+                    let text = question.text.clone();
+                    self.emit(Line::block(move |width| question_rows(&text, width)));
                 }
                 let asked = first_line(&question.text, 120);
                 self.asking = Some(Asking { question, selected: 0, internal: false, secret: false });
                 notify("Waiting for your answer", &asked);
             }
-            Event::Notice(text) => self.notice(&text),
+            Event::Notice(text) => {
+                self.flush_partial();
+                self.end_thinking();
+                self.notice(&text);
+            }
             Event::Swarm { id, description, items } => {
                 self.flush_partial();
                 self.end_thinking();
+                let description = text::sanitize_row(&description).into_owned();
+                let items = items.iter().map(|item| text::sanitize_row(item).into_owned()).collect();
                 self.swarm = Some(swarm::Swarm::new(id, description, items));
             }
             Event::Started | Event::Finished { .. } => {}
@@ -1940,18 +2117,22 @@ impl App {
         match event {
             Event::ToolStart { id, summary, .. } => match (member, &mut self.swarm) {
                 (Some(index), Some(swarm)) => {
+                    let summary = text::sanitize_row(&summary);
                     if !is_bookkeeping(&summary, false) {
                         swarm.call(index, &summary);
                     }
                 }
-                _ => self.running.push(Running { id, summary, label: Some(label), started: Instant::now() }),
+                _ => {
+                    let summary = text::sanitize_row(&summary).into_owned();
+                    self.running.push(Running { id: sub_key(&label, &id), summary, label: Some(label), started: Instant::now() })
+                }
             },
             Event::ToolEnd { id, is_error, brief, .. } if member.is_none() => {
-                let running = self.take_running(&id);
+                let running = self.take_running(&sub_key(&label, &id));
                 let elapsed = running.as_ref().map(|r| r.started.elapsed());
                 let summary = running.map(|r| r.summary).unwrap_or_default();
                 if !is_bookkeeping(&summary, is_error) {
-                    self.tool_line(Some(&label), &summary, is_error, &brief, elapsed);
+                    self.tool_line(Some(&label), &summary, is_error, &text::sanitize_row(&brief), elapsed);
                 }
             }
             Event::Started => {
@@ -1978,6 +2159,8 @@ impl App {
         let index = self.running.iter().position(|r| r.id == id)?;
         Some(self.running.remove(index))
     }
+
+
 
     fn tool_line(&mut self, label: Option<&str>, summary: &str, is_error: bool, brief: &str, elapsed: Option<Duration>) {
         let (glyph, note) = if is_error {
@@ -2055,22 +2238,56 @@ impl App {
         self.status.context = 0;
     }
 
-    fn flush_partial(&mut self) {
+    /// Starts the next conversation with a clean slate: the queue, the todos, the totals, the
+    /// details, other sessions' notes, the snapshots and the context meter go, used by /new
+    /// and /resume alike.
+    fn reset_conversation(&mut self, snapshots: &mut Snapshots, cwd: &Path) {
+        // Messages from other sessions were about the conversation being left.
+        self.controls.steer.borrow_mut().clear();
+        self.queued.clear();
+        self.send_now = false;
+        self.todos.clear();
+        self.reset_usage();
+        self.details.clear();
+        self.detail_back = 0;
+        self.controls.peer_notes.borrow_mut().clear();
+        self.peer_tells = 0;
+        *snapshots = Snapshots::new(cwd);
+    }
+
+    /// Whether the turn just ended earns a desktop notification: a completed turn that ran
+    /// long, not one the user ended themselves with Esc or Ctrl+S.
+    fn wants_notify(&self, elapsed: Duration) -> bool {
+        matches!(self.last_end, Some(LastEnd::Done)) && elapsed >= self.notify_after && !self.send_now
+    }
+
+    /// Prints the streamed line still being held and lays out the table it held back, ending
+    /// the message so the next one starts with fresh Markdown state. True when text was held.
+    fn flush_partial(&mut self) -> bool {
         self.held_blank = false;
+        let tail = self.stream.finish();
+        if !tail.is_empty() {
+            self.partial.push_str(&tail);
+        }
+        let mut flushed = false;
         if !self.partial.trim().is_empty() {
             let line = std::mem::take(&mut self.partial);
             let styled = self.markdown.parts(&line);
+            flushed = true;
             self.commit_parts(styled);
         }
         self.partial.clear();
-        let table = self.markdown.finish_parts();
+        let table = self.markdown.end_message();
+        flushed |= !table.is_empty();
         self.commit_parts(table);
         self.release_asides(true);
+        flushed
     }
 
     /// Ends a thought: one dim line when it took a while, with the full text behind Ctrl+O.
     fn end_thinking(&mut self) {
-        if let Some((started, text)) = self.thinking.take() {
+        if let Some((started, mut text)) = self.thinking.take() {
+            text.push_str(&self.reasoning.finish());
             let seconds = started.elapsed().as_secs_f32();
             let took = clock(started.elapsed());
             self.push_detail("Thinking".into(), text.clone());
@@ -2123,7 +2340,7 @@ impl App {
             ("later", arg) => match arg.strip_prefix("done").and_then(|rest| rest.trim().parse::<usize>().ok()) {
                 Some(number) => match crate::later::done(&self.cwd, number) {
                     Ok(item) => self.notice(&format!("Crossed off: {item}")),
-                    Err(e) => self.error(&format!("{e:#}")),
+                    Err(e) => self.error_report(&e),
                 },
                 None => self.error("Use /later to see the list, or /later done 3 to cross one off."),
             },
@@ -2134,7 +2351,8 @@ impl App {
 
     fn help(&mut self) {
         self.begin(Kind::Note);
-        self.emit(Line::block(help_rows));
+        let enhanced = ENHANCED.load(Ordering::Relaxed);
+        self.emit(Line::block(move |width| help_rows(width, enhanced)));
         self.last_kind = Kind::None;
     }
 
@@ -2144,12 +2362,13 @@ impl App {
         self.aside = None;
         let (text, usage) = match answer {
             Ok(answer) => answer,
-            Err(e) => return self.error(&format!("/btw: {e:#}")),
+            Err(e) => return self.error_from("/btw", &e),
         };
         let cached = usage.cached * 100 / usage.prompt.max(1);
         let note = format!("Not kept in the conversation · {} in · {cached}% cached", short(usage.prompt));
         let question = question.to_string();
-        self.held_asides.push(Line::block(move |width| aside_rows("btw", &question, &text, &note, width)));
+        let answer = text::sanitize(&text).into_owned();
+        self.held_asides.push(Line::block(move |width| aside_rows("btw", &question, &answer, &note, width)));
         self.release_asides(false);
     }
 
@@ -2173,8 +2392,9 @@ impl App {
                 let ask = self.controls.aside.borrow().ask_with(&live::ask_note(&live::sender(from)), &text);
                 self.peer_ask_id += 1;
                 let id = self.peer_ask_id;
-                self.peer_asking.push((id, peer_label(from), text.clone(), Instant::now()));
-                self.peer_asks.push(Box::pin(async move { PeerAnswer { id, from, question: text, answer: ask.await, reply } }));
+                self.peer_asking.push((id, peer_label(from), text::sanitize_row(&text).into_owned(), Instant::now()));
+                let question = text::sanitize(&text).into_owned();
+                self.peer_asks.push(Box::pin(async move { PeerAnswer { id, from, question, answer: ask.await, reply } }));
             }
             live::Request::Tell { from, text } => {
                 if self.peer_tells >= MAX_PEER_TELLS {
@@ -2190,11 +2410,12 @@ impl App {
                 };
                 let _ = reply.send(json!({"ok": true, "delivered": delivered}));
                 let who = peer_label(from);
+                let shown = text::sanitize(&text).into_owned();
                 if !working {
-                    notify(&format!("Message from {who}"), &first_line(&text, 120));
+                    notify(&format!("Message from {who}"), &first_line(&shown, 120));
                 }
                 let tag = format!("{who} says");
-                self.held_asides.push(Line::block(move |width| aside_rows(&tag, "", &text, note, width)));
+                self.held_asides.push(Line::block(move |width| aside_rows(&tag, "", &shown, note, width)));
                 self.release_asides(!working);
             }
         }
@@ -2210,11 +2431,12 @@ impl App {
                 let _ = reply.send(json!({"ok": true, "answer": text}));
                 let cached = usage.cached * 100 / usage.prompt.max(1);
                 let note = format!("Answered from this conversation, not kept · {} in · {cached}% cached", short(usage.prompt));
-                self.held_asides.push(Line::block(move |width| aside_rows(&tag, &question, &text, &note, width)));
+                let shown = text::sanitize(&text).into_owned();
+                self.held_asides.push(Line::block(move |width| aside_rows(&tag, &question, &shown, &note, width)));
                 self.release_asides(self.busy.is_none());
             }
             Err(e) => {
-                let why = format!("{e:#}");
+                let why = gist(&format!("{e:#}"));
                 self.notice(&format!("{tag} “{}”; no answer: {why}", first_line(&question, 80)));
                 let _ = reply.send(json!({"error": why}));
             }
@@ -2355,13 +2577,23 @@ impl App {
             self.notice("No earlier sessions in this folder.");
             return;
         }
+        let running: std::collections::HashMap<PathBuf, u32> = crate::live::list().into_iter().map(|e| (e.log, e.pid)).collect();
         let options = sessions
             .into_iter()
             .take(20)
             .map(|s| {
                 let age = s.modified.elapsed().map(ago).unwrap_or_default();
                 let prompt = s.first_prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-                (format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)), format!("{} prompt{}", s.prompts, if s.prompts == 1 { "" } else { "s" }), PickerChoice::Session(s.path))
+                let counts = format!("{} prompt{}", s.prompts, if s.prompts == 1 { "" } else { "s" });
+                if crate::session::is_locked(&s.path) {
+                    let state = match running.get(&s.path) {
+                        Some(pid) => format!("running (pid {pid})"),
+                        None => "running".to_string(),
+                    };
+                    (format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)), format!("{state} · {counts}"), PickerChoice::Session(s.path))
+                } else {
+                    (format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)), counts, PickerChoice::Session(s.path))
+                }
             })
             .collect();
         self.picker = Some(Picker::new("Resume a session".into(), options, 0));
@@ -2490,7 +2722,7 @@ impl App {
             return self.search_ask("SearXNG API key, if the instance asks for one (Enter for none):", key.as_deref(), true);
         }
         let echo = if answer.is_empty() { "(none)" } else if secret { "(set)" } else { answer };
-        self.commit(format!("  {FIN}↳{RESET} {echo}"));
+        self.commit(format!("  {FIN}↳{RESET} {}", text::sanitize(echo)));
         if answer.is_empty() && provider == "tavily" {
             return self.error("web_search with Tavily needs an API key; nothing was changed.");
         }
@@ -2511,19 +2743,41 @@ impl App {
     }
 
     fn refresh_branch(&mut self) {
+        if self.branch_at.is_some_and(|at| at.elapsed() < BRANCH_TTL) {
+            return;
+        }
+        self.branch_at = Some(Instant::now());
+        self.status.branch = Self::branch_of(&self.cwd);
+    }
+
+    /// The branch for the status line, read where blocking is allowed: on this runtime two
+    /// git spawns would freeze keys, ticks and peer answers, so the wait happens off it.
+    async fn refresh_branch_async(&mut self) {
+        if self.branch_at.is_some_and(|at| at.elapsed() < BRANCH_TTL) {
+            return;
+        }
+        self.branch_at = Some(Instant::now());
+        let cwd = self.cwd.clone();
+        if let Ok(branch) = tokio::task::spawn_blocking(move || Self::branch_of(&cwd)).await {
+            self.status.branch = branch;
+        }
+    }
+
+    /// The branch `cwd` is on, with a mark when it is dirty; None outside a repository.
+    fn branch_of(cwd: &Path) -> Option<String> {
         let git = |args: &[&str]| {
             std::process::Command::new("git")
                 .args(args)
-                .current_dir(&self.cwd)
+                .current_dir(cwd)
                 .output()
                 .ok()
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         };
-        self.status.branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).map(|branch| {
+        git(&["rev-parse", "--abbrev-ref", "HEAD"]).map(|branch| {
             let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
             if dirty { format!("{branch}*") } else { branch }
-        });
+        })
     }
 
     // ---------- drawing ----------
@@ -2540,6 +2794,7 @@ impl App {
         for part in parts {
             match part {
                 Part::Row(row) => self.commit_wrapped(row),
+                Part::Code(row) => self.emit(Line::block(move |width| wrap_code(&row, width))),
                 Part::Table(rows) => self.emit(Line::block(move |width| {
                     text::render_table(&rows, width)
                         .into_iter()
@@ -2606,13 +2861,30 @@ impl App {
 
     fn notice(&mut self, text: &str) {
         self.begin(Kind::Note);
-        self.commit(format!("{DIM}{text}{RESET}"));
+        self.commit(format!("{DIM}{}{RESET}", text::sanitize(text)));
     }
 
     fn error(&mut self, text: &str) {
         self.begin(Kind::Note);
-        self.commit(format!("{DANGER}✗ Error:{RESET} {text}"));
-        if let Some(hint) = error_hint(text) {
+        let why = gist(text);
+        self.commit(format!("{DANGER}✗ Error:{RESET} {}", text::sanitize(&why)));
+        if let Some(hint) = error_hint(&anyhow::anyhow!("{why}")) {
+            self.commit(format!("{DIM}{hint}{RESET}"));
+        }
+    }
+
+    /// A failed turn: the hint follows the provider's kind and status, never digits in the text.
+    fn error_report(&mut self, error: &anyhow::Error) {
+        self.error_from("", error);
+    }
+
+    /// A failed command with its reason: the gist of the error, and the hint its kind earns.
+    fn error_from(&mut self, context: &str, error: &anyhow::Error) {
+        let why = gist(&format!("{error:#}"));
+        let what = if context.is_empty() { why } else { format!("{context}: {why}") };
+        self.begin(Kind::Note);
+        self.commit(format!("{DANGER}✗ Error:{RESET} {}", text::sanitize(&what)));
+        if let Some(hint) = error_hint(error) {
             self.commit(format!("{DIM}{hint}{RESET}"));
         }
     }
@@ -2643,9 +2915,15 @@ impl App {
 
     /// The live area's rows and where the cursor goes in them, padded above with blank rows so
     /// it ends on the bottom row of a screen the conversation doesn't fill yet.
-    fn live(&self) -> (Vec<String>, usize, usize) {
+    fn live(&mut self) -> (Vec<String>, usize, usize) {
         let width = self.width;
         let mut rows: Vec<String> = Vec::new();
+        // Rows that go first when the live area runs past the window: the task list, then
+        // the queue, then the streaming preview, the /btw block and the peer rows. The
+        // running calls, the spinner and the retry countdown never go.
+        let mut shrink_tasks: Vec<usize> = Vec::new();
+        let mut shrink_queue: Vec<usize> = Vec::new();
+        let mut shrink_head: Vec<usize> = Vec::new();
         // A blank row, unless the row above is blank already: it keeps the parts of the live
         // area, and the live area and the conversation, from touching.
         let space = |rows: &mut Vec<String>| {
@@ -2657,11 +2935,31 @@ impl App {
             // Preview touches the scrollback without this: `draw` prints pending rows
             // then the live rows with no gap of its own.
             space(&mut rows);
-            let mut markdown = self.markdown.clone();
-            let mut styled = markdown.line(&self.partial);
-            styled.extend(markdown.finish());
-            let preview: Vec<String> = styled.iter().flat_map(|row| wrap(row, width)).collect();
+            let cached = match &self.preview_cache {
+                Some((tail, cached_width, cached_gen, preview))
+                    if *tail == self.partial && *cached_width == width && *cached_gen == self.markdown.generation() =>
+                {
+                    Some(preview.clone())
+                }
+                _ => None,
+            };
+            let preview = match cached {
+                Some(preview) => preview,
+                None => {
+                    let mut markdown = self.markdown.clone();
+                    let mut styled = markdown.line(&self.partial);
+                    styled.extend(markdown.finish());
+                    let preview: Vec<String> = styled.iter().flat_map(|row| wrap(row, width)).collect();
+                    self.preview_cache =
+                        Some((self.partial.clone(), width, self.markdown.generation(), preview.clone()));
+                    preview
+                }
+            };
+            let head = rows.len();
             rows.extend(preview.into_iter().rev().take(6).rev());
+            shrink_head.extend(head..rows.len());
+        } else {
+            self.preview_cache = None;
         }
         if let Some(started) = self.busy {
             let frame = QUARTER[self.spinner % QUARTER.len()];
@@ -2673,7 +2971,10 @@ impl App {
                 let first = first_sentence(text);
                 rows.push(fit(&format!("{DIM}∴ thinking {} {first}{RESET}", clock(since.elapsed())), width));
             }
-            let waiting_on_you = |running: &Running| self.asking.is_some() && running.summary.starts_with("ask_user_question");
+            let waiting_on_you = |running: &Running| {
+                self.asking.is_some()
+                    && (running.summary.starts_with("ask_user_question") || running.summary.starts_with("exit_plan_mode"))
+            };
             for running in self.running.iter().filter(|r| !waiting_on_you(r)).take(5) {
                 if let Some(swarm) = self.swarm.as_ref().filter(|s| s.id == running.id) {
                     // A panel, not one more tool row: the lines its finished subagents left
@@ -2691,23 +2992,29 @@ impl App {
             }
             if let Some((question, since)) = &self.aside {
                 let question = clip(&question.split_whitespace().collect::<Vec<_>>().join(" "), width.saturating_sub(14));
+                shrink_head.push(rows.len());
                 rows.push(fit(&format!("{LAGOON}{frame}{RESET} {BOLD}{FIN}btw{RESET} {question}{DIM} · {}{RESET}", clock(since.elapsed())), width));
             }
+            let peers = rows.len();
             rows.extend(self.peer_rows(frame, width));
+            shrink_head.extend(peers..rows.len());
             if self.asking.is_none() {
                 // Tool rows keep their list together, but the wordmark never touches them or the conversation.
                 space(&mut rows);
                 let retry = self.retry.map(|(attempt, until)| (attempt, until.saturating_duration_since(Instant::now())));
-                rows.push(fit(&working_row(self.spinner, started.elapsed(), retry), width));
+                rows.push(fit(&working_row(self.spinner, started.elapsed(), retry, self.snapshotting), width));
             }
+            let queue = rows.len();
             for queued in &self.queued {
                 rows.push(fit(&queued_row(queued), width));
             }
+            shrink_queue.extend(queue..rows.len());
         } else if !self.peer_asking.is_empty() {
             space(&mut rows);
             rows.extend(self.peer_rows(QUARTER[self.spinner % QUARTER.len()], width));
         }
         if self.todos.iter().any(|t| t.status != "completed") {
+            let tasks = rows.len();
             space(&mut rows);
             let done = self.todos.iter().filter(|t| t.status == "completed").count();
             rows.push(fit(&format!("  {DIM}tasks {done}/{}{RESET}", self.todos.len()), width));
@@ -2722,6 +3029,7 @@ impl App {
             if self.todos.len() > 8 {
                 rows.push(format!("  {DIM}… {} more{RESET}", self.todos.len() - 8));
             }
+            shrink_tasks.extend((tasks..rows.len()).rev());
         }
         let mode = self.controls.plan.get().then_some("plan mode · Shift+Tab leaves it");
         space(&mut rows);
@@ -2764,7 +3072,7 @@ impl App {
             rows.push(hint_row(&hints, width));
         }
         if let Some(asking) = &self.asking {
-            let names: Vec<String> = asking.question.options.iter().enumerate().map(|(i, o)| format!("{}. {o}", i + 1)).collect();
+            let names: Vec<String> = asking.question.options.iter().enumerate().map(|(i, o)| format!("{}. {}", i + 1, text::sanitize_row(o))).collect();
             let options: Vec<(&str, &str)> = names.iter().map(|name| (name.as_str(), "")).collect();
             let visible = options.len().min(room.max(1));
             rows.extend(choice_rows(&options, asking.selected.min(options.len().saturating_sub(1)), visible, width, width));
@@ -2780,10 +3088,25 @@ impl App {
         if rows.len() > listed + usize::from(modal) {
             rows.push(String::new());
         }
+        if self.exit_armed.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+            rows.push(fit(&format!("{DIM}Press Ctrl+C again to exit.{RESET}"), width));
+        }
         rows.push(self.status_line(width));
-        let excess = rows.len().saturating_sub(self.height - 1);
+        let mut gone = 0;
+        let mut excess = rows.len().saturating_sub(self.height - 1);
         if excess > 0 {
-            let cut = excess.min(top);
+            let mut drop: Vec<usize> =
+                shrink_tasks.into_iter().chain(shrink_queue).chain(shrink_head).take(excess).collect();
+            drop.sort_unstable_by(|a, b| b.cmp(a));
+            gone = drop.iter().filter(|&&i| i < cursor.0).count();
+            for i in drop {
+                rows.remove(i);
+            }
+            cursor.0 -= gone;
+            excess = rows.len().saturating_sub(self.height - 1);
+        }
+        if excess > 0 {
+            let cut = excess.min(top.saturating_sub(gone));
             rows.drain(..cut);
             cursor.0 -= cut;
         }
@@ -2822,7 +3145,8 @@ impl App {
 
     /// The status line for `width` columns. Parts drop out from the least to the most useful as
     /// the terminal narrows: the cache and token detail, the context bar, the branch, and last
-    /// the context figure, so the model and mode stay on screen at any width.
+    /// the context figure, so the model and mode stay on screen at any width. `swarm mode`
+    /// yields before the context figure does.
     fn status_line(&self, width: usize) -> String {
         let mut head = vec![self.status.model.clone()];
         if let Some((word, value)) = thinking_parts(&self.status.thinking) {
@@ -2831,10 +3155,21 @@ impl App {
         if self.controls.plan.get() {
             head.push(format!("{LAGOON}plan mode{RESET}{DIM}"));
         }
-        if self.controls.swarm.get() {
-            head.push(format!("{LAGOON}swarm mode{RESET}{DIM}"));
+        let swarm = self.controls.swarm.get().then(|| format!("{LAGOON}swarm mode{RESET}{DIM}"));
+        if let Some(swarm) = &swarm {
+            head.push(swarm.clone());
         }
-        status_layout(&head.join(&dot()), &self.status, width)
+        let full = head.join(&dot());
+        if let Some(line) = status_layout(&full, &self.status, width) {
+            return line;
+        }
+        if swarm.is_some() {
+            head.pop();
+            if let Some(line) = status_layout(&head.join(&dot()), &self.status, width) {
+                return line;
+            }
+        }
+        format!("{DIM}{}{RESET}", fit(&full, width))
     }
 
     /// Paints the live area, in one write inside a synchronized update so no half-drawn frame
@@ -3015,6 +3350,7 @@ fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width:
 
 /// What the user typed as their message block: tinted rows the width of the window.
 fn prompt_rows(prompt: &str, width: usize) -> Vec<String> {
+    let prompt = text::sanitize(prompt);
     let mut rows = Vec::new();
     let mut first = true;
     // The band is what sets the message apart; with no colors the words are bold instead.
@@ -3027,6 +3363,20 @@ fn prompt_rows(prompt: &str, width: usize) -> Vec<String> {
         }
     }
     rows
+}
+
+/// A question the model asks, as rows: the `?` mark on its first line, each of its lines
+/// wrapped under the mark, so a multi-line question reads as its lines and not as one row
+/// the line breaks run over.
+fn question_rows(text: &str, width: usize) -> Vec<String> {
+    text::sanitize(text)
+        .lines()
+        .enumerate()
+        .flat_map(|(n, line)| {
+            let mark = if n == 0 { format!("{BOLD}{FIN}?{RESET} ") } else { String::new() };
+            wrap_words(&format!("{mark}{BOLD}{FIN}{line}{RESET}"), width, 2)
+        })
+        .collect()
 }
 
 /// A /btw question and its answer as one block: the question, the answer hung off the output
@@ -3060,7 +3410,7 @@ fn aside_rows(tag: &str, question: &str, answer: &str, note: &str, width: usize)
 }
 
 /// `/help`: the commands, then the keys, each description wrapped under its own column.
-fn help_rows(width: usize) -> Vec<String> {
+fn help_rows(width: usize, enhanced: bool) -> Vec<String> {
     let mut rows = vec![format!("{BOLD}Commands{RESET} {DIM}type / to search them and your skills{RESET}")];
     let commands: Vec<(String, String, &str)> = COMMANDS
         .iter()
@@ -3080,6 +3430,10 @@ fn help_rows(width: usize) -> Vec<String> {
     rows.push(format!("{BOLD}Keys{RESET}"));
     let column = KEYS.iter().map(|(key, _)| text::width(key)).max().unwrap_or(0);
     for (key, about) in KEYS {
+        let (key, about) = match *key {
+            "Shift+Enter" if !enhanced => ("Ctrl+J", "new line; also \\ then Enter"),
+            _ => (*key, *about),
+        };
         rows.extend(wrap_words(&format!("  {BOLD}{key:<column$}{RESET}  {DIM}{about}{RESET}"), width, column + 4));
     }
     rows.push(String::new());
@@ -3088,7 +3442,7 @@ fn help_rows(width: usize) -> Vec<String> {
 
 /// A recap as one block: its label, the text wrapped under it, and what asking for it cost.
 fn recap_rows(text: &str, note: &str, width: usize) -> Vec<String> {
-    wrap_words(&format!("{BOLD}{LAGOON}recap{RESET} {text} {DIM}· {note}{RESET}"), width, 6)
+    wrap_words(&format!("{BOLD}{LAGOON}recap{RESET} {} {DIM}· {note}{RESET}", text::sanitize_row(text)), width, 6)
 }
 
 /// What the empty prompt says it takes, in fg-faint: nothing once something is typed or while
@@ -3126,8 +3480,8 @@ fn dot() -> String {
 /// The status line's parts fitted to `width`; see `App::status_line`. The model and mode stand
 /// at the left and the figures at the right edge, in groups three spaces apart. Each kind of
 /// figure has its own color: the effort, the tokens and the branch; the meter is lagoon, and
-/// warn from 80%.
-fn status_layout(head: &str, status: &Status, width: usize) -> String {
+/// warn from 80%. None when even the shortest layout runs past the window.
+fn status_layout(head: &str, status: &Status, width: usize) -> Option<String> {
     let warn = status.window.is_some_and(|window| near_full(status.context, window));
     let figure = |text: String| if warn { tint(WARN, &text) } else { text };
     let context = |bar: bool| match (status.window, bar) {
@@ -3172,10 +3526,10 @@ fn status_layout(head: &str, status: &Status, width: usize) -> String {
         let right = figures.join("   ");
         let used = text::width(head) + text::width(&right);
         if used + 3 <= width {
-            return format!("{DIM}{head}{}{right}{RESET}", " ".repeat(width - used));
+            return Some(format!("{DIM}{head}{}{right}{RESET}", " ".repeat(width - used)));
         }
     }
-    format!("{DIM}{}{RESET}", fit(head, width))
+    None
 }
 
 /// `text` in `color` inside a dim line: it resets, colors, and goes back to dim after.
@@ -3277,19 +3631,48 @@ fn move_rows(out: &mut impl Write, from: usize, to: usize) -> std::io::Result<()
     }
 }
 
-/// What to try for the failures people hit most, from the text of the error.
-fn error_hint(error: &str) -> Option<&'static str> {
+/// What to try for the failures people hit most: the provider's kind and status first, then
+/// words in the text — never digits, so "prompt is too long: 214013 tokens" can't read as a
+/// 401, and "4010" can't read as one either.
+fn error_hint(error: &anyhow::Error) -> Option<&'static str> {
+    if let Some(provider) = error.downcast_ref::<ProviderError>()
+        && let Some(hint) = provider_hint(provider.kind, provider.status)
+    {
+        return Some(hint);
+    }
+    error_hint_text(&format!("{error:#}"))
+}
+
+/// The hint for a classified provider failure.
+fn provider_hint(kind: ErrorKind, status: Option<u16>) -> Option<&'static str> {
+    match kind {
+        ErrorKind::Overflow => Some("The conversation no longer fits the model: /compact summarizes it, /new starts over."),
+        ErrorKind::Auth => Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml."),
+        ErrorKind::Quota => Some("This provider's usage limit is spent: pick another model with /model, or wait until the reset time above."),
+        ErrorKind::RateLimited => Some("The provider is limiting requests: wait a moment, or pick another model with /model."),
+        ErrorKind::Transport => Some("Can't reach the provider: check your network, proxy and base_url."),
+        ErrorKind::Media | ErrorKind::BadResponse | ErrorKind::Other => match status {
+            Some(401 | 403) => Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml."),
+            Some(402) => Some("This provider's usage limit is spent: pick another model with /model, or wait until the reset time above."),
+            Some(429) => Some("The provider is limiting requests: wait a moment, or pick another model with /model."),
+            _ => None,
+        },
+    }
+}
+
+/// The hint for words in an error's text, without a classified provider behind it.
+fn error_hint_text(error: &str) -> Option<&'static str> {
     let error = error.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| error.contains(w));
-    if has(&["401", "403", "unauthorized", "invalid api key", "invalid_api_key", "forbidden"]) {
+    if has(&["unauthorized", "invalid api key", "invalid_api_key", "forbidden"]) {
         Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml.")
     } else if has(&["context length", "context_length", "too long", "maximum context", "prompt is too long"]) {
         Some("The conversation no longer fits the model: /compact summarizes it, /new starts over.")
     } else if has(&["usage limit", "quota", "reset at", "exceeded your current"]) {
         Some("This provider's usage limit is spent: pick another model with /model, or wait until the reset time above.")
-    } else if has(&["429", "rate limit"]) {
+    } else if has(&["too many requests", "rate limit"]) {
         Some("The provider is limiting requests: wait a moment, or pick another model with /model.")
-    } else if has(&["404", "model not found", "unknown model", "does not exist"]) {
+    } else if has(&["model not found", "unknown model", "does not exist"]) {
         Some("The provider doesn't know this model or URL: check model and base_url in ~/.killi/config.toml.")
     } else if has(&["error sending request", "connection", "dns", "timed out", "timeout"]) {
         Some("Can't reach the provider: check your network, proxy and base_url.")
@@ -3299,20 +3682,66 @@ fn error_hint(error: &str) -> Option<&'static str> {
 }
 
 /// An error reason with a JSON body cut down to its status and message: `HTTP 529: busy`. What
-/// follows the body, such as `(after 3 attempts)`, stays.
+/// follows the body, such as `(after 3 attempts)`, stays. A proxy's HTML error page shows its
+/// title or first line instead of kilobytes of markup.
 fn gist(reason: &str) -> String {
-    let reason = reason.replace('\n', " ");
-    let Some(start) = reason.find('{') else { return reason };
-    let mut bodies = serde_json::Deserializer::from_str(&reason[start..]).into_iter::<serde_json::Value>();
-    let Some(Ok(body)) = bodies.next() else { return reason };
-    let Some(message) = body.pointer("/error/message").or(body.get("message")).and_then(|m| m.as_str()) else { return reason };
-    let after = reason[start + bodies.byte_offset()..].trim();
-    let after = if after.is_empty() { String::new() } else { format!(" {after}") };
-    let status: Vec<&str> = reason[..start].split_whitespace().take(2).collect();
-    match status.as_slice() {
-        ["HTTP", code] => format!("HTTP {}: {message}{after}", code.trim_end_matches(':')),
-        _ => format!("{message}{after}"),
+    let flat = reason.replace('\n', " ");
+    if let Some(start) = flat.find('{') {
+        let mut bodies = serde_json::Deserializer::from_str(&flat[start..]).into_iter::<serde_json::Value>();
+        if let Some(Ok(body)) = bodies.next()
+            && let Some(message) = body.pointer("/error/message").or(body.get("message")).and_then(|m| m.as_str())
+        {
+            let after = flat[start + bodies.byte_offset()..].trim();
+            let after = if after.is_empty() { String::new() } else { format!(" {after}") };
+            let status: Vec<&str> = flat[..start].split_whitespace().take(2).collect();
+            return match status.as_slice() {
+                ["HTTP", code] => format!("HTTP {}: {message}{after}", code.trim_end_matches(':')),
+                _ => format!("{message}{after}"),
+            };
+        }
     }
+    html_gist(reason).unwrap_or(flat)
+}
+
+/// A proxy's HTML error page cut to its title or first line, tags stripped; None when the
+/// reason isn't an HTML page.
+fn html_gist(reason: &str) -> Option<String> {
+    let lower = reason.to_ascii_lowercase();
+    if !lower.contains("<html") && !lower.contains("<!doctype") && !lower.contains("<title") {
+        return None;
+    }
+    let markup = reason.find('<').map(|at| &reason[at..]).unwrap_or(reason);
+    let lower_markup = markup.to_ascii_lowercase();
+    let title = lower_markup.find("<title").and_then(|start| {
+        let content = markup[start..].find('>')? + start + 1;
+        let end = lower_markup[content..].find("</title>")? + content;
+        Some(markup[content..end].to_string())
+    });
+    let line = title.or_else(|| markup.lines().find(|line| !line.trim().is_empty()).map(str::to_string))?;
+    let short = strip_tags(&line).split_whitespace().collect::<Vec<_>>().join(" ");
+    if short.is_empty() {
+        return None;
+    }
+    let prefix = match reason.replace('\n', " ").split_whitespace().take(2).collect::<Vec<_>>().as_slice() {
+        ["HTTP", code] => format!("HTTP {}: ", code.trim_end_matches(':')),
+        _ => String::new(),
+    };
+    Some(format!("{prefix}{}", first_line(&short, 200)))
+}
+
+/// An HTML fragment with its tags cut out, so `<h1>Bad Gateway</h1>` reads as its words.
+fn strip_tags(fragment: &str) -> String {
+    let mut out = String::with_capacity(fragment.len());
+    let mut tag = false;
+    for c in fragment.chars() {
+        match c {
+            '<' => tag = true,
+            '>' => tag = false,
+            _ if !tag => out.push(c),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The rows of an edit's diff behind the output gutter: the line number, the sign, the text.
@@ -3325,9 +3754,10 @@ fn diff_rows(lines: &[String], width: usize) -> Vec<String> {
 /// and the text take those colors. Context lines are muted either way.
 fn diff_row(line: &str, width: usize, stripes: bool) -> String {
     let Some((head, text)) = line.split_once('\t').filter(|(head, _)| head.len() > 1 && head.is_char_boundary(1)) else {
-        return fit(&format!("  {FAINT}│{RESET} {DIM}{line}{RESET}"), width);
+        return fit(&format!("  {FAINT}│{RESET} {DIM}{}{RESET}", text::sanitize(line)), width);
     };
     let (sign, number) = head.split_at(1);
+    let text = text::sanitize(text);
     let ink = match sign {
         "+" => LAGOON.to_string(),
         "-" => DANGER.to_string(),
@@ -3485,9 +3915,11 @@ fn overview_rows(overview: &Overview) -> Vec<String> {
     rows
 }
 
-/// The keys worth knowing, each in lagoon with what it does dimmed beside it.
-fn key_hints() -> Vec<String> {
-    [("/", "commands and skills"), ("@", "files"), ("Shift+Enter", "new line"), ("Shift+Tab", "plan mode"), ("Esc", "interrupts")]
+/// The keys worth knowing, each in lagoon with what it does dimmed beside it. Shift+Enter
+/// starts a new line only when the terminal speaks the kitty keyboard protocol; Ctrl+J does.
+fn key_hints(enhanced: bool) -> Vec<String> {
+    let newline = if enhanced { "Shift+Enter" } else { "Ctrl+J" };
+    [("/", "commands and skills"), ("@", "files"), (newline, "new line"), ("Shift+Tab", "plan mode"), ("Esc", "interrupts")]
         .iter()
         .map(|(key, what)| format!("{LAGOON}{key}{RESET} {DIM}{what}{RESET}"))
         .collect()
@@ -3605,22 +4037,56 @@ fn notify(headline: &str, detail: &str) {
     let kil = program == "kil" && kil_takes_osc9(&std::env::var("TERM_PROGRAM_VERSION").unwrap_or_default());
     if kil || ["iTerm.app", "WezTerm", "ghostty"].contains(&program.as_str()) || std::env::var_os("KITTY_WINDOW_ID").is_some() {
         let mut out = stdout();
-        let body = if detail.is_empty() { headline.to_string() } else { format!("{headline} — {detail}") };
-        let _ = write!(out, "\x1b]9;killi: {body}\x07");
+        let _ = write!(out, "{}", osc9_sequence(headline, detail));
         let _ = out.flush();
         return;
     }
-    let plain = if detail.is_empty() {
-        format!("display notification \"{}\" with title \"killi\"", headline.replace('"', "'"))
-    } else {
-        format!("display notification \"{}\" with title \"killi\" subtitle \"{}\"", detail.replace('"', "'"), headline.replace('"', "'"))
-    };
     let mut command = std::process::Command::new("/usr/bin/osascript");
-    match host_app(&program) {
-        Some(id) => command.args(["-e", "try", "-e", &format!("tell application id \"{id}\" to {plain}"), "-e", "on error", "-e", &plain, "-e", "end try"]),
-        None => command.args(["-e", &plain]),
+    command.args(notification_args(headline, detail, host_app(&program).as_deref()));
+    // Reaped on a thread: an unreaped child would linger as a zombie per notification.
+    if let Ok(mut child) = command.spawn() {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+}
+
+/// The OSC 9 sequence showing `headline` over `detail`: both are sanitized, so model text
+/// in them can't end the sequence early with a BEL or an escape.
+fn osc9_sequence(headline: &str, detail: &str) -> String {
+    let headline = text::sanitize(headline);
+    let detail = text::sanitize(detail);
+    let body = if detail.is_empty() { headline.into_owned() } else { format!("{headline} — {detail}") };
+    format!("\x1b]9;killi: {body}\x07")
+}
+
+/// The `osascript` arguments showing `headline` over `detail`, relayed by `id` where the
+/// terminal's app takes the telling: quotes become `'`, so model text can't close the
+/// AppleScript string, and control characters are sanitized away.
+fn notification_args(headline: &str, detail: &str, id: Option<&str>) -> Vec<String> {
+    let quote = |text: &str| text::sanitize(text).replace('"', "'");
+    let headline = quote(headline);
+    let detail = quote(detail);
+    let plain = if detail.is_empty() {
+        format!("display notification \"{headline}\" with title \"killi\"")
+    } else {
+        format!("display notification \"{detail}\" with title \"killi\" subtitle \"{headline}\"")
     };
-    let _ = command.spawn();
+    match id {
+        Some(id) => vec![
+            "-e".into(),
+            "try".into(),
+            "-e".into(),
+            format!("tell application id \"{id}\" to {plain}"),
+            "-e".into(),
+            "on error".into(),
+            "-e".into(),
+            plain,
+            "-e".into(),
+            "end try".into(),
+        ],
+        None => vec!["-e".into(), plain],
+    }
 }
 
 /// The first line of `text` that says something, markdown marks dropped, cut to `chars`:
@@ -3685,33 +4151,32 @@ struct Command {
 /// waiting for the next step.
 /// The working row: the spinner and wordmark, then what the turn is doing and for how long.
 /// While a failed request waits to be retried it counts that wait down instead, since nothing
-/// is working then; once the wait is over the elapsed time of the turn returns.
-fn working_row(frame: usize, elapsed: Duration, retry: Option<(u32, Duration)>) -> String {
+/// is working then; once the wait is over the elapsed time of the turn returns. A snapshot
+/// still running on a blocking thread says so instead of working.
+fn working_row(frame: usize, elapsed: Duration, retry: Option<(u32, Duration)>, snapshotting: bool) -> String {
     let spin = banner::working(frame);
     let doing = match retry.filter(|(_, left)| !left.is_zero()) {
         Some((attempt, left)) => format!("{WARN}retrying in{RESET} {BOLD}{}{RESET} {DIM}· attempt {attempt}{RESET}", clock(left)),
+        None if snapshotting => format!("{DIM}snapshot…{RESET} {BOLD}{}{RESET}", clock(elapsed)),
         None => format!("{DIM}working{RESET} {BOLD}{}{RESET}", clock(elapsed)),
     };
     format!("{spin} {doing} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}")
 }
 
 fn queued_row(queued: &str) -> String {
-    format!("{FIN}❯{RESET} {DIM}{} (sent at the next step · Ctrl+S sends it now){RESET}", queued.replace('\n', " "))
+    format!("{FIN}❯{RESET} {DIM}{} (sent at the next step · Ctrl+S sends it now){RESET}", text::sanitize(queued).replace('\n', " "))
+}
+
+/// How the rows of subagents outside a swarm panel are found again: their label and the
+/// call's id, since two subagents' providers can hand out the same id.
+fn sub_key(label: &str, id: &str) -> String {
+    format!("{label}\0{id}")
 }
 
 /// The queued messages the agent has taken, oldest first: all but the `waiting` ones still in
 /// the steer queue.
 fn take_sent(queued: &mut Vec<String>, waiting: usize) -> Vec<String> {
     queued.drain(..queued.len().saturating_sub(waiting)).collect()
-}
-
-/// The queued messages as the one prompt that starts the next turn, blank-line separated.
-fn joined(steered: Vec<Steered>) -> Option<(String, Vec<Image>)> {
-    if steered.is_empty() {
-        return None;
-    }
-    let text = steered.iter().map(|(text, _)| text.trim_end()).collect::<Vec<_>>().join("\n\n");
-    Some((text, steered.into_iter().flat_map(|(_, images)| images).collect()))
 }
 
 /// What a submitted prompt is: a command when it starts with `/`, else a message to the model.
@@ -3755,6 +4220,95 @@ fn effort_named(model: &str, efforts: &[&str], arg: &str) -> Result<String, Stri
         Err(format!("Say which effort: /effort {}.", efforts.join(" | ")))
     } else {
         Err(format!("{model} has no effort “{effort}”; choose one of {}.", efforts.join(", ")))
+    }
+}
+
+/// Whether /undo has nothing to go back to: no snapshot was ever taken, and snapshots
+/// aren't off. That reads as a notice, not an error.
+fn undo_empty(snapshots: &Snapshots) -> bool {
+    snapshots.last_taken().is_none() && snapshots.disabled.is_none()
+}
+
+/// Paths from `git diff --name-status` lines: the path after the status.
+fn undo_paths(changes: &[String]) -> Vec<String> {
+    changes
+        .iter()
+        .filter_map(|change| {
+            let change = change.trim();
+            if change.is_empty() {
+                return None;
+            }
+            if let Some((_, path)) = change.rsplit_once('\t') {
+                let path = path.trim();
+                return (!path.is_empty()).then(|| path.to_string());
+            }
+            match change.split_once(' ') {
+                Some((_, path)) => {
+                    let path = path.trim();
+                    (!path.is_empty()).then(|| path.to_string())
+                }
+                None => Some(change.to_string()),
+            }
+        })
+        .collect()
+}
+
+/// What the model hears after /undo instead of the interruption note: what was restored,
+/// so it reads the files again instead of relying on what it saw.
+fn undo_note(first_line: &str, paths: &[String]) -> String {
+    const MAX_PATHS: usize = 30;
+    let listed = if paths.len() > MAX_PATHS {
+        format!("{}, and {} more", paths[..MAX_PATHS].join(", "), paths.len() - MAX_PATHS)
+    } else {
+        paths.join(", ")
+    };
+    format!(
+        "The user ran /undo: files were restored to how they were before \"{first_line}\". Changed back: {listed}. Read files again before relying on what you saw."
+    )
+}
+
+/// Puts messages typed during a finished turn back into the prompt, blank-line separated,
+/// with their images where they were pasted.
+fn restore_steered(editor: &mut Editor, steered: Vec<Steered>) {
+    let mut first = editor.is_empty();
+    for (text, images) in steered {
+        if !first {
+            editor.insert("\n\n");
+        }
+        first = false;
+        insert_with_images(editor, &text, &images);
+    }
+}
+
+/// Inserts `text`, re-attaching each image where its placeholder stood so the editor holds
+/// the image itself, not just its old label. Images whose placeholders are gone attach last.
+fn insert_with_images(editor: &mut Editor, text: &str, images: &[Image]) {
+    let mut rest = text;
+    let mut placed = vec![false; images.len()];
+    loop {
+        let mut next: Option<(usize, usize)> = None;
+        for (i, image) in images.iter().enumerate() {
+            if placed[i] {
+                continue;
+            }
+            if let Some(at) = rest.find(image.label.as_str()) {
+                let before = next.is_none_or(|(best, _)| at < best);
+                if before {
+                    next = Some((at, i));
+                }
+            }
+        }
+        let Some((at, i)) = next else { break };
+        editor.insert(&rest[..at]);
+        editor.attach(images[i].url.clone());
+        rest = &rest[at + images[i].label.len()..];
+        placed[i] = true;
+    }
+    editor.insert(rest);
+    for (image, done) in images.iter().zip(placed) {
+        if !done {
+            editor.attach(image.url.clone());
+        }
     }
 }
 
@@ -3838,13 +4392,7 @@ impl TerminalGuard {
         terminal::enable_raw_mode()?;
         let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
         take_terminal(fullscreen, enhanced)?;
-        // With `panic = "abort"` no destructor runs, so a panic would leave the shell on the
-        // alternate screen with the mouse reporting.
-        let report = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            restore_terminal();
-            report(info);
-        }));
+        install_crash_hook();
         suspend_cleanly();
         Ok(Self)
     }
@@ -3977,6 +4525,66 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// Ends what killi started, leaves presence, notes the crash in the session log, then gives
+/// the terminal back, before the previous hook reports: with `panic = "abort"` no destructor
+/// runs, so a panic would otherwise leave children running and log nothing.
+pub fn install_crash_hook() {
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        crate::tools::kill_all();
+        crate::live::leave();
+        append_crash(panic_message(info));
+        restore_terminal();
+        report(info);
+    }));
+}
+
+/// What the panic says, for the crash record.
+fn panic_message(info: &std::panic::PanicHookInfo) -> String {
+    if let Some(text) = info.payload().downcast_ref::<&str>() {
+        text.to_string()
+    } else if let Some(text) = info.payload().downcast_ref::<String>() {
+        text.clone()
+    } else {
+        info.to_string()
+    }
+}
+
+/// The crash record in the session log's shape: one JSON object with a millisecond stamp.
+fn crash_line(message: &str, ts: u128) -> String {
+    format!("{{\"type\":\"crash\",\"message\":{},\"ts\":{ts}}}\n", serde_json::Value::String(message.to_string()))
+}
+
+/// Notes the crash in the session log, best effort: nothing is left running to retry with.
+/// A crash may have torn the last line, so the record starts on a fresh line instead of
+/// gluing onto it.
+fn append_crash(message: String) {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let Some(path) = crate::agent::crash_log() else { return };
+    let mut file = match std::fs::OpenOptions::new().append(true).read(true).open(&path) {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+    let torn = match file.seek(SeekFrom::End(0)) {
+        Ok(0) => false,
+        Ok(_) => file
+            .seek(SeekFrom::End(-1))
+            .and_then(|_| {
+                let mut last = [0u8; 1];
+                file.read_exact(&mut last).map(|()| last[0] != b'\n')
+            })
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let mut line = crash_line(&message, ts);
+    if torn {
+        line.insert(0, '\n');
+    }
+    let _ = file.write_all(line.as_bytes());
+}
+
 /// Gives the terminal back as it was before the UI took it; also on quitting from a signal,
 /// when the guard is never dropped.
 pub fn restore_terminal() {
@@ -4018,7 +4626,9 @@ mod tests {
             }
             out
         };
-        let rows: Vec<String> = help_rows(60).iter().map(|r| bare(r)).collect();
+        let rows: Vec<String> = help_rows(60, true).iter().map(|r| bare(r)).collect();
+        let plain: Vec<String> = help_rows(60, false).iter().map(|r| bare(r)).collect();
+        assert!(plain.iter().any(|r| r.contains("Ctrl+J")) && !plain.iter().any(|r| r.contains("Shift+Enter")));
         assert!(rows.iter().all(|r| text::width(r) <= 60));
         let recap = rows.iter().position(|r| r.starts_with("  /recap")).unwrap();
         let column = rows[recap].find("Recap").unwrap();
@@ -4046,6 +4656,16 @@ mod tests {
         let later = Some((PathBuf::from("/h/.killi/sessions/x/later.md"), 2));
         let text = handoff("1", log, "~/code/slug", "m", "high", &prompts, &stats, later);
         assert_eq!(text.lines().nth(3).unwrap(), "later: /h/.killi/sessions/x/later.md (2 open: what the agent noted to do later)");
+    }
+
+    #[test]
+    fn a_crash_record_is_one_stamped_json_line() {
+        let line = crash_line("boom \"x\"", 7);
+        assert!(line.ends_with("}\n") && line.matches('\n').count() == 1, "{line}");
+        let back: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(back["type"].as_str(), Some("crash"));
+        assert_eq!(back["message"].as_str(), Some("boom \"x\""));
+        assert_eq!(back["ts"].as_u64(), Some(7));
     }
 
     #[test]
@@ -4081,8 +4701,10 @@ mod tests {
             "later  2 noted · /later",
         ]);
         assert!(overview_rows(&Overview::default()).is_empty());
-        let hints: Vec<String> = key_hints().iter().map(|hint| unstyled(hint)).collect();
+        let hints: Vec<String> = key_hints(true).iter().map(|hint| unstyled(hint)).collect();
         assert_eq!(hints.join(" · "), "/ commands and skills · @ files · Shift+Enter new line · Shift+Tab plan mode · Esc interrupts");
+        let plain: Vec<String> = key_hints(false).iter().map(|hint| unstyled(hint)).collect();
+        assert_eq!(plain.join(" · "), "/ commands and skills · @ files · Ctrl+J new line · Shift+Tab plan mode · Esc interrupts");
     }
 
     #[test]
@@ -4127,6 +4749,19 @@ mod tests {
         assert_eq!(first_line("0123456789", 5), "0123…");
         assert_eq!(first_line("", 120), "");
         assert_eq!(first_line("\n   \n", 120), "");
+    }
+
+    #[test]
+    fn a_notification_cannot_break_out_of_its_sequence_or_script() {
+        let sequence = osc9_sequence("done", "line\u{7}with\u{1b}escapes");
+        assert!(sequence.starts_with("\x1b]9;killi: ") && sequence.ends_with('\u{7}'));
+        let body = &sequence["\x1b]9;killi: ".len()..sequence.len() - 1];
+        assert!(!body.contains(['\u{7}', '\u{1b}']) && body.starts_with("done — linewith"), "{sequence:?}");
+        let args = notification_args("say \"hi\"\u{7}", "", None);
+        assert_eq!(args, ["-e", "display notification \"say 'hi'\" with title \"killi\""]);
+        let args = notification_args("h", "d\"etail", Some("com.example.Term"));
+        assert!(args.contains(&"tell application id \"com.example.Term\" to display notification \"d'etail\" with title \"killi\" subtitle \"h\"".to_string()), "{args:?}");
+        assert!(args.iter().any(|arg| arg == "on error") && args.last().is_some_and(|arg| arg == "end try"));
     }
 
     #[test]
@@ -4233,10 +4868,32 @@ mod tests {
 
     #[test]
     fn a_spent_quota_points_to_another_model_not_to_waiting_a_moment() {
-        let spent = error_hint("HTTP 429 Too Many Requests: Usage limit reached for 5 hour. Your limit will reset at 16:06").unwrap();
+        let spent = error_hint(&anyhow::anyhow!("HTTP 429 Too Many Requests: Usage limit reached for 5 hour. Your limit will reset at 16:06")).unwrap();
         assert!(spent.contains("usage limit is spent"));
-        let limited = error_hint("HTTP 429 Too Many Requests: slow down").unwrap();
+        let limited = error_hint(&anyhow::anyhow!("HTTP 429 Too Many Requests: slow down")).unwrap();
         assert!(limited.contains("wait a moment"));
+    }
+
+    #[test]
+    fn hint_follows_status_not_digits() {
+        let overflow = anyhow::Error::new(ProviderError {
+            status: Some(500),
+            kind: ErrorKind::Other,
+            message: "prompt is too long: 214013 tokens".to_string(),
+            attempts: 1,
+            advice: String::new(),
+        });
+        let hint = error_hint(&overflow).unwrap_or("");
+        assert!(!hint.contains("api_key"), "digits in the text are not a 401: {hint}");
+        assert!(error_hint(&anyhow::anyhow!("tried model 4010 twice")).is_none(), "digits alone hint at nothing");
+        let auth = anyhow::Error::new(ProviderError {
+            status: Some(401),
+            kind: ErrorKind::Auth,
+            message: "bad key".to_string(),
+            attempts: 1,
+            advice: String::new(),
+        });
+        assert!(error_hint(&auth).unwrap().contains("api_key"));
     }
 
     /// `line` without escape codes, whatever colors the theme picked.
@@ -4264,15 +4921,15 @@ mod tests {
             branch: Some("main".into()),
             ..Status::default()
         };
-        let line = |width| unstyled(&status_layout("qwen3.7-plus", &status, width));
-        let wide = line(120);
+        let line = |width| status_layout("qwen3.7-plus", &status, width).map(|line| unstyled(&line));
+        let wide = line(120).unwrap();
         assert!(wide.contains("cached") && wide.contains("⎇ main"));
         for width in 12..120 {
-            let shown = line(width);
+            let Some(shown) = line(width) else { continue };
             assert!(text::width(&shown) <= width, "{width}: {shown}");
-            assert!(shown.starts_with("qwen3.7-plus") || width < 12, "{width}: {shown:?}");
+            assert!(shown.starts_with("qwen3.7-plus"), "{width}: {shown:?}");
         }
-        let narrow = line(40);
+        let narrow = line(40).unwrap();
         assert!(narrow.contains("ctx") && !narrow.contains("cached"));
     }
 
@@ -4353,11 +5010,11 @@ mod tests {
             branch: Some("main".into()),
             ..Status::default()
         };
-        let wide = unstyled(&status_layout("qwen3.7-plus", &status, 120));
+        let wide = unstyled(&status_layout("qwen3.7-plus", &status, 120).unwrap());
         assert_eq!(text::width(&wide), 120);
         assert!(wide.starts_with("qwen3.7-plus  ") && wide.ends_with("⎇ main"));
         assert!(wide.contains("   ctx ") && wide.contains("   38k in · 78% cached · 2k out   "), "{wide}");
-        let tight = unstyled(&status_layout("qwen3.7-plus", &status, 62));
+        let tight = unstyled(&status_layout("qwen3.7-plus", &status, 62).unwrap());
         assert!(text::width(&tight) <= 62 && tight.ends_with("main") && !tight.contains("cached"), "{tight}");
     }
 
@@ -4397,10 +5054,33 @@ mod tests {
     #[test]
     fn the_working_row_counts_a_retry_wait_down_then_returns_to_the_turn() {
         let secs = Duration::from_secs;
-        let row = |retry| unstyled(&working_row(20, secs(45), retry));
+        let row = |retry| unstyled(&working_row(20, secs(45), retry, false));
         assert!(row(None).ends_with("killi working 45s · Esc to interrupt"));
         assert!(row(Some((2, secs(8)))).ends_with("killi retrying in 8s · attempt 2 · Esc to interrupt"));
         assert!(row(Some((2, secs(0)))).ends_with("killi working 45s · Esc to interrupt"), "the wait is over, the request is in flight");
+    }
+
+    #[test]
+    fn the_working_row_names_a_snapshot_still_running() {
+        let secs = Duration::from_secs;
+        let row = unstyled(&working_row(20, secs(45), None, true));
+        assert!(row.ends_with("killi snapshot… 45s · Esc to interrupt"), "{row}");
+        let retry = unstyled(&working_row(20, secs(45), Some((2, secs(8))), true));
+        assert!(retry.ends_with("killi retrying in 8s · attempt 2 · Esc to interrupt"), "the retry wait still wins: {retry}");
+    }
+
+    #[test]
+    fn replayed_items_print_as_they_ran() {
+        let mut app = test_app();
+        app.replay_items(vec![
+            Replayed::Note("earlier prompts are folded".into()),
+            Replayed::Prompt("do the thing".into()),
+            Replayed::Text("done\n".into()),
+        ]);
+        let rows: Vec<String> = app.pending.iter().map(|row| unstyled(row)).collect();
+        assert!(rows.iter().any(|row| row == "earlier prompts are folded"), "{rows:?}");
+        assert!(rows.iter().any(|row| row.contains("do the thing")), "{rows:?}");
+        assert!(rows.iter().any(|row| row == "done"), "{rows:?}");
     }
 
     #[test]
@@ -4414,12 +5094,20 @@ mod tests {
     }
 
     #[test]
-    fn queued_messages_sent_now_become_one_prompt_with_their_images() {
+    fn ctrl_s_sends_the_typed_text_once_with_its_images() {
         let image = |n: u32| Image { label: format!("[Image #{n}]"), url: format!("data:image/png;base64,{n}") };
-        assert!(joined(Vec::new()).is_none());
-        let (text, images) = joined(vec![("first [Image #1] ".into(), vec![image(1)]), ("second".into(), Vec::new())]).unwrap();
-        assert_eq!(text, "first [Image #1]\n\nsecond");
-        assert_eq!(images, vec![image(1)]);
+        let mut app = test_app();
+        assert!(app.send_now_prompt().is_none());
+        app.controls.steer.borrow_mut().push_back((
+            "first [Image #1]\n\n<system-reminder>expanded</system-reminder>".into(),
+            vec![image(1), image(2)],
+        ));
+        app.queued.push("first [Image #1]".into());
+        app.queued.push("second".into());
+        let (text, images) = app.send_now_prompt().unwrap();
+        assert_eq!(text, "first [Image #1]\n\nsecond", "the typed text, not the expansion");
+        assert_eq!(images, vec![image(1)], "only the images the text still names");
+        assert!(app.send_now_prompt().is_none(), "the queue is drained");
     }
 
     #[test]
@@ -4440,6 +5128,211 @@ mod tests {
         assert_eq!(clock(secs(3_725)), "1h02m");
         assert_eq!(precise_clock(Duration::from_millis(2_400)), "2.4s");
         assert_eq!(precise_clock(secs(70)), "1m10s");
+    }
+
+    #[test]
+    fn a_new_or_resumed_session_starts_with_a_clean_slate() {
+        let mut app = test_app();
+        app.controls.steer.borrow_mut().push_back(("queued".into(), Vec::new()));
+        app.queued.push("queued".into());
+        app.send_now = true;
+        app.todos.push(Todo { content: "old".into(), status: "pending".into() });
+        app.status.prompt = 10;
+        app.status.context = 10;
+        app.details.push(("title".into(), "body".into()));
+        app.controls.peer_notes.borrow_mut().push_back("note".into());
+        app.peer_tells = 2;
+        let root = crate::test_temp::TempDir::new("killi-reset");
+        let mut snapshots = Snapshots::new(&root);
+        app.reset_conversation(&mut snapshots, &root);
+        assert!(app.controls.steer.borrow().is_empty());
+        assert!(app.queued.is_empty() && !app.send_now);
+        assert!(app.todos.is_empty());
+        assert_eq!((app.status.prompt, app.status.context), (0, 0));
+        assert!(app.details.is_empty() && app.detail_back == 0);
+        assert!(app.controls.peer_notes.borrow().is_empty() && app.peer_tells == 0);
+        assert!(snapshots.last_taken().is_none());
+    }
+
+    #[test]
+    fn no_notification_for_a_turn_the_user_ended() {
+        let mut app = test_app();
+        app.last_end = Some(LastEnd::Interrupted);
+        assert!(!app.wants_notify(Duration::from_secs(30)), "an Esc-ended turn stays quiet");
+        app.last_end = Some(LastEnd::Done);
+        assert!(app.wants_notify(Duration::from_secs(30)));
+        assert!(!app.wants_notify(Duration::from_secs(1)), "a quick turn stays quiet");
+        app.send_now = true;
+        assert!(!app.wants_notify(Duration::from_secs(30)), "a Ctrl+S turn stays quiet");
+    }
+
+    #[test]
+    fn undo_with_nothing_to_undo_is_a_notice_not_an_error() {
+        let root = crate::test_temp::TempDir::new("killi-undo");
+        assert!(undo_empty(&Snapshots::new(&root)));
+    }
+
+    #[test]
+    fn undo_paths_take_the_path_after_the_status() {
+        let changes = ["M\tsrc/a.rs", "A\tb.txt", "D\told name.rs", "M README.md", ""];
+        let changes: Vec<String> = changes.iter().map(|s| s.to_string()).collect();
+        assert_eq!(undo_paths(&changes), ["src/a.rs", "b.txt", "old name.rs", "README.md"]);
+    }
+
+    #[test]
+    fn the_undo_note_names_the_prompt_and_caps_the_paths() {
+        let short = undo_note("Fix the bug", &["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            short,
+            "The user ran /undo: files were restored to how they were before \"Fix the bug\". Changed back: a, b. Read files again before relying on what you saw."
+        );
+        let paths: Vec<String> = (1..=35).map(|n| format!("f{n}.rs")).collect();
+        let note = undo_note("Fix the bug", &paths);
+        assert!(note.contains("Changed back: f1.rs, f2.rs"), "{note}");
+        assert!(note.contains("f30.rs, and 5 more"), "{note}");
+        assert!(!note.contains("f31.rs"), "{note}");
+        assert!(note.ends_with("Read files again before relying on what you saw."), "{note}");
+    }
+
+    #[test]
+    fn queued_messages_come_back_with_their_images() {
+        let mut app = test_app();
+        let image = Image { label: "[Image #1]".into(), url: "data:image/png;base64,AA".into() };
+        restore_steered(
+            &mut app.editor,
+            vec![("see this [Image #1] please".into(), vec![image]), ("second".into(), Vec::new())],
+        );
+        let (text, images) = app.editor.take_with_images();
+        assert!(text.contains("see this") && text.contains("please") && text.contains("second"), "{text}");
+        assert!(text.contains("\n\n"), "{text}");
+        assert_eq!(images.len(), 1);
+        assert!(text.contains(&images[0].label), "the placeholder matches the kept image: {text}");
+    }
+
+    #[test]
+    fn a_failed_command_shows_its_gist_and_the_hint_its_kind_earns() {
+        let mut app = test_app();
+        let busy = anyhow::Error::new(ProviderError {
+            status: Some(503),
+            kind: ErrorKind::Other,
+            message: "busy".into(),
+            attempts: 1,
+            advice: String::new(),
+        });
+        app.error_from("Compaction failed", &busy);
+        let shown = app.pending.iter().map(|row| unstyled(row)).collect::<Vec<_>>().join("\n");
+        assert!(shown.contains("Compaction failed: busy"), "{shown}");
+        app.pending.clear();
+        let overflow = anyhow::Error::new(ProviderError {
+            status: None,
+            kind: ErrorKind::Overflow,
+            message: "too long".into(),
+            attempts: 1,
+            advice: String::new(),
+        });
+        app.error_from("Compaction failed", &overflow);
+        let shown = app.pending.iter().map(|row| unstyled(row)).collect::<Vec<_>>().join("\n");
+        assert!(shown.contains("/compact summarizes it"), "{shown}");
+    }
+
+    #[test]
+    fn the_status_line_keeps_the_context_figure_before_swarm_mode() {
+        let mut app = test_app();
+        app.controls.swarm.set(true);
+        app.status = Status {
+            model: "qwen3.7-plus".into(),
+            thinking: "high".into(),
+            window: Some(200_000),
+            context: 38_000,
+            prompt: 38_000,
+            cached: 30_000,
+            completion: 2_000,
+            ..Status::default()
+        };
+        let line = unstyled(&app.status_line(48));
+        assert!(line.contains("ctx") && !line.contains("swarm"), "{line}");
+    }
+
+    #[test]
+    fn ctrl_l_starts_the_screen_over() {
+        let mut app = test_app();
+        app.content_rows = 24;
+        app.edit_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(app.content_rows, 0);
+    }
+
+    #[test]
+    fn ctrl_c_arms_an_exit_hint_instead_of_printing_one() {
+        let mut app = test_app();
+        app.on_key_idle(TermEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+        assert!(app.exit_armed.is_some());
+        assert!(app.pending.is_empty(), "the transcript keeps only what was done");
+        let (rows, _, _) = app.live();
+        assert!(rows.iter().any(|row| unstyled(row).contains("Press Ctrl+C again to exit")));
+        app.exit_armed = Some(Instant::now() - Duration::from_secs(3));
+        let (rows, _, _) = app.live();
+        assert!(!rows.iter().any(|row| unstyled(row).contains("Press Ctrl+C")));
+    }
+
+    #[test]
+    fn bare_effort_while_busy_offers_the_levels() {
+        let mut app = test_app();
+        let item = |value: &str| Item { value: value.into(), description: String::new() };
+        app.effort_choices = vec![item("off"), item("high")];
+        assert!(!app.command_while_busy("effort", ""));
+        assert_eq!(app.editor.text(), "/effort ");
+        assert!(app.command_while_busy("effort", "high"));
+        assert_eq!(app.effort_later.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn a_plan_waiting_for_approval_reads_as_waiting_on_you() {
+        let mut app = test_app();
+        app.busy = Some(Instant::now());
+        app.running.push(Running { id: "1".into(), summary: "exit_plan_mode the plan".into(), label: None, started: Instant::now() });
+        let (rows, _, _) = app.live();
+        assert!(rows.iter().any(|row| unstyled(row).contains("exit_plan_mode")), "the call ticks while it runs");
+        let (reply, _) = oneshot::channel::<String>();
+        app.asking = Some(Asking {
+            question: Question { text: "Plan?".into(), options: vec!["Approve and start".into()], plan: true, reply },
+            selected: 0,
+            internal: false,
+            secret: false,
+        });
+        let (rows, _, _) = app.live();
+        let shown = rows.iter().map(|row| unstyled(row)).collect::<Vec<_>>().join("\n");
+        assert!(!shown.contains("exit_plan_mode"), "approval waits on you, not on a ticking call: {shown}");
+        assert!(shown.contains("Approve and start"), "{shown}");
+    }
+
+    #[test]
+    fn a_full_live_area_shrinks_tasks_and_queue_before_the_running_call() {
+        let mut app = test_app();
+        app.height = 16;
+        app.busy = Some(Instant::now());
+        app.running.push(Running { id: "1".into(), summary: "bash cargo test".into(), label: None, started: Instant::now() });
+        app.queued = vec!["first".into(), "second".into()];
+        app.todos = (0..8).map(|n| Todo { content: format!("task {n}"), status: "pending".into() }).collect();
+        let (rows, _, _) = app.live();
+        let shown = rows.iter().map(|row| unstyled(row)).collect::<Vec<_>>().join("\n");
+        assert!(rows.len() <= 15, "{shown}");
+        assert!(shown.contains("cargo test"), "the running call stays: {shown}");
+        assert!(shown.contains("Esc to interrupt"), "the spinner row stays: {shown}");
+        assert!(shown.contains("first"), "the queue stays while the task list shrinks: {shown}");
+        assert!(!shown.contains("task 7"), "the task list shrank first: {shown}");
+    }
+
+    #[test]
+    fn parallel_subagents_with_the_same_call_id_keep_their_own_rows() {
+        let mut app = test_app();
+        let start = |id: &str| Event::ToolStart { id: id.into(), summary: "bash make".into() };
+        let end = |id: &str| Event::ToolEnd { id: id.into(), is_error: false, brief: "done".into(), display: None, output: "ok".into() };
+        app.on_sub("one".into(), None, start("call_1"));
+        app.on_sub("two".into(), None, start("call_1"));
+        assert_eq!(app.running.len(), 2);
+        app.on_sub("two".into(), None, end("call_1"));
+        assert_eq!(app.running.len(), 1);
+        assert_eq!(app.running[0].label.as_deref(), Some("one"));
     }
 
     #[test]
@@ -4472,6 +5365,26 @@ mod tests {
         assert!(picker.choice().is_none());
         picker.filter(String::new());
         assert_eq!(picker.shown.len(), 4);
+    }
+
+    #[test]
+    fn a_proxy_error_page_shows_its_title_not_its_markup() {
+        let nginx = "<html><head><title>502 Bad Gateway</title></head><body><h1>Bad Gateway</h1></body></html>";
+        assert_eq!(gist(&format!("HTTP 502 Bad Gateway: {nginx}")), "HTTP 502: 502 Bad Gateway");
+        let cloudflare = "<!doctype html><html><head><title>Attention Required! | Cloudflare</title><style>.x{color:red}</style></head></html>";
+        assert_eq!(gist(&format!("HTTP 403 Forbidden: {cloudflare}")), "HTTP 403: Attention Required! | Cloudflare");
+    }
+
+    #[test]
+    fn a_proxy_page_without_a_title_shows_its_first_line() {
+        let page = "<html><body><h1>Service Unavailable</h1>\n<p>try again</p></body></html>";
+        assert_eq!(gist(&format!("HTTP 503: {page}")), "HTTP 503: Service Unavailable");
+    }
+
+    #[test]
+    fn angle_brackets_outside_a_page_are_untouched() {
+        assert_eq!(gist("connection reset"), "connection reset");
+        assert_eq!(gist("expected <foo> but got <bar>"), "expected <foo> but got <bar>");
     }
 
     #[test]
@@ -4520,13 +5433,13 @@ mod tests {
             branch: Some("main*".into()),
             ..Status::default()
         };
-        let line = status_layout(&format!("model · effort {}", tint(EFFORT, "high")), &status, 140);
+        let line = status_layout(&format!("model · effort {}", tint(EFFORT, "high")), &status, 140).unwrap();
         assert!(line.contains(&format!("{EFFORT}high")));
         assert!(line.contains(&format!("{TOKENS}38k")) && line.contains(&format!("{TOKENS}78%")) && line.contains(&format!("{TOKENS}2k")));
         assert!(line.contains(&format!("{BRANCH}⎇ main")) && line.contains(&format!("{WARN}*")));
         assert!(!line.contains('│'), "groups are told apart by space, not by rules");
         assert!(!line.contains(&format!("{WARN}38k/200k")));
-        let full = status_layout("model", &Status { context: 170_000, ..status }, 140);
+        let full = status_layout("model", &Status { context: 170_000, ..status }, 140).unwrap();
         assert!(full.contains(&format!("{WARN}170k/200k")));
     }
 
@@ -4543,5 +5456,227 @@ mod tests {
     fn first_sentence_stops_at_the_end_of_a_sentence() {
         assert_eq!(first_sentence("The bug is in pop. Then fix it."), "The bug is in pop.");
         assert_eq!(first_sentence("先看代码。再修复。"), "先看代码。");
+    }
+
+    /// `row` without killi's own SGR (`ESC [ digits m`), so any other escape stays in plain sight.
+    fn without_own_sgr(row: &str) -> String {
+        let mut out = String::new();
+        let mut rest = row;
+        while let Some(at) = rest.find('\x1b') {
+            out.push_str(&rest[..at]);
+            let after = &rest[at + 1..];
+            let params = after.strip_prefix('[');
+            let end = params.map_or(0, |p| p.find(|c: char| !c.is_ascii_digit() && c != ';').unwrap_or(p.len()));
+            match params.filter(|p| p[end..].starts_with('m')) {
+                Some(params) => rest = &params[end + 1..],
+                None => {
+                    out.push('\x1b');
+                    rest = after;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[test]
+    fn model_text_cannot_move_the_cursor() {
+        let evil = "a\x1b]0;pwned\x07b\x1b[2Jc\x1b[3;7Hd\x07e\x1bf\r\tg\n**ok**\x1b[0K";
+        let mut stream = text::Sanitizer::default();
+        let mut partial = stream.push(evil);
+        partial.push_str(&stream.finish());
+        let mut markdown = Markdown::default();
+        let mut history = History::new(80);
+        for line in partial.split('\n') {
+            markdown.line(line).iter().for_each(|row| history.push(Line::Row(row.clone())));
+        }
+        let shown: Vec<String> = history.rows().to_vec();
+        assert!(shown.iter().any(|row| unstyled(row) == "abcde   g"), "{shown:?}");
+        assert!(shown.iter().any(|row| unstyled(row) == "ok"), "{shown:?}");
+        for row in &shown {
+            let bare = without_own_sgr(row);
+            assert!(!bare.contains('\x1b') && !bare.chars().any(char::is_control), "{row:?}");
+        }
+    }
+
+    #[test]
+    fn a_question_of_three_lines_renders_three_rows() {
+        let rows: Vec<String> = question_rows("first line\nsecond line\nthird one", 80).iter().map(|row| unstyled(row)).collect();
+        assert_eq!(rows, ["? first line", "second line", "third one"]);
+        let evil = question_rows("a\x1b[2Jb\nc\td", 80);
+        assert_eq!(evil.iter().map(|row| unstyled(row)).collect::<Vec<_>>(), ["? ab", "c   d"]);
+        let wrapped = question_rows("one two three four five six seven", 12);
+        assert!(wrapped.len() > 1 && wrapped.iter().all(|row| text::width(row) <= 12), "{wrapped:?}");
+    }
+
+    /// An `App` that never touched a terminal: events go to `pending`, which the tests read.
+    fn test_app() -> App {
+        App {
+            out: stdout(),
+            width: 80,
+            height: 24,
+            cursor_row: 0,
+            shown: Vec::new(),
+            shown_col: 0,
+            pending: Vec::new(),
+            editor: Editor::with_history(Vec::new()),
+            markdown: Markdown::new(80),
+            partial: String::new(),
+            preview_cache: None,
+            stream: text::Sanitizer::default(),
+            reasoning: text::Sanitizer::default(),
+            held_blank: false,
+            last_blank: false,
+            last_kind: Kind::None,
+            thinking: None,
+            running: Vec::new(),
+            swarm: None,
+            todos: Vec::new(),
+            asking: None,
+            picker: None,
+            search: None,
+            next_input: None,
+            effort_later: None,
+            entries: Vec::new(),
+            model_choices: Vec::new(),
+            effort_choices: Vec::new(),
+            menu_selected: 0,
+            menu_text: String::new(),
+            menu_closed: None,
+            files: None,
+            files_gen: 0,
+            file_menu_cache: None,
+            busy: None,
+            details: Vec::new(),
+            detail_back: 0,
+            ctrl_o_taught: false,
+            status: Status::default(),
+            controls: Controls::default(),
+            spinner: 0,
+            retry: None,
+            snapshotting: false,
+            exit_armed: None,
+            queued: Vec::new(),
+            send_now: false,
+            aside_asked: None,
+            later_noted: false,
+            aside: None,
+            held_asides: Vec::new(),
+            auto_recap: true,
+            recap: None,
+            last_end: None,
+            cwd: PathBuf::from("/test"),
+            notify_after: Duration::from_secs(10),
+            sees_images: false,
+            since_banner: None,
+            content_rows: 24,
+            fullscreen: false,
+            history: History::new(80),
+            view_rows: 24,
+            banner_resumed: false,
+            branch_at: None,
+            live: None,
+            peers: None,
+            peer_asks: FuturesUnordered::new(),
+            peer_asking: Vec::new(),
+            peer_ask_id: 0,
+            peer_tells: 0,
+            undo_warned: false,
+        }
+    }
+
+    #[test]
+    fn a_retry_ends_the_partial_reply_in_its_own_row() {
+        let mut app = test_app();
+        app.thinking = Some((Instant::now(), "hmm".to_string()));
+        app.on_agent(Event::Text("Here is the fi".to_string()));
+        assert!(app.pending.iter().all(|row| unstyled(row) != "Here is the fi"), "no newline yet, nothing committed");
+        app.on_agent(Event::Retry { attempt: 2, wait: Duration::from_secs(1), reason: "busy".to_string() });
+        assert!(app.thinking.is_none(), "the failed attempt's thinking is dropped");
+        app.on_agent(Event::Text("Here is the fix\n".to_string()));
+        let rows: Vec<String> = app.pending.iter().map(|row| unstyled(row)).collect();
+        let first = rows.iter().position(|row| row == "Here is the fi").expect("the partial reply is committed: {rows:?}");
+        let second = rows.iter().position(|row| row == "Here is the fix").expect("the retried reply follows: {rows:?}");
+        assert!(first < second && rows[first + 1..second].iter().any(|row| !row.is_empty()), "two separate rows: {rows:?}");
+        assert!(rows.iter().any(|row| row.contains("discarded")), "the retry says the partial reply was dropped: {rows:?}");
+    }
+
+    #[test]
+    fn a_notice_ends_the_streamed_line_first() {
+        let mut app = test_app();
+        app.on_agent(Event::Text("hello".to_string()));
+        app.on_agent(Event::Notice("a notice".to_string()));
+        app.on_agent(Event::Text("world\n".to_string()));
+        let rows: Vec<String> = app.pending.iter().map(|row| unstyled(row)).collect();
+        let hello = rows.iter().position(|row| row == "hello").expect("the streamed line is committed: {rows:?}");
+        let note = rows.iter().position(|row| row == "a notice").expect("the notice follows: {rows:?}");
+        let world = rows.iter().position(|row| row == "world").expect("the continued reply follows: {rows:?}");
+        assert!(hello < note && note < world && hello + 1 < world, "separate blocks, never glued: {rows:?}");
+    }
+
+    #[test]
+    fn the_branch_is_reread_at_most_every_few_seconds() {
+        let mut app = test_app();
+        app.status.branch = Some("main*".into());
+        app.branch_at = Some(Instant::now());
+        app.refresh_branch();
+        assert_eq!(app.status.branch.as_deref(), Some("main*"), "a fresh reading is kept");
+        app.branch_at = Some(Instant::now() - Duration::from_secs(6));
+        app.refresh_branch();
+        assert!(app.branch_at.is_some_and(|at| at.elapsed() < Duration::from_secs(5)), "a stale reading runs again");
+    }
+
+    #[test]
+    fn outside_a_repository_there_is_no_branch() {
+        let root = crate::test_temp::TempDir::new("killi-norepo");
+        assert_eq!(App::branch_of(&root), None);
+    }
+
+    #[test]
+    fn the_file_menu_filters_once_per_query() {
+        let mut app = test_app();
+        app.files = Some(vec!["src/main.rs".into(), "src/tui/mod.rs".into()]);
+        app.files_gen = 1;
+        app.editor.insert("see @srct");
+        let first = app.suggestions().expect("the query matches");
+        assert!(app.file_menu_cache.is_some(), "the filter is remembered");
+        assert_eq!(app.suggestions(), Some(first.clone()), "the same query reuses it");
+        app.files = Some(vec!["docs/other.md".into()]);
+        app.files_gen = 2;
+        assert_ne!(app.suggestions(), Some(first), "a new listing filters again");
+    }
+
+    #[test]
+    fn the_streaming_preview_is_styled_once_per_tail() {
+        let mut app = test_app();
+        app.on_agent(Event::Text("hello *world*".into()));
+        let (first, _, _) = app.live();
+        let cached = app.preview_cache.clone().expect("the tail's rows are remembered");
+        assert_eq!(cached.0, "hello *world*");
+        let (second, _, _) = app.live();
+        assert_eq!(first, second);
+        assert_eq!(app.preview_cache.as_ref().map(|c| &c.3), Some(&cached.3), "the same tail reuses its rows");
+        app.on_agent(Event::Text("!\n".into()));
+        let (third, _, _) = app.live();
+        assert!(app.preview_cache.is_none(), "a committed line drops the preview");
+        assert_ne!(first, third);
+    }
+
+    #[test]
+    fn a_closed_pipe_reads_as_a_gone_terminal() {
+        let mut fds = [0 as libc::c_int; 2];
+        // SAFETY: fills the two descriptors.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        assert!(!terminal_gone(fds[0]), "an open pipe is not gone");
+        // SAFETY: writes one byte this test reads back, and closes descriptors it opened.
+        assert_eq!(unsafe { libc::write(fds[1], b"x".as_ptr().cast(), 1) }, 1);
+        unsafe { libc::close(fds[1]) };
+        assert!(terminal_gone(fds[0]), "a hangup is gone even with input buffered");
+        let mut byte = [0u8; 1];
+        // SAFETY: reads one byte into a buffer of that length.
+        assert_eq!(unsafe { libc::read(fds[0], byte.as_mut_ptr().cast(), 1) }, 1, "the probe ate no input");
+        assert!(terminal_gone(fds[0]), "a hangup with nothing to read is gone");
+        unsafe { libc::close(fds[0]) };
+        assert!(terminal_gone(-1), "a bad descriptor reads as gone too");
     }
 }

@@ -192,11 +192,6 @@ fn glyph(state: State, frame: usize) -> String {
     }
 }
 
-/// `12 calls`, `1 call`.
-fn calls_text(calls: usize) -> String {
-    format!("{calls} call{}", if calls == 1 { "" } else { "s" })
-}
-
 fn member_row(member: &Member, width: usize, frame: usize, name: usize) -> String {
     let item = clip_middle(&member.item, name);
     let item = format!("{item}{}", " ".repeat(name.saturating_sub(text::width(&item))));
@@ -206,7 +201,7 @@ fn member_row(member: &Member, width: usize, frame: usize, name: usize) -> Strin
     };
     let stats = member.started.map_or(String::new(), |started| {
         let took = member.ended.unwrap_or_else(Instant::now).duration_since(started);
-        format!("  {DIM}{:>5} {FAINT}·{RESET}{DIM} {:<8}{RESET}", clock(took), calls_text(member.calls))
+        format!("  {DIM}{:>5} {FAINT}·{RESET}{DIM} {:<8}{RESET}", clock(took), crate::tools::count(member.calls, "call"))
     });
     let doing = if member.state == State::Running && !member.doing.is_empty() { format!("  {DIM}{}{RESET}", member.doing) } else { String::new() };
     fit(&format!("  {} {item}{stats}{doing}", glyph(member.state, frame)), width)
@@ -215,7 +210,7 @@ fn member_row(member: &Member, width: usize, frame: usize, name: usize) -> Strin
 /// The line a subagent leaves in the conversation when it ends.
 pub fn finished_row(item: &str, failed: bool, calls: usize, took: Duration, width: usize) -> String {
     let glyph = glyph(if failed { State::Failed } else { State::Done }, 0);
-    let note = format!(" {DIM}· {} · {}{RESET}", clock(took), calls_text(calls));
+    let note = format!(" {DIM}· {} · {}{RESET}", clock(took), crate::tools::count(calls, "call"));
     let note = if failed { format!(" {DANGER}failed{RESET}{note}") } else { note };
     let room = width.saturating_sub(text::width(&note) + 6).max(8);
     fit(&format!("  {DIM}↳{RESET} {glyph} {}{note}", clip_middle(item, room)), width)

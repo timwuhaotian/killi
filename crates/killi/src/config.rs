@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{IsTerminal, Write};
+use std::ops::Range;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -188,7 +189,7 @@ pub struct ThinkingConfig {
 }
 
 /// Everything a request needs, resolved from a model alias.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ResolvedModel {
     pub alias: String,
     pub model: String,
@@ -207,6 +208,32 @@ pub struct ResolvedModel {
     /// On the user's ChatGPT plan: requests carry the token `killi login` saved, refreshed as
     /// it expires, in place of `api_key`.
     pub chatgpt: bool,
+}
+
+/// The key stays out of logs and error reports: presence and length only, never the value.
+impl std::fmt::Debug for ResolvedModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let key = if self.api_key.is_empty() {
+            "unset".to_string()
+        } else {
+            format!("<redacted {} chars>", self.api_key.len())
+        };
+        f.debug_struct("ResolvedModel")
+            .field("alias", &self.alias)
+            .field("model", &self.model)
+            .field("protocol", &self.protocol)
+            .field("base_url", &self.base_url)
+            .field("api_key", &key)
+            .field("headers", &self.headers)
+            .field("session_header", &self.session_header)
+            .field("max_output", &self.max_output)
+            .field("context_window", &self.context_window)
+            .field("images", &self.images)
+            .field("thinking", &self.thinking)
+            .field("cache_control", &self.cache_control)
+            .field("chatgpt", &self.chatgpt)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -572,21 +599,124 @@ fn pick_model(config: &Config, path: &Path) -> Result<bool> {
     }
 }
 
+/// The `[name]` table headers of a TOML text in file order, each with the range of lines
+/// (`str::lines` indices) the table covers: from its own header line to the next header's,
+/// or the end of the text. A header may carry spaces, quotes and a trailing comment
+/// (`[ providers.x ]  # note`), and lines inside multi-line strings — the `[prompt]` block's
+/// `system`, for one — are never headers.
+fn table_spans(text: &str) -> Vec<(String, Range<usize>)> {
+    let mut spans = Vec::new();
+    let mut open: Option<&'static str> = None;
+    for (n, line) in text.lines().enumerate() {
+        let mut rest = line;
+        if let Some(delim) = open {
+            let Some(at) = rest.find(delim) else { continue };
+            rest = &rest[at + delim.len()..];
+        } else if let Some(name) = header_name(line) {
+            spans.push((name, n..n));
+            continue;
+        }
+        open = open_multi(rest);
+    }
+    let mut end = text.lines().count();
+    for (_, span) in spans.iter_mut().rev() {
+        span.end = end;
+        end = span.start;
+    }
+    spans
+}
+
+/// The name a table header line carries, or `None` when the line is not one: it must open
+/// with `[` (a `[[x]]` array's inner name reads the same) and close at the first `]` outside
+/// quoted key parts, with nothing after it but spaces and a comment.
+fn header_name(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let bytes = trimmed.as_bytes();
+    if bytes.first() != Some(&b'[') {
+        return None;
+    }
+    let array = bytes.get(1) == Some(&b'[');
+    let mut quote = None;
+    let mut close = None;
+    for (i, &c) in bytes.iter().enumerate().skip(usize::from(array) + 1) {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == b'"' || c == b'\'' => quote = Some(c),
+            None if c == b']' => {
+                close = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    let mut after = trimmed[close + 1..].trim_start();
+    if array {
+        after = after.strip_prefix(']')?.trim_start();
+    }
+    if !after.is_empty() && !after.starts_with('#') {
+        return None;
+    }
+    let name = trimmed[usize::from(array) + 1..close].trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// The multi-line string delimiter (`'''` or `"""`) a line leaves open, if any: comments
+/// and single-line strings are stepped over, and a string that closes on the same line
+/// opens nothing.
+fn open_multi(line: &str) -> Option<&'static str> {
+    let bytes = line.as_bytes();
+    let mut single = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(quote) = single {
+            if quote == b'"' && c == b'\\' {
+                i += 1;
+            } else if c == quote {
+                single = None;
+            }
+        } else {
+            match c {
+                b'#' => return None,
+                b'"' | b'\'' => {
+                    if bytes.get(i + 1) == Some(&c) && bytes.get(i + 2) == Some(&c) {
+                        let delim: &'static str = if c == b'"' { "\"\"\"" } else { "'''" };
+                        match line[i + 3..].find(delim) {
+                            Some(at) => i += at + 3,
+                            None => return Some(delim),
+                        }
+                    } else {
+                        single = Some(c);
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The table a line belongs to, among `table_spans`' result: the last header at or above
+/// the line, or `None` before the first header.
+fn table_of(spans: &[(String, Range<usize>)], line: usize) -> Option<&str> {
+    spans.iter().take_while(|(_, span)| span.start <= line).last().map(|(name, _)| name.as_str())
+}
+
 /// Stores `key` as the `api_key` of `provider` in the config file, in place of the
 /// `api_key` or `api_key_env` line in its section, so `resolve` reads the key from the file.
 /// The rest of the file, comments included, is left as it is.
 fn set_provider_key(path: &Path, provider: &str, key: &str) -> Result<()> {
     let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
-    let header = format!("[providers.{provider}]");
+    let table = format!("providers.{provider}");
     let key_line = format!("api_key = {}", toml::Value::String(key.to_string()));
+    let spans = table_spans(&text);
     let mut out: Vec<String> = Vec::new();
-    let mut in_provider = false;
     let mut written = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_provider = trimmed.starts_with(&header);
-        } else if in_provider && trimmed.starts_with("api_key") {
+    for (n, line) in text.lines().enumerate() {
+        if table_of(&spans, n) == Some(table.as_str()) && line.trim().starts_with("api_key") {
             if !written {
                 out.push(key_line.clone());
                 written = true;
@@ -596,12 +726,14 @@ fn set_provider_key(path: &Path, provider: &str, key: &str) -> Result<()> {
         out.push(line.to_string());
     }
     if !written {
-        let Some(at) = out.iter().position(|line| line.trim().starts_with(&header)) else {
-            bail!("no {header} table in {} to store the key in", path.display())
+        let Some((_, span)) = spans.iter().find(|(name, _)| name == &table) else {
+            bail!("no [{table}] table in {} to store the key in", path.display())
         };
-        out.insert(at + 1, key_line);
+        out.insert(span.start + 1, key_line);
     }
-    fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))
+    let new = format!("{}\n", out.join("\n"));
+    toml::from_str::<Config>(&new).context("storing the key would break the config")?;
+    crate::fs_atomic::write(path, new.as_bytes(), Some(0o600)).with_context(|| format!("could not write {}", path.display()))
 }
 
 /// A model a sign-in adds to the config, as its `[models]` table will say it.
@@ -646,7 +778,7 @@ pub fn add_models(additions: &Additions) -> Result<()> {
     let (out, name, existed, added) = with_models(text.as_deref().unwrap_or_default(), additions)?;
     match &text {
         Some(text) if *text == out => {}
-        Some(_) => fs::write(&path, &out).with_context(|| format!("could not write {}", path.display()))?,
+        Some(_) => crate::fs_atomic::write(&path, out.as_bytes(), None).with_context(|| format!("could not write {}", path.display()))?,
         None => {
             fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
             let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
@@ -741,22 +873,21 @@ fn with_models(text: &str, additions: &Additions) -> Result<(String, String, boo
 /// the file as it is. False when it had neither.
 pub fn remove_provider_key(path: &Path, provider: &str) -> Result<bool> {
     let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
-    let header = format!("[providers.{provider}]");
-    let mut in_provider = false;
-    let mut removed = false;
+    let table = format!("providers.{provider}");
+    let spans = table_spans(&text);
     let mut out: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_provider = trimmed == header;
-        } else if in_provider && trimmed.starts_with("api_key") {
+    let mut removed = false;
+    for (n, line) in text.lines().enumerate() {
+        if table_of(&spans, n) == Some(table.as_str()) && line.trim().starts_with("api_key") {
             removed = true;
             continue;
         }
         out.push(line);
     }
     if removed {
-        fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))?;
+        let new = format!("{}\n", out.join("\n"));
+        toml::from_str::<Config>(&new).context("removing the key would break the config")?;
+        crate::fs_atomic::write(path, new.as_bytes(), None).with_context(|| format!("could not write {}", path.display()))?;
     }
     Ok(removed)
 }
@@ -766,14 +897,12 @@ pub fn remove_provider_key(path: &Path, provider: &str) -> Result<bool> {
 fn set_default_model(path: &Path, alias: &str) -> Result<()> {
     let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
     let line = format!("default_model = {}", toml::Value::String(alias.to_string()));
+    let spans = table_spans(&text);
     let mut out: Vec<String> = Vec::new();
     let mut written = false;
-    let mut in_table = false;
-    for text_line in text.lines() {
-        let trimmed = text_line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_table = true;
-        } else if !in_table && !written && trimmed.starts_with("default_model") {
+    for (n, text_line) in text.lines().enumerate() {
+        let before_tables = spans.first().is_none_or(|(_, span)| n < span.start);
+        if before_tables && !written && text_line.trim().starts_with("default_model") {
             out.push(line.clone());
             written = true;
             continue;
@@ -783,7 +912,9 @@ fn set_default_model(path: &Path, alias: &str) -> Result<()> {
     if !written {
         out.insert(0, line);
     }
-    fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))
+    let new = format!("{}\n", out.join("\n"));
+    toml::from_str::<Config>(&new).context("setting the default model would break the config")?;
+    crate::fs_atomic::write(path, new.as_bytes(), None).with_context(|| format!("could not write {}", path.display()))
 }
 
 /// Writes the `[search]` table `/web-search-config` picked: its `provider`, `url`, `api_key`
@@ -800,17 +931,15 @@ pub fn set_search(path: &Path, provider: &str, url: Option<&str>, key: Option<&s
     if let Some(key) = key.filter(|k| !k.is_empty()) {
         fresh.push(format!("api_key = {}", value(key)));
     }
+    let spans = table_spans(&text);
+    let first = spans.iter().find(|(name, _)| name == "search").map(|(_, span)| span.start);
     let mut out: Vec<String> = Vec::new();
     let mut header = None;
-    let mut in_search = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_search = trimmed == "[search]";
-            if in_search && header.is_none() {
-                header = Some(out.len());
-            }
-        } else if in_search && ["provider", "url", "api_key", "api_key_env"].iter().any(|key| trimmed.starts_with(key)) {
+    for (n, line) in text.lines().enumerate() {
+        if Some(n) == first {
+            header = Some(out.len());
+        }
+        if table_of(&spans, n) == Some("search") && ["provider", "url", "api_key", "api_key_env"].iter().any(|key| line.trim().starts_with(key)) {
             continue;
         }
         out.push(line.to_string());
@@ -826,7 +955,10 @@ pub fn set_search(path: &Path, provider: &str, url: Option<&str>, key: Option<&s
     for (n, line) in fresh.into_iter().enumerate() {
         out.insert(at + n, line);
     }
-    fs::write(path, format!("{}\n", out.join("\n"))).with_context(|| format!("could not write {}", path.display()))
+    let new = format!("{}\n", out.join("\n"));
+    toml::from_str::<Config>(&new).context("setting [search] would break the config")?;
+    let mode = key.is_some_and(|key| !key.is_empty()).then_some(0o600);
+    crate::fs_atomic::write(path, new.as_bytes(), mode).with_context(|| format!("could not write {}", path.display()))
 }
 
 /// The first-launch guide: on the first interactive start, offers to add another command
@@ -924,21 +1056,32 @@ fn command_on_path(name: &str, except: &Path) -> Option<PathBuf> {
     })
 }
 
-/// Asks a yes/no question on the terminal; Enter means yes.
+/// Asks a yes/no question on the terminal; Enter means yes, end of input means no, so a
+/// guide the user closes never writes anything.
 pub(crate) fn confirm(question: &str) -> Result<bool> {
-    Ok(matches!(read_line(&format!("{question} [Y/n] "))?.to_ascii_lowercase().as_str(), "" | "y" | "yes"))
+    Ok(agree(&read_line_opt(&format!("{question} [Y/n] "))?))
+}
+
+/// Enter or yes; anything else, including end of input, is no.
+fn agree(answer: &Option<String>) -> bool {
+    matches!(answer.as_deref().map(str::to_ascii_lowercase).as_deref(), Some("" | "y" | "yes"))
 }
 
 /// Prints `prompt` and reads one line from the terminal, trimmed; end of input reads as no
 /// answer.
 pub(crate) fn read_line(prompt: &str) -> Result<String> {
+    Ok(read_line_opt(prompt)?.unwrap_or_default())
+}
+
+/// Prints `prompt` and reads one line from the terminal, trimmed; None on end of input.
+fn read_line_opt(prompt: &str) -> Result<Option<String>> {
     eprint!("{prompt}");
     std::io::stderr().flush()?;
     let mut answer = String::new();
     if std::io::stdin().read_line(&mut answer)? == 0 {
-        return Ok(String::new());
+        return Ok(None);
     }
-    Ok(answer.trim().to_string())
+    Ok(Some(answer.trim().to_string()))
 }
 
 /// Reads one line with the terminal's echo off, so a pasted key stays out of the scrollback.
@@ -1754,12 +1897,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("config.toml");
-        std::fs::write(&path, "# mine\n[providers.go]\ntype = \"openai\"\napi_key = \"secret\"\nbase_url = \"u\"\n\n[providers.other]\napi_key = \"keep\"\n").unwrap();
+        std::fs::write(&path, "# mine\n[providers.go]\ntype = \"openai\"\napi_key = \"secret\"\nbase_url = \"u\"\n\n[providers.other]\ntype = \"openai\"\napi_key = \"keep\"\n").unwrap();
         assert!(super::remove_provider_key(&path, "go").unwrap());
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("secret") && text.contains("keep") && text.contains("base_url = \"u\"") && text.contains("# mine"), "{text}");
         assert!(!super::remove_provider_key(&path, "go").unwrap());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn debug_redacts_the_key() {
+        let source = "[providers.test]\ntype = \"openai\"\nbase_url = \"https://api.openai.com/v1\"\napi_key = \"sk-live-key-material\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n";
+        let config: super::Config = toml::from_str(source).unwrap();
+        let shown = format!("{:?}", config.resolve(Some("test/model")).unwrap());
+        assert!(!shown.contains("sk-live-key-material"), "{shown}");
+        assert!(shown.contains("test/model"), "{shown}");
+        assert!(shown.contains(&format!("{} chars", "sk-live-key-material".len())), "{shown}");
     }
 
     #[test]
@@ -2051,6 +2204,34 @@ providers:
     }
 
     #[test]
+    fn yes_means_enter_or_yes_and_end_of_input_means_no() {
+        assert!(super::agree(&Some(String::new())), "Enter means yes");
+        assert!(super::agree(&Some("y".into())));
+        assert!(super::agree(&Some("YES".into())));
+        assert!(!super::agree(&None), "end of input is no, so a closed guide writes nothing");
+        assert!(!super::agree(&Some("n".into())));
+        assert!(!super::agree(&Some("quit".into())));
+    }
+
+    #[test]
+    fn confirm_on_empty_stdin_is_no() {
+        // stdin reads as end of input below; nothing else in this process reads it.
+        // SAFETY: duplicates a /dev/null descriptor onto stdin and restores it right after.
+        unsafe {
+            let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY);
+            assert!(null >= 0);
+            let saved = libc::dup(libc::STDIN_FILENO);
+            assert!(saved >= 0);
+            assert_eq!(libc::dup2(null, libc::STDIN_FILENO), libc::STDIN_FILENO);
+            let answer = super::confirm("Write a starting config to edit?");
+            libc::dup2(saved, libc::STDIN_FILENO);
+            libc::close(saved);
+            libc::close(null);
+            assert!(!answer.unwrap());
+        }
+    }
+
+    #[test]
     fn command_names_are_single_safe_words() {
         for name in ["dw", "ddd", "d", "my-cmd_2", "K9"] {
             assert!(super::valid_command_name(name), "{name}");
@@ -2077,6 +2258,74 @@ providers:
         assert!(super::create_command_link(&exe, "taken").unwrap_err().contains("already exists"));
         assert_eq!(std::fs::read(root.join("taken")).unwrap(), b"other");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edits_keep_neighbours_and_reparse() {
+        let root = std::env::temp_dir().join(format!("killi-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        let prompt_block = "system = '''\nYou are kil.\n[models.deep]\n[ providers.other ]\napi_key = \"not a table\"\n'''";
+        let text = format!(
+            "# my config\ndefault_model = \"test/model\"\nproviders.other.type = \"openai\"\nproviders.other.api_key = \"keep\"\n\n\
+             [ providers.test ]  # spaces and a comment\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n\
+             [models.\"test/model\"]  # my model\nprovider = \"test\"\nmodel = \"model\"\n\n\
+             [prompt]\n{prompt_block}\n\n\
+             [providers.second]\ntype = \"openai\"\napi_key = \"keep2\"\nbase_url = \"https://second.example\"\n"
+        );
+        std::fs::write(&path, &text).unwrap();
+
+        super::set_provider_key(&path, "test", "sk-pasted").unwrap();
+        let edited = std::fs::read_to_string(&path).unwrap();
+        let config: super::Config = toml::from_str(&edited).unwrap();
+        assert_eq!(config.providers["test"].api_key.as_deref(), Some("sk-pasted"));
+        assert_eq!(config.providers["test"].api_key_env, None);
+        assert_eq!(config.providers["other"].api_key.as_deref(), Some("keep"), "a dotted key is no table header: {edited}");
+        assert_eq!(config.providers["second"].api_key.as_deref(), Some("keep2"), "the next provider keeps its key: {edited}");
+        assert!(edited.contains("[ providers.test ]  # spaces and a comment\ntype = \"openai\"\napi_key = \"sk-pasted\""), "the key line takes the environment line's place: {edited}");
+        assert!(!edited.contains("api_key_env"), "{edited}");
+        assert!(edited.contains(&format!("[prompt]\n{prompt_block}")), "the prompt block is left as it is: {edited}");
+        assert!(edited.contains("[models.\"test/model\"]  # my model"), "{edited}");
+
+        assert!(super::remove_provider_key(&path, "test").unwrap());
+        let edited = std::fs::read_to_string(&path).unwrap();
+        let config: super::Config = toml::from_str(&edited).unwrap();
+        assert_eq!((config.providers["test"].api_key.as_deref(), config.providers["test"].api_key_env.as_deref()), (None, None));
+        assert_eq!(config.providers["second"].api_key.as_deref(), Some("keep2"), "{edited}");
+        assert_eq!(config.providers["other"].api_key.as_deref(), Some("keep"), "{edited}");
+        assert!(edited.contains("[ providers.test ]  # spaces and a comment"), "{edited}");
+        assert!(edited.contains(&format!("[prompt]\n{prompt_block}")), "{edited}");
+        assert!(!super::remove_provider_key(&path, "test").unwrap(), "there is no key left to take out");
+
+        super::set_default_model(&path, "test/second").unwrap();
+        let edited = std::fs::read_to_string(&path).unwrap();
+        let config: super::Config = toml::from_str(&edited).unwrap();
+        assert_eq!(config.default_model.as_deref(), Some("test/second"));
+        assert_eq!(config.providers["second"].api_key.as_deref(), Some("keep2"), "{edited}");
+        assert!(edited.contains(&format!("[prompt]\n{prompt_block}")), "{edited}");
+
+        super::set_search(&path, "searxng", Some("http://localhost:8080"), None).unwrap();
+        let edited = std::fs::read_to_string(&path).unwrap();
+        let config: super::Config = toml::from_str(&edited).unwrap();
+        assert_eq!((config.search.provider.as_deref(), config.search.url.as_deref()), (Some("searxng"), Some("http://localhost:8080")));
+        assert!(edited.ends_with("\n[search]\nprovider = \"searxng\"\nurl = \"http://localhost:8080\"\n"), "{edited}");
+        assert_eq!(config.providers["second"].api_key.as_deref(), Some("keep2"), "{edited}");
+        assert!(edited.contains(&format!("[prompt]\n{prompt_block}")), "{edited}");
+
+        let (added, _, _, aliases) = super::with_models(&edited, &chatgpt(vec![plan_model("gpt-a")])).unwrap();
+        assert_eq!(aliases, ["chatgpt/gpt-a"]);
+        let config: super::Config = toml::from_str(&added).unwrap();
+        assert_eq!(config.providers["chatgpt"].kind, "chatgpt");
+        assert_eq!(config.providers["second"].api_key.as_deref(), Some("keep2"), "{added}");
+        assert!(added.contains(&format!("[prompt]\n{prompt_block}")), "{added}");
+        assert!(added.starts_with("# my config\ndefault_model = \"test/second\""), "{added}");
+
+        std::fs::write(&path, "default_model = \"test/model\"\nsearch.provider = \"brave\"\n\n[ providers.test ]  # note\ntype = \"openai\"\n").unwrap();
+        let error = super::set_search(&path, "tavily", None, Some("tvly-key"));
+        assert!(error.as_ref().unwrap_err().to_string().contains("would break the config"), "an appended `[search]` would double the dotted one: {error:?}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "default_model = \"test/model\"\nsearch.provider = \"brave\"\n\n[ providers.test ]  # note\ntype = \"openai\"\n", "a refused edit writes nothing");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

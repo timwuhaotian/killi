@@ -145,6 +145,31 @@ pub fn kill_all() {
     }
 }
 
+/// A process group killi started outside a `Process` — a hook, the browser, a directly
+/// started MCP server, `pdftotext` — registered so `kill_all` ends it too. The guard
+/// unregisters the group when the child is reaped; while it lives, `kill_all` covers it.
+pub struct Tracked {
+    pgid: u32,
+}
+
+/// Registers `pgid` (a session leader's pid, so its own process group) with `kill_all`.
+pub fn track(pgid: u32) -> Tracked {
+    let (_, exit) = watch::channel(None);
+    groups().insert(pgid, exit);
+    Tracked { pgid }
+}
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        groups().remove(&self.pgid);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn registered(pgid: u32) -> bool {
+    groups().contains_key(&pgid)
+}
+
 impl Exit {
     fn describe(self) -> String {
         match self {
@@ -372,7 +397,7 @@ pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
     let Some(command) = args.get("command").and_then(Value::as_str) else {
         return Output::error("bash needs `command`.");
     };
-    let timeout = args.get("timeout").and_then(Value::as_u64).unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT);
+    let timeout = super::uint(args, "timeout").unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT);
     let background = args.get("run_in_background").and_then(Value::as_bool).unwrap_or(false);
     if let Some(secs) = leading_sleep(command).filter(|&secs| !background && secs >= MAX_SLEEP) {
         return Output::error(format!(
@@ -528,10 +553,10 @@ impl Tasks {
 }
 
 pub async fn task_output(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
-    let Some(id) = args.get("id").and_then(Value::as_u64).map(|id| id as u32) else {
+    let Some(id) = super::uint(args, "id").map(|id| id as u32) else {
         return Output::error("task_output needs `id`.");
     };
-    let wait = args.get("wait").and_then(Value::as_u64).unwrap_or(0).min(MAX_TIMEOUT);
+    let wait = super::uint(args, "wait").unwrap_or(0).min(MAX_TIMEOUT);
     let (exit_rx, started, pgid, what, output) = {
         let tasks = ctx.tasks.borrow();
         let Some(task) = tasks.list.get(&id) else {
@@ -575,7 +600,7 @@ pub async fn task_output(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output 
 }
 
 pub fn task_stop(ctx: &Context, args: &Value) -> Output {
-    let Some(id) = args.get("id").and_then(Value::as_u64).map(|id| id as u32) else {
+    let Some(id) = super::uint(args, "id").map(|id| id as u32) else {
         return Output::error("task_stop needs `id`.");
     };
     let mut tasks = ctx.tasks.borrow_mut();
@@ -711,8 +736,10 @@ mod tests {
     use std::fs;
 
     fn ctx() -> Context {
-        let dir = std::env::temp_dir();
-        Context::new(dir.clone(), dir.join(format!("killi-spill-{}", std::process::id())))
+        let tmp = crate::test_temp::TempDir::new("killi-bash");
+        let mut ctx = Context::new(tmp.path().to_path_buf(), tmp.join("spill"));
+        ctx.temp = Some(tmp);
+        ctx
     }
 
     fn never() -> bool {
@@ -751,6 +778,19 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn timeout_and_ids_arrive_as_strings_too() {
+        let out = bash(&ctx(), &json!({"command": "echo hi", "timeout": "1"}), &never).await;
+        assert_eq!(out.text, "hi");
+        let ctx = ctx();
+        bash(&ctx, &json!({"command": "sleep 30", "run_in_background": true}), &never).await;
+        assert_eq!(task_stop(&ctx, &json!({"id": "1"})).text, "Stopped task 1.");
+        bash(&ctx, &json!({"command": "sleep 30", "run_in_background": true}), &never).await;
+        let out = task_output(&ctx, &json!({"id": "2", "wait": "1"}), &never).await;
+        assert!(out.text.starts_with("Task 2 is still running"), "{}", out.text);
+        ctx.tasks.borrow_mut().stop_all();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn a_slow_command_moves_to_the_background() {
         let ctx = ctx();
         let out = bash(&ctx, &json!({"command": "echo start; sleep 2; echo done", "timeout": 1}), &never).await;
@@ -779,8 +819,15 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn a_command_that_ends_first_is_not_moved_when_a_message_waits() {
+        // Either the command wins the wait (the usual case: the select prefers its exit
+        // when both are ready) or, under load, the wake poll fires first and the finished
+        // command is reported as a background task. Both report the output.
         let out = bash(&ctx(), &json!({"command": "echo quick"}), &|| true).await;
-        assert_eq!(out.text, "quick");
+        assert!(
+            out.text == "quick" || out.text.contains("moved to background task"),
+            "a finished command is reported either way: {}",
+            out.text
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::{Delta, Failure, Prepared, Reply, StreamParser, ToolCall, Usage, cap_output, truncate};
+use super::{Delta, ErrorKind, Failure, Prepared, Reply, StreamParser, ToolCall, Usage, IMAGE_OMITTED, cap_output, truncate};
 use crate::config::{ResolvedModel, Thinking};
 
 pub const REASONING_KEYS: [&str; 3] = ["reasoning_content", "reasoning_details", "reasoning"];
@@ -33,6 +33,9 @@ struct StreamOptions {
 pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value], cache_key: &str) -> Result<Prepared> {
     let max_output = model.max_output.map(|n| cap_output(model, messages, tools, n).clamp(1, 131_072));
     let mut messages = replay_history(messages);
+    if !model.images {
+        omit_images(&mut messages);
+    }
     if model.cache_control {
         mark_cache_breakpoints(&mut messages);
     }
@@ -94,6 +97,19 @@ fn mark_content(message: &mut Value) {
     }
 }
 
+/// Image parts become plain text when the model can't see images. The words never vary,
+/// so the conversion stays deterministic per model and the cached prefix still hits.
+fn omit_images(messages: &mut [Value]) {
+    for message in messages.iter_mut() {
+        let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) else { continue };
+        for part in parts.iter_mut() {
+            if part["type"] == "image_url" {
+                *part = json!({"type": "text", "text": IMAGE_OMITTED});
+            }
+        }
+    }
+}
+
 fn replay_history(messages: &[Value]) -> Vec<Value> {
     messages
         .iter()
@@ -128,9 +144,15 @@ fn replay_history(messages: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// The most streamed tool calls one reply keeps, so a provider that floods or replays
+/// indices can't grow it without bound.
+const MAX_STREAMED_CALLS: usize = 128;
+
 #[derive(Default)]
 pub(super) struct Parser {
     done: bool,
+    /// Each provider call index, in arrival order, to the reply slot it was first given.
+    call_slots: Vec<(u64, usize)>,
 }
 
 impl StreamParser for Parser {
@@ -166,11 +188,20 @@ impl StreamParser for Parser {
             merge_reasoning_detail(reply, detail);
         }
         for call in delta.get("tool_calls").and_then(Value::as_array).into_iter().flatten() {
-            let index = call.get("index").and_then(Value::as_u64).unwrap_or(reply.tool_calls.len() as u64) as usize;
-            if reply.tool_calls.len() <= index {
-                reply.tool_calls.resize_with(index + 1, ToolCall::default);
-            }
-            let slot = &mut reply.tool_calls[index];
+            let index = call.get("index").and_then(Value::as_u64);
+            let slot = match index.and_then(|index| self.call_slots.iter().find(|(seen, _)| *seen == index).map(|(_, slot)| *slot)) {
+                Some(slot) => slot,
+                None if reply.tool_calls.len() < MAX_STREAMED_CALLS => {
+                    let slot = reply.tool_calls.len();
+                    reply.tool_calls.push(ToolCall::default());
+                    if let Some(index) = index {
+                        self.call_slots.push((index, slot));
+                    }
+                    slot
+                }
+                None => continue,
+            };
+            let slot = &mut reply.tool_calls[slot];
             if let Some(id) = call.get("id").and_then(Value::as_str) {
                 slot.id.push_str(id);
             }
@@ -191,11 +222,25 @@ impl StreamParser for Parser {
     }
 
     fn finish(&mut self, reply: &mut Reply) -> Result<(), Failure> {
-        if self.done || reply.finish_reason.is_some() {
-            Ok(())
-        } else {
-            Err(Failure::transient("OpenAI stream ended without finish_reason or [DONE]".into()))
+        if !self.done && reply.finish_reason.is_none() {
+            return Err(Failure::of(
+                ErrorKind::BadResponse,
+                None,
+                true,
+                "OpenAI stream ended without finish_reason or [DONE]".into(),
+            ));
         }
+        let before = reply.tool_calls.len();
+        reply.tool_calls.retain(|call| !call.name.is_empty());
+        if reply.tool_calls.len() < before && reply.tool_calls.is_empty() && reply.text.trim().is_empty() {
+            return Err(Failure::of(
+                ErrorKind::BadResponse,
+                None,
+                true,
+                format!("provider streamed {} tool call(s) without names", before - reply.tool_calls.len()),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -305,6 +350,70 @@ mod tests {
         let mut sink = |_: Delta| {};
         let event = json!({"choices":[{"delta":{"refusal":"cannot help"}}]});
         assert!(!parser.event(&event, &mut reply, &mut sink).unwrap_err().retryable);
+    }
+
+    #[test]
+    fn sparse_call_indices_do_not_create_nameless_calls() {
+        let mut parser = Parser::default();
+        let mut reply = Reply::default();
+        let mut sink = |_: Delta| {};
+        let events = [
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{}"}}]}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":5,"id":"b","function":{"name":"grep","arguments":"{}"}}]}}]}),
+            json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+        ];
+        for event in &events {
+            parser.event(event, &mut reply, &mut sink).unwrap();
+        }
+        parser.finish(&mut reply).unwrap();
+        assert_eq!(reply.tool_calls.len(), 2);
+        assert_eq!(reply.tool_calls.iter().map(|call| call.name.as_str()).collect::<Vec<_>>(), ["read", "grep"]);
+    }
+
+    #[test]
+    fn a_huge_call_index_does_not_panic() {
+        let mut parser = Parser::default();
+        let mut reply = Reply::default();
+        let mut sink = |_: Delta| {};
+        let events = [
+            json!({"choices":[{"delta":{"tool_calls":[{"index": u64::MAX,"id":"a","function":{"name":"read","arguments":"{}"}}]}}]}),
+            json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+        ];
+        for event in &events {
+            parser.event(event, &mut reply, &mut sink).unwrap();
+        }
+        parser.finish(&mut reply).unwrap();
+        assert_eq!(reply.tool_calls.len(), 1);
+        assert_eq!(reply.tool_calls[0].name, "read");
+    }
+
+    #[test]
+    fn calls_without_names_are_dropped_when_the_stream_finishes() {
+        let mut parser = Parser::default();
+        let mut reply = Reply::default();
+        let mut sink = |_: Delta| {};
+        let events = [
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"read","arguments":"{}"}}]}}]}),
+            json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+        ];
+        for event in &events {
+            parser.event(event, &mut reply, &mut sink).unwrap();
+        }
+        parser.finish(&mut reply).unwrap();
+        assert_eq!(reply.tool_calls.len(), 1);
+        assert_eq!(reply.tool_calls[0].name, "read");
+
+        let mut reply = Reply::default();
+        let events = [
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]}}]}),
+            json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+        ];
+        for event in &events {
+            Parser::default().event(event, &mut reply, &mut sink).ok().unwrap();
+        }
+        let mut parser = Parser::default();
+        assert!(parser.finish(&mut reply).unwrap_err().retryable);
     }
 
     #[test]
@@ -431,6 +540,34 @@ mod tests {
         let marked: Value = serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
         assert_eq!(marked["messages"][1]["content"][0]["cache_control"], json!({"type": "ephemeral"}));
         assert_eq!(messages[1]["content"], "hi");
+    }
+
+    #[test]
+    fn images_become_text_when_the_model_cannot_see_them() {
+        let model = ResolvedModel {
+            alias: "m".into(),
+            model: "text".into(),
+            protocol: crate::config::Protocol::OpenAi,
+            base_url: "http://localhost".into(),
+            api_key: String::new(),
+            headers: Default::default(),
+            session_header: None,
+            max_output: None,
+            context_window: None,
+            images: false,
+            thinking: Thinking::Off,
+            cache_control: false,
+            chatgpt: false,
+        };
+        let messages = vec![json!({"role": "user", "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ]})];
+        let body: Value = serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
+        let content = body["messages"][0]["content"].clone();
+        assert!(content.as_array().unwrap().iter().all(|part| part["type"] != "image_url"), "{content}");
+        assert!(content.as_array().unwrap().iter().any(|part| part["text"] == super::IMAGE_OMITTED), "{content}");
+        assert_eq!(messages[0]["content"][1]["type"], "image_url", "history itself stays as sent");
     }
 
     #[test]

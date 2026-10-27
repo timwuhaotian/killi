@@ -20,7 +20,7 @@ pub struct Entry {
 }
 
 /// What the menu offers for the text before the cursor.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Suggestions {
     pub items: Vec<Item>,
     /// Byte offset in the text where the replaced part starts.
@@ -54,8 +54,8 @@ pub fn suggest(before: &str, entries: &[Entry], arguments: impl Fn(&str) -> Vec<
         return (!items.is_empty()).then_some(Suggestions { items, start: word, fill: Fill::Command });
     }
     let typed = before.strip_prefix('/')?;
-    let space = typed.find(char::is_whitespace)?;
-    let (name, argument) = (&typed[..space], &typed[space + 1..]);
+    let (space, space_char) = typed.char_indices().find(|(_, c)| c.is_whitespace())?;
+    let (name, argument) = (&typed[..space], &typed[space + space_char.len_utf8()..]);
     if argument.contains(char::is_whitespace) {
         return None;
     }
@@ -64,7 +64,7 @@ pub fn suggest(before: &str, entries: &[Entry], arguments: impl Fn(&str) -> Vec<
     if items.len() == 1 && items[0].value == argument {
         items.clear();
     }
-    (!items.is_empty()).then_some(Suggestions { items, start: 1 + space + 1, fill: Fill::Argument })
+    (!items.is_empty()).then_some(Suggestions { items, start: 1 + space + space_char.len_utf8(), fill: Fill::Argument })
 }
 
 /// The file menu for `before`: the `files` of the workspace that fuzzy-match the word at the
@@ -289,6 +289,20 @@ mod tests {
         assert!(files("@zzz", &paths).is_none());
         assert!(files("mail me@", &paths).is_none(), "an @ inside a word is not a mention");
         assert!(files("hello", &paths).is_none());
+    }
+
+    #[test]
+    fn nbsp_and_ideographic_space_after_a_command() {
+        let efforts = |name: &str| match name {
+            "effort" => ["off", "high"].iter().map(|e| Item { value: e.to_string(), description: String::new() }).collect(),
+            _ => Vec::new(),
+        };
+        for space in ['\u{a0}', '\u{3000}'] {
+            let before = format!("/effort{space}hig");
+            let s = suggest(&before, &entries(), efforts).unwrap();
+            assert_eq!(values(&s), ["high"]);
+            assert_eq!((s.start, s.fill), (before.len() - "hig".len(), Fill::Argument));
+        }
     }
 
     #[test]

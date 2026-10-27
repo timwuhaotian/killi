@@ -1,0 +1,110 @@
+## Functional Analysis & Requirement Coverage - Audit Results
+**Score**: 2/4  (the documented features exist and mostly behave as written, but resume, undo, steering and the tool-result budget each have a real hole in a common path)
+**Files reviewed**: 30 (main.rs, setup.rs, agent.rs, session.rs, snapshot.rs, live.rs, plan.rs, swarm.rs, hooks.rs, skills.rs, config.rs, tools/{mod,files,bash}.rs, llm/{openai,responses}.rs, login/chatgpt.rs (offer), tui/{mod,mention,editor}.rs, skills/update-config.md, README.md, docs/decisions.md, CHANGELOG.md, scripts/{eval,bench,frames,fake_llm}.py)
+**Issues found**: 26 (P0 0 · P1 4 · P2 7 · P3 15)
+
+Evidence lives in `scratchpad/I/`: a copy of the crate with `audit_*` tests (`cd scratchpad/I && HOME=$PWD/home RUSTUP_HOME=~/.rustup CARGO_HOME=~/.cargo CARGO_TARGET_DIR=$PWD/target cargo test --locked -p killi audit_`; 5 tests, all fail on current code; the copy also adds one test-only accessor, `Agent::audit_search_provider`, so it isn't pristine source), a logging fake provider `tools/fake_i.py`, a pty driver `tools/tui_i.py <dir> {ctrls|compact|steer|undo|image}` (run with the scratch venv's Python) and `tools/repro_continue.sh`. Everything ran under scratch HOMEs; the user's `~/.killi/sessions` was only counted (no content printed). None of the fixes below touches the system prompt, the tool list or earlier history: each is settings plumbing, a UI change, or an appended `<system-reminder>`, so the cache rules stand.
+
+### P0 - Critical (must fix before merge / blocks production)
+(none)
+
+### P1 - High
+- **[main.rs:102-105, session.rs:307-322, tui/mod.rs:2352-2368]** `killi -c` and the `/resume` picker continue another session's log while that session is still running.
+  Scenario: session A works in a folder; the user, in another terminal in the same folder, runs `killi -c` to continue the session they quit earlier. `session::list` sorts by mtime and nothing checks `live::list()` (whose `Entry.log`, live.rs:56, names each live session's log), so B opens A's log (`Session::open`, append) and both processes write to it. Reproduced (`tools/repro_continue.sh`, with `-p` sessions against a slow fake provider): B skipped the session that had ended and took live A's log. Its first request carried A's in-flight prompt, then B's prompt behind a false "The user interrupted your previous turn.", then the peers reminder, so a real model meets A's unfinished task as its own interrupted work. The log then held `user(A) · user(B) · user(peers note) · assistant(B) · assistant(A)`: two conversations interleaved, with two assistant messages in a row.
+  Impact: decision 49 measured two or more sessions running 41% of the time, and 39 pairs in one folder. The live session's log is corrupted for every later `-r`. The second session acts on the other session's unfinished task. Both print the same "To continue this session" command.
+  Verified: reproduced (`-c`, with `-p` sessions); traced (the `/resume` picker).
+  Suggested fix: in `session::list` (or its two callers), skip a log whose path equals a live entry's `log` whose pid isn't this process, and the current session's own log in the picker. Show live ones as "running in pid N" rather than resuming them.
+
+- **[agent.rs:28, agent.rs:1000-1002, agent.rs:1356-1367 vs tools/mod.rs:19, files.rs:63, bash.rs:599-624, web.rs:203, search.rs:168]** A tool result that fills the tools' 50 KiB budget is cut again, to about 5 KB, before the model sees it.
+  Scenario: the tools cap output at `MAX_BYTES` = 51,200 bytes plus a note. `finish_call` then cuts anything over `MAX_RESULT_CHARS` = 50,000 (compared as `.len()`, so bytes) to its first 4,096 and last 1,024 characters, and spills the rest. Test `audit_a_read_that_fills_its_50kb_budget_reaches_the_model_whole`: `read` of a 3,000-line file returned 51,256 bytes (lines 1-1047, ending "Use offset=1048 to continue"). The model got 5,331 bytes with 106 numbered lines and "[… 46136 characters omitted …]". The continuation hint still says offset=1048, so a model that follows it never sees lines ~89-1029. The spill file is itself the whole 51,256-byte result, so a `read` of it without `limit`, as the note suggests, hits the same cut again. bash, grep and fetch_url outputs at their cap fall into the same 50,000–51,400-byte band.
+  Impact: every full-budget result loses about 90% of its content, which contradicts the `read` description ("up to 2000 lines or 50KB, continue with offset") and README "Long output keeps its useful end". In the user's own logs (counts only): `MAX_RESULT_CHARS` cut 27 results in 20 of 175 sessions. Of those whose log names the tool, 3 were bash, 1 task_output and 2 mcp. bash's own cap keeps its output under about 51.5 KB, so each bash and task_output cut was a full-budget output reduced to 5 KB.
+  Verified: tested; counted in real logs.
+  Suggested fix: make the agent's threshold sit above the tools' budget (e.g. `MAX_BYTES` + room for notes), or have the tools cap at the agent's limit. When the agent does have to cut a `read`, drop or rewrite its continuation hint.
+
+- **[tui/mod.rs:513-536 (532), agent.rs:531-533, 1351-1353]** (intel obs 5, confirmed) `/undo` tells the model only "The user interrupted your previous turn."
+  Scenario: a turn edits `notes.txt` and the user runs `/undo` (files restored). The next request's prompt is `<system-reminder>The user interrupted your previous turn.</system-reminder>\n\nwhat is in notes.txt now?`, reproduced with `tui_i.py undo`. The model's history still shows its successful edits, and "interrupted" suggests unfinished work, so it reasons from files that no longer exist. It may re-apply exactly what the user undid; `edit`s built on its stale view fail, and reverted bash effects (deps, generated files) fail silently. Also, `Snapshots` is created once (tui/mod.rs:137) and survives `/new` and `/resume`. `/undo` after `/new` reverts the previous conversation's last turn and marks the fresh conversation "interrupted" before its first prompt.
+  Impact: the safety net ("killi runs commands and edits files without asking; `/undo` is the safety net") leaves the agent with a wrong picture of the tree.
+  Verified: reproduced (undo); traced (`/new`).
+  Suggested fix: queue a reminder for the next prompt, built from the `changes` list already in hand: "The user ran /undo: these files were put back as they were before your last turn …; that turn's changes are gone, read before editing." Use it instead of `mark_interrupted`. Reset or tag the snapshot stack per conversation on `/new` and `/resume`.
+
+- **[agent.rs:425-431, 882-888; docs/decisions.md:159; tui/mod.rs:199]** (extends [V1]) Images already in the history stop the conversation for good after `/model` to a text-only model. Decision 26's "reduce, then strip, older media" when the provider rejects a request is not implemented: only `reduced()` drops images (agent.rs:1479), and only on an overflow.
+  Scenario: the user drops a screenshot on the prompt (or the agent `read`s a png) on an `image_in` model, then `/model` to a model without it. The notice says "keeping the conversation so far". Every later request resends the image. Reproduced with a fake provider that rejects images for the text model (`tui_i.py image`): `hello` → `HTTP 400: this model does not support image input`, `hello again` → same, and `/compact` → "Compaction failed: HTTP 400" because Full compaction resends the images. Only `/new` gets out.
+  Impact: the conversation is unusable, and the escape loses its context.
+  Verified: reproduced (provider rejection simulated).
+  Suggested fix: when the model can't take images, have the adapters send each image part in history as a short text placeholder ("[image omitted: this model can't see images]"), deterministically per model, so the cache stays stable on that model. Or implement D26's strip-and-retry on a 400 that names images. Warn on `/model` when the history holds images.
+
+### P2 - Medium
+- **[tui/mod.rs:1496, 1118-1123, 164-166, 630, 1706-1709]** Ctrl+S expands `@file` attachments twice and prints the attachment block as the user's message.
+  Scenario: while busy, type `also look at @notes.txt` and press Ctrl+S. `send_busy` stores the already expanded text in `steer`. `read_input` joins it into `Input::Prompt`, and the main loop runs `mention::expand` on it again. Reproduced (`tui_i.py ctrls`): the transcript shows `❯ also look at @notes.txt` followed by the raw `<system-reminder>The files the user named with @ … <file path="notes.txt"> …` dump, and the request carries 2 copies of the file (up to 50 KB each). Test `audit_expanding_a_steered_message_again_attaches_its_files_twice` shows the same with `expand(expand(x))`. Also `session::typed` truncates at the first `\n\n<system-reminder>` (session.rs:290-292), so a later message in the joined prompt drops out of the prompt history and compaction's kept requests.
+  Impact: decision 40's "in one `<system-reminder>`" doesn't hold; the duplicate tokens are paid on every later request.
+  Verified: reproduced + tested.
+  Suggested fix: keep the raw text in `Steered` (expand only when the agent takes it, or once in `prompt_turn`), and show the raw text.
+
+- **[tui/mention.rs:93-112, 74-88]** An apostrophe before an `@path` silently drops the attachment.
+  Scenario: `what's wrong in @src/main.rs`. `words` treats `'` as a shell quote, so everything up to the next `'` is one word, and `words()` returns `["whats wrong in @src/main.rs"]`, which doesn't start with `@`. Nothing is attached, and the `@` menu, which inserted the path, gives no sign. Test `audit_an_apostrophe_before_a_mention_keeps_it`: the control without the apostrophe attaches; with it, nothing does. Any contraction (don't, it's, I'm) earlier in the prompt does this, as do skill and `/swarm` arguments.
+  Impact: an advertised feature (0.4.5/0.4.10) fails on ordinary English. The model gets the path text only and spends a `read` round trip.
+  Verified: tested.
+  Suggested fix: honor quotes only where a word starts (`@"my notes.txt"`, `'…'` after whitespace or `@`), or tokenize `@` mentions on their own: `@` followed by a quoted string or a run of non-whitespace with `\ ` escapes.
+
+- **[setup.rs:140-142, 128-136, 99-101; agent.rs:390, 484-488; tui/mod.rs:206-217]** A `/web-search-config` pick is undone by `/reload` and never reaches `/new` or `/resume`. This contradicts decision 41 ("`Setup::set_search` carries the change to later `/new` sessions") and the notice "here and in new sessions".
+  Scenario: `Setup::set_search` updates only `config.search`. `settings.search` is computed once in `Setup::new`, and `refresh` never recomputes it. `start_on`/`resume` hand `settings` to the agent (`assemble` seeds `ctx.search` from it), and `reload_agent` → `reload_system` overwrites `ctx.search` with the same startup value. Test `audit_a_web_search_pick_survives_reload_and_new`: provider `tavily` right after the pick, `""` (Brave's public page) after `/reload`, `""` in a `/new` session.
+  Impact: a user who set up SearXNG or a key and later runs `/reload` to pick up a skill silently loses search, back on the page that "can turn automated requests away".
+  Verified: tested.
+  Suggested fix: set `self.settings.search = search.settings()` in `set_search`, and recompute it from the new config in `refresh`.
+
+- **[tui/mod.rs:1768 vs 1775-1780; agent.rs:557, 626-630; tui/mod.rs:173, 546]** A queued message survives any turn that doesn't end in Esc: it disappears from the screen and reaches the model out of order, or in the next conversation.
+  Scenario: `finish_turn` always clears `queued` (the rows) but clears `steer` only for an Esc interrupt. Reproduced (`tui_i.py steer`): during a turn that ends in a provider error, the user queues "remember the docs too". The row vanishes; the next prompt "next prompt" goes out as `[…, user "next prompt", user "remember the docs too"]`, because `run` pushes the prompt before `before_request` drains `steer`. The same happens after `Stop::RepeatBreaker` (agent.rs:617-619 returns with `steer` non-empty), when a pending `/btw` keeps the loop alive after the turn's future finished, and on Esc in that same window (`done.take()` turns Esc into `Ended::Done`). `/new` and `/resume` share the same `steer` Rc (`agent.controls.clone()`, `controls.clone()`), so the hidden message lands in the new conversation's first request.
+  Impact: messages the user thinks were dropped are delivered late and in the wrong place, so users retype them and the model reads duplicates.
+  Verified: reproduced (error path); traced (the others).
+  Suggested fix: when `finish_turn` clears `queued`, clear `steer` too (or keep showing whatever stays in `steer` as queued); clear `steer` on `/new` and `/resume`.
+
+- **[tui/mod.rs:537-545, 2042-2048; agent.rs:1289, 1331]** After `/compact` the context meter shows the pre-compaction size, or more.
+  Scenario: the summary request's usage goes through `Event::Usage` → `add_usage(main)` → `status.context = usage.prompt` (the whole old history), while `stats.context = 0` never reaches the UI. Reproduced (`tui_i.py compact`): the status line read `ctx 4k/100k` before `/compact` and `ctx 6k/100k` after, although history was now 2 messages.
+  Impact: the user compacts to free room, sees no change, and runs `/compact` again, which costs another full request. The meter corrects itself only at the next prompt.
+  Verified: reproduced.
+  Suggested fix: after `/compact`, set `app.status.context` from `agent.stats.context`, or emit an estimate of the compacted history.
+
+- **[setup.rs:55-57, 111-118 vs config.rs:530-550, 334-339; login/chatgpt.rs:240-250]** The first-run guides check a different starting model from the one killi starts on.
+  Scenario: `Setup::new` starts on `-m`, else the last `/model` pick (`last-model.json`), else `default_model`. `guide_model` and `chatgpt::offer` check only `-m`/`default_model`. If the last pick's key is missing in this shell (`$ANTHROPIC_API_KEY` exported in another terminal), the guide sees the default model's key and stays quiet. `Setup::new` then fails: "model `x` needs a key … start with -m", and killi exits before the TUI.
+  Impact: README promises "When the model it would start on has no key … it offers to paste the key … or to start on another configured model, so a first run ends on a session instead of an error". That doesn't hold whenever a pick has been saved.
+  Verified: traced.
+  Suggested fix: resolve the starting alias once (`-m`, then a known last pick, then the default) and use it in `guide_model`, `chatgpt::offer` and `Setup::new`. Or fall back to `default_model`, with a notice, when the last pick can't resolve.
+
+- **[agent.rs:842-860; hooks.rs:62-64, 70-72, 143]** (intel obs 17, confirmed; G/E own the fixes) PreToolUse/PostToolUse never run for top-level `agent`/`agent_swarm` calls, because they bypass `execute`. A hook that times out, can't spawn, or exits non-zero other than 2 is skipped without a word to the user.
+  Scenario: a matcher-less PreToolUse audit hook, or one with `matcher = "agent"`, never sees subagent launches, although decision 22 says Claude Code hook scripts "work unchanged" (Claude Code fires PreToolUse for its Task tool). A `no-force-push.sh` that hangs past its timeout lets the call through, silently.
+  Impact: README's hook safety story has holes that nobody sees.
+  Verified: traced.
+  Suggested fix: run the tool hooks around `run_subagents`/`run_swarm`, and post a notice when a hook fails or times out.
+
+### P3 - Low / Nits
+- **[agent.rs:407, 631-635]** A resumed log that ended in plan mode is never told plan mode is off. A new process starts with the Cell and `plan_announced` both false, so no `plan::OFF` is pushed. The model keeps planning and calls `exit_plan_mode`, which answers "Plan mode is off". Test `audit_a_resumed_log_that_ended_in_plan_mode_is_told_it_is_off`. Fix: on resume, set `plan_announced` from the last ON/OFF reminder in the history. This is the same class of desync 0.4.17 fixed for compaction.
+- **[tui/mod.rs:173-190 vs 554-556]** `/resume` keeps the old conversation's task list and token totals on screen (`/new` clears both). The stale todos are also what `killi sessions <pid>` reports (tui/mod.rs:2164). `peer_tells`, `undo_warned` and the Ctrl+O `details` are not reset on `/new` or `/resume` either.
+- **[tui/mod.rs:537-545, 482-487 vs 488; agent.rs:509-513]** `/compact` and `/btw` run on an empty session (`/recap` guards). `/compact` then spends a request, writes a compaction, and leaves a log that `discard_if_unused` no longer deletes and that `/resume` never lists.
+- **[session.rs:61-66, 74-79]** Two sessions created in one wall-clock second by one process collide on `<secs>-<pid>.jsonl` with `create_new`, so `/new` fails with "could not create … File exists (os error 17)". Seen when the audit test called `start_on` twice; startup followed by `/new` within the same second, or two quick `/clear`s, do the same.
+- **[tui/mod.rs:507-512]** `/swarm <task>` restores the pre-turn swarm mode when the turn ends. A `/swarm off` typed mid-turn (a busy command, confirmed with "Swarm mode off.") is silently reverted.
+- **[tui/mod.rs:1817-1823]** A turn the user ended with Esc still posts a desktop notification ("Stopped · 30s") when it ran past `notify_after`, though the user is at the keyboard.
+- **[agent.rs:531, 545-548]** A prompt blocked by a `UserPromptSubmit` hook consumes the "interrupted" note and the one-time `SessionStart` context before returning the error, so neither ever reaches the model.
+- **[config.rs:355-364, 373-377; llm/openai.rs:43-46; README.md:156]** The `thinking` capability shown in README's config example is never read. The global `[thinking] effort` is sent to every model, even one whose `support_efforts` excludes it, while `/effort` offers on/low/medium/high to a non-reasoning model. update-config.md documents the capability as unused, so this is drift, not a bug.
+- **[config.rs:245-251]** Inside a running session, `/model` to a model with no key advises "export it". Exporting in a shell can't reach the running process; "set api_key … then /reload" would work.
+- **[main.rs:147]** `killi -m` with no value is silently ignored; `killi -m -p "x"` takes `-p` as the model and fails with "unknown argument `x`".
+- **[main.rs:160-179]** `--json` prints nothing on stdout when setup fails (no config, unknown model, missing key, bad `-r` log) or on a signal. README promises "one JSON summary"; eval.py survives only through its `metrics_error` catch.
+- Doc drift: README.md:219 and `/help` (tui/mod.rs:3777) say a recap is "100 characters or fewer", but `RECAP_MAX` is 160 (0.4.19).
+- Doc drift: README.md:194 says "Tab completes", but Tab runs a command like Enter (tui/mod.rs:1310; decisions "Status").
+- Doc drift: README.md:48-49 says "Esc interrupts, and nothing it started keeps running", but background tasks survive Esc, including commands moved to the background by a queued message (decision 37); they stop only when the session ends.
+- Doc drift: update-config.md:16 lists the first-run importers without omp (added 0.4.4), and README's command list never explains `/btw`.
+
+### Checked and fine (one line each)
+- Headless: exit code is 0 only for `Stop::Completed` (MaxTokens, RepeatBreaker and errors give 1); `--json` carries every field `eval.py` (requests, prompt/cached/completion tokens) and `bench.py` (`first_prompt_tokens`) read; stdout holds the model's text and stderr the header, tool lines, notices and trailer.
+- `BUSY_COMMANDS` (btw, plan, swarm on/off, later, sessions, help, effort) matches decision 33. `/effort` mid-turn validates at once and applies at the next `read_input`. Other commands typed mid-turn stay in the prompt with a notice.
+- Plan mode: write/edit/bash are checked at dispatch time, so Shift+Tab mid-batch blocks the next call. `exit_plan_mode` approve, feedback and dismiss match decision 23; subagents can't leave plan mode; compaction re-announces plan and swarm (0.4.17).
+- Swarm on by default, `/swarm`, `/swarm on|off`, and the ON/OFF reminders appended only on a change; `/swarm <task>` adds nothing while the mode is on (decision 47).
+- Peers: at most 3 `tell`s between prompts and 2 `ask`s at once; tells are marked not-from-user; `peer_notes` are cleared on `/new` and `/resume`; `KILLI_PID` refuses self-talk; `killi sessions`, `ask` and `tell` errors are clear.
+- Recap fires only for a completed turn that used tools; it is dropped by any input; failures are silent for the automatic one and shown for `/recap`.
+- `/undo` edge cases: "there is nothing to undo yet", off in HOME and `/` with the reason shown, works outside git, warns once when a peer worked since the snapshot.
+- Edge inputs: an empty or whitespace prompt is ignored; an `@file`-only prompt attaches; a skill with no request sends "Follow the skill."; `/prune N` keeps the newest N plus this session, as the picker's choices do (H owns obs 9: live sessions' logs aren't spared); `/later done N` handles a bad N.
+- intel obs 10: `/reload` keeping hooks, compact_at, plan_allow and swarm_parallel is documented as "next killi start" (update-config.md:95-96, `/reload`'s notice), so it is not a bug. The real bug under it is the `[search]` revert above.
+- First-run import offers Kimi Code, pi, omp and opencode (config.rs:480-499), as README says.
+- A 100 KB pasted prompt sends with no cap and renders; the live transcript prints it whole while a replay folds it after 6 lines (B's call).
+
+### Test gaps (critical behaviors with no test)
+`exit_plan` approve/feedback/dismiss; `dispatch` refusing write/edit/bash in plan mode; `recover()` placeholders; `/undo`'s note to the model; `-c`/`session::list` versus live sessions; `mention::expand` idempotence and contractions; `Setup::set_search` → `start_on`/`reload_agent`; `finish_turn` clearing `steer`; the tool cap versus `MAX_RESULT_CHARS`; `run_once`'s exit-code mapping; `Setup::client` effort restore (`-m` drops the logged effort); `switch_model` with images in history.

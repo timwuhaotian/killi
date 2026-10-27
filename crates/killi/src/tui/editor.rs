@@ -79,13 +79,19 @@ impl Editor {
 
     /// Takes the text out, adding it to history; pasted images are dropped.
     pub fn take(&mut self) -> String {
+        let text = self.take_quiet();
+        if !text.trim().is_empty() && self.history.last() != Some(&text) {
+            self.history.push(text.clone());
+        }
+        text
+    }
+
+    /// Takes the text out without adding it to history, for answers that must not be recalled.
+    pub fn take_quiet(&mut self) -> String {
         let text = std::mem::take(&mut self.text);
         self.cursor = 0;
         self.browsing = None;
         self.images.clear();
-        if !text.trim().is_empty() && self.history.last() != Some(&text) {
-            self.history.push(text.clone());
-        }
         text
     }
 
@@ -238,7 +244,9 @@ impl Editor {
 
     /// The text as rows no wider than `width` after `prompt`, and the cursor's row and column.
     /// Rows break after a space where they can, so words stay whole. Words `/name` that `known`
-    /// accepts are drawn in lagoon, like other commands.
+    /// accepts are drawn in lagoon, like other commands. A tab stays in the text but is laid
+    /// out as the spaces to the next 4-column stop, counted from its line's first column, so
+    /// the row widths and the cursor agree with what the screen shows.
     pub fn render(&self, prompt: &str, width: usize, known: &dyn Fn(&str) -> bool) -> (Vec<String>, usize, usize) {
         let prompt_width = super::text::width(prompt);
         let room = width.saturating_sub(prompt_width).max(1);
@@ -248,16 +256,33 @@ impl Editor {
         let mut offset = 0;
         for (n, line) in self.text.split('\n').enumerate() {
             let lead = if n == 0 { prompt.to_string() } else { " ".repeat(prompt_width) };
-            let chars: Vec<(usize, char, usize)> = line.char_indices().map(|(i, c)| (i, c, c.width().unwrap_or(0))).collect();
+            let mut chars: Vec<(usize, char, usize)> = Vec::new();
+            let mut column = 0;
+            for (i, c) in line.char_indices() {
+                if c == '\t' {
+                    for _ in 0..TAB - column % TAB {
+                        chars.push((i, ' ', 1));
+                    }
+                    column += TAB - column % TAB;
+                } else {
+                    let w = c.width().unwrap_or(0);
+                    chars.push((i, c, w));
+                    column += w;
+                }
+            }
             let bounds: Vec<usize> = std::iter::once(0).chain(row_starts(&chars, room)).chain([chars.len()]).collect();
             for (r, span) in bounds.windows(2).enumerate() {
                 let mut row = String::new();
                 let mut row_width = 0;
                 let mut lit = false;
+                let mut placed = usize::MAX;
                 for &(i, c, w) in &chars[span[0]..span[1]] {
                     // A space that would pass the edge is not drawn: the row ends there.
                     let hanging = c == ' ' && row_width + w > room;
-                    if offset + i == self.cursor {
+                    // The spaces a tab laid out to share its byte offset place the cursor once,
+                    // at the tab's first column, as the cursor on the tab itself.
+                    if offset + i == self.cursor && placed != i {
+                        placed = i;
                         cursor = if hanging { (rows.len() + 1, prompt_width) } else { (rows.len(), prompt_width + row_width) };
                     }
                     if hanging {
@@ -287,6 +312,9 @@ impl Editor {
         (rows, cursor.0, cursor.1)
     }
 }
+
+/// The column a tab in the editor lays out to next.
+const TAB: usize = 4;
 
 /// Where each row of a line after the first begins, as indexes into `chars` (byte offset, char,
 /// width): at the start of the word that would pass `room` columns, or at the character itself
@@ -336,6 +364,17 @@ mod tests {
         e.home();
         e.kill_to_end();
         assert!(e.is_empty());
+    }
+
+    #[test]
+    fn a_quiet_take_leaves_no_history() {
+        let mut e = Editor::default();
+        e.insert("first");
+        e.take();
+        e.insert("sk-secret");
+        assert_eq!(e.take_quiet(), "sk-secret");
+        e.up();
+        assert_eq!(e.text(), "first", "the secret was never history");
     }
 
     #[test]
@@ -415,5 +454,26 @@ mod tests {
         assert_eq!(rows[1], format!("{LAGOON}/pdf{RESET}"));
         let (rows, ..) = e.render("", 7, &|name| name == "pdf");
         assert_eq!(rows[0], format!("a {LAGOON}/pdf{RESET} "));
+    }
+
+    #[test]
+    fn a_tab_lays_out_to_the_next_stop_with_the_cursor_on_it() {
+        let mut e = Editor::default();
+        e.insert("a\tbc");
+        assert_eq!(e.text(), "a\tbc", "the text keeps its tab");
+        let (rows, row, col) = e.render("", 20, &|_| false);
+        assert_eq!(rows, ["a   bc"], "the tab takes the columns to the next 4-column stop");
+        assert_eq!((row, col), (0, 6));
+        e.home();
+        e.right();
+        assert_eq!(e.render("", 20, &|_| false).2, 1, "the cursor after the first character");
+        e.right();
+        assert_eq!(e.render("", 20, &|_| false).2, 4, "and just past the tab, where its spaces end");
+        e.right();
+        assert_eq!(e.render("", 20, &|_| false).2, 5, "and before the character after it");
+        let mut e = Editor::default();
+        e.insert("x\n\ty");
+        let (rows, ..) = e.render("", 20, &|_| false);
+        assert_eq!(rows, ["x", "    y"], "a line's stops count from its own first column");
     }
 }

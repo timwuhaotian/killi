@@ -2,10 +2,12 @@
 //! and the tool list. `/reload` re-reads the prompt and skills; the tools stay as they started.
 //! Both the one-shot mode and the TUI start agents from here.
 
+use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::agent::{Agent, Controls, Settings, Sink};
@@ -65,10 +67,13 @@ impl Setup {
         let mut notes = Vec::new();
         if let Some(gateway) = mcp.definition() {
             tools.push(gateway);
-            let mut eager = config.mcp.eager.clone();
-            eager.extend(project_eager(cwd));
+            // A global eager name whose definition the project's `.mcp.json` replaced is a
+            // project server, not a user one: it needs the trust check below, not a free start.
+            let mut eager: Vec<String> = config.mcp.eager.iter().filter(|name| !mcp.is_project(name)).cloned().collect();
+            let global_project: Vec<String> = config.mcp.eager.iter().filter(|name| mcp.is_project(name)).cloned().collect();
+            eager.extend(trusted_project_eager(cwd, &mcp, &mut notes, &global_project));
             eager.retain(|name| mcp.names().contains(&name.as_str()));
-            eager.dedup();
+            dedupe_eager(&mut eager);
             let (native, problems) = mcp.start_eager(&eager).await;
             tools.extend(native);
             notes.extend(problems);
@@ -101,9 +106,17 @@ impl Setup {
     }
 
     /// Continues a logged session, on the model and effort it last used unless -m chose one.
+    /// The log parses once: the choice comes from the same load the agent replays.
     pub fn resume(&self, log: &Path, controls: Controls, sink: Sink) -> Result<Agent> {
-        let client = self.client(&session::load(log)?.choice)?;
-        Agent::resume(client, &self.cwd, log, self.tools.clone(), self.settings.clone(), controls, sink)
+        let report = session::load_reported(log)?;
+        self.resume_loaded(report, log, controls, sink)
+    }
+
+    /// `resume` from the log's load, so callers that already show it don't parse it again:
+    /// replay the conversation from `report.loaded` first, then move the report here.
+    pub fn resume_loaded(&self, report: session::LoadReport, log: &Path, controls: Controls, sink: Sink) -> Result<Agent> {
+        let client = self.client(&report.loaded.choice)?;
+        Agent::resume_reported(client, &self.cwd, log, report, self.tools.clone(), self.settings.clone(), controls, sink)
     }
 
     /// The -m model at its default effort, else `choice` when the config still has that model,
@@ -132,12 +145,15 @@ impl Setup {
         self.prompt = prompt::build(&self.cwd, &listed, config.guidance());
         self.settings.skills = self.skills.clone();
         self.settings.instruction_files = self.prompt.instruction_files.clone();
+        self.settings.search = config.search.settings();
         self.config = config;
     }
 
-    /// Applies a `[search]` pick from /web-search-config: sessions started later in this run
-    /// of killi begin on it too.
+    /// Applies a `[search]` pick from /web-search-config: the settings stay the single
+    /// source, so this session's agent and the sessions started later in this run of killi
+    /// begin on it too.
     pub fn set_search(&mut self, search: crate::config::SearchConfig) {
+        self.settings.search = search.settings();
         self.config.search = search;
     }
 
@@ -221,9 +237,14 @@ fn known<'a>(config: &Config, choice: &'a Choice) -> Option<&'a str> {
     choice.model.as_deref().filter(|alias| config.models.contains_key(*alias))
 }
 
+/// The project killi runs in: the nearest folder with `.git`, else the working directory.
+fn project_root(cwd: &Path) -> PathBuf {
+    cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd).to_path_buf()
+}
+
 /// `[mcp] eager` from the project's `.killi/config.toml`.
 fn project_eager(cwd: &Path) -> Vec<String> {
-    let root = cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd);
+    let root = project_root(cwd);
     let Ok(text) = std::fs::read_to_string(root.join(".killi/config.toml")) else { return Vec::new() };
     let Ok(table) = toml::from_str::<toml::Table>(&text) else { return Vec::new() };
     table
@@ -232,6 +253,94 @@ fn project_eager(cwd: &Path) -> Vec<String> {
         .and_then(toml::Value::as_array)
         .map(|names| names.iter().filter_map(|n| n.as_str().map(String::from)).collect())
         .unwrap_or_default()
+}
+
+/// The eager list without repeats, keeping the first of each: global eager plus project
+/// eager can name the same server twice, and `Vec::dedup` only removes adjacent repeats.
+fn dedupe_eager(eager: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    eager.retain(|name| seen.insert(name.clone()));
+}
+
+/// Project eager servers killi may start now: the trust store already approves them, or the
+/// user does below. Anything else stays off for this session, with a note saying so, so a
+/// "no" leaves killi fully usable without those servers.
+fn trusted_project_eager(cwd: &Path, mcp: &Mcp, notes: &mut Vec<String>, global_project: &[String]) -> Vec<String> {
+    let root = project_root(cwd);
+    let mut wanted = project_eager(cwd);
+    wanted.extend(global_project.iter().cloned());
+    dedupe_eager(&mut wanted);
+    // (name, what the prompt shows, what the fingerprint hashes)
+    let entries: Vec<(String, String, String)> = wanted
+        .into_iter()
+        .filter(|name| mcp.names().contains(&name.as_str()))
+        .filter_map(|name| Some((name.clone(), mcp.command_line(&name)?, mcp.trust_input(&name)?)))
+        .collect();
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let path_key = root.display().to_string();
+    let fingerprint = trust_fingerprint(&entries.iter().map(|(name, _, input)| (name.clone(), input.clone())).collect::<Vec<_>>());
+    if load_trusted(&trust_store_path()).get(&path_key).is_some_and(|known| *known == fingerprint) {
+        return entries.into_iter().map(|(name, _, _)| name).collect();
+    }
+    if interactive() {
+        // Project-controlled text is shown with escapes and controls stripped, so it
+        // can't overwrite the very command the user is asked to inspect.
+        eprintln!("The project at {} asks killi to run at startup:", shown(&path_key));
+        for (name, line, _) in &entries {
+            eprintln!("  {}: {}", shown(name), shown(line));
+        }
+        if crate::config::confirm("Trust and run these?").unwrap_or(false) {
+            if let Err(error) = save_trusted(&trust_store_path(), &path_key, &fingerprint) {
+                notes.push(format!("Trusted project servers, but could not write {}: {error:#}", trust_store_path().display()));
+            }
+            return entries.into_iter().map(|(name, _, _)| name).collect();
+        }
+    }
+    notes.push(format!("Skipped project servers (untrusted): {}.", entries.iter().map(|(name, _, _)| name.as_str()).collect::<Vec<_>>().join(", ")));
+    Vec::new()
+}
+
+/// Text from a project file made safe to print on the terminal.
+fn shown(text: &str) -> String {
+    crate::tui::text::sanitize(text).into_owned()
+}
+
+/// Whether killi can ask the user now; the first-run guides ask the same way.
+fn interactive() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// Where per-repo startup approvals live.
+fn trust_store_path() -> PathBuf {
+    crate::config::killi_home().join("trusted.json")
+}
+
+/// The fingerprint of the command lines a project would run: any change re-asks.
+fn trust_fingerprint(entries: &[(String, String)]) -> String {
+    // FNV-1a, stable across toolchains, so an approval outlives an update.
+    let mut hash = 0xcbf29ce484222325u64;
+    for (name, line) in entries {
+        for byte in name.bytes().chain([0]).chain(line.bytes()).chain([0]) {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("{hash:016x}")
+}
+
+/// The approvals in `path`: none when it is missing or unreadable.
+fn load_trusted(path: &Path) -> BTreeMap<String, String> {
+    std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+/// Remembers `fingerprint` for `root`, so this project's commands start without asking.
+fn save_trusted(path: &Path, root: &str, fingerprint: &str) -> Result<()> {
+    let mut store = load_trusted(path);
+    store.insert(root.to_string(), fingerprint.to_string());
+    crate::fs_atomic::write(path, serde_json::to_string(&store)?.as_bytes(), None)
+        .with_context(|| format!("could not write {}", path.display()))
 }
 
 #[cfg(test)]
@@ -277,6 +386,86 @@ mod tests {
         assert!(setup.settings.skills.run(&serde_json::json!({"name": "second"})).text.contains("Body of second."));
         assert!(setup.skill_prompt("second", "").is_some());
         assert!(!setup.skills_need_restart());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn search_settings_follow_web_search_config_and_reload() {
+        let root = std::env::temp_dir().join(format!("killi-setup-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let mut setup = setup(&root, Vec::new());
+        assert!(setup.settings.search.provider.is_empty(), "unset before any pick");
+
+        setup.set_search(crate::config::SearchConfig { provider: Some("searxng".into()), url: Some("http://localhost:8888".into()), ..Default::default() });
+        assert_eq!(setup.settings.search.provider, "searxng", "a pick reaches /new through the settings");
+        assert_eq!(setup.settings.search.url.as_deref(), Some("http://localhost:8888"));
+
+        let mut config = fresh_config();
+        config.search = crate::config::SearchConfig { provider: Some("tavily".into()), api_key: Some("k".into()), ..Default::default() };
+        setup.refresh(config);
+        assert_eq!(setup.settings.search.provider, "tavily", "/reload re-derives the re-read config");
+        assert_eq!(setup.settings.search.api_key.as_deref(), Some("k"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn eager_dedup_removes_non_adjacent_repeats() {
+        // Global `eager = ["godot", "blender"]` plus project `eager = ["godot"]`.
+        let mut eager = vec!["godot".to_string(), "blender".to_string(), "godot".to_string()];
+        dedupe_eager(&mut eager);
+        assert_eq!(eager, vec!["godot".to_string(), "blender".to_string()], "a repeated server is defined twice");
+    }
+
+    #[test]
+    fn project_trust_is_keyed_by_repo_and_command_lines() {
+        let root = std::env::temp_dir().join(format!("killi-trust-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("trusted.json");
+        assert!(load_trusted(&path).is_empty(), "a missing store trusts nothing");
+
+        let entries = vec![("t".to_string(), "/bin/serve --port 1".to_string())];
+        let fingerprint = trust_fingerprint(&entries);
+        assert_eq!(trust_fingerprint(&entries), fingerprint);
+        assert_ne!(trust_fingerprint(&[("t".to_string(), "/bin/serve --port 2".to_string())]), fingerprint, "a changed command re-asks");
+        assert_ne!(trust_fingerprint(&[("u".to_string(), "/bin/serve --port 1".to_string())]), fingerprint, "a changed name re-asks");
+
+        let key = root.display().to_string();
+        save_trusted(&path, &key, &fingerprint).unwrap();
+        let store = load_trusted(&path);
+        assert!(store.get(&key).is_some_and(|known| *known == fingerprint), "an approval matches: {store:?}");
+        assert!(!store.get(&format!("{key}-other")).is_some_and(|known| *known == fingerprint), "another repo is not trusted by it");
+        assert!(!store.get(&key).is_some_and(|known| *known == "0000000000000000"), "changed commands no longer match");
+
+        std::fs::write(&path, b"{oops").unwrap();
+        assert!(load_trusted(&path).is_empty(), "a corrupt store trusts nothing");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resume_runs_on_the_logs_model_with_its_conversation() {
+        let root = std::env::temp_dir().join(format!("killi-setup-resume-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("1-1.jsonl");
+        let lines = [
+            serde_json::json!({"type": "session", "model": "test/model"}),
+            serde_json::json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+            serde_json::json!({"type": "message", "message": {"role": "user", "content": "hi"}}),
+        ];
+        std::fs::write(&log, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+        let mut config: Config =
+            toml::from_str("default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n").unwrap();
+        config.skills.dirs = vec!["/nonexistent".to_string()];
+        let skills = Skills::discover(&root, &config.skills.dirs);
+        let prompt = prompt::build(&root, &skills, config.guidance());
+        let settings = Settings { skills: skills.clone(), instruction_files: prompt.instruction_files.clone(), ..Settings::default() };
+        let setup = Setup { config, cwd: root.clone(), model: None, last: Choice::default(), prompt, tools: Vec::new(), settings, skills, notes: Vec::new() };
+        let agent = setup.resume(&log, Controls::default(), Rc::new(|_| {})).unwrap();
+        assert_eq!(agent.model_alias(), "test/model");
+        assert!(agent.user_prompts().iter().any(|p| p == "hi"), "the log's conversation replays");
+        drop(agent);
         std::fs::remove_dir_all(root).unwrap();
     }
 

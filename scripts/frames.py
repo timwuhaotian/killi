@@ -137,6 +137,14 @@ print("4 passed")
 '''
 
 
+def newest_killi():
+    """Whichever of the debug and release binaries is newer; a fixed default goes stale."""
+    built = [p for p in (ROOT / "target/debug/killi", ROOT / "target/release/killi") if p.exists()]
+    if not built:
+        sys.exit("no killi binary yet; run cargo build first")
+    return max(built, key=lambda p: p.stat().st_mtime)
+
+
 def free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -382,7 +390,7 @@ def png(svg_path, width, height):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("out", type=Path, help="the folder to write the SVGs to")
-    parser.add_argument("--killi", default=str(ROOT / "target/release/killi"))
+    parser.add_argument("--killi", default=None, help="killi binary (default: whichever of target/debug/killi and target/release/killi is newer)")
     parser.add_argument("--sizes", nargs="+", default=["118x40", "80x24", "60x24"], metavar="COLSxROWS")
     parser.add_argument("--themes", nargs="+", default=["night"], choices=sorted(THEMES))
     parser.add_argument("--scenes", nargs="+", default=list(SCENES), choices=list(SCENES))
@@ -392,6 +400,9 @@ def main():
     parser.add_argument("--no-color", action="store_true")
     parser.add_argument("--png", action="store_true")
     args = parser.parse_args()
+    if args.killi is None:
+        args.killi = str(newest_killi())
+        print(f"using {args.killi}")
     args.killi = str(Path(args.killi).resolve())
     args.out.mkdir(parents=True, exist_ok=True)
     port = free_port()

@@ -5,6 +5,112 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- Error hints now follow the error's kind and status instead of digits inside its text: a
+  "prompt is too long: 214013 tokens" overflow no longer suggests checking your API key,
+  and a Bedrock-style throttle no longer triggers a needless compaction. Transport errors
+  keep their underlying cause, and unfixable ones (bad URL, TLS failure) fail at once
+  instead of retrying for minutes. A response that isn't an event stream fails on the first
+  attempt and shows its body.
+- A rejected image no longer wedges the session. `read`, paste and drop check the file's
+  magic bytes against its type (a Git LFS pointer now says so instead of failing later);
+  switching to a text-only model replaces images with a short placeholder; and if a
+  provider still rejects one, killi strips the images once, records the rewrite in the log,
+  and retries the turn.
+- Tool results the tools already bounded now reach the model whole instead of being cut to
+  about 5 KB, so `read`'s "continue at offset N" hint points at the right place again.
+  `grep` names the files it skipped for being over 10 MB instead of saying "No matches",
+  and `edit` refuses a file that isn't valid UTF-8 instead of rewriting bytes it can't show.
+- Compaction can't storm anymore: after a compaction it waits for the context to grow by a
+  fifth of the limit before compacting again, a fresh subagent inherits its parent's
+  estimate instead of compacting on step one, and `/model` puts the whole existing
+  conversation back into the estimate.
+- A terminal closed during startup no longer leaves killi spinning at 100% CPU ignoring
+  signals; SIGHUP/SIGTERM are handled on their own thread and the startup read checks the
+  terminal is still there first.
+- Untrusted text (model replies, tool output, todos, questions, peer messages) can no longer
+  drive the terminal: escape sequences are stripped and tabs expanded before styling. Tabs
+  in the prompt lay out correctly, multi-line questions wrap instead of staircasing, and
+  `/name` followed by a non-breaking or ideographic space no longer panics.
+- A retry ends the partial reply cleanly: the discarded fragment is committed as its own
+  block in the conversation and in `-p` output, and notices print after it instead of being
+  glued onto its last line. An unclosed code fence no longer inverts code/prose styling for
+  the rest of the session.
+- A session owns its log: opening a log another live session is writing fails with "session
+  is in use" instead of interleaving two conversations into an unresumable file. `-c`
+  picks the newest log that isn't locked, the `/resume` picker marks running sessions and
+  refuses them, and two sessions started in the same second no longer collide. A resumed
+  session can start subagents again.
+- In-place config edits (the key guide, `/web-search-config`, `/model`'s save) no longer eat
+  the next provider's key: headers with comments or spaces are matched, `[x]` lines inside
+  the `[prompt] system` block are left alone, every edit is re-parsed before writing, and
+  writes are atomic (temp file, sync, rename) so concurrent sessions can't tear them.
+- `/undo` stays available after a failed snapshot (the turn gets a notice instead of disarming
+  undo), a failed undo keeps its snapshot so a retry undoes one turn, restores only touch
+  changed files, and sessions no longer share one git index.
+- A message typed during a turn that ends in an error is no longer silently carried into the
+  next conversation: it comes back into the prompt with "Your queued message wasn't sent;
+  it's back in the prompt." And `/undo` now tells the model what changed (the prompt it
+  restores and the files, capped at 30) instead of "The user interrupted your previous
+  turn", and never reaches across `/new` or `/resume`.
+- Plan mode now holds on the harness side: MCP tool calls are blocked (listing stays allowed),
+  writers hiding behind read-only names (`sort -o`, `git branch -D`, `cargo clippy --fix`,
+  …) are refused, a subagent started in plan mode hears it first, and a resumed log keeps
+  the mode it ended in.
+- Hooks run around `agent` and `agent_swarm` calls too; a hook that blocks one says which
+  call it stopped. The interrupted, MCP and instruction notes are only taken after the
+  prompt-submit hook passes, and a hook that times out stays fail-open with one notice.
+- Small truth-telling fixes: length continuations keep the whole reply (subagent reports and
+  `--json` no longer lose their beginning); the open-todos nudge stays quiet when the reply
+  ends with a question; recovery marks an interrupted tool result; nested `AGENTS.md`
+  discovery follows bash's `cwd`; compaction runs before steered messages are pushed; and the
+  compaction summary says a `/name …` request ran a skill whose text isn't kept.
+- Tool edges: numbers sent as strings work (`read` offset/limit, `bash` timeout,
+  `task_output` wait); `mcp` arguments given as a JSON string are parsed; long `fetch_url`
+  text spills to a file; `summary` only strips the working directory at a `/` boundary;
+  MCP images that can't attach show as `[image omitted: …]`, never raw base64; `later`
+  results are numbered and `done` names the item it removed.
+- `/new` and `/resume` share one reset (queue, todos, totals, peer notes, snapshots, meter),
+  so stale todos and totals no longer leak across conversations. `/compact` updates the
+  context meter and refuses an empty session like `/recap` (as does `/btw`); a `/swarm off`
+  typed mid-turn sticks; no desktop notification follows a turn ended with Esc.
+- `/web-search-config` survives `/new`, `/reload` and `/resume`, and `/reload` says which
+  settings apply at the next start instead. First-run guides can be cancelled: Ctrl+C works
+  and an EOF answer counts as "no" without writing anything.
+- Every error display goes through `gist`, non-JSON error pages show their title or first
+  line, and hints come from the error's kind. The live area sheds the task list before the
+  running call; "Shift+Enter" is only advertised when the kitty protocol is active
+  (Ctrl+J otherwise); at 60 columns the status line keeps the context figure; Ctrl+L
+  resets the inline scroll; `/effort` mid-turn offers the menu levels; a dismissed question
+  is no longer a red error; wrapped code keeps its gutter; Ctrl+S keeps typed `@file`
+  text; an apostrophe before `@file` no longer eats the attachment; secret answers stay out
+  of history.
+- `/prune` skips sessions that are still running. A log torn mid-line gets its newline on
+  open, bad-UTF-8 lines are skipped per line with a notice of how many, and a tool call left
+  without a result gets a placeholder on load. Session logs are 0600 in 0700 folders, as are
+  snapshot repos.
+- A message from another session can no longer break out of its "not from the user" frame,
+  and `@file` contents or tool output containing `</file>` or `<system-reminder>` read as
+  text instead of borrowing killi's authority. The MCP broker only takes orders from its
+  own user, over a socket in a 0700 folder. OpenCode Go drops models whose URLs leave
+  `https://opencode.ai/inference/go/`, provider keys no longer appear in debug output, and
+  a project that wants commands started at launch asks once per repository (remembered by
+  repo path plus a hash of the commands) instead of just running them.
+- The snapshot before a prompt no longer freezes the keys and spinner: it runs on a
+  background thread ("snapshot…" in the live area) while the first request is already
+  going, and the first tool call waits for it. The branch name refreshes at most every few
+  seconds off the main thread, the `@` menu reuses its filter per query, and resuming or
+  continuing parses the chosen log once instead of up to four times.
+- Kills leave nothing behind: every child process group (shell commands, hooks, MCP
+  servers, the browser, `pdftotext`) is covered by one registry, and a panic writes a
+  `crash` line to the session log before the terminal is restored. Updates time out, cap
+  at 64 MB, and prove their version before replacing the binary. The lock file is refreshed
+  (no more yanked `tokio`), releases refuse a dirty tree or a missing changelog entry, and
+  the test suite no longer touches the network, leaves no folders behind, and passes three
+  runs in a row.
+- Whitespace-only assistant text is no longer sent to Anthropic (it rejects it), a
+  Responses refusal ends the turn instead of an empty reply, and a server named twice in
+  eager MCP starts once.
+
 ## 0.4.20 — 2026-10-26
 
 - A running swarm's panel has a blank row above it, so the lines its finished subagents left

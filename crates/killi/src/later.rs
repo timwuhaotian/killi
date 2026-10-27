@@ -27,6 +27,20 @@ pub fn done(cwd: &Path, number: usize) -> Result<String> {
     done_in(&path(cwd), number)
 }
 
+/// The open items numbered as `/later done N` and the `later` tool count them, from 1.
+/// For the `later` tool result in `agent.rs`, which owns that display.
+#[allow(dead_code)]
+pub fn numbered(items: &[String]) -> String {
+    items.iter().enumerate().map(|(i, item)| format!("{}. {item}", i + 1)).collect::<Vec<_>>().join("\n")
+}
+
+/// A `later` call's `done` number, whether sent as a number or a string holding one.
+/// For the `later` tool result in `agent.rs`, which owns that display.
+#[allow(dead_code)]
+pub fn done_arg(args: &serde_json::Value) -> Option<usize> {
+    crate::tools::uint(args, "done").map(|n| n as usize)
+}
+
 fn list_in(file: &Path) -> Vec<String> {
     fs::read_to_string(file)
         .unwrap_or_default()
@@ -59,7 +73,7 @@ fn save(file: &Path, items: &[String]) -> Result<()> {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
     let text: String = items.iter().map(|item| format!("- {item}\n")).collect();
-    fs::write(file, text).with_context(|| format!("could not write {}", file.display()))
+    crate::fs_atomic::write(file, text.as_bytes(), None).with_context(|| format!("could not write {}", file.display()))
 }
 
 #[cfg(test)]
@@ -81,5 +95,21 @@ mod tests {
         assert_eq!(list_in(&file), ["cache the glob"]);
         assert_eq!(fs::read_to_string(&file).unwrap(), "- cache the glob\n");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn items_list_numbered_as_done_counts_them() {
+        assert_eq!(numbered(&["fix it".to_string(), "cache it".to_string()]), "1. fix it\n2. cache it");
+        assert!(numbered(&[]).is_empty());
+    }
+
+    #[test]
+    fn done_accepts_a_number_or_a_string_holding_one() {
+        use serde_json::json;
+        assert_eq!(done_arg(&json!({"done": 3})), Some(3));
+        assert_eq!(done_arg(&json!({"done": "3"})), Some(3));
+        assert_eq!(done_arg(&json!({})), None);
+        assert_eq!(done_arg(&json!({"done": "soon"})), None);
+        assert_eq!(done_arg(&json!({"done": 0})), Some(0));
     }
 }

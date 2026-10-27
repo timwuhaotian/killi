@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::tools::OwnSession;
+use crate::tools::{OwnSession, Tracked, track};
 
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(transparent)]
@@ -39,11 +39,19 @@ pub struct Outcome {
     pub block: Option<String>,
     /// Text the hooks asked to add to the model's context.
     pub context: Vec<String>,
+    /// Commands of hooks that never ran: timed out or failed to start. Staying fail-open,
+    /// the agent shows one notice per hook instead of blocking.
+    pub failures: Vec<String>,
 }
 
 impl HooksConfig {
     pub fn is_empty(&self) -> bool {
         self.0.values().all(Vec::is_empty)
+    }
+
+    /// Whether any hook could see a tool call: reads run side by side only when none could.
+    pub fn has_tool_hooks(&self) -> bool {
+        ["PreToolUse", "PostToolUse"].iter().any(|event| self.0.get(*event).is_some_and(|hooks| !hooks.is_empty()))
     }
 
     /// Runs every hook for `event` whose matcher fits `tool`, in order.
@@ -60,6 +68,7 @@ impl HooksConfig {
             }
             let timeout = Duration::from_secs(hook.timeout.unwrap_or(60));
             let Some((code, stdout, stderr)) = execute(&hook.command, cwd, &input, timeout).await else {
+                outcome.failures.push(hook.command.clone());
                 continue;
             };
             if code == 2 {
@@ -102,23 +111,34 @@ fn matches(matcher: Option<&str>, tool: Option<&str>) -> bool {
 
 /// Ends a hook's whole process group when dropped, unless it finished: a timeout or an
 /// interrupted turn would otherwise kill only the shell and leave what it started running.
-struct Group(Option<u32>);
+/// The group is tracked while the hook runs, so quitting on a signal ends it too.
+struct Group {
+    pgid: Option<u32>,
+    _tracked: Option<Tracked>,
+}
+
+impl Group {
+    fn new(id: Option<u32>) -> Self {
+        Self { pgid: id, _tracked: id.map(track) }
+    }
+}
 
 impl Drop for Group {
     fn drop(&mut self) {
-        if let Some(pgid) = self.0 {
+        if let Some(pgid) = self.pgid {
             // SAFETY: killpg only signals the process group this hook was started in.
             unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
         }
     }
 }
 
-async fn execute(command: &str, cwd: &Path, input: &str, timeout: Duration) -> Option<(i32, String, String)> {
+/// Starts a hook with its input piped, in its own session so its group can be killed whole.
+fn spawn_hook(command: &str, cwd: &Path) -> std::io::Result<tokio::process::Child> {
     let command = match command.strip_prefix("~/") {
         Some(rest) => format!("{}/{rest}", crate::config::home().display()),
         None => command.to_string(),
     };
-    let mut child = Command::new("/bin/sh")
+    Command::new("/bin/sh")
         .arg("-c")
         .arg(&command)
         .current_dir(cwd)
@@ -130,8 +150,11 @@ async fn execute(command: &str, cwd: &Path, input: &str, timeout: Duration) -> O
         .own_session()
         .kill_on_drop(true)
         .spawn()
-        .ok()?;
-    let mut group = Group(child.id());
+}
+
+async fn execute(command: &str, cwd: &Path, input: &str, timeout: Duration) -> Option<(i32, String, String)> {
+    let mut child = spawn_hook(command, cwd).ok()?;
+    let mut group = Group::new(child.id());
     let mut stdin = child.stdin.take();
     // The input is written beside the wait, under the same timeout: a hook that never reads it
     // would otherwise block the write, and the agent, for as long as the hook runs.
@@ -142,7 +165,8 @@ async fn execute(command: &str, cwd: &Path, input: &str, timeout: Duration) -> O
     };
     let (_, output) = tokio::time::timeout(timeout, async { tokio::join!(feed, child.wait_with_output()) }).await.ok()?;
     let output = output.ok()?;
-    group.0 = None;
+    group.pgid = None;
+    group._tracked = None;
     Some((
         output.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -198,6 +222,30 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5), "the timeout did not apply: {:?}", started.elapsed());
         tokio::time::sleep(Duration::from_millis(2500)).await;
         assert!(!marker.exists(), "a process the hook started outlived its timeout");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_running_hook_is_tracked_so_kill_all_covers_it() {
+        use crate::tools::registered;
+
+        let tmp = crate::test_temp::TempDir::new("killi-hook-track");
+        let mut child = spawn_hook("sleep 30", tmp.path()).unwrap();
+        let pgid = child.id().unwrap();
+        {
+            let _group = Group::new(child.id());
+            assert!(registered(pgid), "the hook's group is tracked while the hook runs");
+        }
+        assert!(!registered(pgid), "a finished hook unregisters its group");
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+
+    #[test]
+    fn tool_hooks_are_detected() {
+        assert!(!config("[hooks]\n").has_tool_hooks());
+        assert!(!config("[[hooks.SessionStart]]\ncommand = ':'\n").has_tool_hooks());
+        assert!(config("[[hooks.PreToolUse]]\ncommand = ':'\n").has_tool_hooks());
+        assert!(config("[[hooks.PostToolUse]]\ncommand = ':'\n").has_tool_hooks());
     }
 
     #[tokio::test(flavor = "current_thread")]

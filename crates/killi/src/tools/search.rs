@@ -105,6 +105,36 @@ impl SearchErrors {
     }
 }
 
+/// Files `grep` didn't open because they were over [`MAX_FILE_SIZE`]; the note points at
+/// bash, like `read`'s too-large advice.
+#[derive(Default)]
+struct SkippedLarge {
+    count: usize,
+    examples: Vec<String>,
+}
+
+impl SkippedLarge {
+    fn record(&mut self, cwd: &Path, path: &Path) {
+        self.count += 1;
+        if self.examples.len() < 3 {
+            self.examples.push(path.strip_prefix(cwd).unwrap_or(path).display().to_string());
+        }
+    }
+
+    fn note(&self) -> Option<String> {
+        (self.count > 0).then(|| {
+            format!(
+                "Skipped {} file{} over {} MB: {}{} — search them with bash (`rg`/`grep`).",
+                self.count,
+                if self.count == 1 { "" } else { "s" },
+                MAX_FILE_SIZE / (1024 * 1024),
+                self.examples.join(", "),
+                if self.count > self.examples.len() { " …" } else { "" }
+            )
+        })
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Stop {
     Limit,
@@ -306,8 +336,8 @@ fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
         Some("count") => Mode::Count,
         _ => Mode::Content,
     };
-    let context = args.get("context").and_then(Value::as_u64).map_or(0, |c| c.min(MAX_CONTEXT) as usize);
-    let limit = args.get("limit").and_then(Value::as_u64).map_or(DEFAULT_MATCHES, |l| l.max(1) as usize);
+    let context = super::uint(args, "context").map_or(0, |c| c.min(MAX_CONTEXT) as usize);
+    let limit = super::uint(args, "limit").map_or(DEFAULT_MATCHES, |l| l.max(1) as usize);
     let walk = match walker(root, args.get("glob").and_then(Value::as_str)) {
         Ok(walk) => walk,
         Err(message) => return Output::error(message),
@@ -318,6 +348,7 @@ fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
     let mut files = 0;
     let mut notes = Vec::new();
     let mut errors = SearchErrors::default();
+    let mut skipped = SkippedLarge::default();
     let mut scanned_files = 0;
     let mut scanned_bytes = 0_u64;
     let mut scan_limited = false;
@@ -341,6 +372,7 @@ fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
             }
         };
         if metadata.len() > MAX_FILE_SIZE {
+            skipped.record(cwd, entry.path());
             continue;
         }
         if scanned_files == MAX_SCAN_FILES || scanned_bytes.saturating_add(metadata.len()) > MAX_SCAN_BYTES {
@@ -447,10 +479,13 @@ fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
     if scan_limited {
         notes.push(format!("Search incomplete: internal scan work limit reached ({MAX_SCAN_FILES} files or 1GiB); narrow the pattern or path."));
     }
+    if let Some(note) = skipped.note() {
+        notes.push(note);
+    }
     if let Some(note) = errors.note() {
         notes.push(note);
     }
-    let incomplete = scan_limited || errors.count > 0;
+    let incomplete = scan_limited || errors.count > 0 || skipped.count > 0;
     if matches == 0 {
         let mut text = "No matches found.".to_string();
         if !notes.is_empty() {
@@ -554,30 +589,14 @@ mod tests {
     use serde_json::json;
 
     /// A small tree of files, removed when it goes out of scope.
-    struct Tree(PathBuf);
-
-    impl std::ops::Deref for Tree {
-        type Target = PathBuf;
-        fn deref(&self) -> &PathBuf {
-            &self.0
-        }
-    }
-
-    impl Drop for Tree {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn tree() -> Tree {
-        let dir = std::env::temp_dir().join(format!("killi-search-{}-{:?}", std::process::id(), std::thread::current().id()));
-        let _ = std::fs::remove_dir_all(&dir);
+    fn tree() -> crate::test_temp::TempDir {
+        let dir = crate::test_temp::TempDir::new("killi-search");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         std::fs::write(dir.join("src/a.rs"), "fn alpha() {}\nfn beta() {}\n").unwrap();
         std::fs::write(dir.join("notes.txt"), "alpha notes\n").unwrap();
         std::fs::write(dir.join(".git/config"), "alpha\n").unwrap();
-        Tree(dir)
+        dir
     }
 
     #[test]
@@ -672,6 +691,32 @@ mod tests {
         let out = grep_blocking(&dir, &dir, &json!({"pattern": "alpha", "glob": "*.txt"}));
         assert!(out.text.contains("lossy.txt:1: alpha �"), "{}", out.text);
         assert!(!out.text.contains("binary.txt"));
+    }
+
+    #[test]
+    fn grep_names_files_it_skipped_for_size() {
+        let dir = tree();
+        use std::io::Write;
+        let big = dir.join("big.log");
+        let mut file = File::create(&big).unwrap();
+        file.write_all(b"needle\n").unwrap();
+        file.set_len(MAX_FILE_SIZE + 1).unwrap();
+        let out = grep_blocking(&dir, &dir, &json!({"pattern": "needle"}));
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("No matches found."), "{}", out.text);
+        assert!(
+            out.text.contains("Skipped 1 file over 10 MB: big.log — search them with bash (`rg`/`grep`)."),
+            "{}",
+            out.text
+        );
+        let out = grep_blocking(&dir, &dir, &json!({"pattern": "alpha"}));
+        assert!(!out.is_error, "{}", out.text);
+        assert!(out.text.contains("notes.txt:1: alpha notes"), "{}", out.text);
+        assert!(
+            out.text.ends_with("[Skipped 1 file over 10 MB: big.log — search them with bash (`rg`/`grep`).]"),
+            "{}",
+            out.text
+        );
     }
 
     #[test]
