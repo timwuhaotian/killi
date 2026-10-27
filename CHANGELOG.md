@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.5.2 — 2026-10-26
+
+- `/backup-model <alias>` sets this session's fallback: when the primary model exhausts its
+  retries on a 429 rate limit (not a spent quota, which resets on its own), the session switches
+  to the backup and carries the conversation on. The pick lives in the session's log — a resumed
+  session keeps it, a new one starts without it. `/backup-model none` clears it; the status line
+  shows `backup <alias>` while one is set.
+
 ## 0.5.1 — 2026-10-27
 
 - Interrupting a swarm no longer throws away the subagents that already finished: their
