@@ -36,11 +36,11 @@ pub(super) fn base64(bytes: &[u8]) -> String {
 /// A desktop notification, `headline` over a line of `detail`: the terminal's own when it
 /// supports OSC 9 (Kil, iTerm2, WezTerm, Ghostty, kitty show it in their name, so a click
 /// comes back to the pane), otherwise macOS's through `osascript`, relayed by the app the
-/// terminal runs in where that app takes the telling.
+/// terminal runs in where that app takes the telling. Kil's version is not consulted: a pane
+/// outlives the app, and its shell keeps the `TERM_PROGRAM_VERSION` it started with.
 pub(super) fn notify(headline: &str, detail: &str) {
     let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    let kil = program == "kil" && kil_takes_osc9(&std::env::var("TERM_PROGRAM_VERSION").unwrap_or_default());
-    if kil || ["iTerm.app", "WezTerm", "ghostty"].contains(&program.as_str()) || std::env::var_os("KITTY_WINDOW_ID").is_some() {
+    if shows_osc9(&program, std::env::var_os("KITTY_WINDOW_ID").is_some()) {
         let mut out = stdout();
         let _ = write!(out, "{}", osc9_sequence(headline, detail));
         let _ = out.flush();
@@ -54,6 +54,11 @@ pub(super) fn notify(headline: &str, detail: &str) {
             let _ = child.wait();
         });
     }
+}
+
+/// Whether the terminal named by `TERM_PROGRAM` (or kitty, by its window id) shows OSC 9 itself.
+pub(super) fn shows_osc9(program: &str, kitty: bool) -> bool {
+    kitty || ["kil", "iTerm.app", "WezTerm", "ghostty"].contains(&program)
 }
 
 /// The OSC 9 sequence showing `headline` over `detail`: both are sanitized, so model text
@@ -119,14 +124,6 @@ pub(super) fn first_line(text: &str, chars: usize) -> String {
     }
     let cut: String = line.chars().take(chars - 1).collect();
     format!("{}…", cut.trim_end())
-}
-
-/// Whether this Kil shows OSC 9 notifications itself and goes to the pane when one is
-/// clicked: from 0.0.11. Older ones fall back to the `osascript` path.
-pub(super) fn kil_takes_osc9(version: &str) -> bool {
-    let mut parts = version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
-    let v = (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0));
-    v >= (0, 0, 11)
 }
 
 /// The bundle id of the app the terminal runs in: what macOS puts in the environment of

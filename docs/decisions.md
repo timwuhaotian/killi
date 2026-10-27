@@ -180,7 +180,7 @@ Goals: minimal install size, minimal tokens per request, minimal memory per sess
 
 27. **macOS only.** Defaults accepted:
     - Images only (PNG, JPG, GIF, WebP, shrunk before sending); no video or audio in version 1.
-    - Notifications use the terminal's notification escape code when supported, otherwise `osascript`. A notification carries the outcome and turn length over the first line of the reply (or the question asked), so it says what happened, not only "Done".
+    - Notifications use the terminal's notification escape code when supported, otherwise `osascript` (whose notifications belong to Script Editor). Kil always gets the escape code and its version is not checked: a Kil pane outlives the app, and its shell keeps the `TERM_PROGRAM_VERSION` it started with, so a version gate sent restored panes to `osascript`. A notification carries the outcome and turn length over the first line of the reply (or the question asked), so it says what happened, not only "Done".
     - Headless mode: `killi -p "prompt"`, with `--json` adding a summary for `killi eval`.
     - Install and update across the user's 2–3 Macs, in the same style as `kil`:
       - `scripts/release.sh` builds the arm64 binary into `releases/killi-arm64` and writes `releases/latest.toml` (version, SHA-256).

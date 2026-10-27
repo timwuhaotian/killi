@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.4 — 2026-10-27
+
+- Notifications in Kil are always Kil's own, never Script Editor's. killi no longer checks
+  Kil's version before sending the terminal notification: a Kil pane outlives the app, and its
+  shell keeps the `TERM_PROGRAM_VERSION` it started with, so a pane from before Kil 0.0.11
+  sent every notification through `osascript` (whose notifications open Script Editor when
+  clicked) even on a current Kil.
+
 ## 0.6.3 — 2026-10-27
 
 - The working rows name the turn's action instead of the `killi` wordmark: the braille wave

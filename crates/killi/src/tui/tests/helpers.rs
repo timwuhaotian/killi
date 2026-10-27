@@ -1,6 +1,6 @@
 use super::*;
 use super::super::commands::is_command;
-use super::super::notify::{base64, kil_takes_osc9, notification_args, osc9_sequence};
+use super::super::notify::{base64, notification_args, shows_osc9, osc9_sequence};
 use super::super::picker::{PickerChoice, prune_choices, search_options};
 use super::super::run::wants_recap;
 use super::super::start::{crash_line, parse_background, parse_ground};
@@ -74,12 +74,10 @@ fn a_notification_cannot_break_out_of_its_sequence_or_script() {
     }
 
     #[test]
-    fn kil_gets_osc9_notifications_from_the_version_that_shows_them() {
-        assert!(!kil_takes_osc9("0.0.10"));
-        assert!(!kil_takes_osc9(""));
-        assert!(kil_takes_osc9("0.0.11"));
-        assert!(kil_takes_osc9("0.1.0"));
-        assert!(kil_takes_osc9("1.0"));
+    fn kil_gets_osc9_whatever_version_its_pane_remembers() {
+        assert!(shows_osc9("kil", false));
+        assert!(shows_osc9("", true));
+        assert!(!shows_osc9("Apple_Terminal", false));
     }
 
     #[test]
