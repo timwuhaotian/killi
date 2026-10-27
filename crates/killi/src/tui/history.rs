@@ -66,6 +66,9 @@ pub struct History {
     width: usize,
     /// Every entry's rows, never two blank ones in a row.
     rows: Vec<String>,
+    /// Bumped whenever `rows` is laid out again: a row index taken before then names another row
+    /// or none, so a selection made on the old layout is dropped.
+    epoch: u64,
     /// How many rows the view is scrolled back from the newest; 0 follows the conversation.
     back: usize,
     /// Where the banner starts in `entries` and how many entries it has, while they are kept.
@@ -103,6 +106,7 @@ impl History {
     /// Lays every entry out again for the current width.
     fn layout(&mut self) {
         self.rows.clear();
+        self.epoch += 1;
         for entry in &self.entries {
             for row in entry.render(self.width) {
                 if !(row.is_empty() && self.rows.last().is_some_and(String::is_empty)) {
@@ -122,12 +126,24 @@ impl History {
     }
 
     pub fn clear(&mut self) {
+        let epoch = self.epoch + 1;
         *self = Self::new(self.width);
+        self.epoch = epoch;
+    }
+
+    /// The layout's number; see `epoch`.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     #[cfg(test)]
     pub fn rows(&self) -> &[String] {
         &self.rows
+    }
+
+    /// The row at `index`, as laid out.
+    pub fn row(&self, index: usize) -> Option<&str> {
+        self.rows.get(index).map(String::as_str)
     }
 
     /// Every row, for leaving the screen with the conversation printed above the prompt.
@@ -151,8 +167,14 @@ impl History {
     /// The rows a view `height` tall shows: the newest that fit, or those a scrolled-back view
     /// ends on. Fewer than `height` when the conversation is shorter.
     pub fn view(&self, height: usize) -> &[String] {
+        let (first, end) = self.span(height);
+        &self.rows[first..end]
+    }
+
+    /// The first row and the end of what `view(height)` shows, as indices into the rows.
+    pub fn span(&self, height: usize) -> (usize, usize) {
         let end = self.rows.len() - self.below(height);
-        &self.rows[end.saturating_sub(height)..end]
+        (end.saturating_sub(height), end)
     }
 
     /// Rows under a view `height` tall.
@@ -300,5 +322,43 @@ mod tests {
         history.banner_ends();
         rows(2, KEPT + DROPPED_AT_ONCE).into_iter().for_each(|entry| history.push(entry));
         assert!(history.cut_banner().is_none());
+    }
+
+    #[test]
+    fn the_span_of_a_view_names_the_rows_it_shows() {
+        let mut history = history(80, rows(0, 10));
+        assert_eq!(history.span(4), (6, 10));
+        assert_eq!(history.row(6), Some("row 6"));
+        history.scroll_up(3, 4);
+        let (first, end) = history.span(4);
+        assert_eq!(history.view(4), (first..end).map(|i| history.row(i).unwrap()).collect::<Vec<_>>());
+        assert_eq!(history.row(10), None);
+    }
+
+    #[test]
+    fn the_layout_changes_when_rows_move_and_not_when_they_are_added() {
+        let mut history = history(80, rows(0, 3));
+        let laid_out = history.epoch();
+        rows(3, 5).into_iter().for_each(|entry| history.push(entry));
+        history.restore(rows(5, 6));
+        assert_eq!(history.epoch(), laid_out, "appended rows keep every index");
+        history.set_width(40);
+        assert_ne!(history.epoch(), laid_out);
+        let relaid = history.epoch();
+        history.set_width(40);
+        assert_eq!(history.epoch(), relaid, "the same width lays nothing out again");
+        history.clear();
+        assert!(history.epoch() > relaid, "a cleared conversation is not the one before");
+    }
+
+    #[test]
+    fn cutting_the_banner_lays_the_rows_out_again() {
+        let mut history = History::new(80);
+        history.banner_starts();
+        rows(0, 2).into_iter().for_each(|entry| history.push(entry));
+        history.banner_ends();
+        let laid_out = history.epoch();
+        history.cut_banner();
+        assert_ne!(history.epoch(), laid_out);
     }
 }

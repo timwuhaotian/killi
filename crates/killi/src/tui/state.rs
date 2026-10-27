@@ -218,6 +218,10 @@ pub(super) struct App {
     pub(super) history: History,
     /// The rows the conversation had on screen at the last paint, for PageUp and PageDown.
     pub(super) view_rows: usize,
+    /// Fullscreen mode: the text a drag selected in the conversation, if any.
+    pub(super) selection: Option<Selection>,
+    /// The pointer's (row, column) while the button is held after a press in the conversation.
+    pub(super) drag: Option<(usize, usize)>,
     /// Whether the banner says it is a resumed session, for drawing it again.
     pub(super) banner_resumed: bool,
     /// When the branch was last read, so two git spawns don't run after every input.

@@ -5,7 +5,8 @@
 //! In fullscreen mode (`[ui] fullscreen`, on by default in Kil) killi takes the alternate
 //! screen instead: the live area stays on the bottom rows, the conversation scrolls above it
 //! (wheel, PageUp and PageDown) and is laid out again whenever the window changes size. It is
-//! kept in `history`, and printed to the terminal once more when killi quits.
+//! kept in `history`, and printed to the terminal once more when killi quits. A drag across it
+//! selects text, which is copied when the button is let go (`select`).
 
 mod app;
 pub(crate) mod banner;
@@ -26,6 +27,7 @@ mod picker;
 mod peers;
 mod rows;
 mod run;
+mod select;
 mod start;
 mod state;
 mod swarm;
@@ -46,7 +48,7 @@ use anyhow::Result;
 use crossterm::cursor::{Hide, MoveDown, MoveTo, MoveToColumn, MoveUp, Show};
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
     self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
@@ -81,6 +83,7 @@ use notify::{copy_to_clipboard, first_line, notify};
 use picker::{Picker, SearchFlow};
 use rows::{ask_rows, aside_rows, choice_rows, diff_rows, first_sentence, handoff, help_rows, hidden_row, hint_row, is_bookkeeping, key_hints, label, overview_rows, placeholder, prompt_rows, queued_row, question_rows, recap_rows, rule, shorten_path, snapshot_word, tilde, title_rule, tool_summary, tool_text, working_rows, wrap_items};
 use run::{handle_command, next_incoming, peer_label, prompt_turn};
+use select::Selection;
 use start::{CURSOR_ROW, ENHANCED, RESUMED, TerminalGuard, leave_fullscreen, query_ground, resume_command, resumed, terminal_gone, wants_fullscreen};
 use state::{App, Asking, Ended, Idle, Input, Kind, LastEnd, PastAsk, PeerAnswer, PendingAside, Running, SinceBanner, Status, Totals};
 use undo::{restore_steered, undo_empty, undo_note, undo_paths};

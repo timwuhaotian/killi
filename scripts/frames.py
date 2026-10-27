@@ -13,7 +13,8 @@ drawn as Kil draws it, each channel scaled to two thirds. Scenes: start, menu, f
 menu), picker, conv (a bug fix with a diff), question, plan, busy (mid-turn), swarm and swarm-big (an
 `agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), peers (the banner
 with another session in the repository), sessions (`/sessions`) and peer (that session's question and
-message arriving through `killi ask` and `killi tell`). `--inline` runs killi as it runs outside
+message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
+selection in reverse video). `--inline` runs killi as it runs outside
 Kil, in the terminal's scrollback; `--colors 256` hides COLORTERM; `--no-osc` never answers the
 color queries, like a terminal that doesn't know them; `--no-color` sets NO_COLOR.
 
@@ -60,6 +61,7 @@ SCENES = {
     "files": dict(keys=["fix @sl"]),
     "picker": dict(keys=["/model\r"]),
     "conv": dict(keys=[FIX], until="ask, or /"),
+    "select": dict(keys=[FIX, "IDLE", "MOUSE:press:14:0", "MOUSE:drag:9:40", "MOUSE:wheel-up:9:40", "MOUSE:wheel-up:9:40", "MOUSE:up:9:40"]),
     "question": dict(keys=["QUESTION please\r"], until="Esc dismisses"),
     "plan": dict(keys=["\x1b[Z", "add a flag"]),
     "busy": dict(keys=[FIX, "WAIT:1.5", "also keep it small"], settle=0.2),
@@ -170,6 +172,13 @@ class Scratch:
         (self.project / "slug.py").write_text(SLUG)
         (self.project / "test_slug.py").write_text(TEST)
         (self.project / "shot.png").write_bytes(PNG)
+        # killi copies a selection through pbcopy, which here writes to a file instead, so a
+        # scene never touches the real clipboard.
+        self.bin = self.dir / "bin"
+        self.bin.mkdir()
+        self.clipboard = self.dir / "clipboard.txt"
+        (self.bin / "pbcopy").write_text(f'#!/bin/sh\ncat > "{self.clipboard}"\n')
+        (self.bin / "pbcopy").chmod(0o755)
         git = ["git", "-c", "user.email=a@b", "-c", "user.name=a"]
         subprocess.run(["git", "init", "-q", "-b", "master"], cwd=self.project, check=True)
         subprocess.run([*git, "add", "-A"], cwd=self.project, check=True)
@@ -182,6 +191,7 @@ class Scratch:
         for name in ("sessions", "snapshots", "live"):
             shutil.rmtree(self.home / ".killi" / name, ignore_errors=True)
         (self.home / ".killi" / "last-model.json").unlink(missing_ok=True)
+        self.clipboard.unlink(missing_ok=True)
 
     def close(self):
         shutil.rmtree(self.dir, ignore_errors=True)
@@ -207,6 +217,24 @@ def hold_peer(scratch):
     return held
 
 
+MOUSE_CODES = {"press": (0, "M"), "drag": (32, "M"), "up": (0, "m"), "wheel-up": (64, "M"), "wheel-down": (65, "M")}
+
+
+def mouse_report(kind, row, column):
+    """The SGR report (1006) of a button or wheel event at a 0-based cell."""
+    code, final = MOUSE_CODES[kind]
+    return f"\x1b[<{code};{column + 1};{row + 1}{final}"
+
+
+def cell(c):
+    """A screen cell as the SVG draws it. Reverse video swaps the ink and the background, and a
+    default one stands for the theme's own (`background` or `foreground`)."""
+    fg, bg = c.fg, c.bg
+    if c.reverse:
+        fg, bg = (bg if bg != "default" else "background"), (fg if fg != "default" else "foreground")
+    return (c.data, fg, bg, c.bold, c.blink)
+
+
 def run_scene(args, scratch, scene, cols, rows, theme):
     """Runs killi through `scene` and returns the screen as rows of (char, fg, bg, bold, dim)."""
     background, foreground, _ = THEMES[theme]
@@ -218,6 +246,7 @@ def run_scene(args, scratch, scene, cols, rows, theme):
         fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         env = {k: v for k, v in os.environ.items() if k not in ("COLORFGBG", "COLORTERM", "NO_COLOR", "TERM_PROGRAM")}
         env.update(TERM="xterm-256color", HOME=str(scratch.home), TERM_PROGRAM="frames" if args.inline else "kil")
+        env["PATH"] = f"{scratch.bin}{os.pathsep}{env.get('PATH', '')}"
         if args.colors == "truecolor":
             env["COLORTERM"] = "truecolor"
         if args.no_color:
@@ -278,6 +307,16 @@ def run_scene(args, scratch, scene, cols, rows, theme):
             path = str(scratch.project / key[5:]).replace(" ", "\\ ")
             os.write(fd, f"\x1b[200~{path} \x1b[201~".encode())
             pump(0.6)
+        elif key == "IDLE":
+            # Waits for the turn to end: the prompt is back and nothing says it is working.
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline and not ("ask, or /" in shown() and "Esc to interrupt" not in shown()):
+                pump(0.3)
+        elif key.startswith("MOUSE:"):
+            # MOUSE:<press|drag|up|wheel-up|wheel-down>:<row>:<column>, 0-based as killi reads them.
+            kind, row, column = key[6:].split(":")
+            os.write(fd, mouse_report(kind, int(row), int(column)).encode())
+            pump(0.3)
         else:
             os.write(fd, key.encode())
             pump(0.6)
@@ -288,7 +327,7 @@ def run_scene(args, scratch, scene, cols, rows, theme):
             if until in shown() and "Esc to interrupt" not in shown():
                 break
     pump(scene.get("settle", 1.5))
-    cells = [[(c.data, c.fg, c.bg, c.bold, c.blink) for c in (screen.buffer[y][x] for x in range(cols))] for y in range(rows)]
+    cells = [[cell(screen.buffer[y][x]) for x in range(cols)] for y in range(rows)]
     try:
         os.write(fd, b"\x1b")
         pump(0.2)
@@ -317,6 +356,10 @@ def svg(cells, theme):
     def color(name, default):
         if name == "default":
             return default
+        if name == "background":
+            return bg
+        if name == "foreground":
+            return fg
         if name in ANSI_NAMES:
             return palette[ANSI_NAMES.index(name)]
         if name.startswith("bright") and name[6:] in ANSI_NAMES:

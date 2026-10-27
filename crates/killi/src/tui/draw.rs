@@ -169,13 +169,14 @@ impl App {
         if RESUMED.swap(false, Ordering::Relaxed) {
             self.shown.clear();
         }
+        self.forget_stale();
         let (live, cursor_row, cursor_col) = self.live();
         let cut = live.len().saturating_sub(self.height);
         let (live, cursor_row) = (&live[cut..], cursor_row.saturating_sub(cut));
         let area = self.height - live.len();
         let scrolled = self.history.below(area) > 0 && area > 1;
         let view = area - usize::from(scrolled);
-        let mut rows: Vec<String> = self.history.view(view).iter().map(|row| text::plain(row).into_owned()).collect();
+        let mut rows = self.view_lines(view);
         rows.resize(view, String::new());
         if scrolled {
             let below = self.history.below(view);

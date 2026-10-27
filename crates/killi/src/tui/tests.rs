@@ -40,7 +40,7 @@ mod rows;
     }
 
     /// An `App` that never touched a terminal: events go to `pending`, which the tests read.
-    fn test_app() -> App {
+    pub(super) fn test_app() -> App {
         App {
             out: stdout(),
             width: 80,
@@ -106,6 +106,8 @@ mod rows;
             fullscreen: false,
             history: History::new(80),
             view_rows: 24,
+            selection: None,
+            drag: None,
             banner_resumed: false,
             branch_at: None,
             live: None,

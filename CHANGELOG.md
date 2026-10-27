@@ -5,6 +5,20 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- While another killi session works in the same git work tree, tree-moving git
+  commands (`checkout`, `switch`, `restore`, `reset`, `clean`, and `stash` other
+  than `stash list`/`show`) are refused instead of run: use a separate git
+  worktree or run the command yourself. Subagents are guarded too; `[agent]
+  peers = false` turns the guard off.
+
+## 0.6.7 — 2026-10-27
+
+- Fullscreen mode selects its own text now: a drag across the conversation
+  highlights it in reverse video and letting go copies it, across scrolled
+  pages and while the agent works. A drag held at the edge scrolls on its
+  own. Needs a terminal that reports drags; Kil's half (forwarding them,
+  Shift+drag staying native) follows in Kil 0.0.19.
+
 ## 0.6.6 — 2026-10-27
 
 - The `osascript` notification fallback is plain again: wrapping it in

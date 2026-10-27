@@ -20,10 +20,18 @@ impl App {
             self.recap = None;
             return Ok(Some(Input::Prompt(text, images)));
         }
+        let mut edge = tokio::time::interval(Duration::from_millis(50));
+        edge.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             let event = tokio::select! {
                 event = keys.next() => event,
                 () = resumed() => {
+                    self.draw()?;
+                    continue;
+                }
+                // A drag held at the conversation's edge keeps scrolling it, while the pointer stays.
+                _ = edge.tick(), if self.edge_scrolling() => {
+                    self.edge_scroll();
                     self.draw()?;
                     continue;
                 }
@@ -79,10 +87,11 @@ impl App {
                 return Idle::Continue;
             }
             TermEvent::Mouse(mouse) => {
-                self.on_wheel(mouse.kind);
+                self.on_mouse(mouse);
                 return Idle::Continue;
             }
             TermEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                self.clear_selection();
                 if !self.page_key(&key) {
                     self.history.follow();
                 }
@@ -127,15 +136,6 @@ impl App {
             _ => self.edit_key(key),
         }
         Idle::Continue
-    }
-
-    /// The wheel scrolls the conversation, three rows a notch; fullscreen mode only.
-    pub(super) fn on_wheel(&mut self, kind: MouseEventKind) {
-        match kind {
-            MouseEventKind::ScrollUp => self.scroll(-3),
-            MouseEventKind::ScrollDown => self.scroll(3),
-            _ => {}
-        }
     }
 
     /// PageUp and PageDown scroll the conversation by a page, fullscreen mode only. False for

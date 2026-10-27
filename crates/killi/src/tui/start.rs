@@ -163,8 +163,9 @@ impl TerminalGuard {
 
 /// Puts the terminal in the state the UI needs: raw mode, bracketed paste, disambiguated
 /// escape codes when the terminal knows them, and in fullscreen mode the alternate screen with
-/// button and wheel reports (1000) in the SGR form (1006); crossterm's own `EnableMouseCapture`
-/// also asks for 1003, a report of every pointer move.
+/// button, wheel and drag reports (1002, which reports the pointer only while a button is held)
+/// in the SGR form (1006); crossterm's own `EnableMouseCapture` also asks for 1003, a report of
+/// every pointer move.
 fn take_terminal(fullscreen: bool, enhanced: bool) -> Result<()> {
     terminal::enable_raw_mode()?;
     let mut out = stdout();
@@ -175,7 +176,7 @@ fn take_terminal(fullscreen: bool, enhanced: bool) -> Result<()> {
     }
     if fullscreen {
         execute!(out, EnterAlternateScreen, Clear(ClearType::All), MoveTo(0, 0))?;
-        write!(out, "\x1b[?1000h\x1b[?1006h")?;
+        write!(out, "\x1b[?1002h\x1b[?1006h")?;
         out.flush()?;
         FULLSCREEN.store(true, Ordering::Relaxed);
     }
@@ -277,7 +278,7 @@ fn suspend_cleanly() {
 /// Ends mouse reports and leaves the alternate screen, if the UI is on it.
 pub(super) fn leave_fullscreen(out: &mut impl Write) {
     if FULLSCREEN.swap(false, Ordering::Relaxed) {
-        let _ = write!(out, "\x1b[?1006l\x1b[?1000l");
+        let _ = write!(out, "\x1b[?1006l\x1b[?1002l");
         let _ = execute!(out, LeaveAlternateScreen);
     }
 }

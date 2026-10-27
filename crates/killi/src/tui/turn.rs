@@ -33,10 +33,11 @@ impl App {
                 return false;
             }
             TermEvent::Mouse(mouse) => {
-                self.on_wheel(mouse.kind);
+                self.on_mouse(mouse);
                 return false;
             }
             TermEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                self.clear_selection();
                 if !self.page_key(&key) {
                     self.history.follow();
                 }

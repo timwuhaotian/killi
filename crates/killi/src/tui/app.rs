@@ -74,6 +74,8 @@ impl App {
             fullscreen: false,
             history: History::new(usize::from(columns).max(20)),
             view_rows: usize::from(rows).max(5),
+            selection: None,
+            drag: None,
             banner_resumed: false,
             branch_at: None,
             live: None,

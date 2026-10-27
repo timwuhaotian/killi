@@ -33,6 +33,8 @@ where
 {
     let mut future = Box::pin(future);
     let mut tick = tokio::time::interval(Duration::from_millis(100));
+    let mut edge = tokio::time::interval(Duration::from_millis(50));
+    edge.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // A /btw question asked meanwhile; the turn waits for its answer before it ends.
     let mut aside: Option<PendingAside> = None;
     let mut done = None;
@@ -62,6 +64,7 @@ where
                 app.show_aside(&question, answer);
             }
             _ = tick.tick() => app.spinner += 1,
+            _ = edge.tick(), if app.edge_scrolling() => app.edge_scroll(),
         }
         if aside.is_none()
             && let Some(result) = done.take()
