@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.5.0 — 2026-10-27
+
 - Error hints now follow the error's kind and status instead of digits inside its text: a
   "prompt is too long: 214013 tokens" overflow no longer suggests checking your API key,
   and a Bedrock-style throttle no longer triggers a needless compaction. Transport errors
