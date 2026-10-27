@@ -216,11 +216,10 @@ impl App {
         }
         if let Some(asking) = &self.asking {
             let names: Vec<String> = asking.question.options.iter().enumerate().map(|(i, o)| format!("{}. {}", i + 1, text::sanitize_row(o))).collect();
-            let options: Vec<(&str, &str)> = names.iter().map(|name| (name.as_str(), "")).collect();
-            let visible = options.len().min(room.max(1));
-            rows.extend(choice_rows(&options, asking.selected.min(options.len().saturating_sub(1)), visible, width, width));
+            let visible = names.len().min(room.max(1));
+            rows.extend(ask_rows(&names, asking.selected.min(names.len().saturating_sub(1)), visible, width));
             let own = if asking.question.plan { "or type a change" } else { "or type an answer" };
-            let mut hints: Vec<(u8, String)> = match options.len() {
+            let mut hints: Vec<(u8, String)> = match names.len() {
                 0 => Vec::new(),
                 1 => vec![(5, "Tab or Enter chooses".into())],
                 n => vec![(4, format!("1-{} or ↑↓ choose", n.min(9))), (5, "Tab or Enter confirms".into())],

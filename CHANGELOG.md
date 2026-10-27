@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.1 — 2026-10-27
+
+- `ask_user_question` options wrap onto as many rows as they need instead of being cut
+  with an ellipsis when the window is too narrow to show them in one line.
+
 ## 0.6.0 — 2026-10-27
 
 - A structure-only release: every source file is back under about 500 lines (the TUI had

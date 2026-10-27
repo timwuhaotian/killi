@@ -179,6 +179,33 @@ use super::*;
     }
 
     #[test]
+    fn a_long_ask_option_wraps_instead_of_truncating() {
+        let mut app = test_app();
+        app.width = 60;
+        app.height = 24;
+        let (reply, _) = oneshot::channel::<String>();
+        app.asking = Some(Asking {
+            question: Question {
+                text: "Which resolution do you want?".into(),
+                options: vec![
+                    "Move both `subagent_call` and `subworkflow_call` from Logic to AI (smallest diff, 1 file)".into(),
+                    "Something else - tell me what you meant.".into(),
+                ],
+                plan: false,
+                reply,
+            },
+            selected: 0,
+            internal: false,
+            secret: false,
+        });
+        let (rows, _, _) = app.live();
+        let shown = rows.iter().map(|row| unstyled(row)).collect::<Vec<_>>().join("\n");
+        assert!(rows.iter().all(|row| text::width(row) <= 60), "{shown}");
+        assert!(shown.contains("subworkflow_call"), "{shown}");
+        assert!(!shown.contains('…'), "nothing is cut with an ellipsis: {shown}");
+    }
+
+    #[test]
     fn a_full_live_area_shrinks_tasks_and_queue_before_the_running_call() {
         let mut app = test_app();
         app.height = 16;

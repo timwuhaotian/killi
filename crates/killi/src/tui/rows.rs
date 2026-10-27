@@ -24,6 +24,35 @@ pub(super) fn choice_rows(options: &[(&str, &str)], selected: usize, visible: us
         .collect()
 }
 
+/// Rows for an `ask_user_question` call: one wrapped block per option, so a long option
+/// takes the rows it needs instead of being cut with an ellipsis. The selected block sits
+/// on the select stripe to the window's edge; continuation rows hang under the option's
+/// text. `visible` options show at a time around `selected`, like `choice_rows`.
+pub(super) fn ask_rows(names: &[String], selected: usize, visible: usize, width: usize) -> Vec<String> {
+    if names.is_empty() || width == 0 {
+        return Vec::new();
+    }
+    let visible = visible.clamp(1, names.len());
+    let start = selected.saturating_sub(visible / 2).min(names.len() - visible);
+    names[start..start + visible]
+        .iter()
+        .enumerate()
+        .flat_map(|(i, name)| {
+            if start + i == selected {
+                wrap_words(&format!("{SELECT}{LAGOON}❯ {RESET}{SELECT}{BOLD}{name}{RESET}"), width, 5)
+                    .into_iter()
+                    .map(|row| {
+                        let fill = " ".repeat(width.saturating_sub(text::width(&row)));
+                        format!("{row}{SELECT}{fill}{RESET}")
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                wrap_words(&format!("  {name}"), width, 5)
+            }
+        })
+        .collect()
+}
+
 /// What the user typed as their message block: tinted rows the width of the window.
 pub(super) fn prompt_rows(prompt: &str, width: usize) -> Vec<String> {
     let prompt = text::sanitize(prompt);

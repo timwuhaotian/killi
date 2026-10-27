@@ -339,6 +339,21 @@ fn a_long_line_takes_the_rows_it_wraps_to() {
     }
 
     #[test]
+    fn ask_options_wrap_instead_of_truncating() {
+        let names = vec![
+            "1. Move both `subagent_call` and `subworkflow_call` from Logic to AI (smallest diff, 1 file)".to_string(),
+            "2. Something else - tell me what you meant.".to_string(),
+        ];
+        let rows = ask_rows(&names, 0, 2, 40);
+        assert!(rows.len() > 2, "{rows:?}");
+        assert!(rows.iter().all(|row| text::width(row) <= 40), "{rows:?}");
+        let plain = rows.iter().map(|row| unstyled(row)).collect::<Vec<_>>().join("\n");
+        assert!(plain.contains("subworkflow_call"), "{plain:?}");
+        assert!(!plain.contains('…'), "{plain:?}");
+        assert_eq!(text::width(&rows[0]), 40, "the selected block runs to the window's edge");
+    }
+
+    #[test]
     fn a_question_of_three_lines_renders_three_rows() {
         let rows: Vec<String> = question_rows("first line\nsecond line\nthird one", 80).iter().map(|row| unstyled(row)).collect();
         assert_eq!(rows, ["? first line", "second line", "third one"]);
