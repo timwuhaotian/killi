@@ -39,4 +39,7 @@ behind it are in `docs/decisions.md`.
   under about 3k tokens.
 - The prompt's guidance is `prompt/system.md`, and users can replace it with `[prompt] system`
   in their config, so rules that must always hold belong in code, not only in that text.
-- Prefer adding tests to the module's existing `tests` block.
+- Prefer adding tests to the module's existing `tests` block: inline while the file is
+  small, in `<module>/tests.rs` once the file grows. Keep source files under about 500
+  lines by splitting them along the module's seams (pure moves; re-export moved items from
+  the module root so existing paths hold).

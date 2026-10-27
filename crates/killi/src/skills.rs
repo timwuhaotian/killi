@@ -284,7 +284,7 @@ mod tests {
 
     /// The keys the `Deserialize` structs in `source` read, named as serde reads them.
     fn keys_read_by(source: &str) -> Vec<String> {
-        let source = source.split("#[cfg(test)]").next().unwrap_or_default();
+        let source = source.split("#[cfg(test)]\nmod tests").next().unwrap_or_default();
         let mut keys = Vec::new();
         let (mut deserialize, mut camel, mut inside, mut skip, mut rename) = (false, false, false, false, None::<String>);
         for line in source.lines().map(str::trim) {
