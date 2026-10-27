@@ -74,7 +74,7 @@ use menu::{Entry, Fill, Item, Suggestions};
 use palette::Ground;
 use text::{ADD, BOLD, BRANCH, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, RULE, SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_code, wrap_words};
 
-use commands::{BUSY_COMMANDS, COMMANDS, KEYS, entries, effort_named, runs_at_once, submission};
+use commands::{BUSY_COMMANDS, COMMANDS, KEYS, entries, effort_named, is_command, runs_at_once, submission};
 pub use start::{install_crash_hook, restore_terminal};
 pub(crate) use format::megabytes;
 use format::{ago, changed_rows, clip, clock, dot, error_hint, fit, gauge, gist, move_rows, near_full, padding, precise_clock, short, thinking_parts, tint};
@@ -154,7 +154,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         None => session.start(controls.clone(), sink.clone())?,
     };
     let mut snapshots = Snapshots::new(&cwd);
-    let mut app = App::new(&agent, controls.clone(), &cwd);
+    let mut app = App::new(&agent, controls.clone(), &cwd, session.skills().clone());
     app.live = live;
     app.peers = peers;
     app.live_sync(&agent);

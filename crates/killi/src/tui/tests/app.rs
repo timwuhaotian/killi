@@ -398,3 +398,40 @@ use super::*;
         assert!(app.preview_cache.is_none(), "a committed line drops the preview");
         assert_ne!(first, third);
     }
+
+    #[test]
+    fn the_busy_menu_offers_skills_and_skills_queue_their_prompt() {
+        let mut app = test_app();
+        app.busy = Some(Instant::now());
+        app.entries = vec![
+            Entry { name: "new".into(), aliases: Vec::new(), description: String::new() },
+            Entry { name: "btw".into(), aliases: Vec::new(), description: String::new() },
+            Entry { name: "demo-skill".into(), aliases: Vec::new(), description: "does demos".into() },
+        ];
+        app.editor.insert("/");
+        let names = |app: &mut App| {
+            let menu = app.suggestions().expect("the menu opens while busy");
+            menu.items.iter().map(|i| i.value.as_str().to_string()).collect::<Vec<_>>()
+        };
+        let all = names(&mut app);
+        assert!(all.contains(&"demo-skill".to_string()), "skills are offered while busy: {all:?}");
+        assert!(!all.contains(&"new".to_string()), "a command that can't run now isn't: {all:?}");
+        assert!(all.contains(&"btw".to_string()), "a command that runs now still is: {all:?}");
+        app.editor.insert("demo");
+        assert_eq!(names(&mut app), vec!["demo-skill".to_string()], "typing narrows to the skill");
+
+        let dir = crate::test_temp::TempDir::new("killi-busy-skill");
+        let folder = dir.path().join(".agents/skills/demo-skill");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("SKILL.md"), "---\nname: demo-skill\ndescription: does demos\n---\nBe brief.").unwrap();
+        app.skills = crate::skills::Skills::discover(dir.path(), &["no-such-dir".to_string()]);
+        app.editor.clear();
+        app.editor.insert("/demo-skill make one");
+        app.send_busy();
+        assert_eq!(app.queued, ["/demo-skill make one".to_string()]);
+        let steered = app.controls.steer.borrow();
+        let (sent, images) = &steered[0];
+        assert!(sent.contains("Use the demo-skill skill for this.") && sent.contains("Be brief.") && sent.ends_with("make one"), "{sent}");
+        assert!(images.is_empty());
+        assert!(app.editor.is_empty(), "the prompt was taken");
+    }

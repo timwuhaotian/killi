@@ -128,8 +128,19 @@ def analyze(path):
                 stats["billed_reasoning"] += 1
                 # `reasoning_kept` (logged with the usage since 0.4.12) settles it at once; older
                 # logs wait for the assistant message that follows and pair by dialect fields.
+                # `reasoning_seen` (since 0.6.8) says what the stream carried on a lost turn:
+                # which field the provider used, and fields killi doesn't read.
                 if "reasoning_kept" in entry:
-                    stats["reasoning_lost"] += not entry["reasoning_kept"]
+                    lost = not entry["reasoning_kept"]
+                    stats["reasoning_lost"] += lost
+                    if lost:
+                        seen = entry.get("reasoning_seen") or {}
+                        if seen.get("field"):
+                            stats["lost_empty_field"] += 1
+                        elif seen.get("unread"):
+                            stats["lost_unread"] += 1
+                        else:
+                            stats["lost_no_field"] += 1
                 else:
                     awaiting = current
         elif kind == "compaction":
@@ -166,8 +177,14 @@ def findings(sessions, models):
             found.append(f"**{model}: only {pct(m['cached'], m['prompt'])} of input came from the cache over {m['turns']} turns.** "
                          "Probe the provider with `scripts/probe.py cache`.")
         if m["billed_reasoning"] and m["reasoning_lost"] == m["billed_reasoning"]:
+            split = ", ".join(filter(None, [
+                f"{m['lost_no_field']} with no reasoning field" if m["lost_no_field"] else "",
+                f"{m['lost_empty_field']} with an empty field" if m["lost_empty_field"] else "",
+                f"{m['lost_unread']} carrying unread stream fields" if m["lost_unread"] else "",
+            ]))
             found.append(f"**{model}: reasoning was billed on {m['billed_reasoning']} turns but never kept.** "
-                         "Probe with `scripts/probe.py stream` and `responses`; a provider that hides it on chat/completions may return "
+                         + (f"Lost turns: {split}. " if split else "")
+                         + "Probe with `scripts/probe.py stream` and `responses`; a provider that hides it on chat/completions may return "
                          "it on the Responses API (`type = \"openai_responses\"`).")
     for s in sessions:
         name = f"{s['project'][-24:]}/{s['id']}"

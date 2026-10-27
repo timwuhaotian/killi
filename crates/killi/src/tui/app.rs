@@ -1,7 +1,7 @@
 use super::*;
 
 impl App {
-    pub(super) fn new(agent: &Agent, controls: Controls, cwd: &Path) -> Self {
+    pub(super) fn new(agent: &Agent, controls: Controls, cwd: &Path, skills: crate::skills::Skills) -> Self {
         let (columns, rows) = terminal::size().unwrap_or((100, 40));
         let mut app = Self {
             out: stdout(),
@@ -33,6 +33,7 @@ impl App {
             next_input: None,
             effort_later: None,
             entries: Vec::new(),
+            skills,
             model_choices: Vec::new(),
             effort_choices: Vec::new(),
             menu_selected: 0,

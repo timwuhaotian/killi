@@ -185,7 +185,7 @@ impl Agent {
                 swarm: Rc::default(),
                 interactive: false,
                 aside: Rc::default(),
-                here: None,
+                here: self.controls.here.clone(),
                 peer_notes: Rc::default(),
             },
             settings: self.settings.clone(),

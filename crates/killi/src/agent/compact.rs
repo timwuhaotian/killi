@@ -91,7 +91,7 @@ impl Agent {
             reply => reply?,
         };
         self.stats.requests += 1;
-        self.account(&reply.usage, None, None, reply.reasoning_kept())?;
+        self.account(&reply.usage, None, None, reply.reasoning_kept(), reasoning_evidence(&reply))?;
         if reply.text.trim().is_empty() {
             let instead = if reply.tool_calls.is_empty() {
                 match reply.reasoning.is_empty() {

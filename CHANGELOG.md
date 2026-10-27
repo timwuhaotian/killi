@@ -5,11 +5,21 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.8 — 2026-10-27
+
 - While another killi session works in the same git work tree, tree-moving git
   commands (`checkout`, `switch`, `restore`, `reset`, `clean`, and `stash` other
   than `stash list`/`show`) are refused instead of run: use a separate git
   worktree or run the command yourself. Subagents are guarded too; `[agent]
   peers = false` turns the guard off.
+- A usage record whose reasoning was billed but not kept now carries
+  `reasoning_seen`: the field the stream used for reasoning (present but empty)
+  and any delta fields the provider sent that killi doesn't read. The one-time
+  warning says which case it was, and `scripts/sessions.py` splits lost turns
+  into the three cases per model.
+- While the agent works, the slash menu offers skills again: picking one and
+  sending it queues the skill's expanded prompt for the agent's next step, with
+  `/name args` shown in the queue like a typed message.
 
 ## 0.6.7 — 2026-10-27
 

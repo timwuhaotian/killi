@@ -78,6 +78,9 @@ pub struct Reply {
     /// Normalized to OpenAI's values: `stop`, `length`, `tool_calls`.
     pub finish_reason: Option<String>,
     pub usage: Usage,
+    /// Delta field names a provider sent that no adapter reads, sorted, deduped and capped:
+    /// what the stream carried that killi doesn't keep, evidence for hidden reasoning.
+    pub unread_fields: Vec<String>,
 }
 
 impl Reply {
@@ -86,6 +89,17 @@ impl Reply {
     /// together — an items-only reply kept its reasoning with no scalar text at all.
     pub fn reasoning_kept(&self) -> bool {
         !self.reasoning.is_empty() || !self.reasoning_items.is_empty()
+    }
+
+    /// Notes a delta field name no adapter reads: at most 8, each cut at 40 characters.
+    pub fn note_unread(&mut self, key: &str) {
+        let name = key.chars().take(40).collect::<String>();
+        if !self.unread_fields.contains(&name) {
+            self.unread_fields.push(name);
+            self.unread_fields.sort();
+            self.unread_fields.dedup();
+            self.unread_fields.truncate(8);
+        }
     }
 }
 

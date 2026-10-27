@@ -157,6 +157,9 @@ pub(super) struct App {
     pub(super) effort_later: Option<String>,
     /// What the slash menu searches, and the choices it offers after /model and /effort.
     pub(super) entries: Vec<Entry>,
+    /// The session's skills, so a `/name` sent while the agent works can expand one and queue
+    /// its prompt; refreshed by /reload.
+    pub(super) skills: crate::skills::Skills,
     pub(super) model_choices: Vec<Item>,
     pub(super) effort_choices: Vec<Item>,
     pub(super) menu_selected: usize,

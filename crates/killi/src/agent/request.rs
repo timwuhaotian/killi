@@ -44,7 +44,7 @@ impl Agent {
         };
         let took = started.elapsed();
         self.stats.requests += 1;
-        self.account(&reply.usage, Some(&reply.finish_reason), Some(took), reply.reasoning_kept())?;
+        self.account(&reply.usage, Some(&reply.finish_reason), Some(took), reply.reasoning_kept(), reasoning_evidence(&reply))?;
         self.note_hidden_reasoning(&reply)?;
         Ok(reply)
     }
@@ -71,14 +71,23 @@ impl Agent {
     /// Some providers count reasoning tokens but don't send the reasoning on their chat API, so
     /// it can't be kept or replayed and the model starts each step without its own thinking.
     /// The log says so once, to explain a model that forgets what it just did.
-    fn note_hidden_reasoning(&mut self, reply: &Reply) -> Result<()> {
+    pub(super) fn note_hidden_reasoning(&mut self, reply: &Reply) -> Result<()> {
         if hides_reasoning(reply) && !std::mem::replace(&mut self.reasoning_noted, true) {
+            let counted = reply.usage.reasoning;
+            let advice = " If it offers the Responses API, set `type = \"openai_responses\"` on its provider in config.toml.";
+            let why = match reply.reasoning_key {
+                Some(key) => format!("The provider counted {counted} reasoning tokens but its `{key}` field was empty, so there was nothing to keep."),
+                None if reply.unread_fields.is_empty() => {
+                    format!("The provider counted {counted} reasoning tokens but sent no reasoning, so it can't be kept.{advice}")
+                }
+                None => {
+                    let fields = reply.unread_fields.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ");
+                    format!("The provider counted {counted} reasoning tokens but sent none of it back, and the stream carried fields killi doesn't read: {fields}.{advice}")
+                }
+            };
             self.session.record(&json!({
                 "type": "warn",
-                "message": format!(
-                    "The provider counted {} reasoning tokens but sent no reasoning, so it can't be kept. If it offers the Responses API, set `type = \"openai_responses\"` on its provider in config.toml.",
-                    reply.usage.reasoning
-                ),
+                "message": why,
             }))?;
         }
         Ok(())
@@ -86,7 +95,9 @@ impl Agent {
 
     /// `reasoning_kept` says whether this reply's reasoning came back in a form the log holds;
     /// billed but not kept is the dialect-agnostic mark of a provider hiding it on this API.
-    pub(super) fn account(&mut self, usage: &Usage, finish_reason: Option<&Option<String>>, took: Option<Duration>, reasoning_kept: bool) -> Result<()> {
+    /// `reasoning_seen` carries the evidence: which field the stream used and which fields it
+    /// sent that no adapter reads, beside the message (history stays byte-identical).
+    pub(super) fn account(&mut self, usage: &Usage, finish_reason: Option<&Option<String>>, took: Option<Duration>, reasoning_kept: bool, reasoning_seen: Option<Value>) -> Result<()> {
         self.stats.first_prompt.get_or_insert(usage.prompt);
         self.stats.context = usage.prompt;
         self.accounted_messages = self.messages.len();
@@ -96,7 +107,7 @@ impl Agent {
         total.completion += usage.completion;
         total.reasoning += usage.reasoning;
         (self.sink)(Event::Usage(usage.clone()));
-        self.session.record(&json!({
+        let mut record = json!({
             "type": "usage",
             "model": self.client.model.alias,
             "prompt": usage.prompt,
@@ -106,7 +117,11 @@ impl Agent {
             "reasoning_kept": reasoning_kept,
             "finish_reason": finish_reason.cloned().flatten(),
             "ms": took.map(millis),
-        }))
+        });
+        if let Some(seen) = reasoning_seen {
+            record["reasoning_seen"] = seen;
+        }
+        self.session.record(&record)
     }
 
     /// Appends the assistant message and returns its tool calls under their final IDs.
@@ -139,6 +154,19 @@ impl Agent {
 /// Whether a reply was billed for reasoning that never came back, on either channel.
 pub(super) fn hides_reasoning(reply: &Reply) -> bool {
     reply.usage.reasoning > 0 && !reply.reasoning_kept()
+}
+
+/// What the stream carried on a reply whose reasoning was billed but not kept, or that sent
+/// fields no adapter reads: the field the provider used for reasoning (present but empty) and
+/// the unread field names. `None` when there is nothing to say.
+pub(super) fn reasoning_evidence(reply: &Reply) -> Option<Value> {
+    if !hides_reasoning(reply) && reply.unread_fields.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "field": reply.reasoning_key,
+        "unread": reply.unread_fields,
+    }))
 }
 
 /// Whether a provider error says the conversation no longer fits the context window. A

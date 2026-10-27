@@ -71,6 +71,7 @@ mod rows;
             next_input: None,
             effort_later: None,
             entries: Vec::new(),
+            skills: crate::skills::Skills::default(),
             model_choices: Vec::new(),
             effort_choices: Vec::new(),
             menu_selected: 0,

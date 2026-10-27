@@ -9,7 +9,7 @@ pub fn tree_note(peers: &[Entry], now: u64) -> String {
     let who = if peers.len() == 1 { "Another killi session works" } else { "Other killi sessions work" };
     let list: Vec<String> = peers.iter().map(|e| escape_peer(&describe(e, now))).collect();
     format!(
-        "<system-reminder>{who} in this repository too: {}. Changes you didn't make may be theirs: don't revert, overwrite or commit them, and don't switch branches, stash, reset or clean here; use a git worktree for that. `killi sessions` lists the sessions, `killi ask <pid> \"…\"` asks one about its work, `killi tell <pid> \"…\"` leaves it a message.</system-reminder>",
+        "<system-reminder>{who} in this repository too: {}. Changes you didn't make may be theirs: don't revert, overwrite or commit them, and don't switch branches, stash, reset or clean here; use a git worktree for that. Tree-moving git (`checkout`, `switch`, `restore`, `reset`, `clean`, and `stash` other than `stash list`/`show`) is refused while they work here. `killi sessions` lists the sessions, `killi ask <pid> \"…\"` asks one about its work, `killi tell <pid> \"…\"` leaves it a message.</system-reminder>",
         list.join("; ")
     )
 }

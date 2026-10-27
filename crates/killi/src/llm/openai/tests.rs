@@ -290,3 +290,22 @@ fn prepare_caps_output_from_context_and_preserves_string_reasoning() {
     assert_eq!(body["messages"][1]["reasoning_content"], "plan");
     assert!(body.get("max_completion_tokens").is_none());
 }
+
+#[test]
+fn unknown_delta_fields_are_kept_and_an_empty_reasoning_field_is_evidence() {
+    let mut parser = Parser::default();
+    let mut reply = Reply::default();
+    let mut sink = |_: Delta| {};
+    let events = [
+        json!({"choices":[{"delta":{"reasoning_content":""}}]}),
+        json!({"choices":[{"delta":{"role":"assistant","deep_thought":"hm"}}]}),
+        json!({"choices":[{"delta":{"deep_thought":"more"}}]}),
+        json!({"choices":[{"delta":{},"finish_reason":"stop"}]}),
+    ];
+    for event in &events {
+        parser.event(event, &mut reply, &mut sink).unwrap();
+    }
+    assert_eq!(reply.reasoning_key, Some("reasoning_content"), "an empty field is still the field the provider used");
+    assert!(!reply.reasoning_kept());
+    assert_eq!(reply.unread_fields, vec!["deep_thought".to_string()], "deduped, and role/content don't count");
+}

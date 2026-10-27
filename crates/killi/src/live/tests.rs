@@ -99,6 +99,7 @@ fn the_model_hears_who_works_in_its_tree_and_that_a_message_is_not_the_user() {
     let note = tree_note(&[busy], 61_000);
     assert!(note.starts_with("<system-reminder>Another killi session works in this repository too: 41 · working for 1m · /w (feat) · “fix it”."), "{note}");
     assert!(note.contains("killi ask <pid>") && note.ends_with("</system-reminder>"));
+    assert!(note.contains("is refused while they work here"), "{note}");
     assert!(tree_note(&[entry(1, "/w"), entry(2, "/w")], 1_000).contains("Other killi sessions work"));
     assert!(tree_note(&[], 0).contains("No other killi session"));
 

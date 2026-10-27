@@ -6,6 +6,7 @@ mod ask;
 mod compact;
 mod dispatch;
 mod lifecycle;
+mod peer_guard;
 mod request;
 mod subagent;
 mod turn;
@@ -37,7 +38,7 @@ pub use types::{Aside, Controls, Event, Image, Question, Settings, Sink, Slot, S
 
 use compact::CompactMode;
 use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
-use request::{is_media, is_overflow};
+use request::{is_media, is_overflow, reasoning_evidence};
 use types::{PartialSwarm, Repeat, last_plan_state, unanswered};
 
 #[cfg(test)]

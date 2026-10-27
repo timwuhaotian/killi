@@ -326,3 +326,88 @@ fn queued_messages_can_be_taken_back_for_the_prompt() {
     assert_eq!(taken.len(), 2);
     assert!(!agent.pending_steer());
 }
+
+/// An agent working in a git tree with a peer registered there, for the peer guard.
+/// The peer's registration is returned so it stays listed until the test ends.
+fn peered_agent(name: &str) -> (Agent, live::Registration, crate::test_temp::TempDir) {
+    let live_dir = crate::test_temp::TempDir::new(&format!("killi-{name}-live"));
+    let mut agent = idle_agent(name, Controls::default(), Rc::new(|_| {}));
+    std::fs::create_dir_all(agent.ctx.cwd.join(".git")).unwrap();
+    let tree = agent.ctx.cwd.clone();
+    let me = live::Registration::open_in(
+        &live_dir,
+        live::Entry { pid: 1, tree: tree.clone(), cwd: tree.clone(), ..live::Entry::default() },
+    )
+    .unwrap();
+    agent.controls.here = Some(Rc::new(me.here()));
+    let peer = live::Registration::open_in(
+        &live_dir,
+        live::Entry { pid: 2, tree: tree.clone(), cwd: tree.clone(), ..live::Entry::default() },
+    )
+    .unwrap();
+    (agent, peer, live_dir)
+}
+
+fn bash_call(command: &str) -> ToolCall {
+    ToolCall { id: "a".into(), name: "bash".into(), arguments: json!({"command": command}).to_string() }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tree_moving_git_is_refused_while_a_peer_works_here() {
+    let (mut agent, _peer, _live) = peered_agent("peer-guard");
+    for command in [
+        "git restore --staged --worktree -- f",
+        "git checkout -- .",
+        "git switch main",
+        "git stash",
+        "git reset --hard",
+        "git clean -fd",
+        "true; git stash",
+    ] {
+        let call = bash_call(command);
+        let output = agent.dispatch(&call, &json!({"command": command})).await;
+        assert!(output.is_error && output.text.starts_with("Not run: another killi session (pid 2)"), "{command}: {}", output.text);
+        assert!(output.text.contains("`git worktree add"), "{command}: {}", output.text);
+    }
+    // Read-only git and lookalikes run as usual: nothing is refused.
+    for command in ["git stash list", "git stash show -p", "git status", "echo \"git restore\""] {
+        let call = bash_call(command);
+        let output = agent.dispatch(&call, &json!({"command": command})).await;
+        assert!(!output.text.starts_with("Not run:"), "{command}: {}", output.text);
+    }
+    // A subagent moves the same tree, so it is refused too.
+    agent.push(json!({"role": "system", "content": "sys"})).unwrap();
+    let mut child = agent.subagent("kid", None, false).unwrap();
+    assert!(child.controls.here.is_some());
+    let call = bash_call("git restore f");
+    let output = child.dispatch(&call, &json!({"command": "git restore f"})).await;
+    assert!(output.is_error && output.text.starts_with("Not run: another killi session"), "{}", output.text);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tree_moving_git_runs_without_a_peer_or_in_another_tree() {
+    let (mut agent, peer, live) = peered_agent("peer-guard-free");
+    // No peer registered: runs (and fails in the scratch repo, like any git call there).
+    drop(peer);
+    let call = bash_call("git restore f");
+    let output = agent.dispatch(&call, &json!({"command": "git restore f"})).await;
+    assert!(!output.text.starts_with("Not run:"), "{}", output.text);
+    // A peer in a linked worktree is a tree of its own: not blocked.
+    let wt = crate::test_temp::TempDir::new("killi-peer-guard-wt");
+    std::fs::write(wt.path().join(".git"), "gitdir: elsewhere").unwrap();
+    let _wt_peer = live::Registration::open_in(
+        &live,
+        live::Entry { pid: 3, tree: wt.path().to_path_buf(), cwd: wt.path().to_path_buf(), ..live::Entry::default() },
+    )
+    .unwrap();
+    let call = bash_call("git stash");
+    let output = agent.dispatch(&call, &json!({"command": "git stash"})).await;
+    assert!(!output.text.starts_with("Not run:"), "{}", output.text);
+    // A `cwd` in another repo is not this tree either.
+    let other = crate::test_temp::TempDir::new("killi-peer-guard-other");
+    std::fs::create_dir_all(other.path().join(".git")).unwrap();
+    let elsewhere = other.path().to_string_lossy().to_string();
+    let call = bash_call("git restore f");
+    let output = agent.dispatch(&call, &json!({"command": "git restore f", "cwd": elsewhere})).await;
+    assert!(!output.text.starts_with("Not run:"), "{}", output.text);
+}

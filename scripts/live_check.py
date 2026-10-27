@@ -11,7 +11,8 @@ and its liveness (a session that exits, crashes or loses its terminal drops out)
 the reminder the model gets when the sessions in its tree change (again after a compaction, as
 are plan and swarm mode),
 a question answered from the other conversation without being kept, a message for an idle and
-for a working session, the undo warning, and `/sessions`.
+for a working session, the undo warning, `/sessions`, and the peer guard: a peer's tree-moving
+git is refused while a linked worktree and `peers = false` are not.
 
 A session's terminal must be read while another process talks to it, as a real terminal is:
 killi blocks writing its screen to a full pseudo-terminal, and a request then times out.
@@ -89,6 +90,10 @@ def provider(log):
                 text = "I'm fixing slugify in slug.py on master; nothing committed yet."
             elif "SLEEP" in prompt and steps == 0:
                 calls = [{"index": 0, "id": "c1", "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": "sleep 6; echo slept"})}}]
+            elif "STASH" in prompt and steps == 0:
+                calls = [{"index": 0, "id": "c1", "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": "git stash"})}}]
+            elif "RESTORE" in prompt and steps == 0:
+                calls = [{"index": 0, "id": "c1", "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": "git restore --staged --worktree -- slug.py"})}}]
             else:
                 text = "Done: " + prompt[:40]
             self.send_response(200)
@@ -300,12 +305,37 @@ recap = false
         b.type("/sessions\r", 1.0)
         check("/sessions lists the other session", f"● {a.pid} · idle" in b.text(), b.text()[-600:])
 
+        a.type("STASH please\r", 0.5)
+        check("a peer's tree refuses git stash", a.until("Not run: another killi session", 15), a.text()[-600:])
+        a.until("Done: STASH")
+        a.type("RESTORE please\r", 0.5)
+        check("a peer's tree refuses git restore", a.until("Done: RESTORE", 15) and "Not run: another killi session" in a.text(), a.text()[-600:])
+
+        wt = scratch / "wt"
+        subprocess.run(["git", "worktree", "add", "--detach", str(wt)], cwd=project, check=True)
+        d = Session(killi, env, wt)
+        sessions.append(d)
+        d.pump(2.5)
+        d.type("STASH please\r", 0.5)
+        check("a linked worktree is not refused", d.until("Done: STASH", 15) and "Not run:" not in d.text(), d.text()[-600:])
+        os.kill(d.pid, signal.SIGKILL)
+        sessions.remove(d)
+
         a.type("/exit\r", 1.5)
         sessions.remove(a)
         check("a session that exits leaves the list", str(a.pid) not in cli("sessions"))
         b.type("one more\r", 0.5)
         b.until("Done: one more")
         check("the model hears the other session left", any("No other killi session works in this repository now" in u for u in contents(requests()[-1])))
+
+        config = home / ".killi" / "config.toml"
+        config.write_text(config.read_text().replace("notify_after = 9999", "notify_after = 9999\npeers = false"))
+        e = start()
+        e.type("STASH please\r", 0.5)
+        check("peers = false is not refused", e.until("Done: STASH", 15) and "Not run:" not in e.text(), e.text()[-600:])
+        os.kill(e.pid, signal.SIGKILL)
+        sessions.remove(e)
+        config.write_text(config.read_text().replace("\npeers = false", ""))
 
         os.kill(b.pid, signal.SIGKILL)
         time.sleep(0.5)

@@ -147,8 +147,9 @@ impl App {
     }
 
     /// The slash or `@` menu for the prompt as typed. While the agent works the slash menu
-    /// offers only the commands that run then, typed at the start of the prompt, and /effort's
-    /// choices; files are offered as ever.
+    /// offers only the commands that run then plus every skill (its prompt queues for the
+    /// agent's next step), typed at the start of the prompt, and /effort's choices; files are
+    /// offered as ever.
     pub(super) fn suggestions(&mut self) -> Option<Suggestions> {
         if self.picker.is_some() || self.asking.is_some() || self.editor.browsing() {
             return None;
@@ -171,7 +172,7 @@ impl App {
             }
         }
         if self.busy.is_some() {
-            let entries: Vec<Entry> = self.entries.iter().filter(|e| BUSY_COMMANDS.contains(&e.name.as_str())).cloned().collect();
+            let entries: Vec<Entry> = self.entries.iter().filter(|e| BUSY_COMMANDS.contains(&e.name.as_str()) || !is_command(&e.name)).cloned().collect();
             return menu::suggest(self.editor.before_cursor(), &entries, |command| match command {
                 "effort" | "thinking" => self.effort_choices.clone(),
                 _ => Vec::new(),

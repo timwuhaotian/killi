@@ -166,6 +166,9 @@ impl Agent {
         if self.controls.plan.get() && let Some(output) = self.plan_block(call, &args) {
             return output;
         }
+        if let Some(output) = self.peer_block(call, &args) {
+            return output;
+        }
         match call.name.as_str() {
             "skill" => self.settings.skills.run(&args),
             "mcp" => self.settings.mcp.run(&args, self.ctx.images.get()).await,
@@ -209,6 +212,37 @@ impl Agent {
             return Some(tools::Output::error("Plan mode is on: bash runs only read-only commands (ls, rg, git log, cargo check, …), without redirects. Finish the plan and call exit_plan_mode."));
         }
         None
+    }
+
+    /// What another session working in this tree refuses before anything runs: `bash`
+    /// calls that move the tree (`checkout`, `switch`, `restore`, `reset`, `clean`, and
+    /// `stash` other than `list`/`show`). Only the tool list's `bash` is checked, and the
+    /// registry is read only when the command names such a verb. A linked worktree is a
+    /// tree of its own, so it is not blocked; `[agent] peers = false` leaves `here` unset
+    /// and turns this off. `None` runs as usual.
+    fn peer_block(&self, call: &ToolCall, args: &Value) -> Option<tools::Output> {
+        if call.name != "bash" {
+            return None;
+        }
+        let command = args["command"].as_str().unwrap_or_default();
+        let verb = super::peer_guard::moving_verb(command)?;
+        let here = self.controls.here.as_ref()?;
+        let base = args["cwd"]
+            .as_str()
+            .filter(|cwd| !cwd.is_empty())
+            .map(|cwd| tools::resolve(&self.ctx, cwd))
+            .unwrap_or_else(|| self.ctx.cwd.clone());
+        let dir = super::peer_guard::command_dir(command)
+            .map(|target| resolve_target(&target, &base))
+            .unwrap_or(base);
+        if live::work_tree(&dir) != here.tree {
+            return None;
+        }
+        let peer = here.others().into_iter().next()?;
+        Some(tools::Output::error(format!(
+            "Not run: another killi session (pid {}) works in this work tree, and `git {verb}` can discard or move its changes. Use a separate git worktree (`git worktree add ../<name>`) or ask the user to run it.",
+            peer.pid,
+        )))
     }
 
     pub(super) async fn hook(&self, event: &str, tool: Option<&str>, payload: Value) -> crate::hooks::Outcome {
@@ -279,6 +313,18 @@ impl Agent {
 /// Whether a built-in call only reads files or search results and can share a read-only batch.
 pub(super) fn parallel_read(call: &ToolCall) -> bool {
     matches!(call.name.as_str(), "read" | "grep" | "glob")
+}
+
+/// A literal directory from a command, against the directory the call runs in: `~/…`
+/// from home, an absolute path as is, anything else relative to the call's directory.
+fn resolve_target(target: &str, base: &Path) -> PathBuf {
+    match target.strip_prefix("~/") {
+        Some(rest) => crate::config::home().join(rest),
+        None => {
+            let path = PathBuf::from(target);
+            if path.is_absolute() { path } else { base.join(path) }
+        }
+    }
 }
 
 /// Dispatches the tools that need only their shared context, without borrowing the agent.

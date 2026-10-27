@@ -187,6 +187,15 @@ impl StreamParser for Parser {
         for detail in delta.get("reasoning_details").and_then(Value::as_array).into_iter().flatten() {
             merge_reasoning_detail(reply, detail);
         }
+        if let Some(object) = delta.as_object() {
+            for key in object.keys() {
+                if !matches!(key.as_str(), "role" | "content" | "refusal" | "tool_calls")
+                    && !REASONING_KEYS.contains(&key.as_str())
+                {
+                    reply.note_unread(key);
+                }
+            }
+        }
         for call in delta.get("tool_calls").and_then(Value::as_array).into_iter().flatten() {
             let index = call.get("index").and_then(Value::as_u64);
             let slot = match index.and_then(|index| self.call_slots.iter().find(|(seen, _)| *seen == index).map(|(_, slot)| *slot)) {

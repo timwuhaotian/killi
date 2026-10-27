@@ -14,6 +14,80 @@ fn reasoning_that_was_billed_but_never_sent_is_noticed() {
 }
 
 #[test]
+fn reasoning_evidence_says_what_the_stream_carried() {
+    let mut reply = Reply::default();
+    assert!(reasoning_evidence(&reply).is_none(), "nothing billed and nothing unread");
+    reply.usage.reasoning = 40;
+    assert_eq!(reasoning_evidence(&reply).unwrap(), json!({"field": null, "unread": []}));
+    reply.reasoning_key = Some("reasoning_content");
+    assert_eq!(reasoning_evidence(&reply).unwrap(), json!({"field": "reasoning_content", "unread": []}));
+    reply.reasoning = "kept".into();
+    assert!(reasoning_evidence(&reply).is_none(), "kept reasoning with nothing unread has nothing to say");
+    reply.note_unread("deep_thought");
+    assert_eq!(reasoning_evidence(&reply).unwrap(), json!({"field": "reasoning_content", "unread": ["deep_thought"]}), "kept reasoning still names its unread fields");
+    for name in ["delta", "beta", "alpha", "a", "b", "c", "d", "e", "f"] {
+        reply.note_unread(name);
+    }
+    let evidence = reasoning_evidence(&reply).unwrap();
+    assert_eq!(evidence["unread"].as_array().unwrap().len(), 8, "capped at eight, sorted and deduped");
+}
+
+#[test]
+fn hidden_reasoning_is_recorded_with_evidence_and_worded_by_case() {
+    let records = |agent: &Agent| {
+        std::fs::read_to_string(agent.session.log_path.clone())
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect::<Vec<_>>()
+    };
+    let warn_of = |records: &[Value]| records.iter().filter(|r| r["type"] == "warn").map(|r| r["message"].as_str().unwrap_or_default().to_string()).collect::<Vec<_>>();
+    let last_usage = |records: &[Value]| records.iter().rfind(|r| r["type"] == "usage").cloned().unwrap_or(Value::Null);
+
+    let mut agent = idle_agent("reasoning-evidence", Controls::default(), Rc::new(|_| {}));
+    let mut reply = Reply::default();
+    reply.usage.reasoning = 40;
+    agent.account(&reply.usage, None, None, reply.reasoning_kept(), reasoning_evidence(&reply)).unwrap();
+    agent.note_hidden_reasoning(&reply).unwrap();
+    agent.note_hidden_reasoning(&reply).unwrap();
+    let log = records(&agent);
+    let usage = last_usage(&log);
+    assert_eq!(usage["reasoning_kept"], json!(false));
+    assert_eq!(usage["reasoning_seen"]["field"], json!(null));
+    assert_eq!(usage["reasoning_seen"]["unread"], json!([]));
+    let warns = warn_of(&log);
+    assert_eq!(warns.len(), 1, "said once per session");
+    assert!(warns[0].contains("sent no reasoning") && warns[0].contains("Responses API"), "{}", warns[0]);
+
+    let mut agent = idle_agent("reasoning-empty", Controls::default(), Rc::new(|_| {}));
+    let mut reply = Reply::default();
+    reply.usage.reasoning = 40;
+    reply.reasoning_key = Some("reasoning_content");
+    agent.account(&reply.usage, None, None, reply.reasoning_kept(), reasoning_evidence(&reply)).unwrap();
+    agent.note_hidden_reasoning(&reply).unwrap();
+    let log = records(&agent);
+    let usage = last_usage(&log);
+    assert_eq!(usage["reasoning_seen"]["field"], json!("reasoning_content"));
+    let warns = warn_of(&log);
+    assert_eq!(warns.len(), 1);
+    assert!(warns[0].contains("`reasoning_content` field was empty"), "{}", warns[0]);
+    assert!(!warns[0].contains("Responses API"), "the advice doesn't apply: the field came back empty");
+
+    let mut agent = idle_agent("reasoning-unread", Controls::default(), Rc::new(|_| {}));
+    let mut reply = Reply::default();
+    reply.usage.reasoning = 40;
+    reply.note_unread("deep_thought");
+    agent.account(&reply.usage, None, None, reply.reasoning_kept(), reasoning_evidence(&reply)).unwrap();
+    agent.note_hidden_reasoning(&reply).unwrap();
+    let log = records(&agent);
+    let usage = last_usage(&log);
+    assert_eq!(usage["reasoning_seen"]["unread"], json!(["deep_thought"]));
+    let warns = warn_of(&log);
+    assert_eq!(warns.len(), 1);
+    assert!(warns[0].contains("fields killi doesn't read: `deep_thought`"), "{}", warns[0]);
+}
+
+#[test]
 fn repeats_count_and_notice_an_unchanged_result() {
     let mut repeat = Repeat::default();
     assert_eq!(repeat.note(1), (1, false));

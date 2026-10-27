@@ -72,9 +72,9 @@ impl App {
         false
     }
 
-    /// Enter while the agent works: a /btw question or a command runs now, anything else
-    /// is queued for the agent's next step.
-    fn send_busy(&mut self) {
+    /// Enter while the agent works: a /btw question or a command runs now, a skill queues
+    /// its expanded prompt, anything else is queued for the agent's next step.
+    pub(super) fn send_busy(&mut self) {
         if let Some(question) = aside_question(self.editor.text()) {
             self.aside_asked = Some(question);
             self.editor.take();
@@ -83,6 +83,21 @@ impl App {
         if let Some(command) = self.editor.text().trim().strip_prefix('/') {
             let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
             let (name, arg) = (name.to_string(), arg.trim().to_string());
+            if !is_command(&name) && let Some(prompt) = self.skills.invocation(&name, &arg) {
+                // A skill sent while the agent works queues like a typed message: the queue
+                // shows `/name arg` as typed, the agent gets the skill's expanded prompt.
+                let sent = match mention::attachment(&self.cwd, &arg) {
+                    Some(files) => format!("{prompt}\n\n{files}"),
+                    None => prompt,
+                };
+                let (text, images) = self.editor.take_with_images();
+                let shown = text.trim().to_string();
+                if !shown.is_empty() {
+                    self.controls.steer.borrow_mut().push_back((sent, images));
+                    self.queued.push(shown);
+                }
+                return;
+            }
             if self.command_while_busy(&name, &arg) {
                 self.editor.take();
             }

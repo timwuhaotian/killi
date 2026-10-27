@@ -230,6 +230,7 @@ pub(super) async fn handle_command(
             Ok(()) => {
                 session.reload_agent(agent)?;
                 app.entries = entries(session);
+                app.skills = session.skills().clone();
                 app.refresh_choices(session.config());
                 app.redraw_banner(agent, session, snapshots);
                 app.notice("Reloaded the system prompt ([prompt] in config.toml), AGENTS.md files, skills and [search]. The next request starts the cache over; models, MCP servers and tools apply when killi restarts.");
