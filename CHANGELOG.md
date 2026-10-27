@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.5.1 — 2026-10-27
+
+- Interrupting a swarm no longer throws away the subagents that already finished: their
+  reports are recorded as the swarm's result, marked per item, so the next prompt only
+  re-runs the items that never finished instead of re-spending the whole swarm's tokens.
+- Up and Down arrows in the prompt now move between the rows you see, including a long
+  prompt that wraps across them, instead of jumping to history recall; history still
+  comes back from the first row and the draft returns from the last.
+
 ## 0.5.0 — 2026-10-27
 
 - Error hints now follow the error's kind and status instead of digits inside its text: a
