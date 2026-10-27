@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.3 — 2026-10-27
+
+- The working rows name the turn's action instead of the `killi` wordmark: the braille wave
+  is unchanged, then `thinking`, `writing`, `working` and the like fade in letter by letter,
+  with what the turn is doing after the word in plain text. The elapsed time and
+  `Esc to interrupt` sit on their own row under the action word. The separate
+  `∴ thinking` row is gone; its first sentence moved onto the action row.
+
 ## 0.6.2 — 2026-10-27
 
 - The task list no longer stays at `0/8` through a long turn: when 10 tool calls go by with

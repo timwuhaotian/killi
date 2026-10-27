@@ -206,6 +206,20 @@ use super::*;
     }
 
     #[test]
+    fn the_live_area_merges_the_thought_into_the_action_row() {
+        let mut app = test_app();
+        app.busy = Some(Instant::now());
+        app.thinking = Some((Instant::now(), "The internal § references are relative.".into()));
+        app.spinner = 30;
+        app.width = 80;
+        let (rows, _, _) = app.live();
+        let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
+        assert!(shown.iter().any(|row| row.ends_with("thinking The internal § references are relative.")), "{shown:?}");
+        assert!(shown.iter().any(|row| *row == format!("{}0s · Esc to interrupt", " ".repeat(7))), "{shown:?}");
+        assert!(!shown.iter().any(|row| row.contains('∴')), "the old thinking row is gone: {shown:?}");
+    }
+
+    #[test]
     fn a_full_live_area_shrinks_tasks_and_queue_before_the_running_call() {
         let mut app = test_app();
         app.height = 16;

@@ -110,10 +110,6 @@ impl App {
             if !rows.is_empty() || matches!(self.last_kind, Kind::Text | Kind::Note) {
                 space(&mut rows);
             }
-            if let Some((since, text)) = &self.thinking {
-                let first = first_sentence(text);
-                rows.push(fit(&format!("{DIM}∴ thinking {} {first}{RESET}", clock(since.elapsed())), width));
-            }
             let waiting_on_you = |running: &Running| {
                 self.asking.is_some()
                     && (running.summary.starts_with("ask_user_question") || running.summary.starts_with("exit_plan_mode"))
@@ -142,10 +138,22 @@ impl App {
             rows.extend(self.peer_rows(frame, width));
             shrink_head.extend(peers..rows.len());
             if self.asking.is_none() {
-                // Tool rows keep their list together, but the wordmark never touches them or the conversation.
+                // The action word never touches the tool rows or the conversation; the
+                // elapsed time and the interrupt hint sit on their own row under it.
                 space(&mut rows);
                 let retry = self.retry.map(|(attempt, until)| (attempt, until.saturating_duration_since(Instant::now())));
-                rows.push(fit(&working_row(self.spinner, started.elapsed(), retry, self.snapshotting), width));
+                let (action, detail) = if let Some((attempt, left)) = retry.filter(|(_, left)| !left.is_zero()) {
+                    ("retrying".to_string(), format!("in {} · attempt {attempt}", clock(left)))
+                } else if self.snapshotting {
+                    ("snapshot…".to_string(), String::new())
+                } else if let Some((_, text)) = &self.thinking {
+                    ("thinking".to_string(), first_sentence(text))
+                } else if !self.partial.trim().is_empty() {
+                    ("writing".to_string(), String::new())
+                } else {
+                    ("working".to_string(), String::new())
+                };
+                rows.extend(working_rows(self.spinner, started.elapsed(), &action, &detail).into_iter().map(|row| fit(&row, width)));
             }
             let queue = rows.len();
             for queued in &self.queued {

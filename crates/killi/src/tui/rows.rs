@@ -392,22 +392,22 @@ pub(super) fn handoff(
     out.join("\n")
 }
 
-/// A message queued while the agent works, saying Ctrl+S can send it now instead of
-/// waiting for the next step.
-/// The working row: the spinner and wordmark, then what the turn is doing and for how long.
-/// While a failed request waits to be retried it counts that wait down instead, since nothing
-/// is working then; once the wait is over the elapsed time of the turn returns. A snapshot
-/// still running on a blocking thread says so instead of working.
-pub(super) fn working_row(frame: usize, elapsed: Duration, retry: Option<(u32, Duration)>, snapshotting: bool) -> String {
-    let spin = banner::working(frame);
-    let doing = match retry.filter(|(_, left)| !left.is_zero()) {
-        Some((attempt, left)) => format!("{WARN}retrying in{RESET} {BOLD}{}{RESET} {DIM}· attempt {attempt}{RESET}", clock(left)),
-        None if snapshotting => format!("{DIM}snapshot…{RESET} {BOLD}{}{RESET}", clock(elapsed)),
-        None => format!("{DIM}working{RESET} {BOLD}{}{RESET}", clock(elapsed)),
+/// The working rows: the wave and the turn's action word (`thinking`, `writing`, …) with
+/// what it is doing after it, plain; then the turn's elapsed time and the interrupt hint on
+/// their own row, indented under the action word. While a failed request waits to be
+/// retried the first row counts that wait down instead, since nothing is working then. A
+/// snapshot still running on a blocking thread says so instead of working.
+pub(super) fn working_rows(frame: usize, elapsed: Duration, action: &str, detail: &str) -> Vec<String> {
+    let first = match detail.is_empty() {
+        true => banner::action(frame, action),
+        false => format!("{} {detail}", banner::action(frame, action)),
     };
-    format!("{spin} {doing} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}")
+    let second = format!("{:indent$}{BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}", "", clock(elapsed), indent = banner::INDENT);
+    vec![first, second]
 }
 
+/// A message queued while the agent works, saying Ctrl+S can send it now instead of
+/// waiting for the next step.
 pub(super) fn queued_row(queued: &str) -> String {
     format!("{FIN}❯{RESET} {DIM}{} (sent at the next step · Ctrl+S sends it now){RESET}", text::sanitize(queued).replace('\n', " "))
 }

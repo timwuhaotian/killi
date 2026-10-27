@@ -43,6 +43,10 @@ pub fn wordmark(version: &str) -> String {
     format!("{out}{RESET} {DIM}{version}{RESET}")
 }
 
+/// Columns the spinner's second row indents by: the wave and the space after it, so the
+/// elapsed time sits under the action word.
+pub const INDENT: usize = WAVE + 1;
+
 /// The wordmark that stands in for a spinner.
 const WORD: &str = "killi";
 /// Braille cells in the wave drawn before the word; each is two dots wide and four tall.
@@ -75,6 +79,13 @@ fn cell(left: usize, right: usize) -> char {
 /// a flat line and rolls on, then the `killi` wordmark fading in letter by letter, each with
 /// the logo's gradient flowing through it. Always as wide as the wave, a space and the word.
 pub fn working(frame: usize) -> String {
+    action(frame, WORD)
+}
+
+/// The spinner with an action word (`thinking`, `writing`, …) in place of the wordmark: the
+/// wave is unchanged, and the word fades in letter by letter with the logo's gradient
+/// flowing through it, like the wordmark does. As wide as the wave, a space and the word.
+pub fn action(frame: usize, word: &str) -> String {
     let truecolor = truecolor();
     let drift = frame as f32 * 0.035;
     // `across` is how far along its own piece a cell is, from 0 to 1; the word's gradient starts
@@ -93,14 +104,15 @@ pub fn working(frame: usize) -> String {
     }
     out.push_str(RESET);
     out.push(' ');
-    for (i, c) in WORD.chars().enumerate() {
+    let chars: Vec<char> = word.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
         let appeared = (frame as f32 - 2.0 * i as f32 + 1.0) / 3.0;
         if appeared <= 0.0 {
             out.push_str(&format!("{DIM}·{RESET}"));
             continue;
         }
-        out.push_str(&paint(i as f32 / (WORD.len() - 1) as f32, 0.5, appeared.clamp(0.0, 1.0) * 0.75 + 0.25));
-        out.push(c);
+        out.push_str(&paint(i as f32 / (chars.len() - 1).max(1) as f32, 0.5, appeared.clamp(0.0, 1.0) * 0.75 + 0.25));
+        out.push(*c);
         out.push_str(RESET);
     }
     out
@@ -199,9 +211,12 @@ mod tests {
     fn the_spinner_is_always_the_same_width() {
         for frame in 0..200 {
             assert_eq!(width(&working(frame)), WAVE + 1 + WORD.len(), "frame {frame}");
+            assert_eq!(width(&action(frame, "thinking")), WAVE + 1 + 8, "frame {frame}");
         }
         assert!(working(0).contains('·'));
         assert!(!working(20).contains('·'));
+        assert!(action(0, "writing").contains('·'));
+        assert!(!action(20, "writing").contains('·'));
     }
 
     #[test]

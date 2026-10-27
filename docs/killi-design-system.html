@@ -416,7 +416,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <tr><td>Prompt caret</td><td><code>❯</code></td><td><code>fin</code></td><td>—</td></tr>
 <tr><td>Your message</td><td><code>❯</code> (bold) on the tint</td><td><code>fin</code></td><td>—</td></tr>
 <tr><td>Running tool call</td><td><code>◐ ◓ ◑ ◒</code> (frames)</td><td><code>lagoon</code></td><td>the elapsed time</td></tr>
-<tr><td>Working</td><td>the braille wave and <code>killi</code> wordmark</td><td>banner gradient</td><td><code>working</code></td></tr>
+<tr><td>Working</td><td>the braille wave and the action word (<code>thinking</code>, <code>writing</code>, …)</td><td>banner gradient</td><td>what it is doing, plain</td></tr>
 <tr><td>Done</td><td><code>✓</code></td><td><code>fg-faint</code></td><td>the result: <code>24 lines</code></td></tr>
 <tr><td>Failed</td><td><code>✗</code></td><td><code>danger</code></td><td>the reason</td></tr>
 <tr><td>Warning, retry</td><td><code>⚠</code></td><td><code>warn</code></td><td><code>retry</code></td></tr>
@@ -563,12 +563,12 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <section class="comp" id="c-Spinner">
   <div class="comp-head"><h3>Spinner</h3><span class="muted">Signals</span></div>
   <div class="stage ki-stage" id="stage-Spinner"></div>
-  <div class="guide"><p>The working row, nearest the prompt while Killi works: a braille ribbon that rises from a flat line into a wave rolling to the right, then the <code>killi</code> wordmark fading in letter by letter, the banner's lagoon-to-periwinkle gradient flowing through both — followed by <code>working</code> in <code>fg-muted</code>, the elapsed time in <code>fg-strong</code>, then <code>·</code> in <code>fg-faint</code> and <code>Esc</code> in <code>lagoon</code> with <code>to interrupt</code> in <code>fg-muted</code>, like every other key hint. A running tool call turns the quarter glyph <code>◐ ◓ ◑ ◒</code> instead.</p>
-<p><strong>Provide:</strong> <code>elapsed</code>; <code>Quarter</code> for a tool row.</p>
+  <div class="guide"><p>The working rows, nearest the prompt while Killi works. First row: a braille ribbon that rises from a flat line into a wave rolling to the right, then the turn's action word (<code>thinking</code>, <code>writing</code>, <code>working</code>, …) fading in letter by letter, the banner's lagoon-to-periwinkle gradient flowing through both — followed by what it is doing, in plain text. Second row: the elapsed time in <code>fg-strong</code> under the action word, then <code>·</code> in <code>fg-faint</code> and <code>Esc</code> in <code>lagoon</code> with <code>to interrupt</code> in <code>fg-muted</code>, like every other key hint. A running tool call turns the quarter glyph <code>◐ ◓ ◑ ◒</code> instead.</p>
+<p><strong>Provide:</strong> <code>action</code>, <code>detail</code>, <code>elapsed</code>; <code>Quarter</code> for a tool row.</p>
 <ul>
-<li>Do keep exactly one wordmark on screen; tool rows above it carry their own glyph.</li>
-<li>Do leave a blank row above the working row: it never touches the conversation or a running tool call.</li>
-<li>Do hide the working row while a question waits on you — stillness means Killi is not working.</li>
+<li>Do keep exactly one action word on screen; tool rows above it carry their own glyph.</li>
+<li>Do leave a blank row above the working rows: they never touch the conversation or a running tool call.</li>
+<li>Do hide the working rows while a question waits on you — stillness means Killi is not working.</li>
 <li>Don't animate the glyph of a finished call.</li>
 </ul></div>
 </section>
@@ -676,8 +676,8 @@ export interface DiffLine {
 }
 export declare function Diff(props: { lines: DiffLine[]; more?: number }): JSX.Element;
 
-/** The working row: the wave, the wordmark and `working 12s · Esc to interrupt`. */
-export declare function Working(props: { elapsed?: number }): JSX.Element;
+/** The working rows: the wave and the action word with what it is doing, then the elapsed time with `Esc to interrupt` below. */
+export declare function Working(props: { action?: string; detail?: string; elapsed?: number }): JSX.Element;
 /** The turning glyph of a running tool call. */
 export declare function Quarter(): JSX.Element;
 
@@ -1056,9 +1056,10 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     return [0, 1, 2].map(function (k) { return a[k] + (b[k] - a[k]) * f; });
   }
 
-  /* The spinner, `frame` tenths of a second in — the same sums as banner::working. */
-  function wordmark(frame) {
-    var word = 'killi', cells = 6, drift = frame * 0.035;
+  /* The spinner, `frame` tenths of a second in — the same sums as banner::action. */
+  function wordmark(frame, word) {
+    word = word || 'killi';
+    var cells = 6, drift = frame * 0.035;
     var rise = Math.min(1, frame / 8), height = rise * (0.86 + 0.14 * Math.sin(frame * 0.16));
     var LEFT = [0x01, 0x02, 0x04, 0x40], RIGHT = [0x08, 0x10, 0x20, 0x80];
     var tint = function (across, shift, fade) {
@@ -1249,16 +1250,19 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
       props.more ? h('div', { className: 'ki-out' }, h('span', { className: 'ki-gutter' }, '│'), h('span', { className: 'ki-muted' }, '… ' + props.more + ' more line' + (props.more === 1 ? '' : 's'))) : null);
   }
 
-  /* Spinner: the working row, and the quarter glyph of a running tool call */
+  /* Spinner: the working rows, and the quarter glyph of a running tool call */
   function Working(props) {
     var frame = useTick(true, 20);
+    var action = props.action || 'working';
     return h('div', { className: 'ki-working', role: 'status' },
-      h('span', { className: 'ki-word' }, wordmark(frame)),
-      h('span', { className: 'ki-label' }, ' working '),
-      h('span', { className: 'ki-strong' }, clock(props.elapsed)),
-      h('span', { className: 'ki-faint' }, ' · '),
-      h('span', { className: 'ki-lagoon' }, 'Esc'),
-      h('span', { className: 'ki-label' }, ' to interrupt'));
+      h('div', null,
+        h('span', { className: 'ki-word' }, wordmark(frame, action)),
+        props.detail ? h('span', null, ' ' + props.detail) : null),
+      h('div', { style: { paddingLeft: '7ch' } },
+        h('span', { className: 'ki-strong' }, clock(props.elapsed)),
+        h('span', { className: 'ki-faint' }, ' · '),
+        h('span', { className: 'ki-lagoon' }, 'Esc'),
+        h('span', { className: 'ki-label' }, ' to interrupt')));
   }
   function Quarter() {
     var frame = useTick(true, 0);
@@ -1355,10 +1359,9 @@ h('div', null,
 );
 ReactDOM.createRoot(document.getElementById('stage-Spinner')).render(
 h('div', null,
-      h('div', { className: 'ki-muted ki-cut' }, '∴ thinking 4s The test expects punctuation removed.'),
       h(K.ToolCall, { name: 'bash', args: 'cargo test', status: 'running', elapsed: 3000 }),
       h(K.Blank),
-      h(K.Working, { elapsed: 12000 }))
+      h(K.Working, { action: 'thinking', detail: 'The test expects punctuation removed.', elapsed: 12000 }))
 );
 })();
 </script>

@@ -237,21 +237,21 @@ fn a_long_line_takes_the_rows_it_wraps_to() {
     }
 
     #[test]
-    fn the_working_row_counts_a_retry_wait_down_then_returns_to_the_turn() {
+    fn the_working_rows_name_the_action_and_put_the_time_with_the_hint_below() {
         let secs = Duration::from_secs;
-        let row = |retry| unstyled(&working_row(20, secs(45), retry, false));
-        assert!(row(None).ends_with("killi working 45s · Esc to interrupt"));
-        assert!(row(Some((2, secs(8)))).ends_with("killi retrying in 8s · attempt 2 · Esc to interrupt"));
-        assert!(row(Some((2, secs(0)))).ends_with("killi working 45s · Esc to interrupt"), "the wait is over, the request is in flight");
+        let rows: Vec<String> = working_rows(20, secs(45), "thinking", "The internal § references").iter().map(|row| unstyled(row)).collect();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].ends_with("thinking The internal § references"), "{}", rows[0]);
+        assert_eq!(rows[1], format!("{}45s · Esc to interrupt", " ".repeat(7)), "{}", rows[1]);
     }
 
     #[test]
-    fn the_working_row_names_a_snapshot_still_running() {
+    fn the_working_rows_leave_out_an_empty_detail() {
         let secs = Duration::from_secs;
-        let row = unstyled(&working_row(20, secs(45), None, true));
-        assert!(row.ends_with("killi snapshot… 45s · Esc to interrupt"), "{row}");
-        let retry = unstyled(&working_row(20, secs(45), Some((2, secs(8))), true));
-        assert!(retry.ends_with("killi retrying in 8s · attempt 2 · Esc to interrupt"), "the retry wait still wins: {retry}");
+        let rows: Vec<String> = working_rows(20, secs(45), "writing", "").iter().map(|row| unstyled(row)).collect();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].ends_with("writing"), "{}", rows[0]);
+        assert!(rows[1].ends_with("45s · Esc to interrupt"), "{}", rows[1]);
     }
 
     #[test]
