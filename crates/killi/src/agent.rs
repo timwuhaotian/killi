@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
-use futures_util::{StreamExt, future::join_all};
+use futures_util::{StreamExt, future::join_all, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -323,6 +323,14 @@ pub struct Stats {
     pub context: u64,
 }
 
+/// An in-flight `agent_swarm` call's results so far: its tool-call id, its item labels,
+/// and each finished subagent's `(text, is_error)` at its item's index.
+struct PartialSwarm {
+    id: String,
+    items: Vec<String>,
+    results: Vec<Option<(String, bool)>>,
+}
+
 pub struct Agent {
     client: Rc<Client>,
     tools: Rc<Vec<Value>>,
@@ -343,6 +351,9 @@ pub struct Agent {
     compact_floor: u64,
     /// Subagents started by swarm calls in this turn.
     swarm_used: usize,
+    /// The in-flight `agent_swarm` call's finished subagent results, if any, so an
+    /// interruption can keep them instead of dropping the whole swarm's work.
+    partial_swarm: Option<PartialSwarm>,
     /// The log already says that the provider hides its reasoning.
     reasoning_noted: bool,
     todos: Vec<Todo>,
@@ -503,6 +514,7 @@ impl Agent {
             accounted_messages: 0,
             compact_floor: 0,
             swarm_used: 0,
+            partial_swarm: None,
             reasoning_noted: false,
             todos: Vec::new(),
             plan_announced: false,
@@ -1185,6 +1197,9 @@ impl Agent {
 
     /// Reports and records a call's result. Returns true when the repeat breaker trips.
     fn finish_call(&mut self, id: &str, call: &ToolCall, mut output: tools::Output, took: Duration) -> Result<bool> {
+        if self.partial_swarm.as_ref().is_some_and(|partial| partial.id == id) {
+            self.partial_swarm = None;
+        }
         (self.sink)(Event::ToolEnd {
             id: id.into(),
             is_error: output.is_error,
@@ -1370,6 +1385,7 @@ impl Agent {
         self.swarm_used += prompts.len();
         let description = args["description"].as_str().map(str::trim).filter(|d| !d.is_empty()).unwrap_or("swarm");
         let items: Vec<String> = prompts.iter().map(|(item, _)| item.clone()).collect();
+        self.partial_swarm = Some(PartialSwarm { id: id.into(), items: items.clone(), results: vec![None; items.len()] });
         (self.sink)(Event::Swarm { id: id.into(), description: description.into(), items: items.clone() });
         let mut jobs = Vec::new();
         for (n, (_, prompt)) in prompts.into_iter().enumerate() {
@@ -1393,45 +1409,61 @@ impl Agent {
     /// Runs subagents, at most `limit` at once, the next starting as soon as one finishes, and
     /// returns each one's result as a tool output, in order. One that couldn't start reports why.
     async fn run_children(&mut self, jobs: Vec<Job>, limit: usize) -> Vec<tools::Output> {
-        let runs = jobs.into_iter().enumerate().map(|(index, job)| async move {
-            let (mut agent, prompt) = match job {
-                Ok(job) => job,
-                Err(output) => return (index, output, None),
-            };
-            (agent.sink)(Event::Started);
-            let output = match agent.run(&prompt, &[]).await {
-                Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => tools::Output::ok(text),
-                Ok((_, stop)) => tools::Output::error(format!("The subagent stopped without a final report ({stop:?}).")),
-                Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
-            };
-            (agent.sink)(Event::Finished { is_error: output.is_error });
-            // Only its counts outlive it: its conversation and log file are freed here, not
-            // when the slowest sibling of a swarm finishes.
-            (index, output, Some(std::mem::take(&mut agent.stats)))
-        });
-        let mut finished: Vec<_> = futures_util::stream::iter(runs).buffer_unordered(limit.max(1)).collect().await;
-        finished.sort_by_key(|(index, ..)| *index);
-        let mut outputs = Vec::new();
-        for (_, output, stats) in finished {
-            let Some(stats) = stats else {
-                outputs.push(output);
-                continue;
-            };
-            let usage = &stats.usage;
-            let total = &mut self.stats.usage;
-            total.prompt += usage.prompt;
-            total.cached += usage.cached;
-            total.completion += usage.completion;
-            total.reasoning += usage.reasoning;
-            self.stats.requests += stats.requests;
-            self.stats.tool_calls += stats.tool_calls;
-            outputs.push(if output.is_error {
-                output
-            } else {
-                output.brief(format!("{} requests, {} tool calls", stats.requests, stats.tool_calls))
-            });
+        let count = jobs.len();
+        let mut jobs = jobs.into_iter().enumerate();
+        let mut running = FuturesUnordered::new();
+        for (index, job) in jobs.by_ref().take(limit.max(1)) {
+            running.push(Self::run_child(index, job));
         }
-        outputs
+        let mut outputs: Vec<Option<tools::Output>> = Vec::new();
+        outputs.resize_with(count, || None);
+        while let Some((index, output, stats)) = running.next().await {
+            if let Some((next_index, next_job)) = jobs.next() {
+                running.push(Self::run_child(next_index, next_job));
+            }
+            let output = match stats {
+                Some(stats) => {
+                    let usage = &stats.usage;
+                    let total = &mut self.stats.usage;
+                    total.prompt += usage.prompt;
+                    total.cached += usage.cached;
+                    total.completion += usage.completion;
+                    total.reasoning += usage.reasoning;
+                    self.stats.requests += stats.requests;
+                    self.stats.tool_calls += stats.tool_calls;
+                    if output.is_error {
+                        output
+                    } else {
+                        output.brief(format!("{} requests, {} tool calls", stats.requests, stats.tool_calls))
+                    }
+                }
+                None => output,
+            };
+            if let Some(partial) = &mut self.partial_swarm
+                && let Some(result) = partial.results.get_mut(index)
+            {
+                *result = Some((output.text.clone(), output.is_error));
+            }
+            outputs[index] = Some(output);
+        }
+        outputs.into_iter().map(|output| output.expect("every child finished")).collect()
+    }
+
+    async fn run_child(index: usize, job: Job) -> (usize, tools::Output, Option<Stats>) {
+        let (mut agent, prompt) = match job {
+            Ok(job) => job,
+            Err(output) => return (index, output, None),
+        };
+        (agent.sink)(Event::Started);
+        let output = match agent.run(&prompt, &[]).await {
+            Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => tools::Output::ok(text),
+            Ok((_, stop)) => tools::Output::error(format!("The subagent stopped without a final report ({stop:?}).")),
+            Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
+        };
+        (agent.sink)(Event::Finished { is_error: output.is_error });
+        // Only its counts outlive it: its conversation and log file are freed here, not
+        // when the slowest sibling of a swarm finishes.
+        (index, output, Some(std::mem::take(&mut agent.stats)))
     }
 
     /// A subagent ready to run `prompt`, or why it couldn't start.
@@ -1481,6 +1513,7 @@ impl Agent {
             accounted_messages: inherited_len,
             compact_floor: 0,
             swarm_used: 0,
+            partial_swarm: None,
             reasoning_noted: false,
             todos: Vec::new(),
             plan_announced: self.plan_announced,
@@ -1600,8 +1633,24 @@ impl Agent {
     /// history stays valid, and notes the interruption for the next prompt.
     pub fn recover(&mut self) -> Result<()> {
         let missing = unanswered(&self.messages);
+        let partial = self.partial_swarm.take();
         for id in &missing {
-            self.push(json!({"role": "tool", "tool_call_id": id, "content": "Interrupted by the user before this finished."}))?;
+            let content = match &partial {
+                Some(partial) if partial.id == *id => {
+                    let outputs: Vec<tools::Output> = partial
+                        .results
+                        .iter()
+                        .map(|result| match result {
+                            Some((text, false)) => tools::Output::ok(text.clone()),
+                            Some((text, true)) => tools::Output::error(text.clone()),
+                            None => tools::Output::error("Interrupted by the user before this subagent finished, so it has no result."),
+                        })
+                        .collect();
+                    neutralize_reminder_tags(&swarm::report(&self.ctx, &partial.items, &outputs, MAX_RESULT_BYTES).text).into_owned()
+                }
+                _ => "Interrupted by the user before this finished.".to_string(),
+            };
+            self.push(json!({"role": "tool", "tool_call_id": id, "content": content}))?;
         }
         if !missing.is_empty()
             || self.messages.last().is_some_and(|m| m["role"] == "user" || m["role"] == "tool")
@@ -2901,6 +2950,29 @@ mod tests {
         assert!(!ends_with_question("done."));
         assert!(!ends_with_question(""));
         assert!(!ends_with_question("fixed? no, still broken"));
+    }
+
+    #[test]
+    fn recover_keeps_finished_swarm_reports() {
+        let mut agent = idle_agent("recover-swarm", Controls::default(), Rc::new(|_| {}));
+        agent.push(json!({"role": "assistant", "tool_calls": [{"id": "s1"}]})).unwrap();
+        agent.partial_swarm = Some(PartialSwarm {
+            id: "s1".into(),
+            items: vec!["a".into(), "b".into()],
+            results: vec![Some(("item zero report".into(), false)), None],
+        });
+        agent.recover().unwrap();
+        assert!(agent.interrupted);
+        assert!(agent.partial_swarm.is_none());
+        let results: Vec<&Value> = agent.messages.iter().filter(|m| m["role"] == "tool" && m["tool_call_id"] == "s1").collect();
+        assert_eq!(results.len(), 1);
+        let content = results[0]["content"].as_str().unwrap();
+        assert!(content.contains("item zero report"), "{content}");
+        assert!(content.contains("<subagent item=\"a\" outcome=\"completed\">"), "{content}");
+        assert!(content.contains("<subagent item=\"b\" outcome=\"failed\">"), "{content}");
+        assert!(content.contains("Interrupted by the user before this subagent finished, so it has no result."), "{content}");
+        assert!(content.contains("Run the failed items again"), "{content}");
+        assert_ne!(content, "Interrupted by the user before this finished.");
     }
 
     #[test]

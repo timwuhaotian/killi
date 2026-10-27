@@ -16,6 +16,8 @@ pub struct Editor {
     images: Vec<Image>,
     /// Images pasted this session, so a placeholder's number is never used twice.
     pasted: usize,
+    /// Text columns from the most recent `render`; 0 before any render, meaning unbounded.
+    room: std::cell::Cell<usize>,
 }
 
 impl Editor {
@@ -167,8 +169,20 @@ impl Editor {
         self.text.replace_range(self.cursor..end, "");
     }
 
-    /// Moves up a line, or to the previous history entry from the first line.
+    /// Moves up a visual row, or to the previous history entry from the first row. Before
+    /// any render the room is unbounded, so this is the old logical-line movement.
     pub fn up(&mut self) {
+        if self.room.get() != 0 {
+            let rows = self.visual_rows();
+            if let Some((row, column)) = self.visual_cursor(&rows) {
+                if row > 0 {
+                    self.cursor = Self::byte_at_column(&rows[row - 1], column);
+                    return;
+                }
+                self.recall_previous();
+                return;
+            }
+        }
         let start = self.line_start(self.cursor);
         if start > 0 {
             let column = self.text[start..self.cursor].chars().count();
@@ -176,6 +190,10 @@ impl Editor {
             self.cursor = self.at_column(prev_start, column);
             return;
         }
+        self.recall_previous();
+    }
+
+    fn recall_previous(&mut self) {
         let index = match &self.browsing {
             Some((i, _)) => i.checked_sub(1),
             None => self.history.len().checked_sub(1),
@@ -188,13 +206,29 @@ impl Editor {
         }
     }
 
-    /// Moves down a line, or to the next history entry from the last line.
+    /// Moves down a visual row, or to the next history entry from the last row. Before
+    /// any render the room is unbounded, so this is the old logical-line movement.
     pub fn down(&mut self) {
+        if self.room.get() != 0 {
+            let rows = self.visual_rows();
+            if let Some((row, column)) = self.visual_cursor(&rows) {
+                if row + 1 < rows.len() {
+                    self.cursor = Self::byte_at_column(&rows[row + 1], column);
+                    return;
+                }
+                self.recall_next();
+                return;
+            }
+        }
         if let Some(i) = self.text[self.cursor..].find('\n') {
             let column = self.text[self.line_start(self.cursor)..self.cursor].chars().count();
             self.cursor = self.at_column(self.cursor + i + 1, column);
             return;
         }
+        self.recall_next();
+    }
+
+    fn recall_next(&mut self) {
         if let Some((index, draft)) = self.browsing.take() {
             if index + 1 < self.history.len() {
                 self.text = self.history[index + 1].clone();
@@ -213,6 +247,82 @@ impl Editor {
     fn at_column(&self, line_start: usize, column: usize) -> usize {
         let line_end = self.text[line_start..].find('\n').map_or(self.text.len(), |i| line_start + i);
         self.text[line_start..line_end].char_indices().nth(column).map_or(line_end, |(i, _)| line_start + i)
+    }
+
+    /// The visual rows at the room from the last render, laid out as `render` lays them
+    /// out: tabs expand to the next 4-column stop and `row_starts` splits each line.
+    fn visual_rows(&self) -> Vec<VisualRow> {
+        let room = match self.room.get() {
+            0 => usize::MAX,
+            room => room,
+        };
+        let mut rows = Vec::new();
+        let mut offset = 0;
+        for line in self.text.split('\n') {
+            let mut chars: Vec<(usize, char, usize)> = Vec::new();
+            let mut column = 0;
+            for (i, c) in line.char_indices() {
+                if c == '\t' {
+                    for _ in 0..TAB - column % TAB {
+                        chars.push((i, ' ', 1));
+                    }
+                    column += TAB - column % TAB;
+                } else {
+                    let w = c.width().unwrap_or(0);
+                    chars.push((i, c, w));
+                    column += w;
+                }
+            }
+            let bounds: Vec<usize> = std::iter::once(0).chain(row_starts(&chars, room)).chain([chars.len()]).collect();
+            for (r, span) in bounds.windows(2).enumerate() {
+                let mut positions = Vec::new();
+                let mut column = 0;
+                for &(i, _, w) in &chars[span[0]..span[1]] {
+                    let byte = offset + i;
+                    if positions.last().map(|&(b, _)| b) != Some(byte) {
+                        positions.push((byte, column));
+                    }
+                    column += w;
+                }
+                let end = if span[1] == chars.len() { offset + line.len() } else { offset + chars[span[1]].0 };
+                rows.push(VisualRow { positions, end: (end, column), last: r + 2 == bounds.len() });
+            }
+            offset += line.len() + 1;
+        }
+        rows
+    }
+
+    /// The cursor's visual row and its display column in that row. A cursor at a logical
+    /// line's end is on that line's last row; otherwise the last row holding its byte
+    /// holds it, so a byte starting a wrapped row is on that row and a tab byte is at
+    /// the tab's first column in its row.
+    fn visual_cursor(&self, rows: &[VisualRow]) -> Option<(usize, usize)> {
+        if let Some(row) = rows.iter().position(|row| row.last && row.end.0 == self.cursor) {
+            return Some((row, rows[row].end.1));
+        }
+        let mut found = None;
+        for (row, visual) in rows.iter().enumerate() {
+            if let Some(&(_, column)) = visual.positions.iter().find(|&&(byte, _)| byte == self.cursor) {
+                found = Some((row, column));
+            }
+        }
+        found
+    }
+
+    /// The closest byte in `row` whose display column is at most `goal`, or the row's
+    /// end when `goal` is past it.
+    fn byte_at_column(row: &VisualRow, goal: usize) -> usize {
+        let mut at = row.positions.first().map_or(row.end.0, |&(byte, _)| byte);
+        for &(byte, column) in &row.positions {
+            if column > goal {
+                break;
+            }
+            at = byte;
+        }
+        if row.end.1 <= goal {
+            at = row.end.0;
+        }
+        at
     }
 
     fn prev_boundary(&self, at: usize) -> Option<usize> {
@@ -250,6 +360,7 @@ impl Editor {
     pub fn render(&self, prompt: &str, width: usize, known: &dyn Fn(&str) -> bool) -> (Vec<String>, usize, usize) {
         let prompt_width = super::text::width(prompt);
         let room = width.saturating_sub(prompt_width).max(1);
+        self.room.set(room);
         let marked = self.marked(known);
         let mut rows = Vec::new();
         let mut cursor = (0, prompt_width);
@@ -311,6 +422,14 @@ impl Editor {
         }
         (rows, cursor.0, cursor.1)
     }
+}
+
+/// One visual row: the first display column of each byte in it, its end byte and
+/// column, and whether it is its logical line's last row.
+struct VisualRow {
+    positions: Vec<(usize, usize)>,
+    end: (usize, usize),
+    last: bool,
 }
 
 /// The column a tab in the editor lays out to next.
@@ -386,6 +505,71 @@ mod tests {
         e.up();
         assert_eq!(e.text(), "first");
         e.down();
+        e.down();
+        assert_eq!(e.text(), "draft");
+    }
+
+    #[test]
+    fn up_and_down_move_between_visual_rows_of_a_wrapped_line() {
+        let mut e = Editor::with_history(vec!["earlier".into()]);
+        e.insert("hello there world");
+        e.render("› ", 12, &|_| false);
+        assert_eq!(e.cursor, 17);
+        e.up();
+        assert_eq!((e.text(), e.cursor), ("hello there world", 11), "up stays in the text instead of recalling history");
+        e.up();
+        assert_eq!((e.text(), e.cursor), ("hello there world", 5));
+        e.down();
+        assert_eq!((e.text(), e.cursor), ("hello there world", 11));
+        e.down();
+        assert_eq!((e.text(), e.cursor), ("hello there world", 17));
+        e.up();
+        e.up();
+        assert_eq!(e.cursor, 5);
+        e.up();
+        assert_eq!(e.text(), "earlier", "up from the top visual row recalls history");
+        e.down();
+        assert_eq!(e.text(), "hello there world", "down from the recalled entry returns the draft");
+    }
+
+    #[test]
+    fn up_and_down_still_move_between_lines_after_a_render() {
+        let mut e = Editor::default();
+        e.insert("hello\nworld!");
+        e.render("", 20, &|_| false);
+        e.up();
+        assert_eq!(e.cursor, 5);
+        e.down();
+        assert_eq!(e.cursor, 11);
+        let mut e = Editor::default();
+        e.insert("ab cd\nef gh");
+        e.render("", 3, &|_| false);
+        assert_eq!(e.cursor, 11);
+        e.up();
+        assert_eq!(e.cursor, 8, "up crosses into the wrapped row above");
+        e.up();
+        assert_eq!(e.cursor, 5, "up reaches the end of the line above");
+        e.up();
+        assert_eq!(e.cursor, 2);
+        e.down();
+        assert_eq!(e.cursor, 5);
+        e.down();
+        assert_eq!(e.cursor, 8);
+        e.down();
+        assert_eq!(e.cursor, 11);
+    }
+
+    #[test]
+    fn history_draft_round_trip_after_a_render() {
+        let mut e = Editor::with_history(vec!["first".into(), "second".into()]);
+        e.insert("draft");
+        e.render("", 20, &|_| false);
+        e.up();
+        assert_eq!(e.text(), "second");
+        e.up();
+        assert_eq!(e.text(), "first");
+        e.down();
+        assert_eq!(e.text(), "second");
         e.down();
         assert_eq!(e.text(), "draft");
     }
