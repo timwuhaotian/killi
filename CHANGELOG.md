@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.5 — 2026-10-27
+
+- While a question waits, ← walks back over this turn's answered questions (and →
+  forward again to the waiting one), showing each question with the answer given.
+  Changing an earlier answer records a correction that rides with the waiting
+  question's answer, so the model hears both; Esc on a revisited question just
+  returns. Only model questions take part, not plan approval or config flows.
+- The working rows' elapsed time and `Esc to interrupt` now start at the left edge,
+  aligned with the braille wave instead of indented under the action word. While a
+  turn's opening snapshot runs, the wave's word cycles through Chinese words
+  (结印、封存、留影、藏锋、掠影、蓄势, 0.8s each) instead of the internal `snapshot…`.
+
 ## 0.6.4 — 2026-10-27
 
 - Notifications in Kil are always Kil's own, never Script Editor's. killi no longer checks

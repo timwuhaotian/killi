@@ -206,6 +206,46 @@ use super::*;
     }
 
     #[test]
+    fn left_and_right_walk_answered_questions_and_a_change_rides_the_next_answer() {
+        let mut app = test_app();
+        app.width = 80;
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let ask = |text: &str, options: &[&str]| {
+            let (reply, answer) = oneshot::channel::<String>();
+            (Asking { question: Question { text: text.into(), options: options.iter().map(|o| o.to_string()).collect(), plan: false, reply }, selected: 0, internal: false, secret: false }, answer)
+        };
+        let (asking, mut first) = ask("Delete all?", &["all", "biggest", "none"]);
+        app.asking = Some(asking);
+        app.on_key_asking(key(KeyCode::Down));
+        app.on_key_asking(key(KeyCode::Tab));
+        assert_eq!(first.try_recv().unwrap(), "biggest");
+        let (asking, mut second) = ask("Keep logs?", &["yes", "no"]);
+        app.asking = Some(asking);
+        let (rows, _, _) = app.live();
+        let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
+        assert!(shown.iter().any(|row| row.contains("← previous question")), "{shown:?}");
+        app.on_key_asking(key(KeyCode::Left));
+        assert_eq!(app.ask_view, Some(0));
+        let (rows, _, _) = app.live();
+        let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
+        assert!(shown.iter().any(|row| row.contains("question 1/2") && row.contains("Delete all?")), "{shown:?}");
+        assert!(shown.iter().any(|row| row.contains("answered: biggest")), "{shown:?}");
+        app.on_key_asking(key(KeyCode::Up));
+        app.on_key_asking(key(KeyCode::Tab));
+        assert_eq!(app.ask_view, None, "confirming a change returns to the waiting question");
+        assert_eq!(app.ask_corrections.len(), 1);
+        app.on_key_asking(key(KeyCode::Left));
+        app.on_key_asking(key(KeyCode::Right));
+        assert_eq!(app.ask_view, None, "→ past the last answered question returns to the waiting one");
+        app.on_key_asking(key(KeyCode::Tab));
+        let payload = second.try_recv().unwrap();
+        assert!(payload.contains("更正之前的问题「Delete all?」：答案改为「all」（原为「biggest」）"), "{payload}");
+        assert!(payload.ends_with("本问答案：yes"), "{payload}");
+        assert_eq!(app.ask_past.len(), 2);
+        assert!(app.ask_corrections.is_empty());
+    }
+
+    #[test]
     fn the_live_area_merges_the_thought_into_the_action_row() {
         let mut app = test_app();
         app.busy = Some(Instant::now());
@@ -215,8 +255,21 @@ use super::*;
         let (rows, _, _) = app.live();
         let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
         assert!(shown.iter().any(|row| row.ends_with("thinking The internal § references are relative.")), "{shown:?}");
-        assert!(shown.iter().any(|row| *row == format!("{}0s · Esc to interrupt", " ".repeat(7))), "{shown:?}");
+        assert!(shown.iter().any(|row| row == "0s · Esc to interrupt"), "{shown:?}");
         assert!(!shown.iter().any(|row| row.contains('∴')), "the old thinking row is gone: {shown:?}");
+    }
+
+    #[test]
+    fn a_running_snapshot_shows_a_chinese_word_not_snapshot() {
+        let mut app = test_app();
+        app.busy = Some(Instant::now());
+        app.snapshotting = true;
+        app.spinner = 8;
+        app.width = 80;
+        let (rows, _, _) = app.live();
+        let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
+        assert!(shown.iter().any(|row| row.ends_with("封存")), "{shown:?}");
+        assert!(!shown.iter().any(|row| row.contains("snapshot")), "{shown:?}");
     }
 
     #[test]

@@ -242,7 +242,16 @@ fn a_long_line_takes_the_rows_it_wraps_to() {
         let rows: Vec<String> = working_rows(20, secs(45), "thinking", "The internal § references").iter().map(|row| unstyled(row)).collect();
         assert_eq!(rows.len(), 2);
         assert!(rows[0].ends_with("thinking The internal § references"), "{}", rows[0]);
-        assert_eq!(rows[1], format!("{}45s · Esc to interrupt", " ".repeat(7)), "{}", rows[1]);
+        assert_eq!(rows[1], "45s · Esc to interrupt", "{}", rows[1]);
+    }
+
+    #[test]
+    fn the_snapshot_word_cycles_through_chinese_words() {
+        assert_eq!(snapshot_word(0), "结印");
+        assert_eq!(snapshot_word(7), "结印", "a word shows for eight frames");
+        assert_eq!(snapshot_word(8), "封存");
+        assert_eq!(snapshot_word(8 * 6), "结印", "the words wrap round");
+        assert!((0..6).all(|i| !snapshot_word(i * 8).is_ascii()), "no internal word shows");
     }
 
     #[test]

@@ -160,6 +160,29 @@ impl App {
     }
 
     pub(super) fn on_key_asking(&mut self, key: KeyEvent) -> bool {
+        // ←/→ walk this turn's questions while one waits: back over the answered ones,
+        // forward again to the waiting one. Typing keeps the arrows for the text.
+        let navigable = self.asking.as_ref().is_some_and(|a| !a.internal && !a.question.plan) && !self.ask_past.is_empty();
+        if navigable && self.editor.is_empty() {
+            match key.code {
+                KeyCode::Left => {
+                    self.ask_view = Some(match self.ask_view {
+                        None => self.ask_past.len() - 1,
+                        Some(view) => view.saturating_sub(1),
+                    });
+                    return false;
+                }
+                KeyCode::Right if self.ask_view.is_some() => {
+                    let view = self.ask_view.expect("viewing an answered question");
+                    self.ask_view = if view + 1 >= self.ask_past.len() { None } else { Some(view + 1) };
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        if self.ask_view.is_some() {
+            return self.on_key_past(key);
+        }
         let asking = self.asking.as_mut().expect("a question is open");
         let count = asking.question.options.len();
         match key.code {
@@ -175,7 +198,15 @@ impl App {
                 if asking.internal {
                     self.search = None;
                 }
-                let _ = asking.question.reply.send(String::new());
+                // A correction with no answer to ride on goes on its own, or it is lost.
+                let note = std::mem::take(&mut self.ask_corrections);
+                let payload = if note.is_empty() { String::new() } else { format!("{}（本问未作答）", note.join("\n")) };
+                for line in &note {
+                    self.commit(format!("  {FIN}↳{RESET} {line}"));
+                }
+                self.ask_past.clear();
+                self.ask_view = None;
+                let _ = asking.question.reply.send(payload);
                 self.commit(format!("{DIM}  (dismissed){RESET}"));
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.editor.is_empty() => self.editor.clear(),
@@ -190,14 +221,65 @@ impl App {
         false
     }
 
+    /// Keys while an answered question is on screen instead of the waiting one: choosing
+    /// confirms the change and returns to the waiting question; Esc just returns.
+    fn on_key_past(&mut self, key: KeyEvent) -> bool {
+        let view = self.ask_view.expect("viewing an answered question");
+        let count = self.ask_past[view].options.len();
+        match key.code {
+            KeyCode::Up if self.editor.is_empty() => self.ask_past[view].selected = self.ask_past[view].selected.saturating_sub(1),
+            KeyCode::Down if self.editor.is_empty() => {
+                self.ask_past[view].selected = (self.ask_past[view].selected + 1).min(count.saturating_sub(1))
+            }
+            KeyCode::Char(c) if self.editor.is_empty() && c.is_ascii_digit() && (1..=count).contains(&(c as usize - '0' as usize)) => {
+                self.ask_past[view].selected = c as usize - '1' as usize;
+                self.confirm_past(None);
+            }
+            KeyCode::Tab if self.editor.is_empty() => self.confirm_past(None),
+            KeyCode::Esc => self.ask_view = None,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.editor.is_empty() => self.editor.clear(),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
+            KeyCode::Enter if !newline_key(&key) => {
+                let typed = self.editor.take();
+                self.confirm_past(Some(typed).filter(|t| !t.trim().is_empty()));
+            }
+            _ => self.edit_key(key),
+        }
+        false
+    }
+
+    /// Records a revisited answer that changed as a correction for the model, and goes
+    /// back to the waiting question. An unchanged answer records nothing.
+    fn confirm_past(&mut self, typed: Option<String>) {
+        let view = self.ask_view.take().expect("viewing an answered question");
+        let past = &mut self.ask_past[view];
+        let answer = typed.unwrap_or_else(|| past.options.get(past.selected).cloned().unwrap_or_default());
+        if let Some(at) = past.options.iter().position(|option| *option == answer) {
+            past.selected = at;
+        }
+        if answer != past.answer {
+            let old = std::mem::replace(&mut past.answer, answer.clone());
+            self.ask_corrections.push(format!("更正之前的问题「{}」：答案改为「{answer}」（原为「{old}」）", first_line(&past.text, 60)));
+        }
+    }
+
     fn answer(&mut self, typed: Option<String>) {
         let asking = self.asking.take().expect("a question is open");
         let answer = typed.unwrap_or_else(|| asking.question.options.get(asking.selected).cloned().unwrap_or_default());
         if asking.internal {
             return self.search_answer(&answer, asking.secret);
         }
+        if !asking.question.plan {
+            let selected = asking.question.options.iter().position(|option| *option == answer).unwrap_or(asking.selected);
+            self.ask_past.push(PastAsk { text: asking.question.text.clone(), options: asking.question.options.clone(), selected, answer: answer.clone() });
+        }
+        let note = std::mem::take(&mut self.ask_corrections);
+        for line in &note {
+            self.commit(format!("  {FIN}↳{RESET} {line}"));
+        }
         self.commit(format!("  {FIN}↳{RESET} {}", text::sanitize(&answer)));
-        let _ = asking.question.reply.send(answer);
+        let payload = if note.is_empty() { answer } else { format!("{}\n本问答案：{answer}", note.join("\n")) };
+        let _ = asking.question.reply.send(payload);
     }
 
     /// Keys that edit the prompt, the same whether or not the agent works.

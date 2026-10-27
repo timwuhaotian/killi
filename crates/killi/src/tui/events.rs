@@ -121,6 +121,7 @@ impl App {
                     self.emit(Line::block(move |width| question_rows(&text, width)));
                 }
                 let asked = first_line(&question.text, 120);
+                self.ask_view = None;
                 self.asking = Some(Asking { question, selected: 0, internal: false, secret: false });
                 notify("Waiting for your answer", &asked);
             }

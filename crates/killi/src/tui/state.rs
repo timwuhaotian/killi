@@ -82,6 +82,16 @@ pub(super) struct Asking {
     pub(super) secret: bool,
 }
 
+/// A model question already answered in this turn, kept so ← can revisit it while the
+/// next question waits. Its answer already went to the model; changing it here records a
+/// correction in `App::ask_corrections`, sent with the waiting question's answer.
+pub(super) struct PastAsk {
+    pub(super) text: String,
+    pub(super) options: Vec<String>,
+    pub(super) selected: usize,
+    pub(super) answer: String,
+}
+
 #[derive(Default)]
 pub(super) struct Status {
     pub(super) model: String,
@@ -132,6 +142,12 @@ pub(super) struct App {
     pub(super) swarm: Option<swarm::Swarm>,
     pub(super) todos: Vec<Todo>,
     pub(super) asking: Option<Asking>,
+    /// This turn's answered model questions, oldest first, for ←/→ navigation.
+    pub(super) ask_past: Vec<PastAsk>,
+    /// The `ask_past` index on screen instead of the waiting question, when revisiting.
+    pub(super) ask_view: Option<usize>,
+    /// Corrections to answers already sent, delivered with the waiting question's answer.
+    pub(super) ask_corrections: Vec<String>,
     pub(super) picker: Option<Picker>,
     /// A /web-search-config flow between its questions.
     pub(super) search: Option<SearchFlow>,

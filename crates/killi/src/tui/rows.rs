@@ -392,17 +392,27 @@ pub(super) fn handoff(
     out.join("\n")
 }
 
+/// Words for the turn's opening snapshot (the undo point taken on a blocking thread),
+/// cycled while it runs so the internal word never shows. All two characters, so the
+/// spinner keeps one width, and each shows for eight frames (0.8s).
+const SNAPSHOT_WORDS: [&str; 6] = ["结印", "封存", "留影", "藏锋", "掠影", "蓄势"];
+
+/// The snapshot word `frame` tenths of a second into the turn.
+pub(super) fn snapshot_word(frame: usize) -> &'static str {
+    SNAPSHOT_WORDS[frame / 8 % SNAPSHOT_WORDS.len()]
+}
+
 /// The working rows: the wave and the turn's action word (`thinking`, `writing`, …) with
 /// what it is doing after it, plain; then the turn's elapsed time and the interrupt hint on
-/// their own row, indented under the action word. While a failed request waits to be
+/// their own row, left-aligned with the wave. While a failed request waits to be
 /// retried the first row counts that wait down instead, since nothing is working then. A
-/// snapshot still running on a blocking thread says so instead of working.
+/// snapshot still running on a blocking thread shows a snapshot word instead of working.
 pub(super) fn working_rows(frame: usize, elapsed: Duration, action: &str, detail: &str) -> Vec<String> {
     let first = match detail.is_empty() {
         true => banner::action(frame, action),
         false => format!("{} {detail}", banner::action(frame, action)),
     };
-    let second = format!("{:indent$}{BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}", "", clock(elapsed), indent = banner::INDENT);
+    let second = format!("{BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}", clock(elapsed));
     vec![first, second]
 }
 

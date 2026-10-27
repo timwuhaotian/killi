@@ -145,7 +145,7 @@ impl App {
                 let (action, detail) = if let Some((attempt, left)) = retry.filter(|(_, left)| !left.is_zero()) {
                     ("retrying".to_string(), format!("in {} · attempt {attempt}", clock(left)))
                 } else if self.snapshotting {
-                    ("snapshot…".to_string(), String::new())
+                    (snapshot_word(self.spinner).to_string(), String::new())
                 } else if let Some((_, text)) = &self.thinking {
                     ("thinking".to_string(), first_sentence(text))
                 } else if !self.partial.trim().is_empty() {
@@ -223,16 +223,44 @@ impl App {
             rows.push(hint_row(&hints, width));
         }
         if let Some(asking) = &self.asking {
-            let names: Vec<String> = asking.question.options.iter().enumerate().map(|(i, o)| format!("{}. {}", i + 1, text::sanitize_row(o))).collect();
+            // While an answered question is revisited, its text and given answer stand
+            // above its options; the waiting question's text is in the scrollback already.
+            let past = self.ask_view.and_then(|view| self.ask_past.get(view)).filter(|_| !asking.internal && !asking.question.plan);
+            let (options, selected) = match past {
+                Some(past) => (past.options.as_slice(), past.selected),
+                None => (asking.question.options.as_slice(), asking.selected),
+            };
+            let names: Vec<String> = options.iter().enumerate().map(|(i, o)| format!("{}. {}", i + 1, text::sanitize_row(o))).collect();
+            if let (Some(past), Some(view)) = (past, self.ask_view) {
+                let head = format!("{BOLD}{FIN}?{RESET} {DIM}question {}/{}{RESET} {BOLD}{}{RESET}", view + 1, self.ask_past.len() + 1, first_line(&past.text, 80));
+                rows.push(fit(&head, width));
+            }
             let visible = names.len().min(room.max(1));
-            rows.extend(ask_rows(&names, asking.selected.min(names.len().saturating_sub(1)), visible, width));
-            let own = if asking.question.plan { "or type a change" } else { "or type an answer" };
+            rows.extend(ask_rows(&names, selected.min(names.len().saturating_sub(1)), visible, width));
+            if let Some(past) = past {
+                rows.push(fit(&format!("  {FIN}↳{RESET} {DIM}answered: {}", text::sanitize_row(&past.answer)), width));
+            }
             let mut hints: Vec<(u8, String)> = match names.len() {
                 0 => Vec::new(),
                 1 => vec![(5, "Tab or Enter chooses".into())],
                 n => vec![(4, format!("1-{} or ↑↓ choose", n.min(9))), (5, "Tab or Enter confirms".into())],
             };
-            hints.extend([(3, own.to_string()), (2, "Esc dismisses".to_string())]);
+            match past {
+                Some(_) => {
+                    if let Some(confirm) = hints.get_mut(1) {
+                        confirm.1 = "Tab or Enter confirms change".into();
+                    }
+                    hints.push((6, format!("←→ questions {}/{}", self.ask_view.expect("viewing an answered question") + 1, self.ask_past.len() + 1)));
+                    hints.extend([(3, "or type a new answer".to_string()), (2, "Esc back".to_string())]);
+                }
+                None => {
+                    let own = if asking.question.plan { "or type a change" } else { "or type an answer" };
+                    if !asking.internal && !asking.question.plan && !self.ask_past.is_empty() {
+                        hints.push((6, "← previous question".to_string()));
+                    }
+                    hints.extend([(3, own.to_string()), (2, "Esc dismisses".to_string())]);
+                }
+            }
             rows.push(hint_row(&hints, width));
         }
         if rows.len() > listed + usize::from(modal) {

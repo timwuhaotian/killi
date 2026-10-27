@@ -159,6 +159,9 @@ impl App {
 
     pub(super) fn begin_turn(&mut self, prompt: &str) {
         self.commit_prompt(prompt);
+        self.ask_past.clear();
+        self.ask_view = None;
+        self.ask_corrections.clear();
         self.begin_busy();
     }
 
@@ -222,6 +225,9 @@ impl App {
         if let Some(asking) = self.asking.take() {
             let _ = asking.question.reply.send(String::new());
         }
+        self.ask_past.clear();
+        self.ask_view = None;
+        self.ask_corrections.clear();
         // The typed copies of queued messages: Ctrl+S still sends them from here, and a
         // turn that ends without consuming them puts them (not their `@`-expansions) back.
         let typed = std::mem::take(&mut self.queued);

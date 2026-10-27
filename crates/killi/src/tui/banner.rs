@@ -43,10 +43,6 @@ pub fn wordmark(version: &str) -> String {
     format!("{out}{RESET} {DIM}{version}{RESET}")
 }
 
-/// Columns the spinner's second row indents by: the wave and the space after it, so the
-/// elapsed time sits under the action word.
-pub const INDENT: usize = WAVE + 1;
-
 /// The wordmark that stands in for a spinner.
 const WORD: &str = "killi";
 /// Braille cells in the wave drawn before the word; each is two dots wide and four tall.
