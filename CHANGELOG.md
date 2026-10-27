@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.10 — 2026-10-28
+
+- A `/` command or skill typed in full sends on the first Enter, also while the
+  agent works: the completion menu no longer stays open over a complete name
+  (like the `@` menu over a fully typed path) and swallow the key.
+
 ## 0.6.9 — 2026-10-27
 
 - Scripts only: `sessions.py` reports cache-miss streaks (3+ uncached requests
