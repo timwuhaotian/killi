@@ -198,6 +198,7 @@ impl Agent {
             partial_swarm: None,
             reasoning_noted: false,
             todos: Vec::new(),
+            calls_since_todo: 0,
             plan_announced: self.plan_announced,
             swarm_announced: false,
             peers_announced: Vec::new(),

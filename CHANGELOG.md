@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.2 — 2026-10-27
+
+- The task list no longer stays at `0/8` through a long turn: when 10 tool calls go by with
+  an item open and no `todo_write`, the model is reminded mid-turn which item still shows as
+  current, not only when the turn ends. A reply ending in a full-width `？` now counts as a
+  question too, so a Chinese reply that asks the user something isn't re-prompted about its
+  open items.
+
 ## 0.6.1 — 2026-10-27
 
 - `ask_user_question` options wrap onto as many rows as they need instead of being cut

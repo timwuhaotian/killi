@@ -112,6 +112,41 @@ async fn a_message_typed_during_a_call_goes_ahead_of_the_calls_after_it() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_task_list_unchanged_for_many_calls_is_pointed_out_once() {
+    let mut agent = idle_agent("stale-tasks", Controls::default(), Rc::new(|_| {}));
+    std::fs::write(agent.ctx.cwd.join("a.txt"), "alpha").unwrap();
+    let read = |id: &str| (id.to_string(), ToolCall { id: id.into(), name: "read".into(), arguments: r#"{"path":"a.txt"}"#.into() });
+    let list = |id: &str, todos: &str| {
+        (id.to_string(), ToolCall { id: id.into(), name: "todo_write".into(), arguments: format!(r#"{{"todos":{todos}}}"#) })
+    };
+    let reads = |n: usize| (0..n).map(|i| read(&format!("r{i}"))).collect::<Vec<_>>();
+    let stale = |agent: &Agent| agent.messages.iter().filter(|m| m["content"].as_str().is_some_and(|c| c.contains("hasn't changed in"))).count();
+    // Without a list, no number of calls says anything.
+    agent.execute_calls(reads(STALE_TASKS_AFTER), false).await.unwrap();
+    agent.before_request().await.unwrap();
+    assert_eq!(stale(&agent), 0);
+    // Setting the list starts the count over; one call short of the limit stays quiet.
+    agent.execute_calls(vec![list("t", r#"[{"content":"first","status":"in_progress"},{"content":"second","status":"pending"}]"#)], false).await.unwrap();
+    agent.execute_calls(reads(STALE_TASKS_AFTER - 1), false).await.unwrap();
+    agent.before_request().await.unwrap();
+    assert_eq!(stale(&agent), 0);
+    agent.execute_calls(reads(1), false).await.unwrap();
+    agent.before_request().await.unwrap();
+    assert_eq!(stale(&agent), 1);
+    assert!(agent.messages.last().unwrap()["content"].as_str().unwrap().contains("`first` still shows"));
+    // Said once, then not again until as many calls pass; a finished list ends it.
+    agent.before_request().await.unwrap();
+    assert_eq!(stale(&agent), 1);
+    agent.execute_calls(reads(STALE_TASKS_AFTER), false).await.unwrap();
+    agent.before_request().await.unwrap();
+    assert_eq!(stale(&agent), 2);
+    agent.execute_calls(vec![list("u", r#"[{"content":"first","status":"completed"},{"content":"second","status":"completed"}]"#)], false).await.unwrap();
+    agent.execute_calls(reads(STALE_TASKS_AFTER), false).await.unwrap();
+    agent.before_request().await.unwrap();
+    assert_eq!(stale(&agent), 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_subagent_leaves_finished_tasks_for_its_parent_to_report() {
     let mut agent = idle_agent("child-tasks", Controls::default(), Rc::new(|_| {}));
     agent.push(json!({"role": "system", "content": "sys"})).unwrap();

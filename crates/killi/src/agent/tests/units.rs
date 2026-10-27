@@ -130,6 +130,17 @@ fn a_finished_task_list_is_not_mentioned_but_an_open_one_is() {
 }
 
 #[test]
+fn a_task_list_left_unchanged_names_its_current_item() {
+    let todo = |content: &str, status: &str| Todo { content: content.into(), status: status.into() };
+    assert!(stale_tasks_note(&[], 10).is_none());
+    assert!(stale_tasks_note(&[todo("a", "completed")], 10).is_none());
+    let note = stale_tasks_note(&[todo("a", "completed"), todo("b", "pending"), todo("c", "in_progress")], 12).unwrap();
+    assert!(note.contains("in 12 tool calls") && note.contains("`c` still shows"), "{note}");
+    let note = stale_tasks_note(&[todo("a", "completed"), todo("b", "pending")], 10).unwrap();
+    assert!(note.contains("`b` still shows"), "{note}");
+}
+
+#[test]
 fn a_conversation_cut_down_to_be_summarized_keeps_its_shape() {
     let long = "x".repeat(10_000);
     let history = vec![
@@ -311,6 +322,7 @@ fn a_side_question_is_told_what_the_running_call_waits_on() {
 fn a_reply_that_asks_a_question_does_not_reannounce_open_tasks() {
     assert!(ends_with_question("done.\n\nShould I proceed?"));
     assert!(ends_with_question("done.\n\n  Really?  \n\n"));
+    assert!(ends_with_question("好了。\n\n要记成一条待办吗？"));
     assert!(!ends_with_question("done."));
     assert!(!ends_with_question(""));
     assert!(!ends_with_question("fixed? no, still broken"));

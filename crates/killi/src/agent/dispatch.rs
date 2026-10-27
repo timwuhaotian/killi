@@ -233,6 +233,11 @@ impl Agent {
         if self.partial_swarm.as_ref().is_some_and(|partial| partial.id == id) {
             self.partial_swarm = None;
         }
+        if call.name == "todo_write" && !output.is_error {
+            self.calls_since_todo = 0;
+        } else {
+            self.calls_since_todo += 1;
+        }
         (self.sink)(Event::ToolEnd {
             id: id.into(),
             is_error: output.is_error,

@@ -149,6 +149,13 @@ impl Agent {
         if let Some(note) = self.peers_note() {
             self.push(json!({"role": "user", "content": note}))?;
         }
+        if self.depth == 0
+            && self.calls_since_todo >= STALE_TASKS_AFTER
+            && let Some(note) = stale_tasks_note(&self.todos, self.calls_since_todo)
+        {
+            self.calls_since_todo = 0;
+            self.push(json!({"role": "user", "content": note}))?;
+        }
         if self.depth == 0 {
             // Subagents share this task list: reading it here would swallow the notices the
             // parent still has to report.
@@ -196,9 +203,24 @@ impl Agent {
 }
 
 /// Whether the reply ends by asking the user something: its last non-empty line ends with
-/// `?`. An open task list isn't re-announced then; the question already waits for the user.
+/// `?` (or the full-width `？` of Chinese and Japanese replies). An open task list isn't re-announced then; the question already waits for the user.
 pub(super) fn ends_with_question(text: &str) -> bool {
-    text.lines().rev().find(|line| !line.trim().is_empty()).is_some_and(|line| line.trim_end().ends_with('?'))
+    text.lines().rev().find(|line| !line.trim().is_empty()).is_some_and(|line| line.trim_end().ends_with(['?', '？']))
+}
+
+/// Tool calls the task list may go unchanged for with an item open before the model is
+/// reminded of it mid-turn; otherwise a long turn can finish every item with the screen
+/// still showing the first one in progress.
+pub(super) const STALE_TASKS_AFTER: usize = 10;
+
+/// Told to the agent mid-turn when its task list hasn't changed in `calls` tool calls with
+/// items still open. None when the list is empty or finished.
+pub(super) fn stale_tasks_note(todos: &[Todo], calls: usize) -> Option<String> {
+    let current = todos.iter().find(|t| t.status == "in_progress").or_else(|| todos.iter().find(|t| t.status != "completed"))?;
+    Some(format!(
+        "<system-reminder>Your task list hasn't changed in {calls} tool calls; `{}` still shows as the current item. If it or others are finished, call todo_write now with them completed and the next one in_progress; if not, carry on.</system-reminder>",
+        truncate(&current.content, 120)
+    ))
 }
 
 /// Told to the agent when it ends a turn with its task list unfinished, which shows on the

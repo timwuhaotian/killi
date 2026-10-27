@@ -51,7 +51,7 @@ use request::hides_reasoning;
 #[cfg(test)]
 use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm};
 #[cfg(test)]
-use turn::{ends_with_question, open_tasks_note};
+use turn::{STALE_TASKS_AFTER, ends_with_question, open_tasks_note, stale_tasks_note};
 #[cfg(test)]
 use types::{BTW_NOTE, RECAP_CHARS, RECAP_MAX, RECAP_NOTE, fit_recap, side_request};
 
@@ -100,6 +100,9 @@ pub struct Agent {
     /// The log already says that the provider hides its reasoning.
     reasoning_noted: bool,
     todos: Vec<Todo>,
+    /// Tool calls finished since the task list last changed; past `STALE_TASKS_AFTER` with an
+    /// item open, the model is reminded to keep the list current.
+    calls_since_todo: usize,
     plan_announced: bool,
     swarm_announced: bool,
     /// The other sessions in this tree the model was last told about, by pid.
