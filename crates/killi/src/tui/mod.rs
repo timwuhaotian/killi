@@ -220,6 +220,29 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 }
                 Err(e) => app.error_report(&e),
             },
+            Input::BackupModel(alias) => {
+                let alias = alias.trim().to_string();
+                if alias.is_empty() || matches!(alias.as_str(), "none" | "off" | "clear") {
+                    if let Err(e) = agent.clear_backup() {
+                        app.error_report(&e);
+                    }
+                    app.show_model(&agent, session.config());
+                    app.redraw_banner(&agent, &session, &snapshots);
+                    app.notice(&format!("This session has no backup model; it stays on {}.", agent.model_alias()));
+                } else {
+                    match session.config().resolve(Some(&alias)).and_then(Client::new) {
+                        Ok(client) => {
+                            if let Err(e) = agent.set_backup(client) {
+                                app.error_report(&e);
+                            }
+                            app.show_model(&agent, session.config());
+                            app.redraw_banner(&agent, &session, &snapshots);
+                            app.notice(&format!("Backup model for this session: {alias}. A rate limit on {} switches to it; new sessions start without one.", agent.model_alias()));
+                        }
+                        Err(e) => app.error_report(&e),
+                    }
+                }
+            }
             Input::Search(provider, url, key) => {
                 let path = crate::config::killi_home().join("config.toml");
                 let pick = crate::config::SearchConfig { provider: Some(provider.clone()), url: url.clone(), api_key: key.clone(), api_key_env: None };
@@ -630,8 +653,10 @@ async fn handle_command(
                 app.error("Pick brave, tavily or searxng; /web-search-config alone lists them.");
             }
         }
-        "model" if arg.is_empty() => app.open_model_picker(session.config()),
+        "model" if arg.is_empty() => app.open_model_picker(session.config(), false),
         "model" => app.next_input = Some(Input::Model(arg.to_string())),
+        "backup-model" if arg.is_empty() => app.open_model_picker(session.config(), true),
+        "backup-model" => app.next_input = Some(Input::BackupModel(arg.to_string())),
         "effort" | "thinking" if arg.is_empty() => app.open_effort_picker(session.config()),
         "effort" | "thinking" => app.next_input = Some(Input::Effort(arg.to_lowercase())),
         "reload" => match session.reload() {
@@ -786,6 +811,9 @@ enum Input {
     Command(String, String, Vec<Image>),
     Resume(PathBuf),
     Model(String),
+    /// The backup model this session falls back to on a rate limit: `/backup-model <alias>`,
+    /// or `none` to drop it.
+    BackupModel(String),
     Effort(String),
     /// Turns an MCP server on or off; true when picked from the /mcp list, which then reopens.
     Mcp(String, bool),
@@ -859,6 +887,7 @@ impl Picker {
 enum PickerChoice {
     Session(PathBuf),
     Model(String),
+    BackupModel(String),
     Effort(String),
     Mcp(String),
     Prune(usize),
@@ -868,6 +897,8 @@ enum PickerChoice {
 #[derive(Default)]
 struct Status {
     model: String,
+    /// The backup model this session falls back to on a rate limit, if one is set.
+    backup: Option<String>,
     /// The thinking effort, as `Thinking::label` names it.
     thinking: String,
     window: Option<u64>,
@@ -1386,6 +1417,7 @@ impl App {
                     return match choice {
                         PickerChoice::Session(path) => Idle::Input(Input::Resume(path)),
                         PickerChoice::Model(alias) => Idle::Input(Input::Model(alias)),
+                        PickerChoice::BackupModel(alias) => Idle::Input(Input::BackupModel(alias)),
                         PickerChoice::Effort(effort) => Idle::Input(Input::Effort(effort)),
                         PickerChoice::Mcp(name) => Idle::Input(Input::Mcp(name, true)),
                         PickerChoice::Prune(keep) => Idle::Input(Input::Prune(keep)),
@@ -1506,6 +1538,7 @@ impl App {
     fn show_model(&mut self, agent: &Agent, config: &Config) {
         self.sees_images = agent.sees_images();
         self.status.model = agent.model_alias().to_string();
+        self.status.backup = agent.backup_alias().map(String::from);
         self.status.thinking = agent.thinking().label().to_string();
         self.status.window = agent.context_window();
         self.refresh_choices(config);
@@ -2627,17 +2660,24 @@ impl App {
         self.picker = Some(Picker::new("Prune sessions · this one stays".into(), options, 0));
     }
 
-    fn open_model_picker(&mut self, config: &Config) {
+    fn open_model_picker(&mut self, config: &Config, backup: bool) {
+        let chosen = if backup { self.status.backup.clone().unwrap_or_default() } else { self.status.model.clone() };
         let options: Vec<_> = config
             .models
             .iter()
             .map(|(alias, model)| {
-                let current = if *alias == self.status.model { " · current" } else { "" };
-                (alias.clone(), format!("{}{current}", model.provider), PickerChoice::Model(alias.clone()))
+                let current = if *alias == chosen { " · current" } else { "" };
+                let pick = if backup {
+                    PickerChoice::BackupModel(alias.clone())
+                } else {
+                    PickerChoice::Model(alias.clone())
+                };
+                (alias.clone(), format!("{}{current}", model.provider), pick)
             })
             .collect();
-        let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) if *a == self.status.model)).unwrap_or(0);
-        self.picker = Some(Picker::new("Switch model".into(), options, selected));
+        let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) | PickerChoice::BackupModel(a) if *a == chosen)).unwrap_or(0);
+        let title = if backup { format!("Backup model for {}", self.status.model) } else { "Switch model".to_string() };
+        self.picker = Some(Picker::new(title, options, selected));
     }
 
     fn open_mcp_picker(&mut self, mcp: &Mcp, selected: Option<&str>) {
@@ -3151,6 +3191,9 @@ impl App {
         let mut head = vec![self.status.model.clone()];
         if let Some((word, value)) = thinking_parts(&self.status.thinking) {
             head.push(format!("{word} {}", tint(EFFORT, value)));
+        }
+        if let Some(backup) = self.status.backup.as_deref().filter(|backup| *backup != self.status.model.as_str()) {
+            head.push(format!("{} {}", label("backup"), backup));
         }
         if self.controls.plan.get() {
             head.push(format!("{LAGOON}plan mode{RESET}{DIM}"));
@@ -3989,7 +4032,8 @@ fn handoff(
         "The log is JSON lines, one record per `type`: `session` (cwd, model, effort, tools), every `message` exactly as sent \
          (user, assistant with tool_calls, tool results; a tool result's `tool` has is_error, brief and ms), `usage` after each \
          request (prompt, cached, completion and reasoning tokens, finish_reason, ms), `model` when the model or effort \
-         changed, and `compaction`. Every record has a `ts` in ms. `scripts/sessions.py` in the killi repo summarizes logs and flags what to fix."
+         changed, `backup` when this session's backup model was set or cleared, and `compaction`. Every record has a `ts` in ms. \
+         `scripts/sessions.py` in the killi repo summarizes logs and flags what to fix."
             .to_string(),
     );
     out.join("\n")
@@ -4321,6 +4365,7 @@ pub fn stopped_note(stopped: &[String]) -> Option<String> {
 /// The built-in commands, in the order the menu lists them.
 const COMMANDS: &[Command] = &[
     Command { name: "model", aliases: &[], args: "[alias]", about: "Switch model" },
+    Command { name: "backup-model", aliases: &[], args: "[alias]", about: "Set the model this session falls back to on a rate limit" },
     Command { name: "mcp", aliases: &[], args: "[server]", about: "Turn MCP servers on or off" },
     Command { name: "web-search-config", aliases: &[], args: "", about: "Set what web_search asks: brave, tavily or your own searxng" },
     Command { name: "effort", aliases: &["thinking"], args: "[level]", about: "Switch thinking effort" },

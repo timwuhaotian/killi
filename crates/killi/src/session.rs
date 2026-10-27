@@ -32,6 +32,8 @@ pub struct Loaded {
     pub context: u64,
     /// The model and effort the session last ran on.
     pub choice: Choice,
+    /// The backup model this session last set with `/backup-model`, if any.
+    pub backup: Option<String>,
 }
 
 /// How a tool call ended, as the log kept it beside the result.
@@ -228,7 +230,7 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
     // Splitting bytes on `\n` is safe: it never appears inside a multibyte UTF-8 sequence.
     let bytes = fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
     let mut skipped = 0;
-    let mut loaded = Loaded { messages: Vec::new(), tools: HashMap::new(), context: 0, choice: Choice::default() };
+    let mut loaded = Loaded { messages: Vec::new(), tools: HashMap::new(), context: 0, choice: Choice::default(), backup: None };
     for chunk in bytes.split(|b| *b == b'\n') {
         if chunk.is_empty() {
             continue;
@@ -247,6 +249,9 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
                     model: entry["model"].as_str().map(String::from),
                     effort: entry["effort"].as_str().map(String::from),
                 };
+            }
+            Some("backup") => {
+                loaded.backup = entry["model"].as_str().map(String::from);
             }
             Some("message") => {
                 if let (Some(id), Some(tool)) = (entry["message"]["tool_call_id"].as_str(), entry.get("tool")) {
@@ -653,7 +658,7 @@ mod tests {
     use serde_json::json;
 
     fn loaded(messages: Vec<Value>) -> Loaded {
-        Loaded { messages, tools: HashMap::new(), context: 0, choice: Choice::default() }
+        Loaded { messages, tools: HashMap::new(), context: 0, choice: Choice::default(), backup: None }
     }
 
     #[test]
@@ -938,6 +943,30 @@ mod tests {
         ];
         fs::write(&path, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
         assert_eq!(load(&path).unwrap().choice, Choice { model: Some("m/y".into()), effort: Some("low".into()) });
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_backup_entry_is_what_a_resume_runs_on() {
+        let dir = std::env::temp_dir().join(format!("killi-backup-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("1-1.jsonl");
+        let lines = [
+            json!({"type": "session", "model": "m/x"}),
+            json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+            json!({"type": "backup", "model": "m/y"}),
+            json!({"type": "backup", "model": "m/z"}),
+        ];
+        fs::write(&path, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+        assert_eq!(load(&path).unwrap().backup.as_deref(), Some("m/z"), "the last set backup wins");
+        let cleared = [
+            json!({"type": "session", "model": "m/x"}),
+            json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+            json!({"type": "backup", "model": "m/z"}),
+            json!({"type": "backup"}),
+        ];
+        fs::write(&path, cleared.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+        assert_eq!(load(&path).unwrap().backup, None, "clearing the backup wins");
         fs::remove_dir_all(dir).unwrap();
     }
 

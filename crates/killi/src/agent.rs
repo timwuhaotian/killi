@@ -333,6 +333,10 @@ struct PartialSwarm {
 
 pub struct Agent {
     client: Rc<Client>,
+    /// This session's fallback provider: what takes over when the primary exhausts its retries
+    /// on a rate limit. Set with `/backup-model`; a new session starts without one, so a later
+    /// session never inherits it.
+    backup: Option<Rc<Client>>,
     tools: Rc<Vec<Value>>,
     messages: Rc<Vec<Value>>,
     ctx: Rc<tools::Context>,
@@ -430,6 +434,7 @@ impl Agent {
     #[allow(clippy::too_many_arguments)]
     pub fn resume_reported(
         client: Client,
+        backup: Option<Client>,
         cwd: &Path,
         log: &Path,
         report: crate::session::LoadReport,
@@ -443,6 +448,7 @@ impl Agent {
         // A resumed session doesn't pick up messages typed during another session's turn.
         controls.steer.borrow_mut().clear();
         let mut agent = Self::assemble(client, cwd, tools, settings, controls, sink, session);
+        agent.backup = backup.map(Rc::new);
         agent.plan_announced = last_plan_state(&loaded.messages);
         for message in &loaded.messages {
             for call in message["tool_calls"].as_array().into_iter().flatten() {
@@ -501,6 +507,7 @@ impl Agent {
         *ctx.search.borrow_mut() = settings.search.clone();
         Self {
             client: Rc::new(client),
+            backup: None,
             tools: Rc::new(tools),
             messages: Rc::default(),
             ctx: Rc::new(ctx),
@@ -548,12 +555,40 @@ impl Agent {
     /// and the size estimate with it: the old model's billing no longer describes the history.
     /// The log notes it, so a resume continues on this model.
     pub fn switch_model(&mut self, client: Client) -> Result<()> {
+        self.switch_client(client)
+    }
+
+    /// Swaps the session's provider, resetting the size estimate and noting the switch in the log.
+    fn switch_client(&mut self, client: Client) -> Result<()> {
         self.ctx.images.set(client.model.images);
         self.client = Rc::new(client);
         self.stats.context = 0;
         self.accounted_messages = 0;
         self.share();
         self.record_model()
+    }
+
+    /// Sets this session's fallback provider: what it asks once the primary gives up on a rate
+    /// limit. A new session starts without one, so it is never saved for later sessions.
+    pub fn set_backup(&mut self, client: Client) -> Result<()> {
+        self.backup = Some(Rc::new(client));
+        self.record_backup()
+    }
+
+    /// Drops this session's fallback provider.
+    pub fn clear_backup(&mut self) -> Result<()> {
+        self.backup = None;
+        self.record_backup()
+    }
+
+    /// Records the backup the way the log records a model switch, so a resume keeps it.
+    fn record_backup(&mut self) -> Result<()> {
+        self.session.record(&json!({"type": "backup", "model": self.backup.as_ref().map(|c| c.model.alias.as_str())}))
+    }
+
+    /// The backup model this session falls back to, as configured.
+    pub fn backup_alias(&self) -> Option<&str> {
+        self.backup.as_ref().map(|client| client.model.alias.as_str())
     }
 
     /// Reasons at another effort from the next request on, on the same model.
@@ -613,6 +648,12 @@ impl Agent {
 
     pub fn model_alias(&self) -> &str {
         &self.client.model.alias
+    }
+
+    /// Whether a provider failure was the primary rate-limiting its requests — not a spent
+    /// quota or anything else — which is the only failure that switches a session to its backup.
+    fn is_rate_limited(error: &anyhow::Error) -> bool {
+        error.downcast_ref::<ProviderError>().is_some_and(|provider| provider.kind == ErrorKind::RateLimited)
     }
 
     /// Whether the model takes images (`image_in` in its capabilities).
@@ -873,16 +914,39 @@ impl Agent {
             })
         };
         let started = Instant::now();
-        let reply = self.client.complete(&self.messages, &self.tools, &self.session.id, &mut on_delta).await;
-        let took = started.elapsed();
-        self.stats.requests += 1;
-        let reply = match reply {
+        let reply = match self.client.complete(&self.messages, &self.tools, &self.session.id, &mut on_delta).await {
             Ok(reply) => reply,
-            Err(error) => {
-                self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(took)}))?;
+            Err(error) if !Self::is_rate_limited(&error) => {
+                self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
                 return Err(error);
             }
+            // The primary spent its retries on a rate limit: this session switches to the
+            // backup it was given and asks it once. The switch is the switch `switch_model`
+            // makes, so the backup becomes the model the session runs on and the log notes it.
+            Err(error) => match self.backup.take() {
+                Some(backup) => {
+                    let from = self.client.model.alias.clone();
+                    self.switch_client((*backup).clone())?;
+                    (self.sink)(Event::Notice(format!(
+                        "{from} is rate-limited, so this session switched to its backup {}.",
+                        self.client.model.alias
+                    )));
+                    match self.client.complete(&self.messages, &self.tools, &self.session.id, &mut on_delta).await {
+                        Ok(reply) => reply,
+                        Err(error) => {
+                            self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
+                            return Err(error);
+                        }
+                    }
+                }
+                None => {
+                    self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
+                    return Err(error);
+                }
+            },
         };
+        let took = started.elapsed();
+        self.stats.requests += 1;
         self.account(&reply.usage, Some(&reply.finish_reason), Some(took), reply.reasoning_kept())?;
         self.note_hidden_reasoning(&reply)?;
         Ok(reply)
@@ -1492,6 +1556,7 @@ impl Agent {
         let announce_plan = !fork && self.controls.plan.get();
         let mut agent = Agent {
             client: self.client.clone(),
+            backup: None,
             tools: self.tools.clone(),
             messages,
             ctx: self.ctx.clone(),
@@ -2333,11 +2398,16 @@ mod tests {
 
     /// A client that talks to a test stub instead of a provider.
     fn test_client() -> Client {
+        test_client_at("test", "")
+    }
+
+    /// A client that talks to the stub at `base_url`, named `alias`.
+    fn test_client_at(alias: &str, base_url: &str) -> Client {
         let model = crate::config::ResolvedModel {
-            alias: "test".into(),
+            alias: alias.into(),
             model: "test".into(),
             protocol: crate::config::Protocol::OpenAi,
-            base_url: String::new(),
+            base_url: base_url.into(),
             api_key: String::new(),
             headers: Default::default(),
             session_header: None,
@@ -2387,6 +2457,42 @@ mod tests {
         url
     }
 
+    /// Serves `replies` as raw HTTP responses on 127.0.0.1 and returns the base URL to point
+    /// a test client at. Each reply is written whole and the connection closed, so a client may
+    /// send several requests and see them answered in order.
+    async fn serve_raw(replies: Vec<String>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            for reply in replies {
+                let Ok((mut socket, _)) = listener.accept().await else { break };
+                let mut buffer = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    if let Some(end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buffer[..end]).to_ascii_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if buffer.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let _ = socket.write_all(reply.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        url
+    }
+
     /// One SSE reply with `text` and a choice-level `finish_reason`.
     fn sse(text: &str, finish_reason: &str) -> String {
         format!(
@@ -2403,6 +2509,74 @@ mod tests {
         let mut agent = Agent::assemble(test_client(), tmp.path(), Vec::new(), Settings::default(), controls, sink, Session::open(&log).unwrap());
         Rc::get_mut(&mut agent.ctx).expect("a fresh agent owns its context").temp = Some(tmp);
         agent
+    }
+
+    #[test]
+    fn a_new_agent_starts_without_a_backup() {
+        let agent = idle_agent("backup-none", Controls::default(), Rc::new(|_| {}));
+        assert_eq!(agent.backup_alias(), None, "a backup is never inherited by a new session");
+    }
+
+    /// A stub that answers every request with a 429 and no wait, so `complete` burns its whole
+    /// retry budget on it at once.
+    async fn rate_limited_stub(attempts: usize) -> String {
+        let limited = "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 0\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"slow down\"}}".to_string();
+        serve_raw(vec![limited; attempts]).await
+    }
+
+    /// A stub that answers one request with a finished SSE reply.
+    async fn answering_stub(text: &str) -> String {
+        let good = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{}",
+            sse(text, "stop")
+        );
+        serve_raw(vec![good]).await
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_rate_limited_primary_switches_to_the_backup() {
+        let primary = rate_limited_stub(10).await;
+        let backup = answering_stub("from backup").await;
+        let mut agent = idle_agent("backup-switch", Controls::default(), Rc::new(|_| {}));
+        agent.push(json!({"role": "system", "content": "sys"})).unwrap();
+        agent.push(json!({"role": "user", "content": "hi"})).unwrap();
+        agent.client = Rc::new(test_client_at("primary", &primary));
+        agent.set_backup(test_client_at("backup", &backup)).unwrap();
+
+        let reply = agent.request().await.unwrap();
+        assert_eq!(reply.text, "from backup");
+        assert_eq!(agent.model_alias(), "backup", "the backup became the running model");
+        assert_eq!(agent.backup_alias(), None, "the backup was consumed by the switch");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_non_rate_limit_error_keeps_the_backup() {
+        let auth = "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"bad key\"}}".to_string();
+        let primary = serve_raw(vec![auth]).await;
+        let backup = answering_stub("from backup").await;
+        let mut agent = idle_agent("backup-keep", Controls::default(), Rc::new(|_| {}));
+        agent.push(json!({"role": "system", "content": "sys"})).unwrap();
+        agent.push(json!({"role": "user", "content": "hi"})).unwrap();
+        agent.client = Rc::new(test_client_at("primary", &primary));
+        agent.set_backup(test_client_at("backup", &backup)).unwrap();
+
+        let error = agent.request().await.unwrap_err();
+        assert_eq!(error.downcast_ref::<ProviderError>().map(|p| p.kind), Some(ErrorKind::Auth));
+        assert_eq!(agent.model_alias(), "primary", "an auth error leaves the running model alone");
+        assert_eq!(agent.backup_alias(), Some("backup"), "the backup is kept for a later rate limit");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_rate_limited_primary_without_a_backup_fails_as_before() {
+        let primary = rate_limited_stub(10).await;
+        let mut agent = idle_agent("backup-absent", Controls::default(), Rc::new(|_| {}));
+        agent.push(json!({"role": "system", "content": "sys"})).unwrap();
+        agent.push(json!({"role": "user", "content": "hi"})).unwrap();
+        agent.client = Rc::new(test_client_at("primary", &primary));
+
+        let error = agent.request().await.unwrap_err();
+        assert_eq!(error.downcast_ref::<ProviderError>().map(|p| p.kind), Some(ErrorKind::RateLimited));
+        assert_eq!(agent.model_alias(), "primary");
     }
 
     #[test]
@@ -2905,7 +3079,7 @@ mod tests {
         let controls = Controls::default();
         controls.steer.borrow_mut().push_back(("queued".into(), Vec::new()));
         let load = |log: &Path| crate::session::load_reported(log).unwrap();
-        let agent = Agent::resume_reported(test_client(), &dir, &log, load(&log), Vec::new(), Settings::default(), controls.clone(), Rc::new(|_| {}))
+        let agent = Agent::resume_reported(test_client(), None, &dir, &log, load(&log), Vec::new(), Settings::default(), controls.clone(), Rc::new(|_| {}))
             .unwrap();
         assert!(agent.plan_announced, "the log ended in plan mode");
         assert!(controls.steer.borrow().is_empty(), "resume drops another session's queued messages");
@@ -2915,7 +3089,7 @@ mod tests {
             json!({"type": "message", "message": {"role": "user", "content": plan::OFF}}).to_string(),
         ];
         std::fs::write(&log, off.join("\n") + "\n").unwrap();
-        let agent = Agent::resume_reported(test_client(), &dir, &log, load(&log), Vec::new(), Settings::default(), Controls::default(), Rc::new(|_| {}))
+        let agent = Agent::resume_reported(test_client(), None, &dir, &log, load(&log), Vec::new(), Settings::default(), Controls::default(), Rc::new(|_| {}))
             .unwrap();
         assert!(!agent.plan_announced, "the log ended out of plan mode");
     }
@@ -3034,7 +3208,7 @@ mod tests {
                 }
             });
         let report = crate::session::load_reported(&log).unwrap();
-        let agent = Agent::resume_reported(test_client(), &dir, &log, report, Vec::new(), Settings::default(), Controls::default(), sink).unwrap();
+        let agent = Agent::resume_reported(test_client(), None, &dir, &log, report, Vec::new(), Settings::default(), Controls::default(), sink).unwrap();
         let placeholder = agent
             .messages
             .iter()
@@ -3068,7 +3242,7 @@ mod tests {
             }
         });
         let report = crate::session::load_reported(&log).unwrap();
-        let agent = Agent::resume_reported(test_client(), &dir, &log, report, Vec::new(), Settings::default(), Controls::default(), sink)
+        let agent = Agent::resume_reported(test_client(), None, &dir, &log, report, Vec::new(), Settings::default(), Controls::default(), sink)
             .unwrap();
         assert!(
             notices.borrow().iter().any(|n| n.contains("/definitely/not/here") && n.contains("cd /definitely/not/here")),
@@ -3090,7 +3264,7 @@ mod tests {
             }
         });
         let report = crate::session::load_reported(&log).unwrap();
-        let agent = Agent::resume_reported(test_client(), &dir, &log, report, Vec::new(), Settings::default(), Controls::default(), sink)
+        let agent = Agent::resume_reported(test_client(), None, &dir, &log, report, Vec::new(), Settings::default(), Controls::default(), sink)
             .unwrap();
         assert!(quiet.borrow().is_empty(), "resuming where the session ran stays silent: {:?}", quiet.borrow());
         drop(agent);

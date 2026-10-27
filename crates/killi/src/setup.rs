@@ -116,7 +116,14 @@ impl Setup {
     /// replay the conversation from `report.loaded` first, then move the report here.
     pub fn resume_loaded(&self, report: session::LoadReport, log: &Path, controls: Controls, sink: Sink) -> Result<Agent> {
         let client = self.client(&report.loaded.choice)?;
-        Agent::resume_reported(client, &self.cwd, log, report, self.tools.clone(), self.settings.clone(), controls, sink)
+        // The backup is this session's own: a new session never starts on one, and a resumed
+        // one reads it back from its log. A backup the config no longer knows is dropped.
+        let backup = report
+            .loaded
+            .backup
+            .as_deref()
+            .and_then(|alias| self.config.resolve(Some(alias)).and_then(Client::new).ok());
+        Agent::resume_reported(client, backup, &self.cwd, log, report, self.tools.clone(), self.settings.clone(), controls, sink)
     }
 
     /// The -m model at its default effort, else `choice` when the config still has that model,
@@ -465,6 +472,34 @@ mod tests {
         let agent = setup.resume(&log, Controls::default(), Rc::new(|_| {})).unwrap();
         assert_eq!(agent.model_alias(), "test/model");
         assert!(agent.user_prompts().iter().any(|p| p == "hi"), "the log's conversation replays");
+        drop(agent);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resume_keeps_the_session_backup_model() {
+        let root = std::env::temp_dir().join(format!("killi-setup-backup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("1-1.jsonl");
+        let lines = [
+            serde_json::json!({"type": "session", "model": "test/model"}),
+            serde_json::json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+            serde_json::json!({"type": "backup", "model": "test/backup"}),
+        ];
+        std::fs::write(&log, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+        let mut config: Config = toml::from_str(
+            "default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n\n[models.\"test/backup\"]\nprovider = \"test\"\nmodel = \"backup\"\n",
+        )
+        .unwrap();
+        config.skills.dirs = vec!["/nonexistent".to_string()];
+        let skills = Skills::discover(&root, &config.skills.dirs);
+        let prompt = prompt::build(&root, &skills, config.guidance());
+        let settings = Settings { skills: skills.clone(), instruction_files: prompt.instruction_files.clone(), ..Settings::default() };
+        let setup = Setup { config, cwd: root.clone(), model: None, last: Choice::default(), prompt, tools: Vec::new(), settings, skills, notes: Vec::new() };
+        let agent = setup.resume(&log, Controls::default(), Rc::new(|_| {})).unwrap();
+        assert_eq!(agent.model_alias(), "test/model");
+        assert_eq!(agent.backup_alias(), Some("test/backup"), "the backup is this session's own, and a resume reads it back");
         drop(agent);
         std::fs::remove_dir_all(root).unwrap();
     }
