@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.0 — 2026-10-27
+
+- A structure-only release: every source file is back under about 500 lines (the TUI had
+  grown to 5,727) by splitting the big modules along their seams and moving each module's
+  tests to its own `<module>/tests.rs`. Pure moves behind unchanged paths — no behavior
+  changed and the test suite is identical.
+
 ## 0.5.2 — 2026-10-26
 
 - `/backup-model <alias>` sets this session's fallback: when the primary model exhausts its
