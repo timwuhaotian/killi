@@ -66,11 +66,10 @@ fn a_notification_cannot_break_out_of_its_sequence_or_script() {
     assert!(sequence.starts_with("\x1b]9;killi: ") && sequence.ends_with('\u{7}'));
     let body = &sequence["\x1b]9;killi: ".len()..sequence.len() - 1];
     assert!(!body.contains(['\u{7}', '\u{1b}']) && body.starts_with("done — linewith"), "{sequence:?}");
-    let args = notification_args("say \"hi\"\u{7}", "", None);
+    let args = notification_args("say \"hi\"\u{7}", "");
     assert_eq!(args, ["-e", "display notification \"say 'hi'\" with title \"killi\""]);
-        let args = notification_args("h", "d\"etail", Some("com.example.Term"));
-        assert!(args.contains(&"tell application id \"com.example.Term\" to display notification \"d'etail\" with title \"killi\" subtitle \"h\"".to_string()), "{args:?}");
-        assert!(args.iter().any(|arg| arg == "on error") && args.last().is_some_and(|arg| arg == "end try"));
+    let args = notification_args("h", "d\"etail");
+    assert_eq!(args, ["-e", "display notification \"d'etail\" with title \"killi\" subtitle \"h\""]);
     }
 
     #[test]

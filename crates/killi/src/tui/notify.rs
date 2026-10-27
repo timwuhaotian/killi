@@ -35,9 +35,9 @@ pub(super) fn base64(bytes: &[u8]) -> String {
 
 /// A desktop notification, `headline` over a line of `detail`: the terminal's own when it
 /// supports OSC 9 (Kil, iTerm2, WezTerm, Ghostty, kitty show it in their name, so a click
-/// comes back to the pane), otherwise macOS's through `osascript`, relayed by the app the
-/// terminal runs in where that app takes the telling. Kil's version is not consulted: a pane
-/// outlives the app, and its shell keeps the `TERM_PROGRAM_VERSION` it started with.
+/// comes back to the pane), otherwise macOS's through plain `osascript`, whose notifications
+/// belong to Script Editor. Kil's version is not consulted: a pane outlives the app, and
+/// its shell keeps the `TERM_PROGRAM_VERSION` it started with.
 pub(super) fn notify(headline: &str, detail: &str) {
     let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
     if shows_osc9(&program, std::env::var_os("KITTY_WINDOW_ID").is_some()) {
@@ -47,7 +47,7 @@ pub(super) fn notify(headline: &str, detail: &str) {
         return;
     }
     let mut command = std::process::Command::new("/usr/bin/osascript");
-    command.args(notification_args(headline, detail, host_app(&program).as_deref()));
+    command.args(notification_args(headline, detail));
     // Reaped on a thread: an unreaped child would linger as a zombie per notification.
     if let Ok(mut child) = command.spawn() {
         std::thread::spawn(move || {
@@ -70,10 +70,11 @@ pub(super) fn osc9_sequence(headline: &str, detail: &str) -> String {
     format!("\x1b]9;killi: {body}\x07")
 }
 
-/// The `osascript` arguments showing `headline` over `detail`, relayed by `id` where the
-/// terminal's app takes the telling: quotes become `'`, so model text can't close the
-/// AppleScript string, and control characters are sanitized away.
-pub(super) fn notification_args(headline: &str, detail: &str, id: Option<&str>) -> Vec<String> {
+/// The `osascript` arguments showing `headline` over `detail`: quotes become `'`, so model
+/// text can't close the AppleScript string, and control characters are sanitized away.
+/// No `tell application` wrapper: `display notification` is a Standard Addition, so the
+/// banner belongs to Script Editor whatever application is told.
+pub(super) fn notification_args(headline: &str, detail: &str) -> Vec<String> {
     let quote = |text: &str| text::sanitize(text).replace('"', "'");
     let headline = quote(headline);
     let detail = quote(detail);
@@ -82,21 +83,7 @@ pub(super) fn notification_args(headline: &str, detail: &str, id: Option<&str>) 
     } else {
         format!("display notification \"{detail}\" with title \"killi\" subtitle \"{headline}\"")
     };
-    match id {
-        Some(id) => vec![
-            "-e".into(),
-            "try".into(),
-            "-e".into(),
-            format!("tell application id \"{id}\" to {plain}"),
-            "-e".into(),
-            "on error".into(),
-            "-e".into(),
-            plain,
-            "-e".into(),
-            "end try".into(),
-        ],
-        None => vec!["-e".into(), plain],
-    }
+    vec!["-e".into(), plain]
 }
 
 /// The first line of `text` that says something, markdown marks dropped, cut to `chars`:
@@ -124,19 +111,4 @@ pub(super) fn first_line(text: &str, chars: usize) -> String {
     }
     let cut: String = line.chars().take(chars - 1).collect();
     format!("{}…", cut.trim_end())
-}
-
-/// The bundle id of the app the terminal runs in: what macOS puts in the environment of
-/// anything an app starts, or the id that goes with `TERM_PROGRAM` for terminals that strip it.
-fn host_app(program: &str) -> Option<String> {
-    let known = match program {
-        "Apple_Terminal" => Some("com.apple.Terminal"),
-        "kil" => Some("dev.kil.terminal"),
-        "vscode" => Some("com.microsoft.VSCode"),
-        _ => None,
-    };
-    std::env::var("__CFBundleIdentifier")
-        .ok()
-        .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)))
-        .or_else(|| known.map(str::to_string))
 }

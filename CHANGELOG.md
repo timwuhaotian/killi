@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.6 — 2026-10-27
+
+- The `osascript` notification fallback is plain again: wrapping it in
+  `tell application id ...` never transferred ownership (`display notification`
+  is a Standard Addition, so the banner belonged to Script Editor either way —
+  verified). A session started before this update still runs the old code in
+  memory, so restart it to get Kil's own notifications.
+
 ## 0.6.5 — 2026-10-27
 
 - While a question waits, ← walks back over this turn's answered questions (and →
