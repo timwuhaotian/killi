@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.14 — 2026-10-28
+
+- Inline the pid in temp-dir format strings (`test_temp.rs` and the `later.rs` test),
+  matching the inline-args style the files already use.
+
 ## 0.6.13 — 2026-10-28
 
 - Entire checkpoints now work with killi itself: sessions fire `SessionEnd` hooks on
