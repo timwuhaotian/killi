@@ -214,7 +214,7 @@ pub(super) async fn handle_command(
         "web-search-config" => {
             let provider = arg.to_lowercase();
             if ["brave", "tavily", "searxng"].contains(&provider.as_str()) {
-                app.search = Some(SearchFlow { provider: None, url: None, current: session.config().search.clone() });
+                app.search = Some(SearchFlow { provider: None, docker: None, url: None, current: session.config().search.clone() });
                 app.search_pick(&provider);
             } else {
                 app.error("Pick brave, tavily or searxng; /web-search-config alone lists them.");

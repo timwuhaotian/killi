@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.19 — 2026-10-29
+- Picking SearXNG in `/web-search-config` with no instance configured now offers to start
+  one with Docker: killi writes a minimal `~/.killi/searxng/settings.yml` (the image's
+  defaults, the json format `web_search` reads, no limiter) and runs the container on
+  localhost:8888, restarting it on later picks and reusing anything already answering on
+  the port. Nothing is bundled — the binary is unchanged — the image (~380 MB) and the
+  container's memory stay in Docker; a failure falls back to asking for a URL.
+
 ## 0.6.18 — 2026-10-28
 
 - Triple-clicking in the fullscreen conversation selects the whole row, copied on release,

@@ -28,9 +28,12 @@ pub(super) struct Picker {
 }
 
 /// The /web-search-config flow under way: the service picked (none while its list is open),
-/// the instance URL once answered, and the `[search]` the flow started from, for prefilling.
+/// whether killi starts a local SearXNG with Docker or the user points at their own, the
+/// instance URL once answered, and the `[search]` the flow started from, for prefilling.
 pub(super) struct SearchFlow {
     pub(super) provider: Option<String>,
+    /// `None` while the Docker offer waits; `Some(true)` while its start runs.
+    pub(super) docker: Option<bool>,
     pub(super) url: Option<String>,
     pub(super) current: crate::config::SearchConfig,
 }
@@ -295,57 +298,94 @@ impl App {
     pub(super) fn open_search_picker(&mut self, config: &Config) {
         let in_use = config.search.provider.as_deref().unwrap_or("brave");
         let selected = ["brave", "tavily", "searxng"].iter().position(|name| *name == in_use).unwrap_or(0);
-        self.search = Some(SearchFlow { provider: None, url: None, current: config.search.clone() });
+        self.search = Some(SearchFlow { provider: None, docker: None, url: None, current: config.search.clone() });
         self.picker = Some(Picker::new("Web search service".into(), search_options(&config.search), selected));
     }
 
     /// A service picked from that list or named by `/web-search-config <service>`: ask for
     /// what it needs, prefilled with what the config already has for it.
     pub(super) fn search_pick(&mut self, provider: &str) {
-        let Some(flow) = self.search.as_mut() else { return };
+        let Some(mut flow) = self.search.take() else { return };
         flow.provider = Some(provider.to_string());
         let current = flow.current.clone();
         let same = current.provider.as_deref().unwrap_or("brave") == provider;
         let key = same.then(|| current.api_key.clone()).flatten();
+        let fresh = provider == "searxng" && !same;
+        if provider == "searxng" && !fresh {
+            // An instance is already configured: edit its URL and key, not the offer.
+            flow.docker = Some(false);
+        }
+        self.search = Some(flow);
         match provider {
             "searxng" => {
                 self.search_note();
-                let url = current.url.clone().unwrap_or_else(|| "http://localhost:8888".into());
-                self.search_ask("SearXNG instance URL:", Some(&url), false);
+                if fresh {
+                    self.search_question(
+                        "SearXNG is self-hosted. Start a local one with Docker, or use an instance you run?",
+                        vec!["start one with Docker".into(), "use my own instance".into()],
+                    );
+                } else {
+                    let url = current.url.clone().unwrap_or_else(|| "http://localhost:8888".into());
+                    self.search_ask("SearXNG instance URL:", Some(&url), false);
+                }
             }
             "tavily" => self.search_ask("Tavily API key:", key.as_deref(), true),
             _ => self.search_ask("Brave API key (Enter for none: killi then reads Brave's public page):", key.as_deref(), true),
         }
     }
 
-    /// What picking SearXNG asks of the user: it is self-hosted, so say what killi calls and
-    /// where its settings live.
+    /// What picking SearXNG asks of the user: it is self-hosted, so say what killi calls,
+    /// where its settings live, and that Docker is one answer.
     fn search_note(&mut self) {
         self.begin(Kind::Note);
         self.emit(Line::Words(
-            format!("{DIM}killi asks {{url}}/search?q=…&format=json, so run an instance yourself (docker run -p 8888:8080 searxng/searxng) and enable the json format in its settings.yml: search → formats: [html, json].{RESET}"),
+            format!("{DIM}killi asks {{url}}/search?q=…&format=json. With Docker it starts an instance on localhost:8888 with the json format on; without it, run one yourself and add json to search.formats in its settings.yml.{RESET}"),
             2,
         ));
     }
 
     /// One question of the flow, shown as the ask tool's questions are, with the answer typed
     /// into the prompt. Nobody waits on the reply: `answer` routes it back into the flow.
-    fn search_ask(&mut self, text: &str, prefill: Option<&str>, secret: bool) {
-        self.begin(Kind::Note);
-        self.emit(Line::Words(format!("{BOLD}{FIN}?{RESET} {BOLD}{text}{RESET}"), 2));
-        let (reply, _) = tokio::sync::oneshot::channel::<String>();
-        self.asking = Some(Asking { question: Question { text: text.to_string(), options: Vec::new(), plan: false, reply }, selected: 0, internal: true, secret });
+    pub(super) fn search_ask(&mut self, text: &str, prefill: Option<&str>, secret: bool) {
+        self.search_question(text, Vec::new());
+        if secret {
+            self.asking.as_mut().expect("a question is open").secret = true;
+        }
         if let Some(fill) = prefill.filter(|fill| !fill.is_empty()) {
             self.editor.insert(fill);
         }
     }
 
-    /// One answer of the flow: the instance URL is validated, the key may be empty; once both
-    /// are in, the pick goes to the config file and this session as `Input::Search`.
+    /// One choice of the flow: a question whose options are picked, not typed.
+    fn search_question(&mut self, text: &str, options: Vec<String>) {
+        self.begin(Kind::Note);
+        self.emit(Line::Words(format!("{BOLD}{FIN}?{RESET} {BOLD}{text}{RESET}"), 2));
+        let (reply, _) = tokio::sync::oneshot::channel::<String>();
+        self.asking = Some(Asking { question: Question { text: text.to_string(), options, plan: false, reply }, selected: 0, internal: true, secret: false });
+    }
+
+    /// One answer of the flow: the Docker offer, the instance URL (validated), or the key;
+    /// once all are in, the pick goes to the config file and this session as `Input::Search`.
     pub(super) fn search_answer(&mut self, answer: &str, secret: bool) {
         let Some(mut flow) = self.search.take() else { return };
         let answer = answer.trim();
         let provider = flow.provider.clone().unwrap_or_default();
+        if provider == "searxng" && flow.url.is_none() && flow.docker.is_none() {
+            let echo = format!("  {FIN}↳{RESET} {answer}");
+            if answer.contains("Docker") {
+                flow.docker = Some(true);
+                self.search = Some(flow);
+                self.commit(echo);
+                self.begin(Kind::Note);
+                self.commit(format!("{DIM}Starting SearXNG with Docker; the first run pulls the image, which can take a few minutes.{RESET}"));
+                self.searxng = Some(Box::pin(crate::tools::start_searxng()));
+                return;
+            }
+            flow.docker = Some(false);
+            self.commit(echo);
+            self.search = Some(flow);
+            return self.search_ask("SearXNG instance URL:", Some("http://localhost:8888"), false);
+        }
         if provider == "searxng" && flow.url.is_none() {
             if !(answer.starts_with("http://") || answer.starts_with("https://")) {
                 self.error("The instance is its URL, such as http://localhost:8888.");

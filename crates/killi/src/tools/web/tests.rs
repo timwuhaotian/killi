@@ -1,3 +1,4 @@
+use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -306,4 +307,61 @@ async fn searxng_points_at_the_format_setting_when_refused() {
     let url = serve_body("HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\n\r\n", "not allowed").await;
     let err = super::search_chain(&[super::Source::Searxng { base: url, key: None }], "a", 5).await.unwrap_err();
     assert!(err.contains("json format"), "{err}");
+}
+
+#[test]
+fn searxng_settings_enable_the_json_format() {
+    let yaml = super::setup::settings_yaml("abc123");
+    assert!(yaml.contains("use_default_settings: true"), "{yaml}");
+    assert!(yaml.contains("limiter: false"), "the limiter would turn scripted requests away: {yaml}");
+    assert!(yaml.contains("formats:\n    - html\n    - json"), "{yaml}");
+    assert!(yaml.contains("secret_key: \"abc123\""), "{yaml}");
+    assert!(yaml.contains(&super::setup::url()), "the instance knows its own URL: {yaml}");
+}
+
+#[test]
+fn the_docker_run_mounts_killis_settings_on_localhost_only() {
+    let args = super::setup::run_args(Path::new("/home/u/.killi/searxng/settings.yml"));
+    let joined = args.join(" ");
+    assert!(joined.contains("--name killi-searxng"), "{joined}");
+    assert!(joined.contains("--restart unless-stopped"), "it should come back with Docker: {joined}");
+    assert!(joined.contains("-p 127.0.0.1:8888:8080"), "the port binds localhost, not every interface: {joined}");
+    assert!(joined.contains("-v /home/u/.killi/searxng/settings.yml:/etc/searxng/settings.yml:ro"), "{joined}");
+    assert!(joined.ends_with("searxng/searxng"), "{joined}");
+}
+
+/// Serves `n` probes with 503 and the rest with a json results body, counting requests.
+async fn serve_warming(up_after: usize) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = hits.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { return };
+            let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = socket.read(&mut [0u8; 4096]).await;
+            let reply = if n < up_after {
+                "HTTP/1.1 503 Service Unavailable\r\ncontent-type: text/plain\r\n\r\nstarting"
+            } else {
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"results\":[{\"title\":\"A\",\"url\":\"https://a.test\"}]}"
+            };
+            let _ = socket.write_all(reply.as_bytes()).await;
+        }
+    });
+    (url, hits)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ready_once_the_instance_answers_json() {
+    let (url, hits) = serve_warming(2).await;
+    super::setup::wait_ready(&url, std::time::Duration::from_millis(10), std::time::Duration::from_secs(5)).await.unwrap();
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 3, "two refusals, then the answer");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_instance_that_never_answers_times_out() {
+    let (url, _) = serve_warming(usize::MAX).await;
+    let err = super::setup::wait_ready(&url, std::time::Duration::from_millis(10), std::time::Duration::from_millis(100)).await.unwrap_err();
+    assert!(err.contains("never answered"), "{err}");
 }

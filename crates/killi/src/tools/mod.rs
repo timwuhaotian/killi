@@ -16,6 +16,7 @@ pub use bash::{OwnSession, Running, Tasks, Tracked, kill_all, track};
 #[cfg(test)]
 pub(crate) use bash::registered;
 pub use files::{image_type, image_url};
+pub use web::{CONTAINER, start_searxng};
 
 pub const MAX_LINES: usize = 2000;
 pub const MAX_BYTES: usize = 50 * 1024;

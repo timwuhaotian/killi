@@ -7,6 +7,10 @@ pub(super) type PendingAside = (String, Pin<Box<dyn Future<Output = Result<(Stri
 /// user sends anything else.
 pub(super) type PendingRecap = Pin<Box<dyn Future<Output = Result<(String, Usage)>>>>;
 
+/// The local SearXNG start `/web-search-config` began with Docker, ending in the instance's
+/// URL or the reason it failed.
+pub(super) type PendingSearxng = Pin<Box<dyn Future<Output = std::result::Result<String, String>>>>;
+
 /// A question from another session on its way to an answer from this conversation.
 pub(super) type PendingPeerAsk = Pin<Box<dyn Future<Output = PeerAnswer>>>;
 
@@ -151,6 +155,8 @@ pub(super) struct App {
     pub(super) picker: Option<Picker>,
     /// A /web-search-config flow between its questions.
     pub(super) search: Option<SearchFlow>,
+    /// The SearXNG instance Docker is starting for that flow, when one is.
+    pub(super) searxng: Option<PendingSearxng>,
     /// Input to act on before reading keys again, such as `/model <alias>`.
     pub(super) next_input: Option<Input>,
     /// An effort picked while the agent works; it applies once the turn ends.

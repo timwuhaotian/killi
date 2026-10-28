@@ -59,6 +59,28 @@ impl App {
                     self.draw()?;
                     continue;
                 }
+                // The SearXNG Docker start of a /web-search-config flow: the keys stay alive
+                // while it runs, and its answer applies the pick.
+                started = async { self.searxng.as_mut().expect("searxng is starting").as_mut().await }, if self.searxng.is_some() => {
+                    self.searxng = None;
+                    match started {
+                        Ok(url) => {
+                            self.begin(Kind::Note);
+                            self.commit(format!(
+                                "{FAINT}✓{RESET} SearXNG answers at {url} (Docker container {CONTAINER}; it starts with Docker, docker stop {CONTAINER} stops it)."
+                            ));
+                            return Ok(Some(Input::Search("searxng".into(), Some(url), None)));
+                        }
+                        Err(e) => {
+                            self.error(&e);
+                            if self.search.is_some() {
+                                self.search_ask("SearXNG instance URL:", Some("http://localhost:8888"), false);
+                            }
+                        }
+                    }
+                    self.draw()?;
+                    continue;
+                }
             };
             let Some(event) = event else { return Ok(None) };
             let event = event?;

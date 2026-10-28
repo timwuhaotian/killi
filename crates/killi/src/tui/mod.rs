@@ -67,7 +67,7 @@ use crate::llm::{Client, ErrorKind, ProviderError, Usage};
 use crate::mcp::Mcp;
 use crate::session::{Choice, Replayed};
 use crate::snapshot::Snapshots;
-use crate::tools::{image_type, image_url};
+use crate::tools::{CONTAINER, image_type, image_url};
 use editor::Editor;
 use history::{Entry as Line, History};
 use menu::{Entry, Fill, Item, Suggestions};

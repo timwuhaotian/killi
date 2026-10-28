@@ -77,7 +77,10 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   last, which needs no key and can refuse; one `api_key` serves one provider, so a keyed
   fallback to another API is not picked up from this table. "searxng" asks
   `{url}/search?q=…&format=json`, so the instance must enable the json format.
-  `/web-search-config` asks for all of this and writes the table itself.
+  `/web-search-config` asks for all of this and writes the table itself; picking SearXNG
+  without an instance offers to start one with Docker (container `killi-searxng`, localhost
+  only, settings killi writes under `~/.killi/searxng`), reusing anything already answering
+  on the port.
 
 An MCP server in `mcp.json` has `command`, `args`, `env` (stdio) or `url`, `headers`,
 `bearerTokenEnvVar` (HTTP), plus `enabled` (false leaves it out) and `toolTimeoutMs`.

@@ -2,6 +2,7 @@ mod browser;
 mod fetch;
 mod readable;
 mod search;
+pub(crate) mod setup;
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -18,6 +19,7 @@ use crate::llm::truncate;
 
 pub use fetch::fetch_url;
 pub use search::web_search;
+pub use setup::{CONTAINER, start_searxng};
 
 use browser::{Temp, render, screenshot};
 use readable::{decode, extract, html_title, plain};
