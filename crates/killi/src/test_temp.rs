@@ -17,7 +17,8 @@ impl TempDir {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         let unique = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}-{unique}", std::process::id()));
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("{prefix}-{pid}-{nanos}-{unique}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("test scratch folder");
         Self(dir)

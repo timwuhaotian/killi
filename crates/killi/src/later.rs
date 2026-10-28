@@ -82,7 +82,8 @@ mod tests {
 
     #[test]
     fn items_are_added_in_order_listed_and_crossed_off_by_number() {
-        let dir = std::env::temp_dir().join(format!("killi-later-{}", std::process::id()));
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("killi-later-{pid}"));
         let _ = fs::remove_dir_all(&dir);
         let file = dir.join("later.md");
         assert!(list_in(&file).is_empty());
