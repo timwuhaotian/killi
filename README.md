@@ -278,7 +278,7 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
   ```
 
   Events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`,
-  `SubagentStop`. A `PostToolUse` hook that prints something (or exits 2) shows its output to
+  `SubagentStop`, `SessionEnd` (when the session exits, only if a turn ran). A `PostToolUse` hook that prints something (or exits 2) shows its output to
   the model, which makes a cheap stand-in for an editor's diagnostics: run the type checker
   after every edit.
 
@@ -287,6 +287,13 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
   matcher = "edit|write"
   command = "cargo check --quiet 2>&1 | head -30; exit 0"
   ```
+
+- **Entire:** killi sessions checkpoint to [Entire](https://entire.io), which mirrors the
+  repo and links each commit to the session behind it (see the
+  [quickstart](https://docs.entire.com/quickstart)). `entire agent add` has no killi entry,
+  but killi speaks Claude Code's hook protocol, so the wiring in `/update-config` (seven
+  hooks in `~/.killi/config.toml`) checkpoints every session on start, prompt, tool use,
+  stop and exit.
 
 - **Web:** `web_search` finds pages and `fetch_url` reads them. Without setup, search reads
   Brave's public results page, which can turn automated requests away. `/web-search-config`
