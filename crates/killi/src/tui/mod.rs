@@ -312,6 +312,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     }
     app.finish_screen()?;
     let stopped = agent.stop_tasks();
+    agent.session_end("exit").await;
     drop(terminal);
     if let Some(note) = stopped_note(&stopped) {
         println!("{DIM}{note}{RESET}");

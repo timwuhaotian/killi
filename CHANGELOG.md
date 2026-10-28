@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- Entire checkpoints now work with killi itself: sessions fire `SessionEnd` hooks on
+  exit (only if a turn ran), and the `update-config` skill documents the seven-hook
+  wiring, since `entire agent add` has no killi entry but killi speaks Claude Code's
+  hook protocol.
+
 ## 0.6.12 — 2026-10-28
 
 - Fixed a flaky session-lock test: after a session ends, the lock's release is

@@ -272,6 +272,7 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
         Some(Stop::RepeatBreaker) => "repeat_breaker",
         None => "error",
     };
+    agent.session_end(stop_reason).await;
     if json_mode {
         let summary = json!({
             "stop_reason": stop_reason,

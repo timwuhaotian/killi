@@ -258,6 +258,14 @@ impl Agent {
         outcome
     }
 
+    /// Runs the `SessionEnd` hooks once, when the session's work is done. Sessions that never
+    /// started (no turn ran, so no `SessionStart`) run none: there is nothing to close out.
+    pub async fn session_end(&self, reason: &str) {
+        if self.session_started {
+            self.hook("SessionEnd", None, json!({"reason": reason})).await;
+        }
+    }
+
     pub(super) fn tool_start(&self, id: &str, summary: &str) {
         (self.sink)(Event::ToolStart { id: id.into(), summary: summary.into() });
     }

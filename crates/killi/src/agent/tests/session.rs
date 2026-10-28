@@ -444,3 +444,22 @@ async fn undo_note_reaches_the_next_prompt() {
     let sent = agent.messages[0]["content"].as_str().unwrap();
     assert!(sent.contains("Changed back: a.txt, b.txt") && sent.ends_with("hi"), "{sent}");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn session_end_runs_hooks_only_for_started_sessions() {
+    let marker = std::env::temp_dir().join(format!("killi-session-end-{}", std::process::id()));
+    let _ = std::fs::remove_file(&marker);
+    #[derive(serde::Deserialize)]
+    struct Wrapper {
+        hooks: crate::hooks::HooksConfig,
+    }
+    let hooks = toml::from_str::<Wrapper>(&format!("[[hooks.SessionEnd]]\ncommand = \"touch {}\"\n", marker.display())).unwrap().hooks;
+    let mut agent = idle_agent("session-end", Controls::default(), Rc::new(|_| {}));
+    agent.settings = Rc::new(Settings { hooks: Rc::new(hooks), ..Settings::default() });
+    agent.session_end("completed").await;
+    assert!(!marker.exists(), "an unstarted session runs no SessionEnd hooks");
+    agent.session_started = true;
+    agent.session_end("completed").await;
+    assert!(marker.exists(), "a started session runs its SessionEnd hooks");
+    let _ = std::fs::remove_file(&marker);
+}

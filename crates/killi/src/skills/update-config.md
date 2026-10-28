@@ -59,9 +59,9 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   project's own folders are always read.
 - `[[hooks.<Event>]]` with `matcher` (a regex over tool names; none matches every tool),
   `command` (sh, with the event as JSON on stdin) and `timeout` (seconds, default 60). Events:
-  `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`.
-  Exit code 2 blocks and sends stderr to the model; a `PostToolUse` hook's output goes to the
-  model too.
+  `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`,
+  `SessionEnd` (runs when the session exits, only if a turn ran). Exit code 2 blocks and
+  sends stderr to the model; a `PostToolUse` hook's output goes to the model too.
 - `[mcp] eager = ["name"]`: servers that start with every session and get native tool
   definitions; other servers start when first used through the `mcp` tool.
 - `[prompt] system = '''...'''`: the system prompt's guidance in place of the built-in text;
@@ -81,6 +81,45 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
 
 An MCP server in `mcp.json` has `command`, `args`, `env` (stdio) or `url`, `headers`,
 `bearerTokenEnvVar` (HTTP), plus `enabled` (false leaves it out) and `toolTimeoutMs`.
+
+## Entire checkpoints
+
+`entire agent add` has no killi entry, but killi speaks Claude Code's hook protocol, so the
+`claude-code` handlers work unchanged. Paste this into `~/.killi/config.toml` — a project's
+`.killi/config.toml` only reads `[mcp]`, so hooks must live in the user config. Without the
+`entire` CLI on PATH each hook exits 0 at once, so the same config is safe everywhere:
+
+```toml
+[[hooks.SessionStart]]
+command = "command -v entire >/dev/null 2>&1 || exit 0; exec entire hooks claude-code session-start"
+timeout = 30
+
+[[hooks.UserPromptSubmit]]
+command = "command -v entire >/dev/null 2>&1 || exit 0; exec entire hooks claude-code user-prompt-submit"
+timeout = 30
+
+[[hooks.PreToolUse]]
+matcher = "agent|agent_swarm"
+command = "command -v entire >/dev/null 2>&1 || exit 0; exec entire hooks claude-code pre-task"
+timeout = 30
+
+[[hooks.PostToolUse]]
+command = "command -v entire >/dev/null 2>&1 || exit 0; exec entire hooks claude-code post-task"
+timeout = 120
+
+[[hooks.Stop]]
+command = "command -v entire >/dev/null 2>&1 || exit 0; exec entire hooks claude-code stop"
+timeout = 120
+
+[[hooks.SubagentStop]]
+command = "command -v entire >/dev/null 2>&1 || exit 0; exec entire hooks claude-code subagent-stop"
+timeout = 120
+
+[[hooks.SessionEnd]]
+command = "command -v entire >/dev/null 2>&1 || exit 0; exec entire hooks claude-code session-end"
+```
+
+Like other `[hooks]` changes, it takes the next killi start.
 
 ## Making a change
 
