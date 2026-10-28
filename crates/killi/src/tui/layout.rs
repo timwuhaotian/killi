@@ -145,7 +145,7 @@ impl App {
                 let (action, detail) = if let Some((attempt, left)) = retry.filter(|(_, left)| !left.is_zero()) {
                     ("retrying".to_string(), format!("in {} · attempt {attempt}", clock(left)))
                 } else if self.snapshotting {
-                    (snapshot_word(self.spinner).to_string(), String::new())
+                    (snapshot_word(self.spinner), String::new())
                 } else if let Some((_, text)) = &self.thinking {
                     ("thinking".to_string(), first_sentence(text))
                 } else if !self.partial.trim().is_empty() {

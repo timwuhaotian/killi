@@ -246,12 +246,14 @@ fn a_long_line_takes_the_rows_it_wraps_to() {
     }
 
     #[test]
-    fn the_snapshot_word_cycles_through_chinese_words() {
-        assert_eq!(snapshot_word(0), "结印");
-        assert_eq!(snapshot_word(7), "结印", "a word shows for eight frames");
-        assert_eq!(snapshot_word(8), "封存");
-        assert_eq!(snapshot_word(8 * 6), "结印", "the words wrap round");
-        assert!((0..6).all(|i| !snapshot_word(i * 8).is_ascii()), "no internal word shows");
+    fn the_snapshot_phrase_types_out_one_character_at_a_time() {
+        assert_eq!(snapshot_word(0), "给");
+        assert_eq!(snapshot_word(3), "给", "a character pops every four frames");
+        assert_eq!(snapshot_word(4), "给这");
+        assert_eq!(snapshot_word(32), "给这一刻留个影..");
+        assert_eq!(snapshot_word(36), "给这一刻留个影...", "the dots come last");
+        assert_eq!(snapshot_word(200), "给这一刻留个影...", "it stays whole");
+        assert!((0..40).all(|frame| !snapshot_word(frame).is_ascii()), "no internal word shows");
     }
 
     #[test]

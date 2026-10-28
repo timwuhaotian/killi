@@ -392,21 +392,23 @@ pub(super) fn handoff(
     out.join("\n")
 }
 
-/// Words for the turn's opening snapshot (the undo point taken on a blocking thread),
-/// cycled while it runs so the internal word never shows. All two characters, so the
-/// spinner keeps one width, and each shows for eight frames (0.8s).
-const SNAPSHOT_WORDS: [&str; 6] = ["结印", "封存", "留影", "藏锋", "掠影", "蓄势"];
+/// The phrase typed out while the turn's opening snapshot (the undo point taken on a blocking
+/// thread) runs, so the internal word never shows: one warm Chinese line ending in dots, its
+/// characters popping out one at a time and none too fast.
+const SNAPSHOT_PHRASE: &str = "给这一刻留个影...";
+/// Tenths of a second one popped-out character waits before the next appears.
+const CHAR_FRAMES: usize = 4;
 
-/// The snapshot word `frame` tenths of a second into the turn.
-pub(super) fn snapshot_word(frame: usize) -> &'static str {
-    SNAPSHOT_WORDS[frame / 8 % SNAPSHOT_WORDS.len()]
+/// The snapshot phrase `frame` tenths of a second into the turn: the characters out so far.
+pub(super) fn snapshot_word(frame: usize) -> String {
+    SNAPSHOT_PHRASE.chars().take(frame / CHAR_FRAMES + 1).collect()
 }
 
 /// The working rows: the wave and the turn's action word (`thinking`, `writing`, …) with
 /// what it is doing after it, plain; then the turn's elapsed time and the interrupt hint on
 /// their own row, left-aligned with the wave. While a failed request waits to be
 /// retried the first row counts that wait down instead, since nothing is working then. A
-/// snapshot still running on a blocking thread shows a snapshot word instead of working.
+/// snapshot still running on a blocking thread types its phrase out instead of working.
 pub(super) fn working_rows(frame: usize, elapsed: Duration, action: &str, detail: &str) -> Vec<String> {
     let first = match detail.is_empty() {
         true => banner::action(frame, action),

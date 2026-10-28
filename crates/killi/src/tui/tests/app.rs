@@ -260,7 +260,7 @@ use super::*;
     }
 
     #[test]
-    fn a_running_snapshot_shows_a_chinese_word_not_snapshot() {
+    fn a_running_snapshot_types_out_a_chinese_phrase_not_snapshot() {
         let mut app = test_app();
         app.busy = Some(Instant::now());
         app.snapshotting = true;
@@ -268,7 +268,7 @@ use super::*;
         app.width = 80;
         let (rows, _, _) = app.live();
         let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
-        assert!(shown.iter().any(|row| row.ends_with("封存")), "{shown:?}");
+        assert!(shown.iter().any(|row| row.ends_with("给这一")), "{shown:?}");
         assert!(!shown.iter().any(|row| row.contains("snapshot")), "{shown:?}");
     }
 
