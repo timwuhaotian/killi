@@ -16,7 +16,11 @@ pub fn write(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<()> {
     }
     // A symlink at `path` is written through, as a plain write would: the rename replaces
     // its target, not the link.
-    let dest = if path.is_symlink() { fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()) } else { path.to_path_buf() };
+    let dest = if path.is_symlink() {
+        fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    };
     let mode = match mode {
         Some(mode) => mode,
         None => fs::metadata(&dest).map_or(0o600, |meta| meta.permissions().mode() & 0o7777),
