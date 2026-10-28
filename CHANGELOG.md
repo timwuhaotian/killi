@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.11 — 2026-10-28
+
+- While a turn's opening snapshot runs, the wave's word no longer cycles through
+  Chinese words; it types out one warm line (给这一刻留个影...) a character at a
+  time, 0.4s apart, dots last.
+
 ## 0.6.10 — 2026-10-28
 
 - A `/` command or skill typed in full sends on the first Enter, also while the
