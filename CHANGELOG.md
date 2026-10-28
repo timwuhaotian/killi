@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.12 — 2026-10-28
+
+- Fixed a flaky session-lock test: after a session ends, the lock's release is
+  awaited instead of assumed instant, since another test forking at that
+  moment can pin the lock past the drop.
+
 ## 0.6.11 — 2026-10-28
 
 - While a turn's opening snapshot runs, the wave's word no longer cycles through

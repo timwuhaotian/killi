@@ -230,7 +230,17 @@ fn a_log_open_in_one_session_cannot_be_opened_again() {
     }
     drop(one);
 
-    assert!(!is_locked(&path), "the lock goes when the session ends");
+    // Another test forking at this moment inherits the lock's fd, so the release is
+    // awaited instead of assumed instant; a leaked lock still fails.
+    let mut unlocked = false;
+    for _ in 0..100 {
+        if !is_locked(&path) {
+            unlocked = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(unlocked, "the lock goes when the session ends");
     assert!(Session::open(&path).is_ok());
     fs::remove_dir_all(&dir).unwrap();
 }
