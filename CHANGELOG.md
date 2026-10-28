@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.18 — 2026-10-28
+
+- Triple-clicking in the fullscreen conversation selects the whole row, copied on release,
+  and further clicks keep it; double-clicking selects the word under the pointer instead of
+  the selection being lost, since killi's own mouse handling (1002 reports) counts presses
+  itself rather than seeing the terminal's native double-click.
 ## 0.6.17 — 2026-10-28
 
 - Double-clicking a word in the fullscreen conversation now selects that word (copied on

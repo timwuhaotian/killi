@@ -2,7 +2,8 @@
 //! selection is killi's own: its points are rows of the conversation rather than screen cells, so
 //! it stays on its words as the view scrolls, and it can span more than one screen. Releasing the
 //! button copies it, and a second press on the same point soon after the first selects the word
-//! under it. The wheel still scrolls, and a drag held at an edge of the view scrolls it.
+//! under it, a third the whole row. The wheel still scrolls, and a drag held at an edge of the
+//! view scrolls it.
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use unicode_width::UnicodeWidthChar;
@@ -185,7 +186,7 @@ impl App {
     }
 
     /// Ends the selection: a key press returns the view to the newest rows, which it was not
-    /// meant to select, and input between presses ends a double-click's run of them.
+    /// meant to select, and input between presses ends their run of double- and triple-clicks.
     pub(super) fn clear_selection(&mut self) {
         self.selection = None;
         self.drag = None;
@@ -199,19 +200,28 @@ impl App {
         self.extend_drag();
     }
 
-    /// A press in the conversation starts a selection there, and a second one on the same point
-    /// soon after selects the word under it; anywhere else a press only ends the last selection.
+    /// A press in the conversation starts a selection there, a second one on the same point soon
+    /// after selects the word under it and a third the whole row; anywhere else a press only ends
+    /// the last selection.
     fn press(&mut self, (row, col): (usize, usize)) {
         let point = (row < self.view_rows).then(|| self.point_at(row, col)).flatten();
-        let word = point.filter(|point| {
-            self.pressed.is_some_and(|(last, at)| last == *point && at.elapsed() < DOUBLE_CLICK)
-        }).and_then(|point| self.history.row(point.0).and_then(|line| word_on(line, point.1).map(|w| (point, w))));
+        let run = point
+            .zip(self.pressed)
+            .and_then(|(point, (last, at, n))| (last == point && at.elapsed() < DOUBLE_CLICK).then(|| (n + 1).min(3)))
+            .unwrap_or(1);
         self.clear_selection();
-        self.pressed = point.map(|point| (point, Instant::now()));
+        self.pressed = point.map(|point| (point, Instant::now(), run));
         let Some(point) = point else { return };
         self.drag = Some((row, col));
-        self.selection = Some(match word {
-            Some((_, (from, to))) => Selection { anchor: (point.0, from), head: (point.0, to), epoch: self.history.epoch() },
+        let span = if run >= 3 {
+            Some((0, usize::MAX))
+        } else if run == 2 {
+            self.history.row(point.0).and_then(|line| word_on(line, point.1))
+        } else {
+            None
+        };
+        self.selection = Some(match span {
+            Some((from, to)) => Selection { anchor: (point.0, from), head: (point.0, to), epoch: self.history.epoch() },
             None => Selection::at(point, self.history.epoch()),
         });
     }
@@ -411,9 +421,20 @@ mod tests {
         assert_eq!(app.release(), None);
 
         app.on_mouse(press(2, 1));
-        app.pressed = Some(((24, 1), Instant::now()));
+        app.pressed = Some(((24, 1), Instant::now(), 1));
         app.on_mouse(press(2, 1));
         assert_eq!(app.release(), None, "a press on another point is not a double-click");
+    }
+
+    #[test]
+    fn a_triple_click_selects_the_whole_row() {
+        let mut app = app_with_rows(30, 10);
+        (0..3).for_each(|_| app.on_mouse(press(2, 1)));
+        assert_eq!(app.release().as_deref(), Some("row 22"));
+
+        app.on_mouse(press(2, 1));
+        assert_eq!(app.release().as_deref(), Some("row 22"), "a fourth press keeps the row");
+        assert!(app.selection.is_some());
     }
 
     #[test]
