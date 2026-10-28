@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.16 — 2026-10-28
+
+- Failed multi-line edits now point to the first differing line of the closest matching
+  block and show the file's line, instead of only naming where the block begins.
+
 ## 0.6.15 — 2026-10-28
 
 - A reply that ends on a colon with no tool call after it ("Digging into why:") no

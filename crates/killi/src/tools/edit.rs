@@ -113,7 +113,7 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
         }
         match found.len() {
             0 => {
-                let hint = nearest_line(text, &old).map(|line| format!(" The closest line is line {line}; read from there.")).unwrap_or_default();
+                let hint = closest_hint(text, &old).unwrap_or_default();
                 return Err(format!(
                     "Could not find {} in {path}. It must match the file exactly, including indentation and line breaks; read the file again if unsure.{hint}",
                     label(i)
@@ -223,9 +223,44 @@ fn line_diff(old: &str, new: &str, old_line: usize, new_line: usize) -> (String,
     (out, count('+'), count('-'))
 }
 
-/// The 1-based line of `text` closest to `old`'s first non-empty line, trimmed on both sides,
-/// for pointing a failed edit at where the model most likely meant. `None` when nothing is
-/// within half the needle's length, so an unrelated file gets no hint.
+/// The first divergent line of the closest block, or the closest line for a one-line edit.
+/// An unrelated file gets no hint.
+fn closest_hint(text: &str, old: &str) -> Option<String> {
+    let start = nearest_line(text, old)?;
+    let expected: Vec<&str> = old.lines().skip_while(|line| line.trim().is_empty()).collect();
+    if expected.len() < 2 {
+        return Some(format!(" The closest line is line {start}; read from there."));
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let distance = edit_distance(expected[0].trim(), lines[start - 1].trim());
+    let (mut best, mut matched) = (start - 1, 0);
+    for (index, line) in lines.iter().enumerate() {
+        if edit_distance(expected[0].trim(), line.trim()) != distance {
+            continue;
+        }
+        let prefix = expected.iter().zip(&lines[index..]).take_while(|(want, actual)| want == actual).count();
+        if prefix > matched {
+            (best, matched) = (index, prefix);
+        }
+    }
+    if matched == expected.len() {
+        return Some(format!(" The closest line is line {}; read from there.", best + 1));
+    }
+    let line = best + matched + 1;
+    let actual = lines.get(best + matched);
+    let detail = match actual {
+        Some(actual) => {
+            let excerpt: String = actual.chars().take(160).collect();
+            let suffix = if actual.chars().count() > 160 { "…" } else { "" };
+            format!("the file has {excerpt:?}{suffix}.")
+        }
+        None => "the file ends there.".to_string(),
+    };
+    Some(format!(" The closest block starts at line {}; first differing line is line {line}: {detail}", best + 1))
+}
+
+/// The 1-based line of `text` closest to `old`'s first non-empty line, trimmed on both sides.
+/// `None` when nothing is within half the needle's length.
 fn nearest_line(text: &str, old: &str) -> Option<usize> {
     let needle = old.lines().map(str::trim).find(|line| !line.is_empty())?;
     let limit = (needle.chars().count() / 2).max(1);
@@ -333,6 +368,19 @@ mod tests {
         assert!(err.contains("closest line is line 2"), "{err}");
         let far = run(text, json!({"old_string": "something unrelated entirely", "new_string": "x"})).unwrap_err();
         assert!(!far.contains("closest line"), "{far}");
+    }
+
+    #[test]
+    fn a_missing_block_points_at_the_later_difference_in_the_best_window() {
+        let text = "fn a() {\n    let x = 0;\n    let y = 2;\n}\nfn a() {\n    let x = 1;\n    let y = 3;\n}\n";
+        let err = run(text, json!({"old_string": "fn a() {\n    let x = 1;\n    let y = 4;\n}", "new_string": "x"})).unwrap_err();
+        assert!(err.contains("closest block starts at line 5; first differing line is line 7: the file has \"    let y = 3;\"."), "{err}");
+    }
+
+    #[test]
+    fn a_missing_block_can_point_at_end_of_file() {
+        let err = run("first\nsecond\n", json!({"old_string": "first\nsecond\nthird", "new_string": "x"})).unwrap_err();
+        assert!(err.contains("first differing line is line 3: the file ends there."), "{err}");
     }
 
     #[test]
