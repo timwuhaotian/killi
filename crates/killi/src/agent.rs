@@ -52,7 +52,7 @@ use request::hides_reasoning;
 #[cfg(test)]
 use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm};
 #[cfg(test)]
-use turn::{STALE_TASKS_AFTER, ends_with_question, open_tasks_note, stale_tasks_note};
+use turn::{STALE_TASKS_AFTER, ends_with_colon, ends_with_question, open_tasks_note, stale_tasks_note};
 #[cfg(test)]
 use types::{BTW_NOTE, RECAP_CHARS, RECAP_MAX, RECAP_NOTE, fit_recap, side_request};
 

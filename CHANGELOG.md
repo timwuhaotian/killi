@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- A reply that ends on a colon with no tool call after it ("Digging into why:") no
+  longer ends the turn and waits for `continue`: killi reminds the model once to do
+  what it announced or answer in a sentence. Also covers `-p` and subagents.
+
 ## 0.6.14 — 2026-10-28
 
 - Inline the pid in temp-dir format strings (`test_temp.rs` and the `later.rs` test),

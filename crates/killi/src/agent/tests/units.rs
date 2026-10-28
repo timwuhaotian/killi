@@ -403,6 +403,17 @@ fn a_reply_that_asks_a_question_does_not_reannounce_open_tasks() {
 }
 
 #[test]
+fn a_reply_ending_on_a_colon_announces_what_never_came() {
+    assert!(ends_with_colon("Hook ran but did nothing. Digging into why:"));
+    assert!(ends_with_colon("Looking at it:  \n\n"));
+    assert!(ends_with_colon("我先查一下原因："));
+    assert!(!ends_with_colon("Done."));
+    assert!(!ends_with_colon(""));
+    assert!(!ends_with_colon("Run this:\n\n```\ncargo test\n```"));
+    assert!(!ends_with_colon("the ratio is 3:1 here"));
+}
+
+#[test]
 fn compaction_says_skills_must_be_reloaded() {
     assert!(COMPACT_INSTRUCTION.contains("/name") && COMPACT_INSTRUCTION.contains("`skill` tool"));
 }

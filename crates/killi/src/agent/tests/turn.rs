@@ -411,3 +411,32 @@ async fn tree_moving_git_runs_without_a_peer_or_in_another_tree() {
     let output = agent.dispatch(&call, &json!({"command": "git restore f", "cwd": elsewhere})).await;
     assert!(!output.text.starts_with("Not run:"), "{}", output.text);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_reply_ending_on_a_colon_is_asked_to_go_on_once() {
+    use crate::agent::turn::UNFINISHED;
+    let notices = Rc::new(RefCell::new(Vec::new()));
+    let seen = notices.clone();
+    let sink: Sink = Rc::new(move |event| {
+        if let Event::Notice(text) = event {
+            seen.borrow_mut().push(text);
+        }
+    });
+    let url = stub_replies(vec![sse("Digging into why:", "stop"), sse("Found it.", "stop")]).await;
+    let mut agent = idle_agent("unfinished-reply", Controls::default(), sink);
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, stop) = agent.run("why?", &[]).await.unwrap();
+    assert_eq!((text.as_str(), stop), ("Found it.", Stop::Completed));
+    let roles: Vec<_> = agent.messages.iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["user", "assistant", "user", "assistant"]);
+    assert_eq!(agent.messages[2]["content"], UNFINISHED);
+    assert_eq!(notices.borrow().len(), 1);
+
+    // A second colon ends the turn: it is asked once, not until it gives in.
+    let url = stub_replies(vec![sse("Digging:", "stop"), sse("Still digging:", "stop")]).await;
+    let mut agent = idle_agent("unfinished-twice", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, _) = agent.run("why?", &[]).await.unwrap();
+    assert_eq!(text, "Still digging:");
+    assert_eq!(agent.messages.iter().filter(|m| m["content"] == UNFINISHED).count(), 1);
+}

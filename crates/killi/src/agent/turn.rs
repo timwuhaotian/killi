@@ -5,6 +5,10 @@ const MAX_CONTINUATIONS: u32 = 3;
 /// Told at the end of a turn that leaves commands running, after the list of them.
 const LEFT_RUNNING: &str = "Stop with task_stop what nothing needs anymore, such as a server or watcher started for a test or a check. If one should keep running, say so in your reply.";
 
+/// Told once when a reply ends on a colon with no tool call after it: the sentence promised a
+/// lookup or a list and the turn ended before giving it.
+pub(super) const UNFINISHED: &str ="<system-reminder>Your reply ends with a colon, so something was meant to follow it, but nothing did. If you meant to look something up or run something, do it now with a tool call. If you had nothing more to say, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
+
 impl Agent {
     /// Runs one user turn to completion and returns the final reply text.
     pub async fn run(&mut self, user: &str, images: &[Image]) -> Result<(String, Stop)> {
@@ -50,6 +54,7 @@ impl Agent {
         let mut overflow_compacted = false;
         let mut media_stripped = false;
         let mut stop_blocks = 0;
+        let mut told_unfinished = false;
         let mut told_left_running = false;
         let mut told_open_tasks = false;
         loop {
@@ -78,6 +83,12 @@ impl Agent {
                     continue;
                 }
                 if self.pending_steer() {
+                    continue;
+                }
+                if !truncated && !told_unfinished && ends_with_colon(&reply.text) {
+                    told_unfinished = true;
+                    (self.sink)(Event::Notice("The reply ended on a colon with nothing after it. Asked the agent to go on.".into()));
+                    self.push(json!({"role": "user", "content": UNFINISHED}))?;
                     continue;
                 }
                 // `-p` stops everything as it exits, so only a session that goes on asks.
@@ -205,7 +216,17 @@ impl Agent {
 /// Whether the reply ends by asking the user something: its last non-empty line ends with
 /// `?` (or the full-width `？` of Chinese and Japanese replies). An open task list isn't re-announced then; the question already waits for the user.
 pub(super) fn ends_with_question(text: &str) -> bool {
-    text.lines().rev().find(|line| !line.trim().is_empty()).is_some_and(|line| line.trim_end().ends_with(['?', '？']))
+    last_line_ends_with(text, &['?', '？'])
+}
+
+/// Whether the reply ends on a colon (or the full-width `：`): it announces something, a lookup
+/// or a list, that the turn stopped before giving.
+pub(super) fn ends_with_colon(text: &str) -> bool {
+    last_line_ends_with(text, &[':', '：'])
+}
+
+fn last_line_ends_with(text: &str, marks: &[char]) -> bool {
+    text.lines().rev().find(|line| !line.trim().is_empty()).is_some_and(|line| line.trim_end().ends_with(marks))
 }
 
 /// Tool calls the task list may go unchanged for with an item open before the model is
