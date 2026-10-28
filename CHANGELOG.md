@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.17 — 2026-10-28
+
+- Double-clicking a word in the fullscreen conversation now selects that word (copied on
+  release, like a drag) instead of the selection being lost: killi's own mouse handling sees
+  a second press on the same point, not the terminal's native double-click.
 ## 0.6.16 — 2026-10-28
 
 - Failed multi-line edits now point to the first differing line of the closest matching

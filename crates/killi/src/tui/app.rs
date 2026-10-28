@@ -77,6 +77,7 @@ impl App {
             view_rows: usize::from(rows).max(5),
             selection: None,
             drag: None,
+            pressed: None,
             banner_resumed: false,
             branch_at: None,
             live: None,

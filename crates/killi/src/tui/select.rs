@@ -1,12 +1,16 @@
 //! Text selection in fullscreen mode. killi asks the terminal for button reports (1002), so the
 //! selection is killi's own: its points are rows of the conversation rather than screen cells, so
 //! it stays on its words as the view scrolls, and it can span more than one screen. Releasing the
-//! button copies it. The wheel still scrolls, and a drag held at an edge of the view scrolls it.
+//! button copies it, and a second press on the same point soon after the first selects the word
+//! under it. The wheel still scrolls, and a drag held at an edge of the view scrolls it.
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use unicode_width::UnicodeWidthChar;
 
 use super::*;
+
+/// How close together two presses on the same point land to count as a double-click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
 /// Reverse video on and off, around the selected columns.
 const REVERSE: &str = "\x1b[7m";
@@ -131,6 +135,35 @@ pub(super) fn columns_text(line: &str, from: usize, to: usize) -> String {
         .collect()
 }
 
+/// The columns of the word around column `col` of `line`, both ends included: a run of letters,
+/// digits and underscores, or the one character clicked when it is neither. Blank space is None.
+fn word_on(line: &str, col: usize) -> Option<(usize, usize)> {
+    let chars: Vec<(char, usize, usize)> = pieces(line)
+        .into_iter()
+        .filter_map(|piece| match piece {
+            Piece::Char { text, col, width } => text.chars().next().map(|c| (c, col, width)),
+            _ => None,
+        })
+        .collect();
+    let at = chars.iter().position(|&(_, start, width)| covers(start, width, col, col))?;
+    if chars[at].0.is_whitespace() {
+        return None;
+    }
+    // A character with no width of its own, like a combining mark, belongs to its neighbor's word.
+    let joins = |(c, _, width): (char, usize, usize)| width == 0 || c.is_alphanumeric() || c == '_';
+    let mut first = at;
+    let mut last = at;
+    if joins(chars[at]) {
+        while first > 0 && joins(chars[first - 1]) {
+            first -= 1;
+        }
+        while last + 1 < chars.len() && joins(chars[last + 1]) {
+            last += 1;
+        }
+    }
+    Some((chars[first].1, chars[last].1 + chars[last].2.max(1) - 1))
+}
+
 impl App {
     /// Mouse reports, which come only in fullscreen mode: the wheel scrolls the conversation, and
     /// a left-button drag that starts in it selects text, copied when the button is let go.
@@ -152,10 +185,11 @@ impl App {
     }
 
     /// Ends the selection: a key press returns the view to the newest rows, which it was not
-    /// meant to select.
+    /// meant to select, and input between presses ends a double-click's run of them.
     pub(super) fn clear_selection(&mut self) {
         self.selection = None;
         self.drag = None;
+        self.pressed = None;
     }
 
     /// Scrolls the conversation by `rows`, and a drag in progress follows the pointer into what
@@ -165,16 +199,21 @@ impl App {
         self.extend_drag();
     }
 
-    /// A press in the conversation starts a selection there; anywhere else it only ends the last.
+    /// A press in the conversation starts a selection there, and a second one on the same point
+    /// soon after selects the word under it; anywhere else a press only ends the last selection.
     fn press(&mut self, (row, col): (usize, usize)) {
+        let point = (row < self.view_rows).then(|| self.point_at(row, col)).flatten();
+        let word = point.filter(|point| {
+            self.pressed.is_some_and(|(last, at)| last == *point && at.elapsed() < DOUBLE_CLICK)
+        }).and_then(|point| self.history.row(point.0).and_then(|line| word_on(line, point.1).map(|w| (point, w))));
         self.clear_selection();
-        if row >= self.view_rows {
-            return;
-        }
-        if let Some(point) = self.point_at(row, col) {
-            self.selection = Some(Selection::at(point, self.history.epoch()));
-            self.drag = Some((row, col));
-        }
+        self.pressed = point.map(|point| (point, Instant::now()));
+        let Some(point) = point else { return };
+        self.drag = Some((row, col));
+        self.selection = Some(match word {
+            Some((_, (from, to))) => Selection { anchor: (point.0, from), head: (point.0, to), epoch: self.history.epoch() },
+            None => Selection::at(point, self.history.epoch()),
+        });
     }
 
     /// The pointer moved with the button held: the selection's head goes to it.
@@ -350,6 +389,41 @@ mod tests {
             assert_eq!(selection.columns_on(4), None);
         }
         assert!(Selection::at((1, 1), 0).is_empty());
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_under_it_and_release_copies_it() {
+        let mut app = app_with_rows(30, 10);
+        app.on_mouse(press(2, 1));
+        app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, 1));
+        assert!(app.selection.is_none(), "a single press selects nothing");
+        app.on_mouse(press(2, 1));
+        assert_eq!(app.release().as_deref(), Some("row"));
+        assert!(app.selection.is_some(), "the word stays selected after the copy");
+    }
+
+    #[test]
+    fn a_second_press_too_late_or_elsewhere_starts_an_empty_selection() {
+        let mut app = app_with_rows(30, 10);
+        app.on_mouse(press(2, 1));
+        app.pressed.as_mut().unwrap().1 -= DOUBLE_CLICK + Duration::from_millis(1);
+        app.on_mouse(press(2, 1));
+        assert_eq!(app.release(), None);
+
+        app.on_mouse(press(2, 1));
+        app.pressed = Some(((24, 1), Instant::now()));
+        app.on_mouse(press(2, 1));
+        assert_eq!(app.release(), None, "a press on another point is not a double-click");
+    }
+
+    #[test]
+    fn a_word_is_letters_digits_and_underscores_and_any_other_character_alone() {
+        assert_eq!(word_on("hello world_2!", 1), Some((0, 4)));
+        assert_eq!(word_on("hello world_2!", 8), Some((6, 12)));
+        assert_eq!(word_on("hello world_2!", 13), Some((13, 13)));
+        assert_eq!(word_on("hello world", 5), None);
+        assert_eq!(word_on("hello world", 40), None);
+        assert_eq!(word_on("\x1b[1m中文\x1b[0m ab", 2), Some((0, 3)));
     }
 
     #[test]

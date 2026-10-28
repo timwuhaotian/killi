@@ -109,6 +109,7 @@ mod rows;
             view_rows: 24,
             selection: None,
             drag: None,
+            pressed: None,
             banner_resumed: false,
             branch_at: None,
             live: None,
