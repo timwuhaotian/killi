@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.15 — 2026-10-28
+
 - A reply that ends on a colon with no tool call after it ("Digging into why:") no
   longer ends the turn and waits for `continue`: killi reminds the model once to do
   what it announced or answer in a sentence. Also covers `-p` and subagents.
