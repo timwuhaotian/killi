@@ -142,26 +142,84 @@ impl Skills {
         scored.into_iter().take(5).map(|(_, s)| s).collect()
     }
 
-    /// The prompt for `/name args`, when `name` is a skill.
+    /// The prompt for `/name args`, when `name` is a skill: its block with the request that
+    /// follows it, then a block for every further `/skill` word in `args` — a newline or a
+    /// space before it separates one skill's request from the next — so one prompt can load
+    /// several.
     pub fn invocation(&self, name: &str, args: &str) -> Option<String> {
-        let skill = self.find(name)?;
-        let content = Skills::content(skill)?;
-        let request = if args.trim().is_empty() { FOLLOW } else { args.trim() };
-        Some(format!("Use the {} skill for this.\n\n{content}\n\n{request}", skill.name))
+        let (request, more) = self.calls(args);
+        let mut blocks = vec![block(self.find(name)?, &request)?];
+        for (skill, request) in more {
+            blocks.push(block(skill, &request)?);
+        }
+        Some(blocks.join("\n\n"))
     }
+
+    /// The `/name` words in `text` that name a skill, each with the words up to the next one as
+    /// its request; the words before the first come back as the leading request of the call
+    /// `invocation` was asked for.
+    fn calls<'s>(&'s self, text: &str) -> (String, Vec<(&'s Skill, String)>) {
+        let (mut leading, mut calls, mut rest) = (String::new(), Vec::new(), text);
+        while let Some((at, skill)) = self.call_in(rest) {
+            let end = rest[at..].find(char::is_whitespace).map_or(rest.len(), |end| at + end);
+            let (before, after) = rest.split_at(end);
+            match calls.last_mut() {
+                Some((_, request)) => *request = before[..at].trim().to_string(),
+                None => leading = before[..at].trim().to_string(),
+            }
+            calls.push((skill, String::new()));
+            rest = after;
+        }
+        match calls.last_mut() {
+            Some((_, request)) => *request = rest.trim().to_string(),
+            None => leading = rest.trim().to_string(),
+        }
+        (leading, calls)
+    }
+
+    /// The offset of the next `/name` word in `text` that names a skill, and the skill. A word
+    /// names a skill only as a whole, so a path like `src/pdf` stays text.
+    fn call_in<'s>(&'s self, text: &str) -> Option<(usize, &'s Skill)> {
+        let mut at = 0;
+        for word in text.split_inclusive(char::is_whitespace) {
+            if let Some(skill) = word.trim_end().strip_prefix('/').and_then(|name| self.find(name)) {
+                return Some((at, skill));
+            }
+            at += word.len();
+        }
+        None
+    }
+}
+
+/// One call's block: the skill's content, then its request, or a standing instruction when it
+/// came without one.
+fn block(skill: &Skill, request: &str) -> Option<String> {
+    let content = Skills::content(skill)?;
+    let request = if request.trim().is_empty() { FOLLOW } else { request.trim() };
+    Some(format!("Use the {} skill for this.\n\n{content}\n\n{request}", skill.name))
 }
 
 /// The request `invocation` sends when `/name` comes without one.
 const FOLLOW: &str = "Follow the skill.";
 
-/// The `/name request` that `invocation` turned into `prompt`, or `None` for any other prompt.
-/// A prompt that compaction cut inside the skill's text has lost its request and gives `/name`.
+/// The `/name request` calls that `invocation` turned into `prompt`, joined by newlines, or
+/// `None` for any other prompt. A prompt that compaction cut inside the skill's text has lost
+/// its request and gives `/name`.
 pub fn typed(prompt: &str) -> Option<String> {
-    let (name, rest) = prompt.strip_prefix("Use the ")?.split_once(" skill for this.\n\n<skill name=\"")?;
-    rest.strip_prefix(name)?.strip_prefix('"')?;
-    let request = rest.rsplit_once("\n</skill>\n\n").map_or("", |(_, request)| request.trim());
-    let request = if request == FOLLOW { "" } else { request };
-    Some(format!("/{name} {request}").trim_end().to_string())
+    let mut calls = Vec::new();
+    let mut rest = prompt.strip_prefix("Use the ")?;
+    loop {
+        let (name, tail) = rest.split_once(" skill for this.\n\n<skill name=\"")?;
+        let tail = tail.strip_prefix(name)?.strip_prefix('"')?;
+        let after = tail.split_once("\n</skill>\n\n").map_or("", |(_, after)| after);
+        let (request, next) = after.split_once("\n\nUse the ").unwrap_or((after, ""));
+        let request = if request.trim() == FOLLOW { "" } else { request };
+        calls.push(format!("/{name} {request}").trim_end().to_string());
+        if next.is_empty() {
+            return Some(calls.join("\n"));
+        }
+        rest = next;
+    }
 }
 
 fn tokens(text: &str) -> Vec<String> {
@@ -244,6 +302,37 @@ mod tests {
         assert_eq!(typed(&skills.invocation("pdf", "").unwrap()).as_deref(), Some("/pdf"));
         assert_eq!(typed(&format!("{}\n[… 900 characters cut]", &skills.invocation("pdf", "merge").unwrap()[..60])).as_deref(), Some("/pdf"));
         assert_eq!(typed("Use the pdf skill for this.\n\nmerge them"), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn one_prompt_can_invoke_several_skills() {
+        let root = std::env::temp_dir().join(format!("killi-skills-more-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        for (dir, front) in [
+            ("ios-shots", "name: ios-shots\ndescription: Capture screenshots"),
+            ("pdf", "name: pdf\ndescription: Read PDF files"),
+        ] {
+            fs::create_dir_all(root.join(".agents/skills").join(dir)).unwrap();
+            fs::write(root.join(".agents/skills").join(dir).join("SKILL.md"), format!("---\n{front}\n---\nBody of {dir}."))
+                .unwrap();
+        }
+        let skills = Skills::discover(&root, &["/nonexistent".to_string()]);
+        // A newline between the calls, as typed after the first request.
+        let prompt = skills.invocation("ios-shots", "one\n/pdf two").unwrap();
+        assert!(prompt.starts_with("Use the ios-shots skill for this."), "{prompt}");
+        assert!(prompt.contains("Body of ios-shots.\n</skill>\n\none\n\nUse the pdf skill for this."), "{prompt}");
+        assert!(prompt.ends_with("Body of pdf.\n</skill>\n\ntwo"), "{prompt}");
+        assert_eq!(typed(&prompt).as_deref(), Some("/ios-shots one\n/pdf two"));
+        // Right after an autocompleted name, with only the filled-in space between them.
+        let prompt = skills.invocation("ios-shots", "/pdf merge").unwrap();
+        assert!(prompt.contains("Follow the skill.\n\nUse the pdf skill for this."), "{prompt}");
+        assert_eq!(typed(&prompt).as_deref(), Some("/ios-shots\n/pdf merge"));
+        // A slash word that isn't a whole skill name stays request text.
+        let prompt = skills.invocation("pdf", "see src/pdf and /zzz").unwrap();
+        assert!(prompt.ends_with("see src/pdf and /zzz"), "{prompt}");
+        assert_eq!(typed(&prompt).as_deref(), Some("/pdf see src/pdf and /zzz"));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.20 — 2026-10-29
+- One prompt can now load several skills: after the first `/skill request`, another
+  `/skill` on a new line — or right after the space autocomplete fills — becomes its own
+  block with its own request instead of staying plain text. A slash word only counts when
+  the whole word names a skill, so paths like `src/pdf` stay text. Replay and compaction
+  show such a prompt as the `/skill` lines that started it.
+
 ## 0.6.19 — 2026-10-29
 - Picking SearXNG in `/web-search-config` with no instance configured now offers to start
   one with Docker: killi writes a minimal `~/.killi/searxng/settings.yml` (the image's

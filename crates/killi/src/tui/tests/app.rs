@@ -421,9 +421,11 @@ use super::*;
         assert_eq!(names(&mut app), vec!["demo-skill".to_string()], "typing narrows to the skill");
 
         let dir = crate::test_temp::TempDir::new("killi-busy-skill");
-        let folder = dir.path().join(".agents/skills/demo-skill");
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("SKILL.md"), "---\nname: demo-skill\ndescription: does demos\n---\nBe brief.").unwrap();
+        for (name, body) in [("demo-skill", "Be brief."), ("other-skill", "Be kind.")] {
+            let folder = dir.path().join(format!(".agents/skills/{name}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("SKILL.md"), format!("---\nname: {name}\ndescription: does things\n---\n{body}")).unwrap();
+        }
         app.skills = crate::skills::Skills::discover(dir.path(), &["no-such-dir".to_string()]);
         app.editor.clear();
         app.editor.insert("/demo-skill make one");
@@ -433,5 +435,20 @@ use super::*;
         let (sent, images) = &steered[0];
         assert!(sent.contains("Use the demo-skill skill for this.") && sent.contains("Be brief.") && sent.ends_with("make one"), "{sent}");
         assert!(images.is_empty());
+        // A second skill in the same prompt, on the next line or after the completed name's
+        // space, becomes its own block.
+        drop(steered);
+        app.controls.steer.borrow_mut().clear();
+        app.queued.clear();
+        for text in ["/demo-skill make one\n/other-skill make two", "/demo-skill /other-skill both"] {
+            app.controls.steer.borrow_mut().clear();
+            app.queued.clear();
+            app.editor.clear();
+            app.editor.insert(text);
+            app.send_busy();
+            let steered = app.controls.steer.borrow();
+            let (sent, _) = steered.back().unwrap();
+            assert!(sent.contains("Use the demo-skill skill for this.") && sent.contains("Use the other-skill skill for this.") && sent.contains("Be kind."), "from {text}: {sent}");
+        }
         assert!(app.editor.is_empty(), "the prompt was taken");
     }
