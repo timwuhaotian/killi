@@ -27,8 +27,9 @@ fn write_import(out: toml::Table, mcp_src: Option<&Path>, dst_dir: &Path, force:
     Ok(())
 }
 
-/// Copies providers, models, `default_model` and `[thinking]` from Kimi Code's config.
-/// Providers that sign in through Kimi's account login are skipped.
+/// Copies providers, models, `default_model` and thinking from Kimi Code's config: its
+/// `[thinking] enabled` comes over as is, and its effort becomes the default model's
+/// `default_effort`. Providers that sign in through Kimi's account login are skipped.
 pub fn import_kimi(force: bool) -> Result<()> {
     let src = home().join(".kimi-code/config.toml");
     let dir = killi_home();
@@ -66,15 +67,28 @@ pub fn import_kimi(force: bool) -> Result<()> {
     }
 
     let mut out = toml::Table::new();
-    if let Some(default) = kimi.get("default_model").and_then(toml::Value::as_str) {
-        if models.contains_key(default) {
-            out.insert("default_model".into(), default.into());
+    let mut default = None;
+    if let Some(configured) = kimi.get("default_model").and_then(toml::Value::as_str) {
+        if models.contains_key(configured) {
+            out.insert("default_model".into(), configured.into());
+            default = Some(configured.to_string());
         } else {
-            eprintln!("default_model `{default}` was not imported, so none is set");
+            eprintln!("default_model `{configured}` was not imported, so none is set");
         }
     }
     if let Some(thinking) = kimi.get("thinking") {
-        out.insert("thinking".into(), thinking.clone());
+        let mut ours = toml::Table::new();
+        if let Some(enabled) = thinking.get("enabled") {
+            ours.insert("enabled".into(), enabled.clone());
+        }
+        if let (Some(alias), Some(effort)) = (default.as_deref(), thinking.get("effort").and_then(toml::Value::as_str))
+            && let Some(toml::Value::Table(model)) = models.get_mut(alias)
+        {
+            model.insert("default_effort".into(), effort.to_string().into());
+        }
+        if !ours.is_empty() {
+            out.insert("thinking".into(), ours.into());
+        }
     }
     let (provider_count, model_count) = (providers.len(), models.len());
     out.insert("providers".into(), toml::Value::Table(providers));
@@ -221,9 +235,12 @@ fn import_pi_shape(
         if configured != Some(alias.as_str()) {
             eprintln!("{source}'s default model {} wasn't imported, so `{alias}` is the default", configured.unwrap_or("(none)"));
         }
-    }
-    if let Some(effort) = effort {
-        out.insert("thinking".into(), toml::Table::from_iter([("effort".to_string(), effort.into())]).into());
+        // The thinking level the agent had is per model here, so it lands on the default.
+        if let Some(effort) = effort
+            && let Some(toml::Value::Table(model)) = models.get_mut(alias)
+        {
+            model.insert("default_effort".into(), effort.to_string().into());
+        }
     }
     let (provider_count, model_count) = (providers.len(), models.len());
     out.insert("providers".into(), toml::Value::Table(providers));

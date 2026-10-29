@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.21 — 2026-10-29
+
+- Thinking effort is per model now, not one global pick. The `[thinking] effort` key — which
+  the starting config wrote as `high`, so every new session reasoned at high whatever the
+  model offered or you had picked — is gone: a model starts at its own `default_effort`, else
+  the middle of its `support_efforts`, else the provider's default. `/effort` saves the pick
+  as that model's `default_effort` in `~/.killi/config.toml`, so the next session on the model
+  — new, `-m` or a `/model` switch — starts where you left it, and other models keep their own
+  level. `~/.killi/last-model.json` remembers only the model; a resumed session still runs on
+  the effort its log last recorded. Imports (Kimi Code, pi, omp) put the imported level on the
+  default model instead of a global key.
+
 ## 0.6.20 — 2026-10-29
 - One prompt can now load several skills: after the first `/skill request`, another
   `/skill` on a new line — or right after the space autocomplete fills — becomes its own

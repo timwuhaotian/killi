@@ -1,4 +1,4 @@
-//! The model and effort last picked, kept for the sessions started after it.
+//! The model last picked, kept for the sessions started after it.
 
 use super::*;
 
@@ -6,13 +6,14 @@ fn choice_path() -> PathBuf {
     killi_home().join("last-model.json")
 }
 
-/// The model and effort last picked with /model or /effort, which new sessions start on.
+/// The model last picked with /model, which new sessions start on. Its effort is not kept
+/// here: each model's `default_effort` in the config holds it, and `/effort` writes it.
 /// Nothing when none was picked or the file can't be read.
 pub fn last_choice() -> Choice {
     read_choice(&choice_path())
 }
 
-/// Remembers a pick from /model or /effort for the sessions started after it.
+/// Remembers a pick from /model for the sessions started after it.
 pub fn save_choice(choice: &Choice) -> Result<()> {
     write_choice(&choice_path(), choice)
 }

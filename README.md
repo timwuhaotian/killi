@@ -135,8 +135,9 @@ Otherwise `killi init` writes a starting config to edit. It looks like this:
 ```toml
 default_model = "mimo/mimo-v2.6-pro"
 
-[thinking]
-effort = "high"              # or enabled = false
+# [thinking]
+# enabled = false            # turns reasoning off everywhere; each model reasons at its
+#                            # default_effort (what /effort last picked) otherwise
 
 [providers.mimo]
 type = "openai"              # OpenAI chat completions

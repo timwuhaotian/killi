@@ -379,6 +379,13 @@ resume continues on the model and effort the conversation last ran on. The file 
 should new sessions use", the log answers "what was this conversation on", and neither reads
 the other.
 
+Since 2026-10-29 the effort is no longer one global pick. `[thinking] effort` — which the starting
+template wrote as `high`, so every model reasoned at high — is gone; a model reasons at its own
+`default_effort`, else the middle of its `support_efforts`, else the provider's default, and
+`/effort` writes the pick into the model's `[models]` entry as `default_effort`. So each model
+keeps the level it was last left on, across sessions and machines of the same config, and
+`last-model.json` remembers only the model.
+
 `/btw` asks a side question, as in Claude Code. It sends the history as it stands plus the
 question, with the same tools, so the cached prefix hits. The model is told not to call tools.
 Neither the question nor the answer goes into history or the log, so the main thread's cache

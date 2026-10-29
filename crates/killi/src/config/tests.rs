@@ -11,7 +11,23 @@ fn template_parses_and_resolves() {
     unsafe { std::env::set_var("OPENAI_API_KEY", "test-key") };
     let model = config.resolve(None).unwrap();
     assert_eq!(model.protocol, super::Protocol::Responses);
-    assert_eq!(model.thinking, super::Thinking::Effort("high".into()));
+    assert_eq!(model.thinking, super::Thinking::On, "no global effort any more: the model's own, else the provider's default");
+}
+
+#[test]
+fn thinking_follows_the_model_and_ignores_a_former_global_effort() {
+    let base = "[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n";
+    let off: super::Config = toml::from_str(&format!("[thinking]\nenabled = false\n{base}")).unwrap();
+    assert_eq!(off.resolve(Some("test/model")).unwrap().thinking, super::Thinking::Off);
+    // An `effort` line from before the change is unknown and changes nothing.
+    let legacy: super::Config = toml::from_str(&format!("[thinking]\neffort = \"high\"\n{base}")).unwrap();
+    assert_eq!(legacy.resolve(Some("test/model")).unwrap().thinking, super::Thinking::On);
+
+    let own: super::Config = toml::from_str(&format!("{base}default_effort = \"low\"\nsupport_efforts = [\"low\", \"medium\", \"high\"]\n")).unwrap();
+    assert_eq!(own.resolve(Some("test/model")).unwrap().thinking, super::Thinking::Effort("low".into()), "the model's default wins");
+
+    let middle: super::Config = toml::from_str(&format!("{base}support_efforts = [\"low\", \"medium\", \"high\"]\n")).unwrap();
+    assert_eq!(middle.resolve(Some("test/model")).unwrap().thinking, super::Thinking::Effort("medium".into()), "without one, the middle of the supported efforts");
 }
 
 #[test]
@@ -240,6 +256,31 @@ fn choosing_a_model_rewrites_the_default_model_line() {
 }
 
 #[test]
+fn picking_an_effort_rewrites_the_models_default_effort_line() {
+    let root = std::env::temp_dir().join(format!("killi-effort-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    std::fs::write(&path, "# my config\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]  # my model\nprovider = \"test\"\nmodel = \"model\"\ndefault_effort = \"high\"\n\n[models.\"test/other\"]\nprovider = \"test\"\nmodel = \"other\"\ndefault_effort = \"low\"\n").unwrap();
+
+    super::set_model_effort(&path, "test/model", "medium").unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[models.\"test/model\"]  # my model\nprovider = \"test\"\nmodel = \"model\"\ndefault_effort = \"medium\""), "the line is replaced in place: {text}");
+    assert!(text.contains("default_effort = \"low\""), "the other model keeps its own: {text}");
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.models["test/model"].default_effort.as_deref(), Some("medium"));
+    assert_eq!(config.resolve(Some("test/model")).unwrap().thinking, super::Thinking::Effort("medium".into()));
+
+    std::fs::write(&path, "[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.'test/model']\nprovider = \"test\"\nmodel = \"model\"\n").unwrap();
+    super::set_model_effort(&path, "test/model", "off").unwrap();
+    let config: super::Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(config.resolve(Some("test/model")).unwrap().thinking, super::Thinking::Off, "a missing line is added under the header, quotes either way");
+
+    assert!(super::set_model_effort(&path, "test/absent", "low").unwrap_err().to_string().contains("no [models.\"test/absent\"] table"));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn importing_pi_carries_over_providers_models_and_the_default() {
     let root = std::env::temp_dir().join(format!("killi-import-pi-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -264,7 +305,7 @@ fn importing_pi_carries_over_providers_models_and_the_default() {
     let text = std::fs::read_to_string(dst.join("config.toml")).unwrap();
     let config: super::Config = toml::from_str(&text).unwrap();
     assert_eq!(config.default_model.as_deref(), Some("minimax/MiniMax-M3"));
-    assert_eq!(config.thinking.effort.as_deref(), Some("high"));
+    assert_eq!(config.models["minimax/MiniMax-M3"].default_effort.as_deref(), Some("high"), "pi's thinking level is the default model's own");
     assert_eq!(config.providers.len(), 2, "a provider without a key is skipped");
     assert_eq!(config.providers["sph"].api_key.as_deref(), Some("sk-sph"));
     assert_eq!(config.providers["sph"].base_url.as_deref(), Some("https://gw.example.com/v1"));

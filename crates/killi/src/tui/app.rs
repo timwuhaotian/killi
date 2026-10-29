@@ -198,9 +198,10 @@ impl App {
         self.refresh_choices(config);
     }
 
-    /// Remembers the model and effort just picked for the sessions started after this one.
+    /// Remembers the model just picked for the sessions started after this one; its effort
+    /// is the model's `default_effort` in the config, which `/effort` keeps up to date.
     pub(super) fn save_choice(&mut self, agent: &Agent) {
-        let choice = Choice { model: Some(agent.model_alias().to_string()), effort: Some(agent.thinking().label().to_string()) };
+        let choice = Choice { model: Some(agent.model_alias().to_string()), effort: None };
         if let Err(e) = crate::session::save_choice(&choice) {
             self.error_report(&e);
         }

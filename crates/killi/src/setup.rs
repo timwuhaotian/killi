@@ -43,7 +43,7 @@ pub struct Setup {
     cwd: PathBuf,
     /// The model chosen with -m.
     model: Option<String>,
-    /// The last pick from /model or /effort, which a new session starts on without -m.
+    /// The last /model pick, which a new session starts on without -m.
     last: Choice,
     prompt: SystemPrompt,
     tools: Vec<Value>,
@@ -95,7 +95,8 @@ impl Setup {
         &self.config
     }
 
-    /// A new session: on the -m model, else the last /model or /effort pick, else the default.
+    /// A new session: on the -m model, else the last /model pick, else the default; its
+    /// effort is the model's own `default_effort`, where `/effort` keeps the last pick.
     pub fn start(&self, controls: Controls, sink: Sink) -> Result<Agent> {
         self.start_on(self.client(&self.last)?, controls, sink)
     }
@@ -127,7 +128,8 @@ impl Setup {
     }
 
     /// The -m model at its default effort, else `choice` when the config still has that model,
-    /// at its effort when the model offers it, else the default model.
+    /// at the effort the session log last recorded for it when the model offers it, else the
+    /// default model.
     fn client(&self, choice: &Choice) -> Result<Client> {
         let chosen = known(&self.config, choice).filter(|_| self.model.is_none());
         let mut model = self.config.resolve(self.model.as_deref().or(chosen))?;
@@ -135,6 +137,14 @@ impl Setup {
             model.thinking = Thinking::parse(effort);
         }
         Client::new(model)
+    }
+
+    /// Applies an `/effort` pick as the model's `default_effort`, so the resolves of this
+    /// run — `/model` switches, later sessions — begin on it too, as the config file does.
+    pub fn set_effort(&mut self, alias: &str, effort: &str) {
+        if let Some(model) = self.config.models.get_mut(alias) {
+            model.default_effort = Some(effort.to_string());
+        }
     }
 
     /// Re-reads the config, skills and instruction files for /reload, so the system prompt,

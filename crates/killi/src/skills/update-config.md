@@ -19,7 +19,7 @@ first few characters. `~` is `$HOME`; nothing else moves these paths.
 | `<project>/.killi/config.toml` | project config; only `[mcp] eager = ["name"]` is read: servers to start with the session, with native tools, after a one-time trust check per repo (kept in `~/.killi/trusted.json`) |
 | `~/.killi/mcp-off.json` | servers turned off with `/mcp`, kept for later sessions |
 | `~/.killi/command-guide.json` | that the first-run guide already asked which command name to install killi under |
-| `~/.killi/last-model.json` | the last `/model` and `/effort` pick; new sessions start on it unless `-m` names a model |
+| `~/.killi/last-model.json` | the last `/model` pick; new sessions start on it unless `-m` names a model (the effort is per model: `default_effort` in its `[models]` entry, which `/effort` writes) |
 | `~/.killi/sessions/<folder>/` | session logs (`-c`, `-r`, `/resume`, `/prune`) and `later.md`; `<folder>` is the working directory with `/` as `-` |
 | `~/.killi/snapshots/` | the bare git repositories `/undo` restores from |
 | `~/.agents/skills/`, `<project>/.agents/skills/`, `<project>/.claude/skills/` | skills: folders with a `SKILL.md`; the first with a name wins, and `update-config` is built in |
@@ -45,10 +45,11 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   passes it to Claude on Bedrock; without it that model re-bills the whole prompt each turn),
   `max_context_size`
   and `max_output_size` (tokens), `capabilities` (`"image_in"` lets the model take images;
-  other entries are kept but unused), `default_effort` and `support_efforts = [...]` (what
-  `/effort` offers; without them: off, on, low, medium, high).
-- `[thinking]`: `enabled = false` turns reasoning off everywhere; otherwise `effort` applies to
-  every model, else the model's `default_effort`, else the middle of its `support_efforts`.
+  other entries are kept but unused), `default_effort` (the model's own thinking level; `/effort`
+  saves the last pick here) and `support_efforts = [...]` (what `/effort` offers; without them:
+  off, on, low, medium, high).
+- `[thinking]`: `enabled = false` turns reasoning off everywhere; otherwise each model reasons
+  at its `default_effort`, else the middle of its `support_efforts`, else the provider's default.
 - `[agent]`: `compact_at` (compact once a request passes this many input tokens; unset: 60%
   of the model's `max_context_size`, or 256000 when the window is unknown), `plan_allow = ["make -n"]` (extra command prefixes bash may run in plan mode),
   `notify_after` (seconds a turn takes before a desktop notification, default 10),

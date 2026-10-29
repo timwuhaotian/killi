@@ -86,13 +86,13 @@ impl Config {
         (self.providers.get(&model.provider)?.kind == "chatgpt").then_some(alias)
     }
 
-    /// Kimi Code's order: `thinking.enabled = false` turns reasoning off, then the configured
-    /// effort, then the model's default effort, then the middle of its supported efforts.
+    /// `[thinking] enabled = false` turns reasoning off, then the model's `default_effort`
+    /// (where `/effort` keeps the last pick), then the middle of its supported efforts.
     fn thinking_for(&self, model: &Model) -> Thinking {
         if self.thinking.enabled == Some(false) {
             return Thinking::Off;
         }
-        let effort = self.thinking.effort.clone().or_else(|| model.default_effort.clone()).or_else(|| {
+        let effort = model.default_effort.clone().or_else(|| {
             let efforts = &model.support_efforts;
             (!efforts.is_empty()).then(|| efforts[efforts.len() / 2].clone())
         });

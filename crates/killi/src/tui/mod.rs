@@ -292,17 +292,25 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 Err(e) => app.error(&format!("Can't prune: {e:#}")),
             },
             Input::Effort(effort) => {
-                let efforts = session.config().efforts(agent.model_alias());
+                let alias = agent.model_alias().to_string();
+                let efforts = session.config().efforts(&alias);
                 if efforts.contains(&effort) {
                     if let Err(e) = agent.set_thinking(Thinking::parse(&effort)) {
+                        app.error_report(&e);
+                    }
+                    // The pick is the model's `default_effort` in the config file, so the next
+                    // session on this model — and a /model switch in this one — starts on it.
+                    session.set_effort(&alias, &effort);
+                    let path = crate::config::killi_home().join("config.toml");
+                    if let Err(e) = crate::config::set_model_effort(&path, &alias, &effort) {
                         app.error_report(&e);
                     }
                     app.show_model(&agent, session.config());
                     app.redraw_banner(&agent, &session, &snapshots);
                     app.save_choice(&agent);
-                    app.notice(&format!("Thinking effort {effort}. New sessions start on it too."));
+                    app.notice(&format!("Thinking effort {effort}, saved as {alias}'s default."));
                 } else {
-                    app.error(&format!("{} has no effort “{effort}”; choose one of {}.", agent.model_alias(), efforts.join(", ")));
+                    app.error(&format!("{alias} has no effort “{effort}”; choose one of {}.", efforts.join(", ")));
                 }
             }
         }

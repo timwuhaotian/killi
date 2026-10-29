@@ -190,6 +190,46 @@ pub(super) fn set_default_model(path: &Path, alias: &str) -> Result<()> {
     crate::fs_atomic::write(path, new.as_bytes(), None).with_context(|| format!("could not write {}", path.display()))
 }
 
+/// Stores `effort` as `alias`'s `default_effort` in the config file, in place of the
+/// `default_effort` line in its `[models]` table, or right under the table's header, so the
+/// next session on the model starts on it. The rest of the file, comments included, is left
+/// as it is.
+pub fn set_model_effort(path: &Path, alias: &str, effort: &str) -> Result<()> {
+    let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let line = format!("default_effort = {}", toml::Value::String(effort.to_string()));
+    let spans = table_spans(&text);
+    let mut out: Vec<String> = Vec::new();
+    let mut written = false;
+    for (n, text_line) in text.lines().enumerate() {
+        let in_table = table_of(&spans, n).is_some_and(|name| is_model_table(name, alias));
+        if in_table && text_line.trim().starts_with("default_effort") {
+            if !written {
+                out.push(line.clone());
+                written = true;
+            }
+            continue;
+        }
+        out.push(text_line.to_string());
+    }
+    if !written {
+        let Some((_, span)) = spans.iter().find(|(name, _)| is_model_table(name, alias)) else {
+            bail!("no [models.\"{alias}\"] table in {} to set the effort in", path.display())
+        };
+        out.insert(span.start + 1, line);
+    }
+    let new = format!("{}\n", out.join("\n"));
+    toml::from_str::<Config>(&new).context("setting the effort would break the config")?;
+    crate::fs_atomic::write(path, new.as_bytes(), None).with_context(|| format!("could not write {}", path.display()))
+}
+
+/// Whether `name`, as `table_spans` read it from a header, is `alias`'s `[models]` table:
+/// the key may be quoted with either of TOML's quote characters, or bare.
+fn is_model_table(name: &str, alias: &str) -> bool {
+    name.strip_prefix("models.").is_some_and(|key| {
+        key.strip_prefix('"').and_then(|k| k.strip_suffix('"')).or_else(|| key.strip_prefix('\'').and_then(|k| k.strip_suffix('\''))).unwrap_or(key) == alias
+    })
+}
+
 /// Writes the `[search]` table `/web-search-config` picked: its `provider`, `url`, `api_key`
 /// and `api_key_env` lines are replaced in place, or the table is added at the end. A key of
 /// `None` drops the key lines, so one set for another provider is never reused. The rest of

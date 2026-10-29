@@ -9,8 +9,9 @@ use anyhow::{Context, Result, bail};
 pub(super) const TEMPLATE: &str = r#"# killi's config. Models are named "<provider>/<model>"; pick one with -m or default_model.
 default_model = "openai/gpt-5.5"
 
-[thinking]
-effort = "high"                 # or: enabled = false
+# [thinking]
+# enabled = false              # turns reasoning off everywhere; each model's default_effort
+#                              # (what /effort last picked) is used otherwise
 
 [agent]
 swarm = true                    # start in swarm mode: split work across subagents; false turns it off

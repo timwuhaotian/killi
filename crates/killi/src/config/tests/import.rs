@@ -56,7 +56,7 @@ providers:
     let text = std::fs::read_to_string(dst.join("config.toml")).unwrap();
     let config: Config = toml::from_str(&text).unwrap();
     assert_eq!(config.default_model.as_deref(), Some("envkey/claude-x"), "the `default` role, first of the list, with its `:effort` off the end");
-    assert_eq!(config.thinking.effort.as_deref(), Some("high"));
+    assert_eq!(config.models["envkey/claude-x"].default_effort.as_deref(), Some("high"), "the imported level is the default model's own");
     assert_eq!(config.providers.len(), 2, "a `!command` key and a missing key are skipped");
     assert_eq!(config.providers["gateway"].api_key.as_deref(), Some("sk-gateway"));
     assert_eq!(config.providers["gateway"].base_url.as_deref(), Some("https://gw.example.com/v1"), "the comment after the URL drops");

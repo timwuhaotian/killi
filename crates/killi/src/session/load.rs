@@ -19,10 +19,12 @@ pub struct Loaded {
     pub backup: Option<String>,
 }
 
-/// A model alias and thinking effort, as `Thinking::label` names it.
+/// A model alias and thinking effort, as `Thinking::label` names it. The effort is what a
+/// session log last recorded; `last-model.json` writes only the model.
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Choice {
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
 }
 

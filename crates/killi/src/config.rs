@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 pub use command::command_guide_if_first;
-pub use edit::{remove_provider_key, set_search};
+pub use edit::{remove_provider_key, set_model_effort, set_search};
 pub use guide::{guide_model, init, set_up_if_missing};
 pub use import::{import_kimi, import_opencode, import_omp, import_pi};
 pub use models::{Additions, NewModel, add_models};
@@ -208,8 +208,9 @@ pub struct Model {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct ThinkingConfig {
+    /// Turns reasoning off everywhere; otherwise each model reasons at its own
+    /// `default_effort`, else the middle of its `support_efforts`.
     pub enabled: Option<bool>,
-    pub effort: Option<String>,
 }
 
 /// Everything a request needs, resolved from a model alias.
