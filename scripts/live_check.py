@@ -7,7 +7,7 @@ pseudo-terminal under a scratch HOME, a scripted provider that logs every reques
     scripts/live_check.py --killi target/debug/killi
 
 Prints PASS or FAIL for each check and exits non-zero if any failed. What it covers: the list
-and its liveness (a session that exits, crashes or loses its terminal drops out), the banner,
+and its liveness (a session that exits, crashes or loses its terminal drops out), that the banner stays quiet about them,
 the reminder the model gets when the sessions in its tree change (again after a compaction, as
 are plan and swarm mode),
 a question answered from the other conversation without being kept, a message for an idle and
@@ -228,7 +228,7 @@ recap = false
         a = start()
         check("a session is listed", str(a.pid) in cli("sessions"), cli("sessions"))
         b = start()
-        check("the banner names the other session", f"Also in this repository: {a.pid}" in b.text(), b.text()[-800:])
+        check("the banner doesn't list the other session", "Also in this repository" not in b.text(), b.text()[-800:])
         listing = cli("sessions", pid=b.pid)
         check("the list marks this session", f"{b.pid} · idle" in listing and "this session" in listing, listing)
         status = cli("sessions", str(a.pid))

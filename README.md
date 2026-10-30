@@ -232,8 +232,7 @@ final message, one list per folder in `~/.killi/sessions/<folder>/later.md` with
 only. `/later` shows the list, `/later done 3` crosses one off, and the banner says how many
 are open.
 
-**Other sessions.** Every killi running on the machine is listed in `~/.killi/live`, and the
-banner names the ones working in the same repository. When one starts or stops there, the
+**Other sessions.** Every killi running on the machine is listed in `~/.killi/live`. When one starts or stops there, the
 agent is told once: changes it didn't make may be theirs, and branch switches, stashes and
 resets belong in a worktree. `/undo` says when it would also undo another session's work. From
 the agent's shell, or yours:
