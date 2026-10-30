@@ -196,25 +196,37 @@ fn score_tokens(tokens: &[&str], text: &str) -> Option<f64> {
 
 /// pi-tui's `fuzzyMatch`: every character of `query` appears in `text` in order. Lower is
 /// better: consecutive runs and word starts score well, gaps and late matches cost. A query
-/// like `v2` also matches with its letters and digits swapped.
+/// like `v2` also matches with its letters and digits swapped, and a longer one with its two
+/// halves swapped (`resolvere` finds `review-resolve`), both after the in-order matches.
 pub fn fuzzy_match(query: &str, text: &str) -> Option<f64> {
-    let query = query.to_lowercase();
+    let query: Vec<char> = query.to_lowercase().chars().collect();
     let text: Vec<char> = text.to_lowercase().chars().collect();
-    if let Some(score) = match_chars(&query.chars().collect::<Vec<_>>(), &text) {
+    if let Some(score) = match_chars(&query, &text) {
         return Some(score);
     }
-    let split = query
-        .find(|c: char| c.is_ascii_digit() != query.starts_with(|f: char| f.is_ascii_digit()))?;
-    let (head, tail) = query.split_at(split);
-    let letters_digits = |a: &str, b: &str| {
-        a.chars().all(|c| c.is_ascii_lowercase()) && b.chars().all(|c| c.is_ascii_digit())
-    };
-    if !(letters_digits(head, tail) || letters_digits(tail, head)) {
-        return None;
+    let is_digit = |c: &char| c.is_ascii_digit();
+    let rotated =
+        |at: usize| -> Vec<char> { query[at..].iter().chain(&query[..at]).copied().collect() };
+    if let Some(at) = query
+        .iter()
+        .position(|c| is_digit(c) != is_digit(&query[0]))
+    {
+        let (head, tail) = query.split_at(at);
+        let letters_digits = |a: &[char], b: &[char]| {
+            a.iter().all(char::is_ascii_lowercase) && b.iter().all(is_digit)
+        };
+        if letters_digits(head, tail) || letters_digits(tail, head) {
+            return match_chars(&rotated(at), &text).map(|score| score + 5.0);
+        }
     }
-    let swapped: Vec<char> = tail.chars().chain(head.chars()).collect();
-    match_chars(&swapped, &text).map(|score| score + 5.0)
+    (MIN_HALF..=query.len().saturating_sub(MIN_HALF))
+        .filter_map(|at| match_chars(&rotated(at), &text))
+        .min_by(f64::total_cmp)
+        .map(|score| score + 20.0)
 }
+
+/// The shortest half of a query that may be matched out of order.
+const MIN_HALF: usize = 2;
 
 fn match_chars(query: &[char], text: &[char]) -> Option<f64> {
     if query.is_empty() {
@@ -316,6 +328,21 @@ mod tests {
         assert_eq!(values(&s)[..2], ["pdf", "make-pdf-report"]);
         let s = suggest("/cr", &entries(), |_| Vec::new()).unwrap();
         assert_eq!(values(&s)[0], "code-review");
+    }
+
+    #[test]
+    fn a_query_with_its_halves_swapped_still_matches() {
+        let skills = vec![
+            entry("pr-resolve", &[], ""),
+            entry("review-resolve", &[], ""),
+            entry("resolvere", &[], ""),
+        ];
+        let s = suggest("/resolvere", &skills, |_| Vec::new());
+        assert!(s.is_none(), "a complete name gets no menu");
+        let s = suggest("/resolvere", &skills[..2], |_| Vec::new()).unwrap();
+        assert_eq!(values(&s), ["review-resolve"]);
+        let s = suggest("/zq", &skills, |_| Vec::new());
+        assert!(s.is_none());
     }
 
     #[test]

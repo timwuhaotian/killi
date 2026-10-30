@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.25 — 2026-10-30
+
+- The slash menu's fuzzy match also takes a query whose two halves are swapped: `/resolvere`
+  finds `review-resolve`. These matches rank after the in-order ones, and each half needs at
+  least two characters. The `@` file menu and argument menus share the matcher.
+
 ## 0.6.24 — 2026-10-30
 
 - `/provider` adds a provider from a preset: `/provider muse-code` writes Meta's Muse
