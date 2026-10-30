@@ -158,20 +158,6 @@ impl App {
         }
     }
 
-    /// The banner's line about the other sessions working in this repository, if any.
-    pub(super) fn peers_line(&self) -> Option<String> {
-        let others = self.live.as_ref()?.here().others();
-        if others.is_empty() {
-            return None;
-        }
-        let now = live::now();
-        let list: Vec<String> = others.iter().map(|e| live::describe(e, now)).collect();
-        Some(format!(
-            "{DIM}Also in this repository: {}. /sessions lists every session.{RESET}",
-            list.join("; ")
-        ))
-    }
-
     /// Lists the other live sessions, those in this repository first.
     pub(super) fn show_sessions(&mut self) {
         let tree = live::work_tree(&self.cwd);

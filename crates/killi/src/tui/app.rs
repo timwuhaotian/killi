@@ -165,9 +165,6 @@ impl App {
         if let Some(why) = &snapshots.disabled {
             self.commit(format!("{DIM}{why}{RESET}"));
         }
-        if let Some(line) = self.peers_line() {
-            self.emit(Line::block(move |width| wrap_words(&line, width, 0)));
-        }
         if resumed {
             let prompts = agent.user_prompts();
             self.commit(format!(

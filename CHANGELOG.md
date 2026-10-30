@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.26 — 2026-10-30
+
+- The start-up banner no longer lists the other sessions working in the same
+  repository; `/sessions` still does.
+
 ## 0.6.25 — 2026-10-30
 
 - The slash menu's fuzzy match also takes a query whose two halves are swapped: `/resolvere`
