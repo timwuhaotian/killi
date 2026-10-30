@@ -1,7 +1,10 @@
 use super::*;
 
 /// A /btw question and its answer on the way.
-pub(super) type PendingAside = (String, Pin<Box<dyn Future<Output = Result<(String, Usage)>>>>);
+pub(super) type PendingAside = (
+    String,
+    Pin<Box<dyn Future<Output = Result<(String, Usage)>>>>,
+);
 
 /// A recap on its way after a turn that used tools; dropped, which stops the request, when the
 /// user sends anything else.
@@ -42,7 +45,13 @@ pub(super) struct Totals {
 impl Totals {
     pub(super) fn of(agent: &Agent) -> Self {
         let usage = &agent.stats.usage;
-        Self { requests: agent.stats.requests, tool_calls: agent.stats.tool_calls, prompt: usage.prompt, cached: usage.cached, completion: usage.completion }
+        Self {
+            requests: agent.stats.requests,
+            tool_calls: agent.stats.tool_calls,
+            prompt: usage.prompt,
+            cached: usage.cached,
+            completion: usage.completion,
+        }
     }
 }
 

@@ -44,24 +44,40 @@ pub(super) fn glob_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
                 more = true;
                 break;
             }
-            found.push(entry.path().strip_prefix(cwd).unwrap_or(entry.path()).display().to_string());
+            found.push(
+                entry
+                    .path()
+                    .strip_prefix(cwd)
+                    .unwrap_or(entry.path())
+                    .display()
+                    .to_string(),
+            );
         }
     }
     let incomplete = scan_limited || errors.count > 0;
     if found.is_empty() {
-        let mut text = format!("No files match `{pattern}` under {}.", display_root(cwd, root));
+        let mut text = format!(
+            "No files match `{pattern}` under {}.",
+            display_root(cwd, root)
+        );
         if scan_limited {
             text.push_str(&format!("\n[Search incomplete: internal {MAX_SCAN_FILES} files scan limit reached; narrow the pattern or path.]"));
         }
         if let Some(note) = errors.note() {
             text.push_str(&format!("\n[{note}]"));
         }
-        return if incomplete { Output::error(text) } else { Output::ok(text) };
+        return if incomplete {
+            Output::error(text)
+        } else {
+            Output::ok(text)
+        };
     }
     let count = found.len();
     let mut out = found.join("\n");
     if more {
-        out.push_str(&format!("\n[{MAX_FILES} results limit reached; narrow the pattern or path.]"));
+        out.push_str(&format!(
+            "\n[{MAX_FILES} results limit reached; narrow the pattern or path.]"
+        ));
     }
     if scan_limited {
         out.push_str(&format!("\n[Search incomplete: internal {MAX_SCAN_FILES} files scan limit reached; narrow the pattern or path.]"));
@@ -69,7 +85,11 @@ pub(super) fn glob_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
     if let Some(note) = errors.note() {
         out.push_str(&format!("\n[{note}]"));
     }
-    Output::ok(out).brief(format!("{count}{} file{}", if more { "+" } else { "" }, if count == 1 { "" } else { "s" }))
+    Output::ok(out).brief(format!(
+        "{count}{} file{}",
+        if more { "+" } else { "" },
+        if count == 1 { "" } else { "s" }
+    ))
 }
 
 fn display_root(cwd: &Path, root: &Path) -> String {

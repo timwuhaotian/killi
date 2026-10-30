@@ -18,8 +18,16 @@ pub(super) fn near_full(used: u64, window: u64) -> bool {
 /// How full the context window is, as a ten-cell lagoon meter that turns warn from 80%.
 pub(super) fn gauge(used: u64, window: u64) -> String {
     let filled = (used.saturating_mul(10).div_ceil(window.max(1)) as usize).min(10);
-    let color = if near_full(used, window) { WARN } else { LAGOON };
-    format!("{RESET}{color}{}{RESET}{FAINT}{}{RESET}{DIM}", "━".repeat(filled), "╌".repeat(10 - filled))
+    let color = if near_full(used, window) {
+        WARN
+    } else {
+        LAGOON
+    };
+    format!(
+        "{RESET}{color}{}{RESET}{FAINT}{}{RESET}{DIM}",
+        "━".repeat(filled),
+        "╌".repeat(10 - filled)
+    )
 }
 
 /// `text` cut to `max` columns with an ellipsis.
@@ -88,15 +96,31 @@ pub(super) fn error_hint(error: &anyhow::Error) -> Option<&'static str> {
 /// The hint for a classified provider failure.
 fn provider_hint(kind: ErrorKind, status: Option<u16>) -> Option<&'static str> {
     match kind {
-        ErrorKind::Overflow => Some("The conversation no longer fits the model: /compact summarizes it, /new starts over."),
-        ErrorKind::Auth => Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml."),
-        ErrorKind::Quota => Some("This provider's usage limit is spent: pick another model with /model, or wait until the reset time above."),
-        ErrorKind::RateLimited => Some("The provider is limiting requests: wait a moment, or pick another model with /model."),
-        ErrorKind::Transport => Some("Can't reach the provider: check your network, proxy and base_url."),
+        ErrorKind::Overflow => Some(
+            "The conversation no longer fits the model: /compact summarizes it, /new starts over.",
+        ),
+        ErrorKind::Auth => {
+            Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml.")
+        }
+        ErrorKind::Quota => Some(
+            "This provider's usage limit is spent: pick another model with /model, or wait until the reset time above.",
+        ),
+        ErrorKind::RateLimited => Some(
+            "The provider is limiting requests: wait a moment, or pick another model with /model.",
+        ),
+        ErrorKind::Transport => {
+            Some("Can't reach the provider: check your network, proxy and base_url.")
+        }
         ErrorKind::Media | ErrorKind::BadResponse | ErrorKind::Other => match status {
-            Some(401 | 403) => Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml."),
-            Some(402) => Some("This provider's usage limit is spent: pick another model with /model, or wait until the reset time above."),
-            Some(429) => Some("The provider is limiting requests: wait a moment, or pick another model with /model."),
+            Some(401 | 403) => Some(
+                "Check api_key or api_key_env for this model's provider in ~/.killi/config.toml.",
+            ),
+            Some(402) => Some(
+                "This provider's usage limit is spent: pick another model with /model, or wait until the reset time above.",
+            ),
+            Some(429) => Some(
+                "The provider is limiting requests: wait a moment, or pick another model with /model.",
+            ),
             _ => None,
         },
     }
@@ -106,17 +130,38 @@ fn provider_hint(kind: ErrorKind, status: Option<u16>) -> Option<&'static str> {
 fn error_hint_text(error: &str) -> Option<&'static str> {
     let error = error.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| error.contains(w));
-    if has(&["unauthorized", "invalid api key", "invalid_api_key", "forbidden"]) {
+    if has(&[
+        "unauthorized",
+        "invalid api key",
+        "invalid_api_key",
+        "forbidden",
+    ]) {
         Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml.")
-    } else if has(&["context length", "context_length", "too long", "maximum context", "prompt is too long"]) {
+    } else if has(&[
+        "context length",
+        "context_length",
+        "too long",
+        "maximum context",
+        "prompt is too long",
+    ]) {
         Some("The conversation no longer fits the model: /compact summarizes it, /new starts over.")
     } else if has(&["usage limit", "quota", "reset at", "exceeded your current"]) {
-        Some("This provider's usage limit is spent: pick another model with /model, or wait until the reset time above.")
+        Some(
+            "This provider's usage limit is spent: pick another model with /model, or wait until the reset time above.",
+        )
     } else if has(&["too many requests", "rate limit"]) {
         Some("The provider is limiting requests: wait a moment, or pick another model with /model.")
     } else if has(&["model not found", "unknown model", "does not exist"]) {
-        Some("The provider doesn't know this model or URL: check model and base_url in ~/.killi/config.toml.")
-    } else if has(&["error sending request", "connection", "dns", "timed out", "timeout"]) {
+        Some(
+            "The provider doesn't know this model or URL: check model and base_url in ~/.killi/config.toml.",
+        )
+    } else if has(&[
+        "error sending request",
+        "connection",
+        "dns",
+        "timed out",
+        "timeout",
+    ]) {
         Some("Can't reach the provider: check your network, proxy and base_url.")
     } else {
         None
@@ -129,12 +174,20 @@ fn error_hint_text(error: &str) -> Option<&'static str> {
 pub(super) fn gist(reason: &str) -> String {
     let flat = reason.replace('\n', " ");
     if let Some(start) = flat.find('{') {
-        let mut bodies = serde_json::Deserializer::from_str(&flat[start..]).into_iter::<serde_json::Value>();
+        let mut bodies =
+            serde_json::Deserializer::from_str(&flat[start..]).into_iter::<serde_json::Value>();
         if let Some(Ok(body)) = bodies.next()
-            && let Some(message) = body.pointer("/error/message").or(body.get("message")).and_then(|m| m.as_str())
+            && let Some(message) = body
+                .pointer("/error/message")
+                .or(body.get("message"))
+                .and_then(|m| m.as_str())
         {
             let after = flat[start + bodies.byte_offset()..].trim();
-            let after = if after.is_empty() { String::new() } else { format!(" {after}") };
+            let after = if after.is_empty() {
+                String::new()
+            } else {
+                format!(" {after}")
+            };
             let status: Vec<&str> = flat[..start].split_whitespace().take(2).collect();
             return match status.as_slice() {
                 ["HTTP", code] => format!("HTTP {}: {message}{after}", code.trim_end_matches(':')),
@@ -159,12 +212,26 @@ fn html_gist(reason: &str) -> Option<String> {
         let end = lower_markup[content..].find("</title>")? + content;
         Some(markup[content..end].to_string())
     });
-    let line = title.or_else(|| markup.lines().find(|line| !line.trim().is_empty()).map(str::to_string))?;
-    let short = strip_tags(&line).split_whitespace().collect::<Vec<_>>().join(" ");
+    let line = title.or_else(|| {
+        markup
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .map(str::to_string)
+    })?;
+    let short = strip_tags(&line)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if short.is_empty() {
         return None;
     }
-    let prefix = match reason.replace('\n', " ").split_whitespace().take(2).collect::<Vec<_>>().as_slice() {
+    let prefix = match reason
+        .replace('\n', " ")
+        .split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
         ["HTTP", code] => format!("HTTP {}: ", code.trim_end_matches(':')),
         _ => String::new(),
     };

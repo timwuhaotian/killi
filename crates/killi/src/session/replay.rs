@@ -7,7 +7,12 @@ pub const COMPACTED_MARK: &str = "<system-reminder>This conversation was compact
 /// What the user typed, oldest first: reminders killi added are left out, and a compaction's
 /// summary gives back the requests it kept.
 pub fn user_prompts(messages: &[Value]) -> Vec<String> {
-    messages.iter().filter(|m| m["role"] == "user").filter_map(|m| m["content"].as_str()).flat_map(text_prompts).collect()
+    messages
+        .iter()
+        .filter(|m| m["role"] == "user")
+        .filter_map(|m| m["content"].as_str())
+        .flat_map(text_prompts)
+        .collect()
 }
 
 /// The prompts in one user message: a compaction's summary gives back the requests it
@@ -34,7 +39,12 @@ pub enum Replayed {
     Note(String),
     Prompt(String),
     Text(String),
-    Tool { summary: String, output: String, is_error: bool, brief: String },
+    Tool {
+        summary: String,
+        output: String,
+        is_error: bool,
+        brief: String,
+    },
 }
 
 /// The conversation as the terminal showed it, for a resumed session: prompts, the model's
@@ -52,10 +62,18 @@ pub fn replay(loaded: &Loaded, cwd: &Path, keep: usize) -> Vec<Replayed> {
     for message in &loaded.messages {
         match message["role"].as_str() {
             Some("user") => {
-                let Some(text) = message["content"].as_str() else { continue };
+                let Some(text) = message["content"].as_str() else {
+                    continue;
+                };
                 if text.starts_with(COMPACTED_MARK) {
-                    shown.push(Replayed::Note("The conversation before this was compacted into a summary.".into()));
-                    shown.extend(user_prompts(std::slice::from_ref(message)).into_iter().map(Replayed::Prompt));
+                    shown.push(Replayed::Note(
+                        "The conversation before this was compacted into a summary.".into(),
+                    ));
+                    shown.extend(
+                        user_prompts(std::slice::from_ref(message))
+                            .into_iter()
+                            .map(Replayed::Prompt),
+                    );
                 } else if let Some(prompt) = typed(text) {
                     shown.push(Replayed::Prompt(prompt));
                 }
@@ -66,36 +84,74 @@ pub fn replay(loaded: &Loaded, cwd: &Path, keep: usize) -> Vec<Replayed> {
                 }
                 for call in message["tool_calls"].as_array().into_iter().flatten() {
                     let name = call["function"]["name"].as_str().unwrap_or_default();
-                    let args = serde_json::from_str::<Value>(call["function"]["arguments"].as_str().unwrap_or_default()).unwrap_or_default();
+                    let args = serde_json::from_str::<Value>(
+                        call["function"]["arguments"].as_str().unwrap_or_default(),
+                    )
+                    .unwrap_or_default();
                     let id = call["id"].as_str().unwrap_or_default();
-                    let output = results.get(id).copied().unwrap_or("(no result)").to_string();
+                    let output = results
+                        .get(id)
+                        .copied()
+                        .unwrap_or("(no result)")
+                        .to_string();
                     let (is_error, brief) = match loaded.tools.get(id) {
                         Some(end) => (end.is_error, end.brief.clone()),
                         None => guess_end(&output),
                     };
-                    shown.push(Replayed::Tool { summary: crate::tools::summary(name, &args, cwd), output, is_error, brief });
+                    shown.push(Replayed::Tool {
+                        summary: crate::tools::summary(name, &args, cwd),
+                        output,
+                        is_error,
+                        brief,
+                    });
                 }
             }
             _ => {}
         }
     }
-    let prompts = shown.iter().filter(|r| matches!(r, Replayed::Prompt(_))).count();
+    let prompts = shown
+        .iter()
+        .filter(|r| matches!(r, Replayed::Prompt(_)))
+        .count();
     if prompts > keep {
-        let first = shown.iter().enumerate().filter(|(_, r)| matches!(r, Replayed::Prompt(_))).nth(prompts - keep).map_or(0, |(i, _)| i);
+        let first = shown
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| matches!(r, Replayed::Prompt(_)))
+            .nth(prompts - keep)
+            .map_or(0, |(i, _)| i);
         shown.drain(..first);
         let earlier = prompts - keep;
-        shown.insert(0, Replayed::Note(format!("{earlier} earlier prompt{} not shown.", if earlier == 1 { "" } else { "s" })));
+        shown.insert(
+            0,
+            Replayed::Note(format!(
+                "{earlier} earlier prompt{} not shown.",
+                if earlier == 1 { "" } else { "s" }
+            )),
+        );
     }
     shown
 }
 
 /// How a result ended, for logs that didn't keep it: a command that failed says so at the end.
 pub(super) fn guess_end(output: &str) -> (bool, String) {
-    let failed = output.lines().last().is_some_and(|l| l.starts_with("[Command ")) || output.starts_with("Interrupted by the user");
+    let failed = output
+        .lines()
+        .last()
+        .is_some_and(|l| l.starts_with("[Command "))
+        || output.starts_with("Interrupted by the user");
     let lines = output.lines().count();
     match (failed, lines) {
         _ if output.starts_with("(no output") => (false, "no output".into()),
-        (true, _) => (true, output.lines().last().unwrap_or_default().trim_matches(['[', ']']).to_string()),
+        (true, _) => (
+            true,
+            output
+                .lines()
+                .last()
+                .unwrap_or_default()
+                .trim_matches(['[', ']'])
+                .to_string(),
+        ),
         (false, 0 | 1) => (false, String::new()),
         (false, n) => (false, format!("{n} lines")),
     }

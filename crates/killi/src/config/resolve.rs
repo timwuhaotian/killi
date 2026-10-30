@@ -18,13 +18,20 @@ impl Config {
 
     pub fn resolve(&self, requested: Option<&str>) -> Result<ResolvedModel> {
         let Some(alias) = requested.or(self.default_model.as_deref()) else {
-            bail!("no model chosen: pass -m <provider/model> or set default_model in ~/.killi/config.toml");
+            bail!(
+                "no model chosen: pass -m <provider/model> or set default_model in ~/.killi/config.toml"
+            );
         };
         let Some(model) = self.models.get(alias) else {
-            bail!("unknown model `{alias}`; models are listed under [models.\"...\"] in ~/.killi/config.toml");
+            bail!(
+                "unknown model `{alias}`; models are listed under [models.\"...\"] in ~/.killi/config.toml"
+            );
         };
         let Some(provider) = self.providers.get(&model.provider) else {
-            bail!("model `{alias}` names provider `{}`, which isn't configured", model.provider);
+            bail!(
+                "model `{alias}` names provider `{}`, which isn't configured",
+                model.provider
+            );
         };
         let chatgpt = provider.kind == "chatgpt";
         let protocol = match model.protocol.as_deref().unwrap_or(&provider.kind) {
@@ -36,16 +43,23 @@ impl Config {
             ),
         };
         if chatgpt && protocol != Protocol::Responses {
-            bail!("model `{alias}` runs on a ChatGPT plan, which takes only the Responses API; remove its `protocol`");
+            bail!(
+                "model `{alias}` runs on a ChatGPT plan, which takes only the Responses API; remove its `protocol`"
+            );
         }
-        let base_url = match (model.base_url.as_ref().or(provider.base_url.as_ref()), protocol) {
+        let base_url = match (
+            model.base_url.as_ref().or(provider.base_url.as_ref()),
+            protocol,
+        ) {
             (Some(url), _) => url.clone(),
             (None, Protocol::Anthropic) => "https://api.anthropic.com".to_string(),
             (None, _) => "https://api.openai.com/v1".to_string(),
         };
         let api_key = match chatgpt {
             true => String::new(),
-            false => provider.key().ok_or_else(|| anyhow::anyhow!("{}", no_key(alias, &model.provider, provider)))?,
+            false => provider
+                .key()
+                .ok_or_else(|| anyhow::anyhow!("{}", no_key(alias, &model.provider, provider)))?,
         };
         Ok(ResolvedModel {
             alias: alias.to_string(),
@@ -72,12 +86,18 @@ impl Config {
         let alias = requested.or(self.default_model.as_deref())?;
         let model = self.models.get(alias)?;
         let provider = self.providers.get(&model.provider)?;
-        (provider.kind != "chatgpt" && provider.key().is_none()).then(|| MissingKey { alias: alias.to_string(), provider: model.provider.clone() })
+        (provider.kind != "chatgpt" && provider.key().is_none()).then(|| MissingKey {
+            alias: alias.to_string(),
+            provider: model.provider.clone(),
+        })
     }
 
     /// The configured provider `ours` picks out: its name, and whether it has a key.
     pub fn find_provider(&self, ours: fn(&Provider) -> bool) -> Option<(&str, bool)> {
-        self.providers.iter().find(|(_, provider)| ours(provider)).map(|(name, provider)| (name.as_str(), provider.key().is_some()))
+        self.providers
+            .iter()
+            .find(|(_, provider)| ours(provider))
+            .map(|(name, provider)| (name.as_str(), provider.key().is_some()))
     }
 
     /// The model killi would start on, when it runs on a ChatGPT plan.
@@ -102,15 +122,31 @@ impl Config {
 
     /// The system prompt's guidance: `[prompt] system`, or the built-in text.
     pub fn guidance(&self) -> &str {
-        self.prompt.system.as_deref().filter(|text| !text.trim().is_empty()).unwrap_or(crate::prompt::DEFAULT)
+        self.prompt
+            .system
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or(crate::prompt::DEFAULT)
     }
 
     /// The efforts `/effort` offers for a model, as Kimi Code lists them: off, then the
     /// model's `support_efforts`, or on/off and the common levels when it declares none.
     pub fn efforts(&self, alias: &str) -> Vec<String> {
-        let declared = self.models.get(alias).map(|m| m.support_efforts.clone()).unwrap_or_default();
-        let levels: Vec<&str> = if declared.is_empty() { vec!["on", "low", "medium", "high"] } else { Vec::new() };
-        std::iter::once("off").chain(levels).map(String::from).chain(declared).collect()
+        let declared = self
+            .models
+            .get(alias)
+            .map(|m| m.support_efforts.clone())
+            .unwrap_or_default();
+        let levels: Vec<&str> = if declared.is_empty() {
+            vec!["on", "low", "medium", "high"]
+        } else {
+            Vec::new()
+        };
+        std::iter::once("off")
+            .chain(levels)
+            .map(String::from)
+            .chain(declared)
+            .collect()
     }
 }
 

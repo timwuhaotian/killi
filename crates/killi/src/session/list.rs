@@ -14,7 +14,9 @@ pub struct Listed {
 /// This folder's sessions, newest first. The list streams each log and parses only the
 /// lines that may hold a user message, so tool results and usage lines are never touched.
 pub fn list(cwd: &Path) -> Vec<Listed> {
-    let Ok(entries) = fs::read_dir(project_dir(cwd)) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(project_dir(cwd)) else {
+        return Vec::new();
+    };
     let mut sessions: Vec<Listed> = entries
         .flatten()
         .map(|entry| entry.path())
@@ -22,7 +24,12 @@ pub fn list(cwd: &Path) -> Vec<Listed> {
         .filter_map(|path| {
             let modified = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
             let (first_prompt, prompts) = scan_prompts(&path)?;
-            Some(Listed { path, modified, first_prompt, prompts })
+            Some(Listed {
+                path,
+                modified,
+                first_prompt,
+                prompts,
+            })
         })
         .collect();
     sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
@@ -46,11 +53,18 @@ pub(super) fn scan_prompts(path: &Path) -> Option<(String, usize)> {
     let mut anchored: Option<bool> = None;
     for line in BufReader::new(file).split(b'\n') {
         let line = line.ok()?;
-        if anchored.is_some() && !contains(&line, b"\"user\"") && !contains(&line, b"\"compaction\"") {
+        if anchored.is_some()
+            && !contains(&line, b"\"user\"")
+            && !contains(&line, b"\"compaction\"")
+        {
             continue;
         }
-        let Ok(text) = std::str::from_utf8(&line) else { continue };
-        let Ok(entry) = serde_json::from_str::<Value>(text) else { continue };
+        let Ok(text) = std::str::from_utf8(&line) else {
+            continue;
+        };
+        let Ok(entry) = serde_json::from_str::<Value>(text) else {
+            continue;
+        };
         match entry["type"].as_str() {
             Some("message") => {
                 if anchored.is_none() {
@@ -63,7 +77,14 @@ pub(super) fn scan_prompts(path: &Path) -> Option<(String, usize)> {
                 }
             }
             Some("compaction") => {
-                anchored = Some(entry["messages"].as_array().into_iter().flatten().next().is_some_and(|m| m["role"] == "system"));
+                anchored = Some(
+                    entry["messages"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .next()
+                        .is_some_and(|m| m["role"] == "system"),
+                );
                 prompts.clear();
                 prompts.extend(
                     entry["messages"]
@@ -82,7 +103,10 @@ pub(super) fn scan_prompts(path: &Path) -> Option<(String, usize)> {
         return None;
     }
     let first = prompts.first()?;
-    Some((first.lines().next().unwrap_or_default().to_string(), prompts.len()))
+    Some((
+        first.lines().next().unwrap_or_default().to_string(),
+        prompts.len(),
+    ))
 }
 
 /// Every session's log on this machine, newest first, with the folder beside it that holds
@@ -92,7 +116,9 @@ pub fn list_all() -> Vec<(PathBuf, SystemTime)> {
 }
 
 pub(super) fn list_all_in(root: &Path) -> Vec<(PathBuf, SystemTime)> {
-    let Ok(projects) = fs::read_dir(root) else { return Vec::new() };
+    let Ok(projects) = fs::read_dir(root) else {
+        return Vec::new();
+    };
     let mut logs: Vec<(PathBuf, SystemTime)> = projects
         .flatten()
         .filter(|entry| entry.path().is_dir())

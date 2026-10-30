@@ -18,17 +18,22 @@ fn estimated_value_bytes(value: &Value) -> u64 {
         Value::Null => 4,
         Value::Bool(value) => 4 + u64::from(!*value),
         Value::Number(value) => value.to_string().len() as u64,
-        Value::String(value) if value.starts_with("data:") && value.contains(";base64,") => IMAGE_TOKEN_RESERVE * 4,
+        Value::String(value) if value.starts_with("data:") && value.contains(";base64,") => {
+            IMAGE_TOKEN_RESERVE * 4
+        }
         Value::String(value) => value.len() as u64 + 2,
-        Value::Array(values) => values
-            .iter()
-            .fold(2, |total, value| total.saturating_add(estimated_value_bytes(value)).saturating_add(1)),
+        Value::Array(values) => values.iter().fold(2, |total, value| {
+            total
+                .saturating_add(estimated_value_bytes(value))
+                .saturating_add(1)
+        }),
         Value::Object(values) => values.iter().fold(2, |total, (key, value)| {
-            let value_bytes = if key == "data" && values.get("type").and_then(Value::as_str) == Some("base64") {
-                IMAGE_TOKEN_RESERVE * 4
-            } else {
-                estimated_value_bytes(value)
-            };
+            let value_bytes =
+                if key == "data" && values.get("type").and_then(Value::as_str) == Some("base64") {
+                    IMAGE_TOKEN_RESERVE * 4
+                } else {
+                    estimated_value_bytes(value)
+                };
             total
                 .saturating_add(key.len() as u64)
                 .saturating_add(4)
@@ -47,8 +52,15 @@ pub(super) fn estimated_input_tokens(messages: &[Value], tools: &[Value]) -> u64
 
 pub(super) const OUTPUT_SAFETY_TOKENS: u64 = 256;
 
-pub(super) fn cap_output(model: &ResolvedModel, messages: &[Value], tools: &[Value], max: u64) -> u64 {
-    let Some(window) = model.context_window else { return max.max(1) };
+pub(super) fn cap_output(
+    model: &ResolvedModel,
+    messages: &[Value],
+    tools: &[Value],
+    max: u64,
+) -> u64 {
+    let Some(window) = model.context_window else {
+        return max.max(1);
+    };
     let reserved = estimated_input_tokens(messages, tools).saturating_add(OUTPUT_SAFETY_TOKENS);
     max.min(window.saturating_sub(reserved)).max(1)
 }

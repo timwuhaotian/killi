@@ -81,7 +81,11 @@ fn git(work: &TakeWork, args: &[&str]) -> Result<String> {
 fn write_tree(work: &TakeWork) -> Result<String> {
     if !work.git_dir.exists() {
         create_private_dir(&work.git_dir)?;
-        let status = Command::new("git").args(["init", "--bare", "-q"]).arg(&work.git_dir).status().context("could not run git")?;
+        let status = Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&work.git_dir)
+            .status()
+            .context("could not run git")?;
         if !status.success() {
             bail!("git init failed for {}", work.git_dir.display());
         }
@@ -99,13 +103,21 @@ impl Snapshots {
         let disabled = if work_tree == crate::config::home() || work_tree == Path::new("/") {
             Some("undo is off in your home folder and at the root".to_string())
         } else if too_many_files(&work_tree) {
-            Some(format!("undo is off: this folder has more than {MAX_FILES} files"))
+            Some(format!(
+                "undo is off: this folder has more than {MAX_FILES} files"
+            ))
         } else if Command::new("git").arg("--version").output().is_err() {
             Some("undo needs git".to_string())
         } else {
             None
         };
-        Self { git_dir, work_tree, disabled, skipped: None, trees: Vec::new() }
+        Self {
+            git_dir,
+            work_tree,
+            disabled,
+            skipped: None,
+            trees: Vec::new(),
+        }
     }
 
     /// This session's own index inside the shared snapshot directory, so sessions running in
@@ -125,7 +137,12 @@ impl Snapshots {
 
     /// Everything the blocking half needs, cloned so it can move to another thread.
     fn work(&self) -> TakeWork {
-        TakeWork { git_dir: self.git_dir.clone(), work_tree: self.work_tree.clone(), index_file: self.index_file(), lock_name: self.lock_name() }
+        TakeWork {
+            git_dir: self.git_dir.clone(),
+            work_tree: self.work_tree.clone(),
+            index_file: self.index_file(),
+            lock_name: self.lock_name(),
+        }
     }
 
     /// The blocking half of `take`, without the bookkeeping: `None` when snapshots are
@@ -155,8 +172,12 @@ impl Snapshots {
     /// `take` without freezing the caller: the git commands run on a blocking thread.
     #[allow(dead_code)]
     pub async fn take_async(&mut self) {
-        let Some(work) = self.start_take() else { return };
-        let tree = tokio::task::spawn_blocking(move || work.run()).await.map_err(|e| anyhow::anyhow!("the snapshot task ended: {e}"));
+        let Some(work) = self.start_take() else {
+            return;
+        };
+        let tree = tokio::task::spawn_blocking(move || work.run())
+            .await
+            .map_err(|e| anyhow::anyhow!("the snapshot task ended: {e}"));
         let tree = tree.and_then(|tree| tree);
         self.commit_take(tree);
     }
@@ -188,11 +209,21 @@ impl Snapshots {
         if let Some(why) = &self.disabled {
             bail!("{why}");
         }
-        let Some(tree) = self.trees.last().map(|(tree, _)| tree.clone()) else { bail!("there is nothing to undo yet") };
+        let Some(tree) = self.trees.last().map(|(tree, _)| tree.clone()) else {
+            bail!("there is nothing to undo yet")
+        };
         let now = write_tree(&self.work())?;
-        let changes: Vec<String> = self.git(&["diff", "--name-status", "--no-renames", &tree, &now])?.lines().map(String::from).collect();
+        let changes: Vec<String> = self
+            .git(&["diff", "--name-status", "--no-renames", &tree, &now])?
+            .lines()
+            .map(String::from)
+            .collect();
         self.git(&["read-tree", "--reset", "-u", &tree])?;
-        for path in self.git(&["ls-files", "--others", "--exclude-standard", "-z"])?.split('\0').filter(|p| !p.is_empty()) {
+        for path in self
+            .git(&["ls-files", "--others", "--exclude-standard", "-z"])?
+            .split('\0')
+            .filter(|p| !p.is_empty())
+        {
             let _ = std::fs::remove_file(self.work_tree.join(path));
         }
         self.trees.pop();
@@ -214,7 +245,12 @@ fn tighten_private_dir(dir: &Path) {
 }
 
 fn too_many_files(root: &Path) -> bool {
-    ignore::WalkBuilder::new(root).hidden(false).filter_entry(|e| e.file_name() != ".git").build().take(MAX_FILES + 1).count()
+    ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .filter_entry(|e| e.file_name() != ".git")
+        .build()
+        .take(MAX_FILES + 1)
+        .count()
         > MAX_FILES
 }
 
@@ -246,7 +282,10 @@ mod tests {
         assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one");
         assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "keep");
         assert!(!root.join("c.txt").exists());
-        assert!(root.join("target/out").exists(), "ignored files are left alone");
+        assert!(
+            root.join("target/out").exists(),
+            "ignored files are left alone"
+        );
         assert_eq!(changes.len(), 3, "{changes:?}");
         fs::remove_dir_all(&snaps.git_dir).unwrap();
         fs::remove_dir_all(root).unwrap();
@@ -291,12 +330,29 @@ mod tests {
         let _ = fs::remove_dir_all(&snaps.git_dir);
         snaps.take();
         let old = SystemTime::now() - Duration::from_secs(3600);
-        fs::File::options().write(true).open(root.join("a.txt")).unwrap().set_modified(old).unwrap();
-        fs::File::options().write(true).open(root.join("b.txt")).unwrap().set_modified(old).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(root.join("a.txt"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(root.join("b.txt"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
         fs::write(root.join("a.txt"), "two").unwrap();
         snaps.undo().unwrap();
         assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one");
-        assert_eq!(fs::metadata(root.join("b.txt")).unwrap().modified().unwrap(), old, "an untouched file keeps its mtime");
+        assert_eq!(
+            fs::metadata(root.join("b.txt"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            old,
+            "an untouched file keeps its mtime"
+        );
         fs::remove_dir_all(&snaps.git_dir).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
@@ -319,7 +375,11 @@ mod tests {
         assert!(snaps.undo().is_err());
         snaps.work_tree = tree;
         snaps.undo().unwrap();
-        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "two", "the retry undoes one turn, not two");
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "two",
+            "the retry undoes one turn, not two"
+        );
         assert_eq!(snaps.trees.len(), 1);
         snaps.undo().unwrap();
         assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one");
@@ -343,7 +403,12 @@ mod tests {
         snaps.take();
         snaps.work_tree = tree;
         assert_eq!(snaps.disabled, None);
-        assert!(snaps.skipped.as_deref().is_some_and(|why| why.starts_with("undo snapshot skipped for this turn:")));
+        assert!(
+            snaps
+                .skipped
+                .as_deref()
+                .is_some_and(|why| why.starts_with("undo snapshot skipped for this turn:"))
+        );
         assert_eq!(snaps.trees.len(), 1);
         snaps.undo().unwrap();
         assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one");
@@ -390,10 +455,16 @@ mod tests {
         snaps.git_dir = root.with_extension("shadow.git");
         let _ = fs::remove_dir_all(&snaps.git_dir);
         snaps.take();
-        assert_eq!(snaps.git_dir.metadata().unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(
+            snaps.git_dir.metadata().unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         fs::set_permissions(&snaps.git_dir, fs::Permissions::from_mode(0o755)).unwrap();
         snaps.take();
-        assert_eq!(snaps.git_dir.metadata().unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(
+            snaps.git_dir.metadata().unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         fs::remove_dir_all(&snaps.git_dir).unwrap();
         fs::remove_dir_all(root).unwrap();
     }

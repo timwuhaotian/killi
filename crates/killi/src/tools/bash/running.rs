@@ -33,12 +33,26 @@ impl Drop for Waiting<'_> {
     }
 }
 
-pub(super) fn waiting<'a>(ctx: &'a Context, what: String, output: Arc<Mutex<Captured>>) -> Waiting<'a> {
+pub(super) fn waiting<'a>(
+    ctx: &'a Context,
+    what: String,
+    output: Arc<Mutex<Captured>>,
+) -> Waiting<'a> {
     let mut running = ctx.running.borrow_mut();
     running.next += 1;
     let id = running.next;
-    running.list.insert(id, Wait { what, started: Instant::now(), output });
-    Waiting { running: &ctx.running, id }
+    running.list.insert(
+        id,
+        Wait {
+            what,
+            started: Instant::now(),
+            output,
+        },
+    );
+    Waiting {
+        running: &ctx.running,
+        id,
+    }
 }
 
 impl Running {
@@ -61,12 +75,23 @@ impl Wait {
         let recent = String::from_utf8_lossy(&captured.bytes[from..]);
         let mut lines: Vec<&str> = recent.trim_end().lines().rev().take(5).collect();
         lines.reverse();
-        let lines: String = lines.iter().map(|line| format!("\n  {}", crate::llm::truncate(line, 160))).collect();
-        format!("{} has run {}, {quiet}.{lines}", self.what, span(self.started.elapsed()))
+        let lines: String = lines
+            .iter()
+            .map(|line| format!("\n  {}", crate::llm::truncate(line, 160)))
+            .collect();
+        format!(
+            "{} has run {}, {quiet}.{lines}",
+            self.what,
+            span(self.started.elapsed())
+        )
     }
 }
 
 fn span(elapsed: Duration) -> String {
     let secs = elapsed.as_secs();
-    if secs < 60 { format!("{secs}s") } else { format!("{}m{:02}s", secs / 60, secs % 60) }
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    }
 }

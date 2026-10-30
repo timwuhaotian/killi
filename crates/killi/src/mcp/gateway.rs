@@ -46,7 +46,8 @@ impl Mcp {
                     for tool in tools {
                         let tool_name = tool["name"].as_str().unwrap_or_default();
                         let native = native_name(name, tool_name);
-                        self.native.insert(native.clone(), (name.clone(), tool_name.to_string()));
+                        self.native
+                            .insert(native.clone(), (name.clone(), tool_name.to_string()));
                         definitions.push(json!({"type": "function", "function": {
                             "name": native,
                             "description": tool["description"].as_str().unwrap_or_default(),
@@ -80,7 +81,10 @@ impl Mcp {
             return Output::error("mcp needs `server`.");
         };
         if !self.servers.contains_key(server) {
-            return Output::error(format!("No MCP server `{server}`. Servers: {}.", self.names().join(", ")));
+            return Output::error(format!(
+                "No MCP server `{server}`. Servers: {}.",
+                self.names().join(", ")
+            ));
         }
         if let Some(refused) = self.refused(server) {
             return refused;
@@ -94,7 +98,9 @@ impl Mcp {
                             "\n## {}\n{}\nArguments: {}\n",
                             tool["name"].as_str().unwrap_or_default(),
                             tool["description"].as_str().unwrap_or_default().trim(),
-                            tool.get("inputSchema").map(Value::to_string).unwrap_or_else(|| "{}".into()),
+                            tool.get("inputSchema")
+                                .map(Value::to_string)
+                                .unwrap_or_else(|| "{}".into()),
                         ));
                     }
                     Output::ok(text).brief(format!("{} tools", tools.len()))
@@ -127,7 +133,9 @@ impl Mcp {
                 _ => break,
             }
         }
-        self.listed.borrow_mut().insert(server.to_string(), tools.clone());
+        self.listed
+            .borrow_mut()
+            .insert(server.to_string(), tools.clone());
         Ok(tools)
     }
 
@@ -136,7 +144,10 @@ impl Mcp {
             Ok(connection) => connection,
             Err(e) => return Output::error(format!("Could not reach MCP server {server}: {e:#}")),
         };
-        let result = match connection.request("tools/call", json!({"name": tool, "arguments": arguments})).await {
+        let result = match connection
+            .request("tools/call", json!({"name": tool, "arguments": arguments}))
+            .await
+        {
             Ok(result) => result,
             Err(e) => return Output::error(format!("{server}/{tool} failed: {e:#}")),
         };
@@ -148,8 +159,16 @@ impl Mcp {
         {
             text.push(structured.to_string());
         }
-        let body = if text.is_empty() { "(no content)".to_string() } else { text.join("\n") };
-        let mut output = if result["isError"] == true { Output::error(body) } else { Output::ok(body).brief(format!("{server}/{tool}")) };
+        let body = if text.is_empty() {
+            "(no content)".to_string()
+        } else {
+            text.join("\n")
+        };
+        let mut output = if result["isError"] == true {
+            Output::error(body)
+        } else {
+            Output::ok(body).brief(format!("{server}/{tool}"))
+        };
         output.image = image;
         output
     }
@@ -163,11 +182,19 @@ impl Mcp {
             match part["type"].as_str() {
                 Some("text") => text.push(part["text"].as_str().unwrap_or_default().to_string()),
                 Some("image") if images && image.is_none() => {
-                    image = Some(format!("data:{};base64,{}", part["mimeType"].as_str().unwrap_or("image/png"), part["data"].as_str().unwrap_or_default()));
+                    image = Some(format!(
+                        "data:{};base64,{}",
+                        part["mimeType"].as_str().unwrap_or("image/png"),
+                        part["data"].as_str().unwrap_or_default()
+                    ));
                     text.push("(image attached below)".into());
                 }
                 Some("image") => text.push(image_note(part)),
-                Some("resource") => text.push(part["resource"]["text"].as_str().map_or_else(|| part["resource"].to_string(), String::from)),
+                Some("resource") => text.push(
+                    part["resource"]["text"]
+                        .as_str()
+                        .map_or_else(|| part["resource"].to_string(), String::from),
+                ),
                 _ => text.push(part.to_string()),
             }
         }
@@ -182,7 +209,9 @@ impl Mcp {
             Some(Value::Object(_)) => Ok(args["arguments"].clone()),
             Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
                 Ok(parsed @ Value::Object(_)) => Ok(parsed),
-                Ok(_) => Err("mcp `arguments` is a string but not a JSON object; send an object.".into()),
+                Ok(_) => {
+                    Err("mcp `arguments` is a string but not a JSON object; send an object.".into())
+                }
                 Err(e) => Err(format!("mcp `arguments` is a string but not JSON: {e}")),
             },
             Some(_) => Ok(json!({})),
@@ -193,7 +222,9 @@ impl Mcp {
 /// An image the model isn't shown, named by type and size instead of dumped as base64.
 fn image_note(part: &Value) -> String {
     let mime = part["mimeType"].as_str().unwrap_or("image/png");
-    let kb = part["data"].as_str().map_or(0, |data| data.len() * 3 / 4 / 1024);
+    let kb = part["data"]
+        .as_str()
+        .map_or(0, |data| data.len() * 3 / 4 / 1024);
     format!("[image omitted: {mime} ({kb} KB not shown)]")
 }
 
@@ -201,7 +232,13 @@ fn image_note(part: &Value) -> String {
 fn native_name(server: &str, tool: &str) -> String {
     format!("mcp__{server}__{tool}")
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(64)
         .collect()
 }

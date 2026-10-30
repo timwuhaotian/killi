@@ -13,8 +13,9 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
   its own. `/provider` alone lists the presets, marking those already signed in. The
   config is re-read as it lands, so `/model` offers the new models at once.
 - A provider can map the tool names its API refuses, as `tool_names = { bash =
-  "run_command", web_search = "search_web" }` under `[providers.<name>]`: the Responses
-  API sends and reads the mapped names while the session keeps killi's. Meta began
+  "run_command", web_search = "search_web" }` under `[providers.<name>]`: every protocol
+  killi speaks sends the mapped names and reads replies back under killi's, while the
+  session keeps killi's names in its history. Meta began
   answering a Muse Code subscription's requests with `client_attestation_denied` whenever
   the tools carry another client's names (`bash`, `shell`, `web_search`, `search`), which
   had broken the `meta` provider; the `/provider muse-code` preset ships with the mapping.

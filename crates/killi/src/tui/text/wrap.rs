@@ -73,8 +73,15 @@ fn sanitize_body<'a>(mut text: &'a str, column: &mut usize, out: &mut String) ->
                     let mut rest = &after[1..];
                     text = loop {
                         match rest.chars().next() {
-                            Some(c) if ('\x30'..='\x3f').contains(&c) || ('\x20'..='\x2f').contains(&c) => rest = &rest[c.len_utf8()..],
-                            Some(c) if ('\x40'..='\x7e').contains(&c) => break &rest[c.len_utf8()..],
+                            Some(c)
+                                if ('\x30'..='\x3f').contains(&c)
+                                    || ('\x20'..='\x2f').contains(&c) =>
+                            {
+                                rest = &rest[c.len_utf8()..]
+                            }
+                            Some(c) if ('\x40'..='\x7e').contains(&c) => {
+                                break &rest[c.len_utf8()..];
+                            }
                             Some(_) => break rest,
                             None => return text,
                         }
@@ -86,7 +93,9 @@ fn sanitize_body<'a>(mut text: &'a str, column: &mut usize, out: &mut String) ->
                     text = loop {
                         match rest.chars().next() {
                             Some(c) if c == '\x07' => break &rest[c.len_utf8()..],
-                            Some(c) if c == '\x1b' && rest[1..].starts_with('\\') => break &rest[2..],
+                            Some(c) if c == '\x1b' && rest[1..].starts_with('\\') => {
+                                break &rest[2..];
+                            }
                             Some(c) if c.is_control() => break rest,
                             Some(c) => rest = &rest[c.len_utf8()..],
                             None => return text,
@@ -188,7 +197,14 @@ pub fn wrap_words(line: &str, max: usize, indent: usize) -> Vec<String> {
     if width(line) <= max {
         return vec![line.to_string()];
     }
-    let mut rows = Rows { rows: Vec::new(), row: String::new(), width: 0, active: String::new(), indent: indent.min(max / 2), max };
+    let mut rows = Rows {
+        rows: Vec::new(),
+        row: String::new(),
+        width: 0,
+        active: String::new(),
+        indent: indent.min(max / 2),
+        max,
+    };
     let mut word: Vec<(String, usize)> = Vec::new();
     let mut spaces = 0;
     let mut placed = false;
@@ -286,10 +302,13 @@ pub fn wrap_code(line: &str, max: usize) -> Vec<String> {
         return vec![line.to_string()];
     }
     let gutter = format!("  {FAINT}▏{RESET} ");
-    wrap_words(line, max, 4).into_iter().map(|row| match row.strip_prefix("    ") {
-        Some(rest) => format!("{gutter}{rest}"),
-        None => row,
-    }).collect()
+    wrap_words(line, max, 4)
+        .into_iter()
+        .map(|row| match row.strip_prefix("    ") {
+            Some(rest) => format!("{gutter}{rest}"),
+            None => row,
+        })
+        .collect()
 }
 
 /// The columns a line's leading spaces and list marker take, for wrapping its later rows
@@ -306,10 +325,14 @@ pub fn hanging_indent(line: &str) -> usize {
     }
     let text = plain.trim_start_matches(' ');
     let lead = plain.len() - text.len();
-    let marker = ["• ", "◦ ", "☐ ", "☑ ", "│ ", "▏ "].iter().find(|m| text.starts_with(**m)).map(|_| 2).or_else(|| {
-        let digits = text.chars().take_while(char::is_ascii_digit).count();
-        (digits > 0 && text[digits..].starts_with(". ")).then_some(digits + 2)
-    });
+    let marker = ["• ", "◦ ", "☐ ", "☑ ", "│ ", "▏ "]
+        .iter()
+        .find(|m| text.starts_with(**m))
+        .map(|_| 2)
+        .or_else(|| {
+            let digits = text.chars().take_while(char::is_ascii_digit).count();
+            (digits > 0 && text[digits..].starts_with(". ")).then_some(digits + 2)
+        });
     lead + marker.unwrap_or(0)
 }
 

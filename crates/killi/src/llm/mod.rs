@@ -20,13 +20,15 @@ use serde_json::Value;
 
 use crate::config::{Protocol, ResolvedModel};
 
-use error::{backoff, body_excerpt, classify, excerpt, kind_for_status, retryable_status, transport_failure};
+use error::{
+    backoff, body_excerpt, classify, excerpt, kind_for_status, retryable_status, transport_failure,
+};
 use history::{arguments_object, content_text, system_text};
 use tokens::cap_output;
 
+pub(crate) use error::error_chain;
 pub use error::{ErrorKind, ProviderError};
 pub use openai::REASONING_KEYS;
-pub(crate) use error::error_chain;
 pub(crate) use tokens::{IMAGE_OMITTED, IMAGE_TOKEN_RESERVE};
 
 #[cfg(test)]
@@ -114,7 +116,11 @@ pub struct ToolCall {
 pub enum Delta<'a> {
     Text(&'a str),
     Reasoning(&'a str),
-    Retry { attempt: u32, wait: Duration, reason: &'a str },
+    Retry {
+        attempt: u32,
+        wait: Duration,
+        reason: &'a str,
+    },
 }
 
 /// The bytes of a chunked event stream, drained one `\n`-terminated line at a time. Bytes
@@ -159,7 +165,12 @@ struct Prepared {
 
 /// The state a protocol keeps while it reads one streamed reply.
 trait StreamParser {
-    fn event(&mut self, event: &Value, reply: &mut Reply, on_delta: &mut dyn FnMut(Delta)) -> Result<(), Failure>;
+    fn event(
+        &mut self,
+        event: &Value,
+        reply: &mut Reply,
+        on_delta: &mut dyn FnMut(Delta),
+    ) -> Result<(), Failure>;
     fn done(&mut self) {}
     fn finish(&mut self, reply: &mut Reply) -> Result<(), Failure>;
 }
@@ -177,7 +188,14 @@ struct Failure {
 
 impl Failure {
     fn of(kind: ErrorKind, status: Option<u16>, retryable: bool, message: String) -> Self {
-        Self { kind, status, retryable, retry_after: None, max_attempts: None, message }
+        Self {
+            kind,
+            status,
+            retryable,
+            retry_after: None,
+            max_attempts: None,
+            message,
+        }
     }
     fn fatal(message: String) -> Self {
         Self::of(ErrorKind::Other, None, false, message)
@@ -196,7 +214,9 @@ impl Failure {
 impl From<crate::login::chatgpt::TokenError> for Failure {
     fn from(error: crate::login::chatgpt::TokenError) -> Self {
         match error {
-            crate::login::chatgpt::TokenError::SignIn(message) => Failure::of(ErrorKind::Auth, None, false, message),
+            crate::login::chatgpt::TokenError::SignIn(message) => {
+                Failure::of(ErrorKind::Auth, None, false, message)
+            }
             crate::login::chatgpt::TokenError::Transient(message) => Failure::transient(message),
         }
     }
@@ -209,7 +229,11 @@ impl Client {
             .connect_timeout(Duration::from_secs(30))
             .read_timeout(Duration::from_secs(300))
             .build()?;
-        Ok(Self { http, model, cooldown: Rc::new(Cell::new(None)) })
+        Ok(Self {
+            http,
+            model,
+            cooldown: Rc::new(Cell::new(None)),
+        })
     }
 
     /// Sends one request, retrying transient failures. A failed attempt's partial output is
@@ -244,15 +268,24 @@ impl Client {
                 burns += 1;
             }
             let cap = failure.max_attempts.unwrap_or(MAX_ATTEMPTS);
-            let spent = if failure.max_attempts.is_some() { attempt } else { burns };
+            let spent = if failure.max_attempts.is_some() {
+                attempt
+            } else {
+                burns
+            };
             if !failure.retryable || spent >= cap || attempt >= HARD_ATTEMPTS {
                 // Even a final 429 paces the next call on this client: the server just
                 // named a wait, and a clone starting now should observe it.
                 if failure.status == Some(429) {
-                    let deadline = Instant::now() + failure.retry_after.unwrap_or_else(|| backoff(attempt));
+                    let deadline =
+                        Instant::now() + failure.retry_after.unwrap_or_else(|| backoff(attempt));
                     self.cooldown.set(Some(deadline));
                 }
-                let advice = if self.model.chatgpt { crate::login::chatgpt::advice(&failure.message) } else { String::new() };
+                let advice = if self.model.chatgpt {
+                    crate::login::chatgpt::advice(&failure.message)
+                } else {
+                    String::new()
+                };
                 return Err(anyhow::Error::new(ProviderError {
                     status: failure.status,
                     kind: failure.kind,
@@ -262,7 +295,11 @@ impl Client {
                 }));
             }
             let wait = failure.retry_after.unwrap_or_else(|| backoff(attempt));
-            on_delta(Delta::Retry { attempt, wait, reason: &failure.message });
+            on_delta(Delta::Retry {
+                attempt,
+                wait,
+                reason: &failure.message,
+            });
             if failure.status == Some(429) {
                 let deadline = Instant::now() + wait;
                 self.cooldown.set(Some(deadline));
@@ -277,7 +314,9 @@ impl Client {
     /// Sleeps until the shared 429 cooldown passes. Returns whether this call actually waited
     /// out a deadline another member set; such an attempt doesn't burn this call's budget.
     async fn wait_cooldown(&self, mine: Option<Instant>) -> bool {
-        let Some(shared) = self.cooldown.get() else { return false };
+        let Some(shared) = self.cooldown.get() else {
+            return false;
+        };
         let deadline = mine.filter(|mine| *mine > shared).unwrap_or(shared);
         let now = Instant::now();
         if deadline <= now {
@@ -289,7 +328,12 @@ impl Client {
 
     /// One request. On a ChatGPT plan it carries the current token, and the first 401 of a
     /// `complete` call refreshes that token and is retried at once (`renewed` records it).
-    async fn attempt(&self, prepared: &Prepared, renewed: &mut bool, on_delta: &mut dyn FnMut(Delta)) -> Result<Reply, Failure> {
+    async fn attempt(
+        &self,
+        prepared: &Prepared,
+        renewed: &mut bool,
+        on_delta: &mut dyn FnMut(Delta),
+    ) -> Result<Reply, Failure> {
         let mut request = self.http.post(&prepared.url).body(prepared.body.clone());
         let token = match self.model.chatgpt {
             true => Some(crate::login::chatgpt::access_token(&self.http, None).await?),
@@ -314,10 +358,15 @@ impl Client {
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .map(Duration::from_secs);
             let text = response.text().await.unwrap_or_default();
-            if let Some(token) = token.as_deref().filter(|_| status == StatusCode::UNAUTHORIZED && !*renewed) {
+            if let Some(token) = token
+                .as_deref()
+                .filter(|_| status == StatusCode::UNAUTHORIZED && !*renewed)
+            {
                 crate::login::chatgpt::access_token(&self.http, Some(token)).await?;
                 *renewed = true;
-                let message = format!("HTTP {status}: the ChatGPT token was turned away, so it was refreshed");
+                let message = format!(
+                    "HTTP {status}: the ChatGPT token was turned away, so it was refreshed"
+                );
                 return Err(Failure {
                     kind: ErrorKind::Auth,
                     status: Some(status.as_u16()),
@@ -334,20 +383,35 @@ impl Client {
             .headers()
             .get("content-type")
             .and_then(|value| value.to_str().ok())
-            .map(|value| value.split(';').next().unwrap_or(value).trim().to_ascii_lowercase());
-        if content_type.as_deref().is_some_and(|content_type| content_type != "text/event-stream") {
+            .map(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or(value)
+                    .trim()
+                    .to_ascii_lowercase()
+            });
+        if content_type
+            .as_deref()
+            .is_some_and(|content_type| content_type != "text/event-stream")
+        {
             let body = body_excerpt(&mut response).await;
             let message = format!(
                 "HTTP {status}: content-type is {ct}, not an event stream: {}",
                 excerpt(&body),
                 ct = content_type.as_deref().unwrap_or_default()
             );
-            return Err(Failure::of(ErrorKind::BadResponse, Some(status.as_u16()), false, message));
+            return Err(Failure::of(
+                ErrorKind::BadResponse,
+                Some(status.as_u16()),
+                false,
+                message,
+            ));
         }
 
         let mut parser: Box<dyn StreamParser> = match self.model.protocol {
-            Protocol::OpenAi => Box::<openai::Parser>::default(),
-            Protocol::Anthropic => Box::<anthropic::Parser>::default(),
+            Protocol::OpenAi => Box::new(openai::Parser::new(&self.model.tool_names)),
+            Protocol::Anthropic => Box::new(anthropic::Parser::new(&self.model.tool_names)),
             Protocol::Responses => Box::new(responses::Parser::new(&self.model.tool_names)),
         };
         let mut reply = Reply::default();
@@ -357,7 +421,12 @@ impl Client {
         let mut saw_data = false;
         'stream: while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| {
-                Failure::of(ErrorKind::Transport, None, true, format!("stream interrupted: {}", error_chain(&e)))
+                Failure::of(
+                    ErrorKind::Transport,
+                    None,
+                    true,
+                    format!("stream interrupted: {}", error_chain(&e)),
+                )
             })?;
             if head.len() < EXCERPT_BYTES {
                 let take = (EXCERPT_BYTES - head.len()).min(chunk.len());
@@ -366,7 +435,9 @@ impl Client {
             lines.push(&chunk);
             while let Some(line) = lines.next_line() {
                 let line = String::from_utf8_lossy(&line);
-                let Some(data) = line.trim().strip_prefix("data:") else { continue };
+                let Some(data) = line.trim().strip_prefix("data:") else {
+                    continue;
+                };
                 saw_data = true;
                 let data = data.trim();
                 let Some(event) = parse_sse_data(data)? else {
@@ -377,12 +448,19 @@ impl Client {
             }
         }
         if !saw_data {
-            let noted = content_type.map_or(String::new(), |content_type| format!(" (content-type {content_type})"));
+            let noted = content_type.map_or(String::new(), |content_type| {
+                format!(" (content-type {content_type})")
+            });
             let message = format!(
                 "HTTP {status}: the stream carried no events{noted}: {}",
                 excerpt(&String::from_utf8_lossy(&head))
             );
-            return Err(Failure::of(ErrorKind::BadResponse, Some(status.as_u16()), false, message));
+            return Err(Failure::of(
+                ErrorKind::BadResponse,
+                Some(status.as_u16()),
+                false,
+                message,
+            ));
         }
         ensure_stream_consumed(lines.rest())?;
         parser.finish(&mut reply)?;
@@ -395,7 +473,12 @@ fn parse_sse_data(data: &str) -> Result<Option<Value>, Failure> {
         return Ok(None);
     }
     serde_json::from_str(data).map(Some).map_err(|e| {
-        Failure::of(ErrorKind::BadResponse, None, true, format!("malformed SSE JSON: {e}"))
+        Failure::of(
+            ErrorKind::BadResponse,
+            None,
+            true,
+            format!("malformed SSE JSON: {e}"),
+        )
     })
 }
 
@@ -403,7 +486,12 @@ fn ensure_stream_consumed(buffer: &[u8]) -> Result<(), Failure> {
     if buffer.iter().all(|b| b.is_ascii_whitespace()) {
         Ok(())
     } else {
-        Err(Failure::of(ErrorKind::BadResponse, None, true, "stream ended with unconsumed data".into()))
+        Err(Failure::of(
+            ErrorKind::BadResponse,
+            None,
+            true,
+            "stream ended with unconsumed data".into(),
+        ))
     }
 }
 
@@ -413,9 +501,12 @@ fn validate_reply(reply: Reply) -> Result<Reply, Failure> {
     if let Some(reason) = reply.finish_reason.as_deref()
         && !matches!(reason, "stop" | "length" | "tool_calls")
     {
-        return Err(Failure::fatal(format!("response terminated abnormally: {reason}")));
+        return Err(Failure::fatal(format!(
+            "response terminated abnormally: {reason}"
+        )));
     }
-    if reply.text.trim().is_empty() && reply.tool_calls.is_empty() && reply.finish_reason.is_none() {
+    if reply.text.trim().is_empty() && reply.tool_calls.is_empty() && reply.finish_reason.is_none()
+    {
         return Err(Failure::transient(match reply.reasoning.is_empty() {
             true => "empty response without a termination reason".into(),
             false => "reasoning-only response without a termination reason".into(),

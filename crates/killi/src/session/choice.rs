@@ -19,7 +19,10 @@ pub fn save_choice(choice: &Choice) -> Result<()> {
 }
 
 pub(super) fn read_choice(path: &Path) -> Choice {
-    fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
 }
 
 pub(super) fn write_choice(path: &Path, choice: &Choice) -> Result<()> {

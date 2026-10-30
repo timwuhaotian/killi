@@ -55,7 +55,11 @@ pub struct Setup {
 
 impl Setup {
     pub async fn new(config: Config, cwd: &Path, model: Option<&str>) -> Result<Self> {
-        let last = if model.is_none() { session::last_choice() } else { Choice::default() };
+        let last = if model.is_none() {
+            session::last_choice()
+        } else {
+            Choice::default()
+        };
         config.resolve(model.or(known(&config, &last)))?;
         let skills = Skills::discover(cwd, &config.skills.dirs);
         let prompt = prompt::build(cwd, &skills, config.guidance());
@@ -69,9 +73,26 @@ impl Setup {
             tools.push(gateway);
             // A global eager name whose definition the project's `.mcp.json` replaced is a
             // project server, not a user one: it needs the trust check below, not a free start.
-            let mut eager: Vec<String> = config.mcp.eager.iter().filter(|name| !mcp.is_project(name)).cloned().collect();
-            let global_project: Vec<String> = config.mcp.eager.iter().filter(|name| mcp.is_project(name)).cloned().collect();
-            eager.extend(trusted_project_eager(cwd, &mcp, &mut notes, &global_project));
+            let mut eager: Vec<String> = config
+                .mcp
+                .eager
+                .iter()
+                .filter(|name| !mcp.is_project(name))
+                .cloned()
+                .collect();
+            let global_project: Vec<String> = config
+                .mcp
+                .eager
+                .iter()
+                .filter(|name| mcp.is_project(name))
+                .cloned()
+                .collect();
+            eager.extend(trusted_project_eager(
+                cwd,
+                &mcp,
+                &mut notes,
+                &global_project,
+            ));
             eager.retain(|name| mcp.names().contains(&name.as_str()));
             dedupe_eager(&mut eager);
             let (native, problems) = mcp.start_eager(&eager).await;
@@ -81,14 +102,28 @@ impl Setup {
         let settings = Settings {
             compact_at: config.agent.compact_at,
             plan_allow: config.agent.plan_allow.clone(),
-            swarm_parallel: config.agent.swarm_parallel.unwrap_or(DEFAULT_SWARM_PARALLEL).max(1),
+            swarm_parallel: config
+                .agent
+                .swarm_parallel
+                .unwrap_or(DEFAULT_SWARM_PARALLEL)
+                .max(1),
             search: config.search.settings(),
             skills: skills.clone(),
             hooks: Rc::new(config.hooks.clone()),
             mcp: Rc::new(mcp),
             instruction_files: prompt.instruction_files.clone(),
         };
-        Ok(Self { config, cwd: cwd.to_path_buf(), model: model.map(String::from), last, prompt, tools, settings, skills, notes })
+        Ok(Self {
+            config,
+            cwd: cwd.to_path_buf(),
+            model: model.map(String::from),
+            last,
+            prompt,
+            tools,
+            settings,
+            skills,
+            notes,
+        })
     }
 
     pub fn config(&self) -> &Config {
@@ -103,7 +138,15 @@ impl Setup {
 
     /// A new session on `client`, as /new keeps the model and effort in use.
     pub fn start_on(&self, client: Client, controls: Controls, sink: Sink) -> Result<Agent> {
-        let mut agent = Agent::new(client, &self.cwd, &self.prompt.text, self.tools.clone(), self.settings.clone(), controls, sink)?;
+        let mut agent = Agent::new(
+            client,
+            &self.cwd,
+            &self.prompt.text,
+            self.tools.clone(),
+            self.settings.clone(),
+            controls,
+            sink,
+        )?;
         if let Some(backup) = self.backup_client() {
             agent.set_backup(backup);
         }
@@ -119,15 +162,34 @@ impl Setup {
 
     /// `resume` from the log's load, so callers that already show it don't parse it again:
     /// replay the conversation from `report.loaded` first, then move the report here.
-    pub fn resume_loaded(&self, report: session::LoadReport, log: &Path, controls: Controls, sink: Sink) -> Result<Agent> {
+    pub fn resume_loaded(
+        &self,
+        report: session::LoadReport,
+        log: &Path,
+        controls: Controls,
+        sink: Sink,
+    ) -> Result<Agent> {
         let client = self.client(&report.loaded.choice)?;
-        Agent::resume_reported(client, self.backup_client(), &self.cwd, log, report, self.tools.clone(), self.settings.clone(), controls, sink)
+        Agent::resume_reported(
+            client,
+            self.backup_client(),
+            &self.cwd,
+            log,
+            report,
+            self.tools.clone(),
+            self.settings.clone(),
+            controls,
+            sink,
+        )
     }
 
     /// The backup client the config's `backup_model` names, if it resolves: every session —
     /// new or resumed — starts on it. A backup the config no longer knows is dropped.
     fn backup_client(&self) -> Option<Client> {
-        self.config.backup_model.as_deref().and_then(|alias| self.config.resolve(Some(alias)).and_then(Client::new).ok())
+        self.config
+            .backup_model
+            .as_deref()
+            .and_then(|alias| self.config.resolve(Some(alias)).and_then(Client::new).ok())
     }
 
     /// The -m model at its default effort, else `choice` when the config still has that model,
@@ -136,7 +198,11 @@ impl Setup {
     fn client(&self, choice: &Choice) -> Result<Client> {
         let chosen = known(&self.config, choice).filter(|_| self.model.is_none());
         let mut model = self.config.resolve(self.model.as_deref().or(chosen))?;
-        if let Some(effort) = choice.effort.as_ref().filter(|e| chosen.is_some() && self.config.efforts(&model.alias).contains(e)) {
+        if let Some(effort) = choice
+            .effort
+            .as_ref()
+            .filter(|e| chosen.is_some() && self.config.efforts(&model.alias).contains(e))
+        {
             model.thinking = Thinking::parse(effort);
         }
         Client::new(model)
@@ -161,7 +227,11 @@ impl Setup {
     fn refresh(&mut self, config: Config) {
         self.skills = Skills::discover(&self.cwd, &config.skills.dirs);
         // Without the skill tool the model can't load skills, so the prompt doesn't name them.
-        let listed = if self.has_skill_tool() { self.skills.clone() } else { Skills::default() };
+        let listed = if self.has_skill_tool() {
+            self.skills.clone()
+        } else {
+            Skills::default()
+        };
         self.prompt = prompt::build(&self.cwd, &listed, config.guidance());
         self.settings.skills = self.skills.clone();
         self.settings.instruction_files = self.prompt.instruction_files.clone();
@@ -195,7 +265,9 @@ impl Setup {
     }
 
     fn has_skill_tool(&self) -> bool {
-        self.tools.iter().any(|tool| tool["function"]["name"] == "skill")
+        self.tools
+            .iter()
+            .any(|tool| tool["function"]["name"] == "skill")
     }
 
     /// What the system prompt includes, in one line.
@@ -203,10 +275,21 @@ impl Setup {
     pub fn overview(&self) -> Overview {
         Overview {
             custom_prompt: self.config.guidance() != prompt::DEFAULT,
-            instructions: self.prompt.instruction_files.iter().map(|p| p.strip_prefix(&self.cwd).unwrap_or(p).to_path_buf()).collect(),
+            instructions: self
+                .prompt
+                .instruction_files
+                .iter()
+                .map(|p| p.strip_prefix(&self.cwd).unwrap_or(p).to_path_buf())
+                .collect(),
             instruction_tokens: self.prompt.instruction_tokens,
             skills: self.skills.len(),
-            mcp: self.settings.mcp.names().iter().map(|name| name.to_string()).collect(),
+            mcp: self
+                .settings
+                .mcp
+                .names()
+                .iter()
+                .map(|name| name.to_string())
+                .collect(),
             later: crate::later::list(&self.cwd).len(),
             problems: self.notes.clone(),
         }
@@ -220,8 +303,16 @@ impl Setup {
             parts.push("custom prompt from [prompt]".to_string());
         }
         if !overview.instructions.is_empty() {
-            let names: Vec<String> = overview.instructions.iter().map(|p| p.display().to_string()).collect();
-            parts.push(format!("instructions ~{} tokens from {}", overview.instruction_tokens, names.join(", ")));
+            let names: Vec<String> = overview
+                .instructions
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            parts.push(format!(
+                "instructions ~{} tokens from {}",
+                overview.instruction_tokens,
+                names.join(", ")
+            ));
         }
         if overview.skills > 0 {
             parts.push(format!("{} skills", overview.skills));
@@ -260,24 +351,39 @@ impl Setup {
 
 /// The model `choice` names, when the config still has it.
 fn known<'a>(config: &Config, choice: &'a Choice) -> Option<&'a str> {
-    choice.model.as_deref().filter(|alias| config.models.contains_key(*alias))
+    choice
+        .model
+        .as_deref()
+        .filter(|alias| config.models.contains_key(*alias))
 }
 
 /// The project killi runs in: the nearest folder with `.git`, else the working directory.
 fn project_root(cwd: &Path) -> PathBuf {
-    cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd).to_path_buf()
+    cwd.ancestors()
+        .find(|d| d.join(".git").exists())
+        .unwrap_or(cwd)
+        .to_path_buf()
 }
 
 /// `[mcp] eager` from the project's `.killi/config.toml`.
 fn project_eager(cwd: &Path) -> Vec<String> {
     let root = project_root(cwd);
-    let Ok(text) = std::fs::read_to_string(root.join(".killi/config.toml")) else { return Vec::new() };
-    let Ok(table) = toml::from_str::<toml::Table>(&text) else { return Vec::new() };
+    let Ok(text) = std::fs::read_to_string(root.join(".killi/config.toml")) else {
+        return Vec::new();
+    };
+    let Ok(table) = toml::from_str::<toml::Table>(&text) else {
+        return Vec::new();
+    };
     table
         .get("mcp")
         .and_then(|m| m.get("eager"))
         .and_then(toml::Value::as_array)
-        .map(|names| names.iter().filter_map(|n| n.as_str().map(String::from)).collect())
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(|n| n.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -291,7 +397,12 @@ fn dedupe_eager(eager: &mut Vec<String>) {
 /// Project eager servers killi may start now: the trust store already approves them, or the
 /// user does below. Anything else stays off for this session, with a note saying so, so a
 /// "no" leaves killi fully usable without those servers.
-fn trusted_project_eager(cwd: &Path, mcp: &Mcp, notes: &mut Vec<String>, global_project: &[String]) -> Vec<String> {
+fn trusted_project_eager(
+    cwd: &Path,
+    mcp: &Mcp,
+    notes: &mut Vec<String>,
+    global_project: &[String],
+) -> Vec<String> {
     let root = project_root(cwd);
     let mut wanted = project_eager(cwd);
     wanted.extend(global_project.iter().cloned());
@@ -300,31 +411,58 @@ fn trusted_project_eager(cwd: &Path, mcp: &Mcp, notes: &mut Vec<String>, global_
     let entries: Vec<(String, String, String)> = wanted
         .into_iter()
         .filter(|name| mcp.names().contains(&name.as_str()))
-        .filter_map(|name| Some((name.clone(), mcp.command_line(&name)?, mcp.trust_input(&name)?)))
+        .filter_map(|name| {
+            Some((
+                name.clone(),
+                mcp.command_line(&name)?,
+                mcp.trust_input(&name)?,
+            ))
+        })
         .collect();
     if entries.is_empty() {
         return Vec::new();
     }
     let path_key = root.display().to_string();
-    let fingerprint = trust_fingerprint(&entries.iter().map(|(name, _, input)| (name.clone(), input.clone())).collect::<Vec<_>>());
-    if load_trusted(&trust_store_path()).get(&path_key).is_some_and(|known| *known == fingerprint) {
+    let fingerprint = trust_fingerprint(
+        &entries
+            .iter()
+            .map(|(name, _, input)| (name.clone(), input.clone()))
+            .collect::<Vec<_>>(),
+    );
+    if load_trusted(&trust_store_path())
+        .get(&path_key)
+        .is_some_and(|known| *known == fingerprint)
+    {
         return entries.into_iter().map(|(name, _, _)| name).collect();
     }
     if interactive() {
         // Project-controlled text is shown with escapes and controls stripped, so it
         // can't overwrite the very command the user is asked to inspect.
-        eprintln!("The project at {} asks killi to run at startup:", shown(&path_key));
+        eprintln!(
+            "The project at {} asks killi to run at startup:",
+            shown(&path_key)
+        );
         for (name, line, _) in &entries {
             eprintln!("  {}: {}", shown(name), shown(line));
         }
         if crate::config::confirm("Trust and run these?").unwrap_or(false) {
             if let Err(error) = save_trusted(&trust_store_path(), &path_key, &fingerprint) {
-                notes.push(format!("Trusted project servers, but could not write {}: {error:#}", trust_store_path().display()));
+                notes.push(format!(
+                    "Trusted project servers, but could not write {}: {error:#}",
+                    trust_store_path().display()
+                ));
             }
             return entries.into_iter().map(|(name, _, _)| name).collect();
         }
     }
-    notes.push(format!("Skipped project servers (untrusted): {}.", entries.iter().map(|(name, _, _)| name.as_str()).collect::<Vec<_>>().join(", ")));
+    notes.push(format!(
+        "Skipped project servers (untrusted): {}.",
+        entries
+            .iter()
+            .map(|(name, _, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     Vec::new()
 }
 
@@ -358,7 +496,10 @@ fn trust_fingerprint(entries: &[(String, String)]) -> String {
 
 /// The approvals in `path`: none when it is missing or unreadable.
 fn load_trusted(path: &Path) -> BTreeMap<String, String> {
-    std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
 }
 
 /// Remembers `fingerprint` for `root`, so this project's commands start without asking.

@@ -33,7 +33,9 @@ impl Service {
     fn about(self) -> &'static str {
         match self {
             Service::ChatGpt => "ChatGPT: your Plus or Pro plan, signed in in the browser",
-            Service::OpencodeGo => "OpenCode Go: your subscription, with the API key from the OpenCode Console",
+            Service::OpencodeGo => {
+                "OpenCode Go: your subscription, with the API key from the OpenCode Console"
+            }
         }
     }
 
@@ -56,7 +58,10 @@ pub async fn login(name: Option<&str>) -> Result<()> {
 /// `killi logout [name]`: signs out of the named service, or of one picked from those killi is
 /// signed in to.
 pub async fn logout(name: Option<&str>) -> Result<()> {
-    let signed: Vec<Service> = Service::ALL.into_iter().filter(|service| service.signed_in()).collect();
+    let signed: Vec<Service> = Service::ALL
+        .into_iter()
+        .filter(|service| service.signed_in())
+        .collect();
     if name.is_none() && signed.is_empty() {
         println!("killi isn't signed in to anything.");
         return Ok(());
@@ -72,7 +77,8 @@ pub async fn logout(name: Option<&str>) -> Result<()> {
 fn pick(name: Option<&str>, listed: &[Service], question: &str) -> Result<Service> {
     let names = Service::ALL.map(Service::name).join(", ");
     if let Some(name) = name {
-        return choose(name, &Service::ALL).ok_or_else(|| anyhow!("killi has no sign-in for `{name}`; it has: {names}"));
+        return choose(name, &Service::ALL)
+            .ok_or_else(|| anyhow!("killi has no sign-in for `{name}`; it has: {names}"));
     }
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         bail!("name the service, one of: {names}");
@@ -92,14 +98,23 @@ fn choose(answer: &str, listed: &[Service]) -> Option<Service> {
         return listed.first().copied();
     }
     if let Ok(number) = answer.parse::<usize>() {
-        return number.checked_sub(1).and_then(|index| listed.get(index)).copied();
+        return number
+            .checked_sub(1)
+            .and_then(|index| listed.get(index))
+            .copied();
     }
-    listed.iter().copied().find(|service| service.name().eq_ignore_ascii_case(answer))
+    listed
+        .iter()
+        .copied()
+        .find(|service| service.name().eq_ignore_ascii_case(answer))
 }
 
 fn http_client() -> Result<reqwest::Client> {
     let builder = reqwest::Client::builder().user_agent(crate::llm::USER_AGENT);
-    Ok(builder.connect_timeout(Duration::from_secs(30)).timeout(Duration::from_secs(60)).build()?)
+    Ok(builder
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(60))
+        .build()?)
 }
 
 #[cfg(test)]
@@ -110,20 +125,33 @@ mod tests {
     fn an_answer_picks_by_number_or_name_and_enter_takes_the_first() {
         assert_eq!(choose("", &Service::ALL), Some(Service::ChatGpt));
         assert_eq!(choose("2", &Service::ALL), Some(Service::OpencodeGo));
-        assert_eq!(choose(" OpenCode-Go ", &Service::ALL), Some(Service::OpencodeGo));
+        assert_eq!(
+            choose(" OpenCode-Go ", &Service::ALL),
+            Some(Service::OpencodeGo)
+        );
         assert_eq!(choose("3", &Service::ALL), None);
         assert_eq!(choose("0", &Service::ALL), None);
         assert_eq!(choose("zen", &Service::ALL), None);
         let one = [Service::OpencodeGo];
-        assert_eq!(choose("", &one), Some(Service::OpencodeGo), "Enter takes the only one listed");
-        assert_eq!(choose("chatgpt", &one), None, "a name must be on the list shown");
+        assert_eq!(
+            choose("", &one),
+            Some(Service::OpencodeGo),
+            "Enter takes the only one listed"
+        );
+        assert_eq!(
+            choose("chatgpt", &one),
+            None,
+            "a name must be on the list shown"
+        );
         assert_eq!(choose("", &[]), None);
     }
 
     #[test]
     fn a_named_service_needs_no_list() {
         assert_eq!(pick(Some("chatgpt"), &[], "").unwrap(), Service::ChatGpt);
-        let error = pick(Some("zen"), &Service::ALL, "").unwrap_err().to_string();
+        let error = pick(Some("zen"), &Service::ALL, "")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("chatgpt, opencode-go"), "{error}");
     }
 }

@@ -1,10 +1,15 @@
 //! OpenAI Chat Completions: history keeps its stored form; structured reasoning is converted on a copy.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::{Delta, ErrorKind, Failure, Prepared, Reply, StreamParser, ToolCall, Usage, IMAGE_OMITTED, cap_output, truncate};
+use super::{
+    Delta, ErrorKind, Failure, IMAGE_OMITTED, Prepared, Reply, StreamParser, ToolCall, Usage,
+    cap_output, truncate,
+};
 use crate::config::{ResolvedModel, Thinking};
 
 pub const REASONING_KEYS: [&str; 3] = ["reasoning_content", "reasoning_details", "reasoning"];
@@ -30,8 +35,15 @@ struct StreamOptions {
     include_usage: bool,
 }
 
-pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value], cache_key: &str) -> Result<Prepared> {
-    let max_output = model.max_output.map(|n| cap_output(model, messages, tools, n).clamp(1, 131_072));
+pub(super) fn prepare(
+    model: &ResolvedModel,
+    messages: &[Value],
+    tools: &[Value],
+    cache_key: &str,
+) -> Result<Prepared> {
+    let max_output = model
+        .max_output
+        .map(|n| cap_output(model, messages, tools, n).clamp(1, 131_072));
     let mut messages = replay_history(messages);
     if !model.images {
         omit_images(&mut messages);
@@ -39,21 +51,30 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
     if model.cache_control {
         mark_cache_breakpoints(&mut messages);
     }
+    map_history_calls(&mut messages, &model.tool_names);
     let completion_style = model.model.starts_with("gpt-5")
-        || (model.model.starts_with('o') && model.model[1..].starts_with(|c: char| c.is_ascii_digit()));
+        || (model.model.starts_with('o')
+            && model.model[1..].starts_with(|c: char| c.is_ascii_digit()));
     // Some gateways reject reasoning in history unless reasoning is switched on.
-    let has_reasoning = || messages.iter().any(|m| REASONING_KEYS.iter().any(|k| m.get(*k).is_some()));
+    let has_reasoning = || {
+        messages
+            .iter()
+            .any(|m| REASONING_KEYS.iter().any(|k| m.get(*k).is_some()))
+    };
     let reasoning_effort = match &model.thinking {
         Thinking::Effort(effort) => Some(effort.as_str()),
         Thinking::On if has_reasoning() => Some("medium"),
         Thinking::On | Thinking::Off => None,
     };
+    let tools = map_tools(tools, &model.tool_names);
     let request = Request {
         model: &model.model,
         messages: &messages,
-        tools,
+        tools: &tools,
         stream: true,
-        stream_options: StreamOptions { include_usage: true },
+        stream_options: StreamOptions {
+            include_usage: true,
+        },
         prompt_cache_key: cache_key,
         max_tokens: max_output.filter(|_| !completion_style),
         max_completion_tokens: max_output.filter(|_| completion_style),
@@ -86,7 +107,8 @@ fn mark_content(message: &mut Value) {
     let mark = json!({"type": "ephemeral"});
     match &mut message["content"] {
         Value::String(text) if !text.is_empty() => {
-            message["content"] = json!([{"type": "text", "text": text.clone(), "cache_control": mark}]);
+            message["content"] =
+                json!([{"type": "text", "text": text.clone(), "cache_control": mark}]);
         }
         Value::Array(blocks) => {
             if let Some(block) = blocks.iter_mut().rev().find(|b| b["type"] == "text") {
@@ -101,7 +123,9 @@ fn mark_content(message: &mut Value) {
 /// so the conversion stays deterministic per model and the cached prefix still hits.
 fn omit_images(messages: &mut [Value]) {
     for message in messages.iter_mut() {
-        let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) else { continue };
+        let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
         for part in parts.iter_mut() {
             if part["type"] == "image_url" {
                 *part = json!({"type": "text", "text": IMAGE_OMITTED});
@@ -122,7 +146,12 @@ fn replay_history(messages: &[Value]) -> Vec<Value> {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter(|item| !matches!(item["type"].as_str(), Some("reasoning" | "thinking" | "redacted_thinking")))
+                    .filter(|item| {
+                        !matches!(
+                            item["type"].as_str(),
+                            Some("reasoning" | "thinking" | "redacted_thinking")
+                        )
+                    })
                     .map(|item| {
                         let mut item = item.clone();
                         // Kimi's summary/encrypted dialect uses `index` only while streaming and
@@ -144,6 +173,39 @@ fn replay_history(messages: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// The copy being sent carries the provider's tool names where it maps any, so an API that
+/// refuses another client's names still serves the request; the history stays as stored.
+fn map_history_calls(messages: &mut [Value], tool_names: &BTreeMap<String, String>) {
+    for call in messages
+        .iter_mut()
+        .filter_map(|message| message.get_mut("tool_calls"))
+        .filter_map(Value::as_array_mut)
+        .flatten()
+    {
+        if let Some(name) = call["function"]["name"].as_str().map(str::to_string)
+            && let Some(wire) = tool_names.get(&name)
+        {
+            call["function"]["name"] = json!(wire);
+        }
+    }
+}
+
+/// The tools as the API takes them: the provider's names where it maps any.
+fn map_tools(tools: &[Value], tool_names: &BTreeMap<String, String>) -> Vec<Value> {
+    tools
+        .iter()
+        .map(|tool| {
+            let mut tool = tool.clone();
+            if let Some(name) = tool["function"]["name"].as_str().map(str::to_string)
+                && let Some(wire) = tool_names.get(&name)
+            {
+                tool["function"]["name"] = json!(wire);
+            }
+            tool
+        })
+        .collect()
+}
+
 /// The most streamed tool calls one reply keeps, so a provider that floods or replays
 /// indices can't grow it without bound.
 const MAX_STREAMED_CALLS: usize = 128;
@@ -153,23 +215,56 @@ pub(super) struct Parser {
     done: bool,
     /// Each provider call index, in arrival order, to the reply slot it was first given.
     call_slots: Vec<(u64, usize)>,
+    /// The provider's `tool_names` inverted: the name the API sends back to the session's.
+    names: BTreeMap<String, String>,
+}
+
+impl Parser {
+    pub(super) fn new(tool_names: &BTreeMap<String, String>) -> Self {
+        Self {
+            names: tool_names
+                .iter()
+                .map(|(ours, wire)| (wire.clone(), ours.clone()))
+                .collect(),
+            ..Parser::default()
+        }
+    }
 }
 
 impl StreamParser for Parser {
-    fn event(&mut self, event: &Value, reply: &mut Reply, on_delta: &mut dyn FnMut(Delta)) -> Result<(), Failure> {
+    fn event(
+        &mut self,
+        event: &Value,
+        reply: &mut Reply,
+        on_delta: &mut dyn FnMut(Delta),
+    ) -> Result<(), Failure> {
         if let Some(error) = event.get("error").filter(|e| !e.is_null()) {
             let code = error.get("code").and_then(Value::as_u64).map(|c| c as u16);
-            return Err(Failure::from_status(code, format!("provider error mid-stream: {}", truncate(&error.to_string(), 2000))));
+            return Err(Failure::from_status(
+                code,
+                format!(
+                    "provider error mid-stream: {}",
+                    truncate(&error.to_string(), 2000)
+                ),
+            ));
         }
         if let Some(usage) = event.get("usage").filter(|u| u.is_object()) {
             reply.usage = parse_usage(usage);
         }
-        let Some(choice) = event.get("choices").and_then(|c| c.get(0)) else { return Ok(()) };
+        let Some(choice) = event.get("choices").and_then(|c| c.get(0)) else {
+            return Ok(());
+        };
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
             reply.finish_reason = Some(reason.to_string());
         }
-        let Some(delta) = choice.get("delta") else { return Ok(()) };
-        if delta.get("refusal").and_then(Value::as_str).is_some_and(|text| !text.is_empty()) {
+        let Some(delta) = choice.get("delta") else {
+            return Ok(());
+        };
+        if delta
+            .get("refusal")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty())
+        {
             return Err(Failure::fatal("provider refused the request".into()));
         }
         if let Some(text) = delta.get("content").and_then(Value::as_str) {
@@ -184,7 +279,12 @@ impl StreamParser for Parser {
                 break;
             }
         }
-        for detail in delta.get("reasoning_details").and_then(Value::as_array).into_iter().flatten() {
+        for detail in delta
+            .get("reasoning_details")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             merge_reasoning_detail(reply, detail);
         }
         if let Some(object) = delta.as_object() {
@@ -196,9 +296,19 @@ impl StreamParser for Parser {
                 }
             }
         }
-        for call in delta.get("tool_calls").and_then(Value::as_array).into_iter().flatten() {
+        for call in delta
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             let index = call.get("index").and_then(Value::as_u64);
-            let slot = match index.and_then(|index| self.call_slots.iter().find(|(seen, _)| *seen == index).map(|(_, slot)| *slot)) {
+            let slot = match index.and_then(|index| {
+                self.call_slots
+                    .iter()
+                    .find(|(seen, _)| *seen == index)
+                    .map(|(_, slot)| *slot)
+            }) {
                 Some(slot) => slot,
                 None if reply.tool_calls.len() < MAX_STREAMED_CALLS => {
                     let slot = reply.tool_calls.len();
@@ -231,6 +341,12 @@ impl StreamParser for Parser {
     }
 
     fn finish(&mut self, reply: &mut Reply) -> Result<(), Failure> {
+        // A name can arrive in pieces, so it maps back to the session's once whole.
+        for call in &mut reply.tool_calls {
+            if let Some(ours) = self.names.get(&call.name) {
+                call.name = ours.clone();
+            }
+        }
         if !self.done && reply.finish_reason.is_none() {
             return Err(Failure::of(
                 ErrorKind::BadResponse,
@@ -241,12 +357,18 @@ impl StreamParser for Parser {
         }
         let before = reply.tool_calls.len();
         reply.tool_calls.retain(|call| !call.name.is_empty());
-        if reply.tool_calls.len() < before && reply.tool_calls.is_empty() && reply.text.trim().is_empty() {
+        if reply.tool_calls.len() < before
+            && reply.tool_calls.is_empty()
+            && reply.text.trim().is_empty()
+        {
             return Err(Failure::of(
                 ErrorKind::BadResponse,
                 None,
                 true,
-                format!("provider streamed {} tool call(s) without names", before - reply.tool_calls.len()),
+                format!(
+                    "provider streamed {} tool call(s) without names",
+                    before - reply.tool_calls.len()
+                ),
             ));
         }
         Ok(())
@@ -268,7 +390,10 @@ fn merge_reasoning_detail(reply: &mut Reply, detail: &Value) {
         })
         .or_else(|| {
             detail.get("id").and_then(Value::as_str).and_then(|id| {
-                reply.reasoning_items.iter().position(|item| same_type(item) && item["id"].as_str() == Some(id))
+                reply
+                    .reasoning_items
+                    .iter()
+                    .position(|item| same_type(item) && item["id"].as_str() == Some(id))
             })
         })
         .or_else(|| {
@@ -289,7 +414,10 @@ fn merge_reasoning_detail(reply: &mut Reply, detail: &Value) {
         return;
     };
     for (key, value) in detail.as_object().into_iter().flatten() {
-        let append = matches!(key.as_str(), "text" | "summary" | "data" | "encrypted_content" | "signature");
+        let append = matches!(
+            key.as_str(),
+            "text" | "summary" | "data" | "encrypted_content" | "signature"
+        );
         if append
             && let (Some(Value::String(text)), Some(delta)) = (current.get_mut(key), value.as_str())
         {

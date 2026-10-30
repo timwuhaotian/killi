@@ -10,7 +10,12 @@ enum Mode {
 /// Line ranges (first, last; 0-based) of every match in `text`.
 fn match_ranges(regex: &Regex, text: &str, lines: &[&str], multiline: bool) -> Vec<(usize, usize)> {
     if !multiline {
-        return lines.iter().enumerate().filter(|(_, line)| regex.is_match(line)).map(|(n, _)| (n, n)).collect();
+        return lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| regex.is_match(line))
+            .map(|(n, _)| (n, n))
+            .collect();
     }
     let mut starts = vec![0];
     starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
@@ -20,7 +25,10 @@ fn match_ranges(regex: &Regex, text: &str, lines: &[&str], multiline: bool) -> V
         .map(|m| {
             let last_line = lines.len().saturating_sub(1);
             let first = line_of(m.start()).min(last_line);
-            (first, line_of(m.end().saturating_sub(1).max(m.start())).clamp(first, last_line))
+            (
+                first,
+                line_of(m.end().saturating_sub(1).max(m.start())).clamp(first, last_line),
+            )
         })
         .collect()
 }
@@ -37,7 +45,8 @@ impl SkippedLarge {
     fn record(&mut self, cwd: &Path, path: &Path) {
         self.count += 1;
         if self.examples.len() < 3 {
-            self.examples.push(path.strip_prefix(cwd).unwrap_or(path).display().to_string());
+            self.examples
+                .push(path.strip_prefix(cwd).unwrap_or(path).display().to_string());
         }
     }
 
@@ -49,7 +58,11 @@ impl SkippedLarge {
                 if self.count == 1 { "" } else { "s" },
                 MAX_FILE_SIZE / (1024 * 1024),
                 self.examples.join(", "),
-                if self.count > self.examples.len() { " …" } else { "" }
+                if self.count > self.examples.len() {
+                    " …"
+                } else {
+                    ""
+                }
             )
         })
     }
@@ -86,8 +99,16 @@ struct PreviousLine {
 
 impl PreviousLine {
     fn new(number: usize, text: String, matched: bool) -> Self {
-        let text = if text.len() > MAX_MATCH_LINE { format!("{}… [truncated]", truncate(&text, MAX_MATCH_LINE)) } else { text };
-        Self { number, text, matched }
+        let text = if text.len() > MAX_MATCH_LINE {
+            format!("{}… [truncated]", truncate(&text, MAX_MATCH_LINE))
+        } else {
+            text
+        };
+        Self {
+            number,
+            text,
+            matched,
+        }
     }
 }
 
@@ -99,11 +120,17 @@ struct Pending {
 
 fn push_line(out: &mut String, path: &str, line: &PreviousLine) {
     let sep = if line.matched { ':' } else { '-' };
-    out.push_str(&format!("{path}{sep}{}{sep} {}\n", line.number + 1, line.text));
+    out.push_str(&format!(
+        "{path}{sep}{}{sep} {}\n",
+        line.number + 1,
+        line.text
+    ));
 }
 
 fn flush_pending(pending: &mut Option<Pending>, out: &mut String) -> Result<(), Stop> {
-    let Some(pending) = pending.take() else { return Ok(()) };
+    let Some(pending) = pending.take() else {
+        return Ok(());
+    };
     if out.len() + pending.text.len() > MAX_BYTES {
         return Err(Stop::Bytes);
     }
@@ -128,10 +155,14 @@ pub(super) fn stream_content(
     let mut stop_after_pending = false;
     let mut stop = None;
     while !stop_after_pending || pending.is_some() {
-        let Some(text) = next_line(reader, &mut buf)? else { break };
+        let Some(text) = next_line(reader, &mut buf)? else {
+            break;
+        };
         let matched = regex.is_match(&text);
         let line = PreviousLine::new(number, text, matched);
-        let in_pending = pending.as_ref().is_some_and(|chunk| (chunk.from..=chunk.to).contains(&number));
+        let in_pending = pending
+            .as_ref()
+            .is_some_and(|chunk| (chunk.from..=chunk.to).contains(&number));
         if matched && !stop_after_pending {
             if *matches == limit {
                 if let Some(chunk) = pending.as_mut() {
@@ -152,7 +183,9 @@ pub(super) fn stream_content(
                         push_line(&mut chunk.text, path, &line);
                     }
                 } else {
-                    let from = number.saturating_sub(context).max(printed.map_or(0, |p| p + 1));
+                    let from = number
+                        .saturating_sub(context)
+                        .max(printed.map_or(0, |p| p + 1));
                     let to = number + context;
                     let mut chunk = String::new();
                     if context > 0 && printed.is_some_and(|p| from > p + 1) && from <= to {
@@ -166,7 +199,11 @@ pub(super) fn stream_content(
                     }
                     printed = Some(printed.map_or(to, |p| p.max(to)));
                     if from <= to {
-                        pending = Some(Pending { from, to, text: chunk });
+                        pending = Some(Pending {
+                            from,
+                            to,
+                            text: chunk,
+                        });
                     }
                 }
             }
@@ -176,7 +213,10 @@ pub(super) fn stream_content(
         if pending.as_ref().is_some_and(|chunk| chunk.to == number)
             && let Err(stop) = flush_pending(&mut pending, out)
         {
-            return Ok(FileResult { matches: 0, stop: Some(stop) });
+            return Ok(FileResult {
+                matches: 0,
+                stop: Some(stop),
+            });
         }
         if context > 0 {
             previous.push_back(line);
@@ -194,7 +234,11 @@ pub(super) fn stream_content(
     Ok(FileResult { matches: 0, stop })
 }
 
-fn stream_matches(reader: &mut impl BufRead, regex: &Regex, files_only: bool) -> io::Result<FileResult> {
+fn stream_matches(
+    reader: &mut impl BufRead,
+    regex: &Regex,
+    files_only: bool,
+) -> io::Result<FileResult> {
     let mut buf = Vec::new();
     let mut matches = 0;
     while let Some(line) = next_line(reader, &mut buf)? {
@@ -205,12 +249,18 @@ fn stream_matches(reader: &mut impl BufRead, regex: &Regex, files_only: bool) ->
             }
         }
     }
-    Ok(FileResult { matches, stop: None })
+    Ok(FileResult {
+        matches,
+        stop: None,
+    })
 }
 
 fn stop_note(stop: Stop, limit: usize) -> String {
     match stop {
-        Stop::Limit => format!("{limit} matches limit reached; use limit={} for more or refine the pattern.", limit * 2),
+        Stop::Limit => format!(
+            "{limit} matches limit reached; use limit={} for more or refine the pattern.",
+            limit * 2
+        ),
         Stop::Bytes => "50KB limit reached; refine the pattern or path.".into(),
     }
 }
@@ -274,13 +324,20 @@ pub(super) fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
             skipped.record(cwd, entry.path());
             continue;
         }
-        if scanned_files == MAX_SCAN_FILES || scanned_bytes.saturating_add(metadata.len()) > MAX_SCAN_BYTES {
+        if scanned_files == MAX_SCAN_FILES
+            || scanned_bytes.saturating_add(metadata.len()) > MAX_SCAN_BYTES
+        {
             scan_limited = true;
             break;
         }
         scanned_files += 1;
         scanned_bytes += metadata.len();
-        let shown_path = entry.path().strip_prefix(cwd).unwrap_or(entry.path()).display().to_string();
+        let shown_path = entry
+            .path()
+            .strip_prefix(cwd)
+            .unwrap_or(entry.path())
+            .display()
+            .to_string();
         if multiline {
             let bytes = match std::fs::read(entry.path()) {
                 Ok(bytes) => bytes,
@@ -300,12 +357,19 @@ pub(super) fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
             }
             if mode != Mode::Content {
                 if files == limit {
-                    notes.push(format!("{limit} files limit reached; use limit={} for more or refine the pattern.", limit * 2));
+                    notes.push(format!(
+                        "{limit} files limit reached; use limit={} for more or refine the pattern.",
+                        limit * 2
+                    ));
                     break;
                 }
                 files += 1;
                 matches += ranges.len();
-                out.push_str(&if mode == Mode::Files { format!("{shown_path}\n") } else { format!("{shown_path}:{}\n", ranges.len()) });
+                out.push_str(&if mode == Mode::Files {
+                    format!("{shown_path}\n")
+                } else {
+                    format!("{shown_path}:{}\n", ranges.len())
+                });
                 continue;
             }
             let mut is_match = vec![false; lines.len()];
@@ -319,7 +383,9 @@ pub(super) fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
                     break 'files;
                 }
                 matches += 1;
-                let from = first.saturating_sub(context).max(printed.map_or(0, |p| p + 1));
+                let from = first
+                    .saturating_sub(context)
+                    .max(printed.map_or(0, |p| p + 1));
                 let to = (last + context).min(lines.len().saturating_sub(1));
                 let mut chunk = String::new();
                 if context > 0 && printed.is_some_and(|p| from > p + 1) && from <= to {
@@ -347,7 +413,15 @@ pub(super) fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
             }
         };
         let result = if mode == Mode::Content {
-            stream_content(&mut reader, &regex, context, limit, &shown_path, &mut out, &mut matches)
+            stream_content(
+                &mut reader,
+                &regex,
+                context,
+                limit,
+                &shown_path,
+                &mut out,
+                &mut matches,
+            )
         } else {
             stream_matches(&mut reader, &regex, mode == Mode::Files)
         };
@@ -367,12 +441,19 @@ pub(super) fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
                 continue;
             }
             if files == limit {
-                notes.push(format!("{limit} files limit reached; use limit={} for more or refine the pattern.", limit * 2));
+                notes.push(format!(
+                    "{limit} files limit reached; use limit={} for more or refine the pattern.",
+                    limit * 2
+                ));
                 break;
             }
             files += 1;
             matches += result.matches;
-            out.push_str(&if mode == Mode::Files { format!("{shown_path}\n") } else { format!("{shown_path}:{}\n", result.matches) });
+            out.push_str(&if mode == Mode::Files {
+                format!("{shown_path}\n")
+            } else {
+                format!("{shown_path}:{}\n", result.matches)
+            });
         }
     }
     if scan_limited {
@@ -390,7 +471,11 @@ pub(super) fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
         if !notes.is_empty() {
             text.push_str(&format!("\n[{}]", notes.join(" ")));
         }
-        return if incomplete { Output::error(text) } else { Output::ok(text) };
+        return if incomplete {
+            Output::error(text)
+        } else {
+            Output::ok(text)
+        };
     }
     if !notes.is_empty() {
         out.push_str(&format!("[{}]", notes.join(" ")));

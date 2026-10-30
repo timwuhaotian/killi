@@ -7,11 +7,23 @@ impl Agent {
             sink(match delta {
                 Delta::Text(text) => Event::Text(text.to_string()),
                 Delta::Reasoning(text) => Event::Reasoning(text.to_string()),
-                Delta::Retry { attempt, wait, reason } => Event::Retry { attempt, wait, reason: reason.to_string() },
+                Delta::Retry {
+                    attempt,
+                    wait,
+                    reason,
+                } => Event::Retry {
+                    attempt,
+                    wait,
+                    reason: reason.to_string(),
+                },
             })
         };
         let started = Instant::now();
-        let reply = match self.client.complete(&self.messages, &self.tools, &self.session.id, &mut on_delta).await {
+        let reply = match self
+            .client
+            .complete(&self.messages, &self.tools, &self.session.id, &mut on_delta)
+            .await
+        {
             Ok(reply) => reply,
             Err(error) if !Self::is_rate_limited(&error) => {
                 self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
@@ -27,12 +39,22 @@ impl Agent {
                     // A subagent that falls back keeps the session on its own model, so it
                     // says what it did itself.
                     let note = if self.depth == 0 {
-                        format!("{from} is rate-limited, so this session switched to its backup {}.", self.client.model.alias)
+                        format!(
+                            "{from} is rate-limited, so this session switched to its backup {}.",
+                            self.client.model.alias
+                        )
                     } else {
-                        format!("{from} is rate-limited, so this subagent switched to the backup {}.", self.client.model.alias)
+                        format!(
+                            "{from} is rate-limited, so this subagent switched to the backup {}.",
+                            self.client.model.alias
+                        )
                     };
                     (self.sink)(Event::Notice(note));
-                    match self.client.complete(&self.messages, &self.tools, &self.session.id, &mut on_delta).await {
+                    match self
+                        .client
+                        .complete(&self.messages, &self.tools, &self.session.id, &mut on_delta)
+                        .await
+                    {
                         Ok(reply) => reply,
                         Err(error) => {
                             self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
@@ -48,7 +70,13 @@ impl Agent {
         };
         let took = started.elapsed();
         self.stats.requests += 1;
-        self.account(&reply.usage, Some(&reply.finish_reason), Some(took), reply.reasoning_kept(), reasoning_evidence(&reply))?;
+        self.account(
+            &reply.usage,
+            Some(&reply.finish_reason),
+            Some(took),
+            reply.reasoning_kept(),
+            reasoning_evidence(&reply),
+        )?;
         self.note_hidden_reasoning(&reply)?;
         Ok(reply)
     }
@@ -67,7 +95,11 @@ impl Agent {
         }))?;
         (self.sink)(Event::Notice(format!(
             "The provider rejected the conversation's images, so {stripped} {} replaced with a placeholder and the request was retried.",
-            if stripped == 1 { "image was" } else { "images were" },
+            if stripped == 1 {
+                "image was"
+            } else {
+                "images were"
+            },
         )));
         Ok(())
     }
@@ -80,13 +112,24 @@ impl Agent {
             let counted = reply.usage.reasoning;
             let advice = " If it offers the Responses API, set `type = \"openai_responses\"` on its provider in config.toml.";
             let why = match reply.reasoning_key {
-                Some(key) => format!("The provider counted {counted} reasoning tokens but its `{key}` field was empty, so there was nothing to keep."),
+                Some(key) => format!(
+                    "The provider counted {counted} reasoning tokens but its `{key}` field was empty, so there was nothing to keep."
+                ),
                 None if reply.unread_fields.is_empty() => {
-                    format!("The provider counted {counted} reasoning tokens but sent no reasoning, so it can't be kept.{advice}")
+                    format!(
+                        "The provider counted {counted} reasoning tokens but sent no reasoning, so it can't be kept.{advice}"
+                    )
                 }
                 None => {
-                    let fields = reply.unread_fields.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ");
-                    format!("The provider counted {counted} reasoning tokens but sent none of it back, and the stream carried fields killi doesn't read: {fields}.{advice}")
+                    let fields = reply
+                        .unread_fields
+                        .iter()
+                        .map(|f| format!("`{f}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "The provider counted {counted} reasoning tokens but sent none of it back, and the stream carried fields killi doesn't read: {fields}.{advice}"
+                    )
                 }
             };
             self.session.record(&json!({
@@ -101,7 +144,14 @@ impl Agent {
     /// billed but not kept is the dialect-agnostic mark of a provider hiding it on this API.
     /// `reasoning_seen` carries the evidence: which field the stream used and which fields it
     /// sent that no adapter reads, beside the message (history stays byte-identical).
-    pub(super) fn account(&mut self, usage: &Usage, finish_reason: Option<&Option<String>>, took: Option<Duration>, reasoning_kept: bool, reasoning_seen: Option<Value>) -> Result<()> {
+    pub(super) fn account(
+        &mut self,
+        usage: &Usage,
+        finish_reason: Option<&Option<String>>,
+        took: Option<Duration>,
+        reasoning_kept: bool,
+        reasoning_seen: Option<Value>,
+    ) -> Result<()> {
         self.stats.first_prompt.get_or_insert(usage.prompt);
         self.stats.context = usage.prompt;
         self.accounted_messages = self.messages.len();
@@ -130,7 +180,11 @@ impl Agent {
 
     /// Appends the assistant message and returns its tool calls under their final IDs.
     pub(super) fn record_reply(&mut self, reply: &Reply) -> Result<Vec<(String, ToolCall)>> {
-        let calls: Vec<_> = reply.tool_calls.iter().map(|call| (self.unique_id(&call.id), call.clone())).collect();
+        let calls: Vec<_> = reply
+            .tool_calls
+            .iter()
+            .map(|call| (self.unique_id(&call.id), call.clone()))
+            .collect();
         let mut message = json!({"role": "assistant"});
         if !reply.text.is_empty() || calls.is_empty() {
             message["content"] = reply.text.clone().into();
@@ -180,14 +234,24 @@ pub(super) fn is_overflow(error: &anyhow::Error) -> bool {
         return provider.kind == ErrorKind::Overflow;
     }
     let text = format!("{error:#}").to_ascii_lowercase();
-    ["context length", "context_length", "maximum context", "context window", "prompt is too long", "too many tokens", "input is too long"]
-        .iter()
-        .any(|needle| text.contains(needle))
+    [
+        "context length",
+        "context_length",
+        "maximum context",
+        "context window",
+        "prompt is too long",
+        "too many tokens",
+        "input is too long",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 /// Whether the provider rejected an image or other media in the conversation.
 pub(super) fn is_media(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<ProviderError>().is_some_and(|provider| provider.kind == ErrorKind::Media)
+    error
+        .downcast_ref::<ProviderError>()
+        .is_some_and(|provider| provider.kind == ErrorKind::Media)
 }
 
 /// Replaces every image part in history with a placeholder, so the request the provider
@@ -197,7 +261,9 @@ pub(super) fn is_media(error: &anyhow::Error) -> bool {
 fn strip_images_from(messages: &mut [Value]) -> usize {
     let mut stripped = 0;
     for message in messages.iter_mut() {
-        let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) else { continue };
+        let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
         for part in parts.iter_mut() {
             if part["type"] == "image_url" {
                 *part = json!({"type": "text", "text": IMAGE_OMITTED});

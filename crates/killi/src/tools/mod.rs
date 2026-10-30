@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-pub use bash::{OwnSession, Running, Tasks, Tracked, kill_all, track};
 #[cfg(test)]
 pub(crate) use bash::registered;
+pub use bash::{OwnSession, Running, Tasks, Tracked, kill_all, track};
 pub use files::{image_type, image_url};
 pub use web::{CONTAINER, start_searxng};
 
@@ -76,16 +76,31 @@ pub struct Output {
 
 impl Output {
     pub fn ok(text: impl Into<String>) -> Self {
-        Self { text: text.into(), is_error: false, brief: String::new(), display: None, image: None }
+        Self {
+            text: text.into(),
+            is_error: false,
+            brief: String::new(),
+            display: None,
+            image: None,
+        }
     }
     pub fn error(text: impl Into<String>) -> Self {
         let text = text.into();
         let first = text.lines().next().unwrap_or_default();
         let brief = match crate::llm::truncate(first, 80) {
             short if short.len() == first.len() => short.to_string(),
-            short => format!("{}…", short.rsplit_once(' ').map_or(short, |(head, _)| head)),
+            short => format!(
+                "{}…",
+                short.rsplit_once(' ').map_or(short, |(head, _)| head)
+            ),
         };
-        Self { text, is_error: true, brief, display: None, image: None }
+        Self {
+            text,
+            is_error: true,
+            brief,
+            display: None,
+            image: None,
+        }
     }
     pub fn brief(mut self, brief: impl Into<String>) -> Self {
         self.brief = brief.into();
@@ -133,10 +148,14 @@ pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
         "read" | "write" | "edit" => field("path").to_string(),
         "bash" => {
             let command = field("command").lines().next().unwrap_or_default();
-            let command = [format!("cd {cwd} && "), format!("cd \"{cwd}\" && "), format!("cd '{cwd}' && ")]
-                .iter()
-                .find_map(|prefix| command.strip_prefix(prefix.as_str()))
-                .unwrap_or(command);
+            let command = [
+                format!("cd {cwd} && "),
+                format!("cd \"{cwd}\" && "),
+                format!("cd '{cwd}' && "),
+            ]
+            .iter()
+            .find_map(|prefix| command.strip_prefix(prefix.as_str()))
+            .unwrap_or(command);
             match field("cwd") {
                 "" => command.to_string(),
                 dir => format!("[{dir}] {command}"),
@@ -144,18 +163,27 @@ pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
         }
         "grep" => format!("{:?} {}", field("pattern"), field("path")),
         "glob" => format!("{} {}", field("pattern"), field("path")),
-        "task_output" | "task_stop" => format!("task {}", args.get("id").map(Value::to_string).unwrap_or_default()),
+        "task_output" | "task_stop" => format!(
+            "task {}",
+            args.get("id").map(Value::to_string).unwrap_or_default()
+        ),
         "fetch_url" => field("url").to_string(),
         "web_search" => field("query").to_string(),
         "agent" => field("description").to_string(),
-        "agent_swarm" => format!("{} ({})", field("description"), count(args["items"].as_array().map_or(0, Vec::len), "item")),
+        "agent_swarm" => format!(
+            "{} ({})",
+            field("description"),
+            count(args["items"].as_array().map_or(0, Vec::len), "item")
+        ),
         "skill" => field("name").to_string() + field("query"),
         "mcp" => format!("{} {}", field("server"), field("tool")),
         "ask_user_question" => field("question").to_string(),
         _ => String::new(),
     };
     let detail = strip_cwd(&detail, &cwd);
-    format!("{name} {}", crate::llm::truncate(&detail, 120)).trim_end().to_string()
+    format!("{name} {}", crate::llm::truncate(&detail, 120))
+        .trim_end()
+        .to_string()
 }
 
 /// `cwd` out of a summary, only as a path prefix at a `/` boundary, so `/x/killi-old`
@@ -167,7 +195,10 @@ fn strip_cwd(detail: &str, cwd: &str) -> String {
     if cwd == "/" {
         return detail.strip_prefix('/').unwrap_or(detail).to_string();
     }
-    detail.strip_prefix(&format!("{cwd}/")).unwrap_or(detail).to_string()
+    detail
+        .strip_prefix(&format!("{cwd}/"))
+        .unwrap_or(detail)
+        .to_string()
 }
 
 fn tool(name: &str, description: &str, parameters: Value) -> Value {
@@ -325,7 +356,11 @@ pub fn resolve(ctx: &Context, path: &str) -> PathBuf {
         Some(rest) => crate::config::home().join(rest),
         None => PathBuf::from(path),
     };
-    if path.is_absolute() { path } else { ctx.cwd.join(path) }
+    if path.is_absolute() {
+        path
+    } else {
+        ctx.cwd.join(path)
+    }
 }
 
 pub fn is_binary(bytes: &[u8]) -> bool {
@@ -335,7 +370,10 @@ pub fn is_binary(bytes: &[u8]) -> bool {
 /// Writes `text` to a new file in the spill directory and returns its path.
 pub fn spill(ctx: &Context, stem: &str, text: &str) -> Option<PathBuf> {
     std::fs::create_dir_all(&ctx.spill_dir).ok()?;
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
     let path = ctx.spill_dir.join(format!("{stem}-{nanos}.txt"));
     std::fs::write(&path, text).ok()?;
     Some(path)
@@ -360,17 +398,36 @@ mod tests {
     #[test]
     fn a_bash_summary_shows_where_it_ran_and_drops_a_leading_cd() {
         let cwd = Path::new("/w/app");
-        assert_eq!(summary("bash", &json!({"command": "cd /w/app && cargo test"}), cwd), "bash cargo test");
-        assert_eq!(summary("bash", &json!({"command": "git status", "cwd": "../other"}), cwd), "bash [../other] git status");
+        assert_eq!(
+            summary("bash", &json!({"command": "cd /w/app && cargo test"}), cwd),
+            "bash cargo test"
+        );
+        assert_eq!(
+            summary(
+                "bash",
+                &json!({"command": "git status", "cwd": "../other"}),
+                cwd
+            ),
+            "bash [../other] git status"
+        );
     }
 
     #[test]
     fn a_summary_strips_the_cwd_only_as_a_path_prefix() {
         let cwd = Path::new("/x/killi");
-        assert_eq!(summary("read", &json!({"path": "/x/killi/src/a.rs"}), cwd), "read src/a.rs");
-        assert_eq!(summary("read", &json!({"path": "/x/killi-old/src/a.rs"}), cwd), "read /x/killi-old/src/a.rs");
+        assert_eq!(
+            summary("read", &json!({"path": "/x/killi/src/a.rs"}), cwd),
+            "read src/a.rs"
+        );
+        assert_eq!(
+            summary("read", &json!({"path": "/x/killi-old/src/a.rs"}), cwd),
+            "read /x/killi-old/src/a.rs"
+        );
         assert_eq!(summary("read", &json!({"path": "/x/killi"}), cwd), "read .");
         let root = Path::new("/");
-        assert_eq!(summary("read", &json!({"path": "/etc/hosts"}), root), "read etc/hosts");
+        assert_eq!(
+            summary("read", &json!({"path": "/etc/hosts"}), root),
+            "read etc/hosts"
+        );
     }
 }

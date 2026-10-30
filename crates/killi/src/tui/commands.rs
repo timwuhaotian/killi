@@ -5,13 +5,21 @@ pub(super) fn entries(session: &Setup) -> Vec<Entry> {
     let commands = COMMANDS.iter().map(|c| Entry {
         name: c.name.to_string(),
         aliases: c.aliases.iter().map(|a| a.to_string()).collect(),
-        description: if c.args.is_empty() { c.about.to_string() } else { format!("{} — {}", c.args, c.about) },
+        description: if c.args.is_empty() {
+            c.about.to_string()
+        } else {
+            format!("{} — {}", c.args, c.about)
+        },
     });
-    let skills = session.skills().iter().filter(|s| !is_command(&s.name)).map(|s| Entry {
-        name: s.name.clone(),
-        aliases: Vec::new(),
-        description: s.description.clone(),
-    });
+    let skills = session
+        .skills()
+        .iter()
+        .filter(|s| !is_command(&s.name))
+        .map(|s| Entry {
+            name: s.name.clone(),
+            aliases: Vec::new(),
+            description: s.description.clone(),
+        });
     commands.chain(skills).collect()
 }
 
@@ -31,15 +39,23 @@ pub(super) fn submission(text: String, images: Vec<Image>) -> Option<Input> {
         return None;
     }
     if let Some(command) = trimmed.strip_prefix('/') {
-        let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
-        return Some(Input::Command(name.to_string(), arg.trim().to_string(), images));
+        let (name, arg) = command
+            .split_once(char::is_whitespace)
+            .unwrap_or((command, ""));
+        return Some(Input::Command(
+            name.to_string(),
+            arg.trim().to_string(),
+            images,
+        ));
     }
     Some(Input::Prompt(text, images))
 }
 
 /// Whether `name` is a built-in command or one of its aliases, not a skill.
 pub(super) fn is_command(name: &str) -> bool {
-    COMMANDS.iter().any(|c| c.name == name || c.aliases.contains(&name))
+    COMMANDS
+        .iter()
+        .any(|c| c.name == name || c.aliases.contains(&name))
 }
 
 /// Whether choosing the menu's item at `index` sends the prompt: a built-in command at the start
@@ -47,13 +63,17 @@ pub(super) fn is_command(name: &str) -> bool {
 /// can follow it.
 pub(super) fn runs_at_once(menu: &Suggestions, index: usize) -> bool {
     let name = menu.items[index].value.as_str();
-    let needs_argument = COMMANDS.iter().any(|c| (c.name == name || c.aliases.contains(&name)) && c.args.starts_with('<'));
+    let needs_argument = COMMANDS
+        .iter()
+        .any(|c| (c.name == name || c.aliases.contains(&name)) && c.args.starts_with('<'));
     menu.fill == Fill::Command && menu.start == 0 && is_command(name) && !needs_argument
 }
 
 /// The commands that also work while the agent works: they need nothing the running turn holds,
 /// except /effort, which waits for the turn to end (see `App::effort_after_turn`).
-pub(super) const BUSY_COMMANDS: &[&str] = &["btw", "plan", "swarm", "later", "sessions", "help", "effort"];
+pub(super) const BUSY_COMMANDS: &[&str] = &[
+    "btw", "plan", "swarm", "later", "sessions", "help", "effort",
+];
 
 /// The effort `arg` names among those `model` takes, or what to tell the user.
 pub(super) fn effort_named(model: &str, efforts: &[&str], arg: &str) -> Result<String, String> {
@@ -61,51 +81,187 @@ pub(super) fn effort_named(model: &str, efforts: &[&str], arg: &str) -> Result<S
     if efforts.contains(&effort.as_str()) {
         Ok(effort)
     } else if effort.is_empty() {
-        Err(format!("Say which effort: /effort {}.", efforts.join(" | ")))
+        Err(format!(
+            "Say which effort: /effort {}.",
+            efforts.join(" | ")
+        ))
     } else {
-        Err(format!("{model} has no effort “{effort}”; choose one of {}.", efforts.join(", ")))
+        Err(format!(
+            "{model} has no effort “{effort}”; choose one of {}.",
+            efforts.join(", ")
+        ))
     }
 }
 
 /// The built-in commands, in the order the menu lists them.
 pub(super) const COMMANDS: &[Command] = &[
-    Command { name: "provider", aliases: &[], args: "[name]", about: "Add a provider and its models: muse-code or opencode-go" },
-    Command { name: "model", aliases: &[], args: "[alias]", about: "Switch model" },
-    Command { name: "backup-model", aliases: &[], args: "[alias]", about: "Set the model every session falls back to on a rate limit" },
-    Command { name: "mcp", aliases: &[], args: "[server]", about: "Turn MCP servers on or off" },
-    Command { name: "web-search-config", aliases: &[], args: "", about: "Set what web_search asks: brave, tavily or your own searxng" },
-    Command { name: "effort", aliases: &["thinking"], args: "[level]", about: "Switch thinking effort" },
-    Command { name: "new", aliases: &["clear"], args: "", about: "Start a fresh session in this folder" },
-    Command { name: "resume", aliases: &[], args: "", about: "Continue an earlier session in this folder" },
-    Command { name: "btw", aliases: &[], args: "<question>", about: "Ask a side question, also while the agent works; not kept" },
-    Command { name: "compact", aliases: &[], args: "[focus]", about: "Summarize the conversation to free context" },
-    Command { name: "recap", aliases: &[], args: "", about: "Recap the session in 100 characters; also after each turn that used tools" },
-    Command { name: "undo", aliases: &[], args: "", about: "Put files back as they were before the last turn" },
-    Command { name: "plan", aliases: &[], args: "", about: "Toggle plan mode (also Shift+Tab)" },
-    Command { name: "swarm", aliases: &[], args: "[task|on|off]", about: "Swarm mode: split work across many subagents" },
-    Command { name: "goal", aliases: &[], args: "[<text>|done|clear]", about: "Session goal: the session can't end until it is done or cleared" },
-    Command { name: "usage", aliases: &["cost"], args: "", about: "Tokens and requests this session" },
-    Command { name: "session", aliases: &["share"], args: "", about: "Copy this session's id, log path and summary, to paste into another agent" },
-    Command { name: "sessions", aliases: &[], args: "", about: "The other killi sessions running on this machine, and what each is doing" },
-    Command { name: "later", aliases: &[], args: "[done N]", about: "What the agent noted for later in this folder; done N crosses one off" },
-    Command { name: "prune", aliases: &[], args: "[keep]", about: "Delete every session on this machine but the newest few" },
-    Command { name: "reload", aliases: &[], args: "", about: "Re-read [prompt], AGENTS.md files and skills" },
-    Command { name: "help", aliases: &[], args: "", about: "Commands and keys" },
-    Command { name: "exit", aliases: &["quit"], args: "", about: "Quit killi (also Ctrl+D)" },
+    Command {
+        name: "provider",
+        aliases: &[],
+        args: "[name]",
+        about: "Add a provider and its models: muse-code or opencode-go",
+    },
+    Command {
+        name: "model",
+        aliases: &[],
+        args: "[alias]",
+        about: "Switch model",
+    },
+    Command {
+        name: "backup-model",
+        aliases: &[],
+        args: "[alias]",
+        about: "Set the model every session falls back to on a rate limit",
+    },
+    Command {
+        name: "mcp",
+        aliases: &[],
+        args: "[server]",
+        about: "Turn MCP servers on or off",
+    },
+    Command {
+        name: "web-search-config",
+        aliases: &[],
+        args: "",
+        about: "Set what web_search asks: brave, tavily or your own searxng",
+    },
+    Command {
+        name: "effort",
+        aliases: &["thinking"],
+        args: "[level]",
+        about: "Switch thinking effort",
+    },
+    Command {
+        name: "new",
+        aliases: &["clear"],
+        args: "",
+        about: "Start a fresh session in this folder",
+    },
+    Command {
+        name: "resume",
+        aliases: &[],
+        args: "",
+        about: "Continue an earlier session in this folder",
+    },
+    Command {
+        name: "btw",
+        aliases: &[],
+        args: "<question>",
+        about: "Ask a side question, also while the agent works; not kept",
+    },
+    Command {
+        name: "compact",
+        aliases: &[],
+        args: "[focus]",
+        about: "Summarize the conversation to free context",
+    },
+    Command {
+        name: "recap",
+        aliases: &[],
+        args: "",
+        about: "Recap the session in 100 characters; also after each turn that used tools",
+    },
+    Command {
+        name: "undo",
+        aliases: &[],
+        args: "",
+        about: "Put files back as they were before the last turn",
+    },
+    Command {
+        name: "plan",
+        aliases: &[],
+        args: "",
+        about: "Toggle plan mode (also Shift+Tab)",
+    },
+    Command {
+        name: "swarm",
+        aliases: &[],
+        args: "[task|on|off]",
+        about: "Swarm mode: split work across many subagents",
+    },
+    Command {
+        name: "goal",
+        aliases: &[],
+        args: "[<text>|done|clear]",
+        about: "Session goal: the session can't end until it is done or cleared",
+    },
+    Command {
+        name: "usage",
+        aliases: &["cost"],
+        args: "",
+        about: "Tokens and requests this session",
+    },
+    Command {
+        name: "session",
+        aliases: &["share"],
+        args: "",
+        about: "Copy this session's id, log path and summary, to paste into another agent",
+    },
+    Command {
+        name: "sessions",
+        aliases: &[],
+        args: "",
+        about: "The other killi sessions running on this machine, and what each is doing",
+    },
+    Command {
+        name: "later",
+        aliases: &[],
+        args: "[done N]",
+        about: "What the agent noted for later in this folder; done N crosses one off",
+    },
+    Command {
+        name: "prune",
+        aliases: &[],
+        args: "[keep]",
+        about: "Delete every session on this machine but the newest few",
+    },
+    Command {
+        name: "reload",
+        aliases: &[],
+        args: "",
+        about: "Re-read [prompt], AGENTS.md files and skills",
+    },
+    Command {
+        name: "help",
+        aliases: &[],
+        args: "",
+        about: "Commands and keys",
+    },
+    Command {
+        name: "exit",
+        aliases: &["quit"],
+        args: "",
+        about: "Quit killi (also Ctrl+D)",
+    },
 ];
 
 pub(super) const KEYS: &[(&str, &str)] = &[
-    ("@", "name a file: the menu searches the workspace, and the file goes to the model with your message"),
-    ("Enter", "send; while the agent works, sends your message at its next step"),
+    (
+        "@",
+        "name a file: the menu searches the workspace, and the file goes to the model with your message",
+    ),
+    (
+        "Enter",
+        "send; while the agent works, sends your message at its next step",
+    ),
     ("Shift+Enter", "new line; also Ctrl+J, or \\ then Enter"),
     ("Esc", "interrupt the agent"),
-    ("Ctrl+S", "while the agent works, interrupt it and send your message now"),
+    (
+        "Ctrl+S",
+        "while the agent works, interrupt it and send your message now",
+    ),
     ("Shift+Tab", "plan mode"),
     ("Ctrl+O", "show the last tool output or thought in full"),
     ("Ctrl+V", "paste an image (Cmd+V too in Kil)"),
     ("↑ ↓", "history"),
-    ("PageUp PageDown", "scroll the conversation (fullscreen mode, with the wheel)"),
-    ("Ctrl+C", "clear the prompt; on an empty one, interrupt the agent, or twice to quit"),
+    (
+        "PageUp PageDown",
+        "scroll the conversation (fullscreen mode, with the wheel)",
+    ),
+    (
+        "Ctrl+C",
+        "clear the prompt; on an empty one, interrupt the agent, or twice to quit",
+    ),
 ];
 
 impl App {
@@ -121,12 +277,17 @@ impl App {
             ("swarm", "off") => self.set_swarm(false),
             ("later", "") => self.show_later(),
             ("sessions", _) => self.show_sessions(),
-            ("later", arg) => match arg.strip_prefix("done").and_then(|rest| rest.trim().parse::<usize>().ok()) {
+            ("later", arg) => match arg
+                .strip_prefix("done")
+                .and_then(|rest| rest.trim().parse::<usize>().ok())
+            {
                 Some(number) => match crate::later::done(&self.cwd, number) {
                     Ok(item) => self.notice(&format!("Crossed off: {item}")),
                     Err(e) => self.error_report(&e),
                 },
-                None => self.error("Use /later to see the list, or /later done 3 to cross one off."),
+                None => {
+                    self.error("Use /later to see the list, or /later done 3 to cross one off.")
+                }
             },
             _ => return false,
         }
@@ -149,10 +310,15 @@ impl App {
             Err(e) => return self.error_from("/btw", &e),
         };
         let cached = usage.cached * 100 / usage.prompt.max(1);
-        let note = format!("Not kept in the conversation · {} in · {cached}% cached", short(usage.prompt));
+        let note = format!(
+            "Not kept in the conversation · {} in · {cached}% cached",
+            short(usage.prompt)
+        );
         let question = question.to_string();
         let answer = text::sanitize(&text).into_owned();
-        self.held_asides.push(Line::block(move |width| aside_rows("btw", &question, &answer, &note, width)));
+        self.held_asides.push(Line::block(move |width| {
+            aside_rows("btw", &question, &answer, &note, width)
+        }));
         self.release_asides(false);
     }
 
@@ -161,14 +327,17 @@ impl App {
         let cached = usage.cached * 100 / usage.prompt.max(1);
         let note = format!("{} in · {cached}% cached", short(usage.prompt));
         let text = text.to_string();
-        self.held_asides.push(Line::block(move |width| recap_rows(&text, &note, width)));
+        self.held_asides
+            .push(Line::block(move |width| recap_rows(&text, &note, width)));
         self.release_asides(true);
     }
 
     /// Prints the answered /btw blocks, unless the model is in the middle of a paragraph and
     /// `force` is off: the block would cut it in two.
     pub(super) fn release_asides(&mut self, force: bool) {
-        if self.held_asides.is_empty() || (!force && self.last_kind == Kind::Text && !self.held_blank) {
+        if self.held_asides.is_empty()
+            || (!force && self.last_kind == Kind::Text && !self.held_blank)
+        {
             return;
         }
         // The block ends with its own blank row and the prose goes on as if it weren't there, so
@@ -201,10 +370,22 @@ impl App {
     /// path, a summary and the prompts so far.
     pub(super) fn share_session(&mut self, agent: &Agent) {
         let log = &agent.session.log_path;
-        let id = log.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let id = log
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let later = crate::later::list(&self.cwd).len();
         let later = (later > 0).then(|| (crate::later::path(&self.cwd), later));
-        let text = handoff(&id, log, &tilde(&self.cwd), agent.model_alias(), agent.thinking().label(), &agent.user_prompts(), &agent.stats, later);
+        let text = handoff(
+            &id,
+            log,
+            &tilde(&self.cwd),
+            agent.model_alias(),
+            agent.thinking().label(),
+            &agent.user_prompts(),
+            &agent.stats,
+            later,
+        );
         copy_to_clipboard(&text);
         self.begin(Kind::Note);
         for line in text.lines() {
@@ -221,7 +402,11 @@ impl App {
         if items.is_empty() {
             return self.notice("Nothing noted for later in this folder. The agent adds to the list with its `later` tool.");
         }
-        self.commit(format!("{BOLD}Noted for later{RESET} {DIM}({}) · {}{RESET}", items.len(), tilde(&crate::later::path(&cwd))));
+        self.commit(format!(
+            "{BOLD}Noted for later{RESET} {DIM}({}) · {}{RESET}",
+            items.len(),
+            tilde(&crate::later::path(&cwd))
+        ));
         for (i, item) in items.iter().enumerate() {
             self.commit_wrapped(format!("  {DIM}{}.{RESET} {item}", i + 1));
         }
@@ -261,7 +446,8 @@ impl App {
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         };
         git(&["rev-parse", "--abbrev-ref", "HEAD"]).map(|branch| {
-            let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
+            let dirty = git(&["status", "--porcelain", "--untracked-files=no"])
+                .is_some_and(|s| !s.is_empty());
             if dirty { format!("{branch}*") } else { branch }
         })
     }

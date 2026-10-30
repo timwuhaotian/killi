@@ -2,7 +2,9 @@ use super::*;
 
 /// The rows a printed line takes on a screen `width` columns wide, wrapping included.
 pub(super) fn screen_rows(line: &str, width: usize) -> usize {
-    line.split('\n').map(|part| text::width(part).max(1).div_ceil(width.max(1))).sum()
+    line.split('\n')
+        .map(|part| text::width(part).max(1).div_ceil(width.max(1)))
+        .sum()
 }
 
 impl App {
@@ -87,7 +89,11 @@ impl App {
     /// A failed command with its reason: the gist of the error, and the hint its kind earns.
     pub(super) fn error_from(&mut self, context: &str, error: &anyhow::Error) {
         let why = gist(&format!("{error:#}"));
-        let what = if context.is_empty() { why } else { format!("{context}: {why}") };
+        let what = if context.is_empty() {
+            why
+        } else {
+            format!("{context}: {why}")
+        };
         self.begin(Kind::Note);
         self.commit(format!("{DANGER}✗ Error:{RESET} {}", text::sanitize(&what)));
         if let Some(hint) = error_hint(error) {
@@ -97,7 +103,10 @@ impl App {
 
     /// The screen rows the lines waiting to be printed take.
     pub(super) fn pending_rows(&self) -> usize {
-        self.pending.iter().map(|line| screen_rows(line, self.width)).sum()
+        self.pending
+            .iter()
+            .map(|line| screen_rows(line, self.width))
+            .sum()
     }
 
     /// Paints the live area, in one write inside a synchronized update so no half-drawn frame
@@ -115,9 +124,19 @@ impl App {
         }
         let committed = self.pending_rows();
         let (rows, cursor_row, cursor_col) = self.live();
-        let rows: Vec<String> = rows.iter().map(|row| text::plain(row).into_owned()).collect();
-        let changed = self.pending.is_empty().then(|| changed_rows(&self.shown, &rows)).flatten();
-        if changed.as_ref().is_some_and(|changed| changed.is_empty()) && cursor_row == self.cursor_row && cursor_col == self.shown_col {
+        let rows: Vec<String> = rows
+            .iter()
+            .map(|row| text::plain(row).into_owned())
+            .collect();
+        let changed = self
+            .pending
+            .is_empty()
+            .then(|| changed_rows(&self.shown, &rows))
+            .flatten();
+        if changed.as_ref().is_some_and(|changed| changed.is_empty())
+            && cursor_row == self.cursor_row
+            && cursor_col == self.shown_col
+        {
             return Ok(());
         }
         let mut frame: Vec<u8> = Vec::new();
@@ -149,13 +168,23 @@ impl App {
                 move_rows(&mut frame, rows.len().saturating_sub(1), cursor_row)?;
             }
         }
-        if self.since_banner.as_ref().is_some_and(|since| since.rows + rows.len() > self.height) {
+        if self
+            .since_banner
+            .as_ref()
+            .is_some_and(|since| since.rows + rows.len() > self.height)
+        {
             self.since_banner = None;
         }
-        queue!(frame, MoveToColumn(cursor_col as u16), Show, EndSynchronizedUpdate)?;
+        queue!(
+            frame,
+            MoveToColumn(cursor_col as u16),
+            Show,
+            EndSynchronizedUpdate
+        )?;
         self.out.write_all(&frame)?;
         self.out.flush()?;
-        self.content_rows = (self.content_rows + committed).min(self.height.saturating_sub(rows.len()));
+        self.content_rows =
+            (self.content_rows + committed).min(self.height.saturating_sub(rows.len()));
         self.shown = rows;
         self.shown_col = cursor_col;
         self.cursor_row = cursor_row;
@@ -181,13 +210,22 @@ impl App {
         if scrolled {
             let below = self.history.below(view);
             let plural = if below == 1 { "" } else { "s" };
-            rows.push(fit(&format!("  {FAINT}↓ {below} row{plural} below · PageDown scrolls, typing returns{RESET}"), self.width));
+            rows.push(fit(
+                &format!(
+                    "  {FAINT}↓ {below} row{plural} below · PageDown scrolls, typing returns{RESET}"
+                ),
+                self.width,
+            ));
         }
         self.view_rows = view;
         let cursor_row = rows.len() + cursor_row;
         rows.extend(live.iter().map(|row| text::plain(row).into_owned()));
         let whole = self.shown.len() != rows.len();
-        if !whole && self.shown == rows && cursor_row == self.cursor_row && cursor_col == self.shown_col {
+        if !whole
+            && self.shown == rows
+            && cursor_row == self.cursor_row
+            && cursor_col == self.shown_col
+        {
             return Ok(());
         }
         let mut frame: Vec<u8> = Vec::new();
@@ -202,7 +240,12 @@ impl App {
             queue!(frame, MoveTo(0, i as u16), Clear(ClearType::CurrentLine))?;
             write!(frame, "{row}{RESET}")?;
         }
-        queue!(frame, MoveTo(cursor_col as u16, cursor_row as u16), Show, EndSynchronizedUpdate)?;
+        queue!(
+            frame,
+            MoveTo(cursor_col as u16, cursor_row as u16),
+            Show,
+            EndSynchronizedUpdate
+        )?;
         self.out.write_all(&frame)?;
         self.out.flush()?;
         self.shown = rows;

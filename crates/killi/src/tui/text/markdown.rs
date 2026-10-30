@@ -23,7 +23,10 @@ pub struct Markdown {
 
 impl Markdown {
     pub fn new(width: usize) -> Self {
-        Self { width, ..Self::default() }
+        Self {
+            width,
+            ..Self::default()
+        }
     }
 
     /// What `line` adds. A table row adds nothing until a line that isn't one follows.
@@ -93,11 +96,20 @@ impl Markdown {
     /// one that closes the block), so the block starts and ends on its code.
     fn block(&mut self, line: &str, trimmed: &str) -> Option<Part> {
         if let Some(info) = trimmed.strip_prefix("```") {
-            let lang = info.trim().split(|c: char| c.is_whitespace() || c == ',').next().unwrap_or("");
+            let lang = info
+                .trim()
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .next()
+                .unwrap_or("");
             self.in_code = !self.in_code;
-            self.lang = if self.in_code { Lang::of(lang) } else { Lang::Plain };
+            self.lang = if self.in_code {
+                Lang::of(lang)
+            } else {
+                Lang::Plain
+            };
             let label = if self.in_code { lang } else { "" };
-            return (!label.is_empty()).then(|| Part::Row(format!("  {FAINT}▏{RESET} {DIM}{label}{RESET}")));
+            return (!label.is_empty())
+                .then(|| Part::Row(format!("  {FAINT}▏{RESET} {DIM}{label}{RESET}")));
         }
         if self.in_code {
             let code = match self.lang {
@@ -107,11 +119,18 @@ impl Markdown {
             return Some(Part::Code(format!("  {FAINT}▏{RESET} {code}")));
         }
         if let Some((level, rest)) = heading(trimmed) {
-            let color = if level <= 2 { LAGOON.to_string() } else { String::new() };
+            let color = if level <= 2 {
+                LAGOON.to_string()
+            } else {
+                String::new()
+            };
             return Some(Part::Row(format!("{BOLD}{color}{}{RESET}", inline(rest))));
         }
         if let Some(rest) = trimmed.strip_prefix("> ") {
-            return Some(Part::Row(format!("{FAINT}│{RESET} {DIM}{}{RESET}", inline(rest))));
+            return Some(Part::Row(format!(
+                "{FAINT}│{RESET} {DIM}{}{RESET}",
+                inline(rest)
+            )));
         }
         let indent = &line[..line.len() - trimmed.len()];
         for bullet in ["- ", "* ", "+ "] {
@@ -126,10 +145,17 @@ impl Markdown {
         }
         let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
         if digits > 0 && trimmed[digits..].starts_with(". ") {
-            return Some(Part::Row(format!("{indent}{DIM}{}.{RESET} {}", &trimmed[..digits], inline(&trimmed[digits + 2..]))));
+            return Some(Part::Row(format!(
+                "{indent}{DIM}{}.{RESET} {}",
+                &trimmed[..digits],
+                inline(&trimmed[digits + 2..])
+            )));
         }
         if matches!(trimmed, "---" | "***" | "___") {
-            return Some(Part::Row(format!("{RULE}{}{RESET}", "─".repeat(self.width.clamp(10, 60)))));
+            return Some(Part::Row(format!(
+                "{RULE}{}{RESET}",
+                "─".repeat(self.width.clamp(10, 60))
+            )));
         }
         Some(Part::Row(inline(line)))
     }
@@ -137,7 +163,11 @@ impl Markdown {
 
 fn heading(line: &str) -> Option<(usize, &str)> {
     let hashes = line.chars().take_while(|&c| c == '#').count();
-    (1..=6).contains(&hashes).then(|| line[hashes..].strip_prefix(' ')).flatten().map(|rest| (hashes, rest))
+    (1..=6)
+        .contains(&hashes)
+        .then(|| line[hashes..].strip_prefix(' '))
+        .flatten()
+        .map(|rest| (hashes, rest))
 }
 
 /// `code`, **bold**, *italic*, ~~struck~~ and [links](url) inside a line.
@@ -184,12 +214,18 @@ pub(super) fn inline(text: &str) -> String {
             if url.is_empty() || label == url {
                 out.push_str(&format!("{LAGOON}{UNDERLINE}{label}{RESET}"));
             } else {
-                out.push_str(&format!("{LAGOON}{UNDERLINE}{label}{RESET} {DIM}({url}){RESET}"));
+                out.push_str(&format!(
+                    "{LAGOON}{UNDERLINE}{label}{RESET} {DIM}({url}){RESET}"
+                ));
             }
             rest = &rest[used..];
             continue;
         }
-        let next = rest.char_indices().skip(1).find(|(_, c)| matches!(c, '`' | '*' | '~' | '[')).map_or(rest.len(), |(i, _)| i);
+        let next = rest
+            .char_indices()
+            .skip(1)
+            .find(|(_, c)| matches!(c, '`' | '*' | '~' | '['))
+            .map_or(rest.len(), |(i, _)| i);
         out.push_str(&rest[..next]);
         rest = &rest[next..];
     }
@@ -198,7 +234,11 @@ pub(super) fn inline(text: &str) -> String {
 
 /// Inline code: text on a chip where 24-bit color can draw one softly, else in lagoon.
 pub(super) fn code(span: &str) -> String {
-    if truecolor() { format!("{CHIP}{span}{RESET}") } else { format!("{LAGOON}{span}{RESET}") }
+    if truecolor() {
+        format!("{CHIP}{span}{RESET}")
+    } else {
+        format!("{LAGOON}{span}{RESET}")
+    }
 }
 
 /// The label, the address and the bytes used by a `[label](url)` at the start of `text`.
@@ -253,13 +293,22 @@ pub fn render_table(rows: &[String], max_width: usize) -> Vec<String> {
     let count = parsed.iter().map(Vec::len).max().unwrap_or(0);
     let styled: Vec<Vec<String>> = parsed
         .iter()
-        .map(|row| (0..count).map(|i| row.get(i).map_or(String::new(), |c| inline(c))).collect())
+        .map(|row| {
+            (0..count)
+                .map(|i| row.get(i).map_or(String::new(), |c| inline(c)))
+                .collect()
+        })
         .collect();
-    let mut widths: Vec<usize> = (0..count).map(|i| styled.iter().map(|row| width(&row[i])).max().unwrap_or(0)).collect();
+    let mut widths: Vec<usize> = (0..count)
+        .map(|i| styled.iter().map(|row| width(&row[i])).max().unwrap_or(0))
+        .collect();
     let overhead = 2 + 3 * count.saturating_sub(1);
     if max_width > 0 {
         while widths.iter().sum::<usize>() + overhead > max_width {
-            let Some((widest, w)) = widths.iter().copied().enumerate().max_by_key(|&(_, w)| w) else { break };
+            let Some((widest, w)) = widths.iter().copied().enumerate().max_by_key(|&(_, w)| w)
+            else {
+                break;
+            };
             if w <= 3 {
                 break;
             }
@@ -272,11 +321,17 @@ pub fn render_table(rows: &[String], max_width: usize) -> Vec<String> {
             .enumerate()
             .map(|(i, cell)| {
                 let cell = ellipsize(cell, widths[i]);
-                let cell = if bold { format!("{BOLD}{cell}{RESET}") } else { cell };
+                let cell = if bold {
+                    format!("{BOLD}{cell}{RESET}")
+                } else {
+                    cell
+                };
                 let pad = widths[i].saturating_sub(width(&cell));
                 match aligns.get(i) {
                     Some('r') => format!("{}{cell}", " ".repeat(pad)),
-                    Some('c') => format!("{}{cell}{}", " ".repeat(pad / 2), " ".repeat(pad - pad / 2)),
+                    Some('c') => {
+                        format!("{}{cell}{}", " ".repeat(pad / 2), " ".repeat(pad - pad / 2))
+                    }
                     _ => format!("{cell}{}", " ".repeat(pad)),
                 }
             })
@@ -327,23 +382,85 @@ impl Lang {
     fn keywords(self) -> &'static [&'static str] {
         match self {
             Lang::Rust => &[
-                "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod", "match", "if", "else", "for", "while", "loop", "return",
-                "self", "Self", "async", "await", "move", "const", "static", "type", "where", "crate", "super", "as", "in", "ref", "dyn", "unsafe",
-                "break", "continue", "true", "false",
+                "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod",
+                "match", "if", "else", "for", "while", "loop", "return", "self", "Self", "async",
+                "await", "move", "const", "static", "type", "where", "crate", "super", "as", "in",
+                "ref", "dyn", "unsafe", "break", "continue", "true", "false",
             ],
             Lang::Js => &[
-                "function", "const", "let", "var", "return", "if", "else", "for", "while", "class", "new", "import", "export", "from", "default",
-                "async", "await", "try", "catch", "throw", "switch", "case", "break", "continue", "typeof", "interface", "type", "extends", "true",
-                "false", "null", "undefined", "this", "of", "in",
+                "function",
+                "const",
+                "let",
+                "var",
+                "return",
+                "if",
+                "else",
+                "for",
+                "while",
+                "class",
+                "new",
+                "import",
+                "export",
+                "from",
+                "default",
+                "async",
+                "await",
+                "try",
+                "catch",
+                "throw",
+                "switch",
+                "case",
+                "break",
+                "continue",
+                "typeof",
+                "interface",
+                "type",
+                "extends",
+                "true",
+                "false",
+                "null",
+                "undefined",
+                "this",
+                "of",
+                "in",
             ],
             Lang::Py => &[
-                "def", "class", "return", "if", "elif", "else", "for", "while", "import", "from", "as", "with", "try", "except", "finally", "raise",
-                "lambda", "pass", "break", "continue", "yield", "async", "await", "in", "not", "and", "or", "is", "None", "True", "False", "self",
+                "def", "class", "return", "if", "elif", "else", "for", "while", "import", "from",
+                "as", "with", "try", "except", "finally", "raise", "lambda", "pass", "break",
+                "continue", "yield", "async", "await", "in", "not", "and", "or", "is", "None",
+                "True", "False", "self",
             ],
-            Lang::Sh => &["if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac", "function", "in", "echo", "cd", "export", "return", "local"],
+            Lang::Sh => &[
+                "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
+                "function", "in", "echo", "cd", "export", "return", "local",
+            ],
             Lang::Go => &[
-                "func", "var", "const", "type", "struct", "interface", "package", "import", "return", "if", "else", "for", "range", "switch", "case",
-                "default", "go", "defer", "chan", "map", "select", "nil", "true", "false", "break", "continue",
+                "func",
+                "var",
+                "const",
+                "type",
+                "struct",
+                "interface",
+                "package",
+                "import",
+                "return",
+                "if",
+                "else",
+                "for",
+                "range",
+                "switch",
+                "case",
+                "default",
+                "go",
+                "defer",
+                "chan",
+                "map",
+                "select",
+                "nil",
+                "true",
+                "false",
+                "break",
+                "continue",
             ],
             Lang::Json | Lang::Config => &["true", "false", "null"],
             Lang::Plain | Lang::Diff => &[],
@@ -381,7 +498,10 @@ fn highlight(lang: Lang, line: &str) -> String {
         if let Some(marker) = comment
             && chars[i..].iter().take(marker.len()).collect::<String>() == marker
         {
-            out.push_str(&format!("{DIM}{}{RESET}", chars[i..].iter().collect::<String>()));
+            out.push_str(&format!(
+                "{DIM}{}{RESET}",
+                chars[i..].iter().collect::<String>()
+            ));
             break;
         }
         if quotes.contains(&c) {
@@ -390,18 +510,30 @@ fn highlight(lang: Lang, line: &str) -> String {
                 end += if chars[end] == '\\' { 2 } else { 1 };
             }
             let end = (end + 1).min(chars.len());
-            out.push_str(&format!("{STRING}{}{RESET}", chars[i..end].iter().collect::<String>()));
+            out.push_str(&format!(
+                "{STRING}{}{RESET}",
+                chars[i..end].iter().collect::<String>()
+            ));
             i = end;
             continue;
         }
         if c.is_ascii_digit() && (i == 0 || !is_word(chars[i - 1])) {
-            let end = chars[i..].iter().position(|&ch| !(ch.is_alphanumeric() || ch == '.' || ch == '_')).map_or(chars.len(), |p| i + p);
-            out.push_str(&format!("{NUMBER}{}{RESET}", chars[i..end].iter().collect::<String>()));
+            let end = chars[i..]
+                .iter()
+                .position(|&ch| !(ch.is_alphanumeric() || ch == '.' || ch == '_'))
+                .map_or(chars.len(), |p| i + p);
+            out.push_str(&format!(
+                "{NUMBER}{}{RESET}",
+                chars[i..end].iter().collect::<String>()
+            ));
             i = end;
             continue;
         }
         if is_word(c) {
-            let end = chars[i..].iter().position(|&ch| !is_word(ch)).map_or(chars.len(), |p| i + p);
+            let end = chars[i..]
+                .iter()
+                .position(|&ch| !is_word(ch))
+                .map_or(chars.len(), |p| i + p);
             let word: String = chars[i..end].iter().collect();
             if words.contains(&word.as_str()) {
                 out.push_str(&format!("{KEYWORD}{word}{RESET}"));

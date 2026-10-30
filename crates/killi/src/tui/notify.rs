@@ -8,7 +8,12 @@ pub(super) fn copy_to_clipboard(text: &str) {
     let mut out = stdout();
     let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
     let _ = out.flush();
-    if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+    if let Ok(mut child) = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(text.as_bytes());
         }
@@ -21,7 +26,10 @@ pub(super) fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(TABLE[(n >> (18 - 6 * i)) as usize & 63] as char);
@@ -66,7 +74,11 @@ pub(super) fn shows_osc9(program: &str, kitty: bool) -> bool {
 pub(super) fn osc9_sequence(headline: &str, detail: &str) -> String {
     let headline = text::sanitize(headline);
     let detail = text::sanitize(detail);
-    let body = if detail.is_empty() { headline.into_owned() } else { format!("{headline} — {detail}") };
+    let body = if detail.is_empty() {
+        headline.into_owned()
+    } else {
+        format!("{headline} — {detail}")
+    };
     format!("\x1b]9;killi: {body}\x07")
 }
 

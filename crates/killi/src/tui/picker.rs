@@ -2,11 +2,17 @@ use super::*;
 
 /// The /web-search-config list: each service behind `web_search`, what it needs, and a mark
 /// on the one in use.
-pub(super) fn search_options(current: &crate::config::SearchConfig) -> Vec<(String, String, PickerChoice)> {
+pub(super) fn search_options(
+    current: &crate::config::SearchConfig,
+) -> Vec<(String, String, PickerChoice)> {
     let in_use = current.provider.as_deref().unwrap_or("brave");
     let option = |name: &str, what: &str| {
         let mark = if name == in_use { " · in use" } else { "" };
-        (name.to_string(), format!("{what}{mark}"), PickerChoice::Search(name.to_string()))
+        (
+            name.to_string(),
+            format!("{what}{mark}"),
+            PickerChoice::Search(name.to_string()),
+        )
     };
     vec![
         option("brave", "an API key, or the public results page"),
@@ -44,9 +50,19 @@ pub(super) struct ProviderFlow {
     pub(super) preset: String,
 }
 impl Picker {
-    pub(super) fn new(title: String, options: Vec<(String, String, PickerChoice)>, selected: usize) -> Picker {
+    pub(super) fn new(
+        title: String,
+        options: Vec<(String, String, PickerChoice)>,
+        selected: usize,
+    ) -> Picker {
         let shown = (0..options.len()).collect();
-        Picker { title, options, query: String::new(), shown, selected }
+        Picker {
+            title,
+            options,
+            query: String::new(),
+            shown,
+            selected,
+        }
     }
 
     /// Narrows the options to those fuzzy-matching `query` and selects the best.
@@ -76,7 +92,10 @@ pub(super) enum PickerChoice {
 
 /// The counts `/prune` offers to keep, from fewest to most, each removing something.
 pub(super) fn prune_choices(others: usize) -> Vec<usize> {
-    [5, 10, 20, 50, 100, 200].into_iter().filter(|&keep| keep < others).collect()
+    [5, 10, 20, 50, 100, 200]
+        .into_iter()
+        .filter(|&keep| keep < others)
+        .collect()
 }
 
 /// A /provider preset's question for its key; empty when killi knows no such preset.
@@ -107,15 +126,23 @@ impl App {
         let picker = self.picker.as_mut().expect("picker is open");
         match key.code {
             KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
-            KeyCode::Down => picker.selected = (picker.selected + 1).min(picker.shown.len().saturating_sub(1)),
+            KeyCode::Down => {
+                picker.selected = (picker.selected + 1).min(picker.shown.len().saturating_sub(1))
+            }
             KeyCode::Esc => self.picker = None,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.picker = None,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.picker = None
+            }
             KeyCode::Backspace => {
                 let mut query = picker.query.clone();
                 query.pop();
                 picker.filter(query);
             }
-            KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 let query = format!("{}{c}", picker.query);
                 picker.filter(query);
             }
@@ -124,7 +151,9 @@ impl App {
                     if let PickerChoice::Session(path) = &choice
                         && crate::session::is_locked(path)
                     {
-                        self.notice("that session is still running; continue it there, or start /new");
+                        self.notice(
+                            "that session is still running; continue it there, or start /new",
+                        );
                         return Idle::Continue;
                     }
                     self.picker = None;
@@ -202,25 +231,41 @@ impl App {
             {
                 return menu.clone();
             }
-            let menu = self.files.as_ref().and_then(|files| menu::files(&before, files));
+            let menu = self
+                .files
+                .as_ref()
+                .and_then(|files| menu::files(&before, files));
             self.file_menu_cache = Some((before, self.files_gen, menu.clone()));
             if let Some(menu) = menu {
                 return Some(menu);
             }
         }
         if self.busy.is_some() {
-            let entries: Vec<Entry> = self.entries.iter().filter(|e| BUSY_COMMANDS.contains(&e.name.as_str()) || !is_command(&e.name)).cloned().collect();
-            return menu::suggest(self.editor.before_cursor(), &entries, |command| match command {
-                "effort" | "thinking" => self.effort_choices.clone(),
-                _ => Vec::new(),
-            })
+            let entries: Vec<Entry> = self
+                .entries
+                .iter()
+                .filter(|e| BUSY_COMMANDS.contains(&e.name.as_str()) || !is_command(&e.name))
+                .cloned()
+                .collect();
+            return menu::suggest(
+                self.editor.before_cursor(),
+                &entries,
+                |command| match command {
+                    "effort" | "thinking" => self.effort_choices.clone(),
+                    _ => Vec::new(),
+                },
+            )
             .filter(|menu| menu.fill != Fill::Command || menu.start == 0);
         }
-        menu::suggest(self.editor.before_cursor(), &self.entries, |command| match command {
-            "model" => self.model_choices.clone(),
-            "effort" | "thinking" => self.effort_choices.clone(),
-            _ => Vec::new(),
-        })
+        menu::suggest(
+            self.editor.before_cursor(),
+            &self.entries,
+            |command| match command {
+                "model" => self.model_choices.clone(),
+                "effort" | "thinking" => self.effort_choices.clone(),
+                _ => Vec::new(),
+            },
+        )
     }
 
     /// Starts the menu's selection over when the text changes: on the first item, or on the
@@ -232,7 +277,11 @@ impl App {
         self.menu_text = self.editor.text().to_string();
         let (model, thinking) = (self.status.model.clone(), self.status.thinking.clone());
         let current = |item: &Item| item.value == model || item.value == thinking;
-        self.menu_selected = self.suggestions().filter(|m| m.fill == Fill::Argument).and_then(|m| m.items.iter().position(current)).unwrap_or(0);
+        self.menu_selected = self
+            .suggestions()
+            .filter(|m| m.fill == Fill::Argument)
+            .and_then(|m| m.items.iter().position(current))
+            .unwrap_or(0);
     }
 
     /// Reads the workspace's paths when the cursor is in an `@` word and forgets them when it
@@ -259,22 +308,41 @@ impl App {
             self.notice("No earlier sessions in this folder.");
             return;
         }
-        let running: std::collections::HashMap<PathBuf, u32> = crate::live::list().into_iter().map(|e| (e.log, e.pid)).collect();
+        let running: std::collections::HashMap<PathBuf, u32> = crate::live::list()
+            .into_iter()
+            .map(|e| (e.log, e.pid))
+            .collect();
         let options = sessions
             .into_iter()
             .take(20)
             .map(|s| {
                 let age = s.modified.elapsed().map(ago).unwrap_or_default();
-                let prompt = s.first_prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-                let counts = format!("{} prompt{}", s.prompts, if s.prompts == 1 { "" } else { "s" });
+                let prompt = s
+                    .first_prompt
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let counts = format!(
+                    "{} prompt{}",
+                    s.prompts,
+                    if s.prompts == 1 { "" } else { "s" }
+                );
                 if crate::session::is_locked(&s.path) {
                     let state = match running.get(&s.path) {
                         Some(pid) => format!("running (pid {pid})"),
                         None => "running".to_string(),
                     };
-                    (format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)), format!("{state} · {counts}"), PickerChoice::Session(s.path))
+                    (
+                        format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)),
+                        format!("{state} · {counts}"),
+                        PickerChoice::Session(s.path),
+                    )
                 } else {
-                    (format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)), counts, PickerChoice::Session(s.path))
+                    (
+                        format!("{age:>8}  {}", crate::llm::truncate(&prompt, 70)),
+                        counts,
+                        PickerChoice::Session(s.path),
+                    )
                 }
             })
             .collect();
@@ -283,19 +351,39 @@ impl App {
 
     /// Offers how many of the newest sessions to keep, each choice saying how many it removes.
     pub(super) fn open_prune_picker(&mut self, current: &Path) {
-        let others = crate::session::list_all().iter().filter(|(path, _)| path != current).count();
+        let others = crate::session::list_all()
+            .iter()
+            .filter(|(path, _)| path != current)
+            .count();
         let options: Vec<_> = prune_choices(others)
             .into_iter()
-            .map(|keep| (format!("keep the newest {keep}"), format!("removes {} of {others}", others - keep), PickerChoice::Prune(keep)))
+            .map(|keep| {
+                (
+                    format!("keep the newest {keep}"),
+                    format!("removes {} of {others}", others - keep),
+                    PickerChoice::Prune(keep),
+                )
+            })
             .collect();
         if options.is_empty() {
-            return self.notice(&format!("Only {} on this machine; nothing worth pruning.", crate::tools::count(others, "other session")));
+            return self.notice(&format!(
+                "Only {} on this machine; nothing worth pruning.",
+                crate::tools::count(others, "other session")
+            ));
         }
-        self.picker = Some(Picker::new("Prune sessions · this one stays".into(), options, 0));
+        self.picker = Some(Picker::new(
+            "Prune sessions · this one stays".into(),
+            options,
+            0,
+        ));
     }
 
     pub(super) fn open_model_picker(&mut self, config: &Config, backup: bool) {
-        let chosen = if backup { self.status.backup.clone().unwrap_or_default() } else { self.status.model.clone() };
+        let chosen = if backup {
+            self.status.backup.clone().unwrap_or_default()
+        } else {
+            self.status.model.clone()
+        };
         let options: Vec<_> = config
             .models
             .iter()
@@ -310,7 +398,12 @@ impl App {
             })
             .collect();
         let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) | PickerChoice::BackupModel(a) if *a == chosen)).unwrap_or(0);
-        let title = if backup { "Backup model, for every session" } else { "Switch model" }.to_string();
+        let title = if backup {
+            "Backup model, for every session"
+        } else {
+            "Switch model"
+        }
+        .to_string();
         self.picker = Some(Picker::new(title, options, selected));
     }
 
@@ -319,27 +412,54 @@ impl App {
             return self.notice("No MCP servers are configured: add them to ~/.killi/mcp.json or the project's .mcp.json.");
         }
         let servers = mcp.list();
-        let at = servers.iter().position(|s| Some(s.name.as_str()) == selected).unwrap_or(0);
+        let at = servers
+            .iter()
+            .position(|s| Some(s.name.as_str()) == selected)
+            .unwrap_or(0);
         let options = servers
             .into_iter()
-            .map(|s| (s.name.clone(), format!("{} · {}", if s.on { "on" } else { "off" }, s.hint), PickerChoice::Mcp(s.name)))
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    format!("{} · {}", if s.on { "on" } else { "off" }, s.hint),
+                    PickerChoice::Mcp(s.name),
+                )
+            })
             .collect();
-        self.picker = Some(Picker::new("MCP servers · Enter turns one on or off".into(), options, at));
+        self.picker = Some(Picker::new(
+            "MCP servers · Enter turns one on or off".into(),
+            options,
+            at,
+        ));
     }
 
     /// /web-search-config: pick what `web_search` asks, then answer for what that service
     /// needs; the pick is written to the config and applies at once.
     pub(super) fn open_search_picker(&mut self, config: &Config) {
         let in_use = config.search.provider.as_deref().unwrap_or("brave");
-        let selected = ["brave", "tavily", "searxng"].iter().position(|name| *name == in_use).unwrap_or(0);
-        self.search = Some(SearchFlow { provider: None, docker: None, url: None, current: config.search.clone() });
-        self.picker = Some(Picker::new("Web search service".into(), search_options(&config.search), selected));
+        let selected = ["brave", "tavily", "searxng"]
+            .iter()
+            .position(|name| *name == in_use)
+            .unwrap_or(0);
+        self.search = Some(SearchFlow {
+            provider: None,
+            docker: None,
+            url: None,
+            current: config.search.clone(),
+        });
+        self.picker = Some(Picker::new(
+            "Web search service".into(),
+            search_options(&config.search),
+            selected,
+        ));
     }
 
     /// A service picked from that list or named by `/web-search-config <service>`: ask for
     /// what it needs, prefilled with what the config already has for it.
     pub(super) fn search_pick(&mut self, provider: &str) {
-        let Some(mut flow) = self.search.take() else { return };
+        let Some(mut flow) = self.search.take() else {
+            return;
+        };
         flow.provider = Some(provider.to_string());
         let current = flow.current.clone();
         let same = current.provider.as_deref().unwrap_or("brave") == provider;
@@ -359,12 +479,19 @@ impl App {
                         vec!["start one with Docker".into(), "use my own instance".into()],
                     );
                 } else {
-                    let url = current.url.clone().unwrap_or_else(|| "http://localhost:8888".into());
+                    let url = current
+                        .url
+                        .clone()
+                        .unwrap_or_else(|| "http://localhost:8888".into());
                     self.search_ask("SearXNG instance URL:", Some(&url), false);
                 }
             }
             "tavily" => self.search_ask("Tavily API key:", key.as_deref(), true),
-            _ => self.search_ask("Brave API key (Enter for none: killi then reads Brave's public page):", key.as_deref(), true),
+            _ => self.search_ask(
+                "Brave API key (Enter for none: killi then reads Brave's public page):",
+                key.as_deref(),
+                true,
+            ),
         }
     }
 
@@ -381,16 +508,24 @@ impl App {
     /// The /provider list: the presets killi knows how to add, marked when already in.
     pub(super) fn open_provider_picker(&mut self, config: &crate::config::Config) {
         let mark = |on: bool| if on { " · signed in" } else { "" };
-        let muse = config.find_provider(crate::config::muse_ours).is_some_and(|(_, key)| key);
+        let muse = config
+            .find_provider(crate::config::muse_ours)
+            .is_some_and(|(_, key)| key);
         let options = vec![
             (
                 "muse-code".to_string(),
-                format!("Meta's Muse Code subscription, with the key from the muse CLI{}", mark(muse)),
+                format!(
+                    "Meta's Muse Code subscription, with the key from the muse CLI{}",
+                    mark(muse)
+                ),
                 PickerChoice::Provider("muse-code".into()),
             ),
             (
                 "opencode-go".to_string(),
-                format!("OpenCode Go, with the API key from its console{}", mark(crate::login::opencode_go_signed_in())),
+                format!(
+                    "OpenCode Go, with the API key from its console{}",
+                    mark(crate::login::opencode_go_signed_in())
+                ),
                 PickerChoice::Provider("opencode-go".into()),
             ),
         ];
@@ -401,10 +536,13 @@ impl App {
     /// preset writes is said first, so the key's owner knows where it goes.
     pub(super) fn provider_pick(&mut self, preset: &str) {
         if provider_question(preset).is_empty() {
-            return self.error("Pick one of the presets: /provider muse-code or /provider opencode-go.");
+            return self
+                .error("Pick one of the presets: /provider muse-code or /provider opencode-go.");
         }
         let (note, question) = provider_setup(preset);
-        self.provider = Some(ProviderFlow { preset: preset.to_string() });
+        self.provider = Some(ProviderFlow {
+            preset: preset.to_string(),
+        });
         self.begin(Kind::Note);
         self.emit(Line::Words(format!("{DIM}{note}{RESET}"), 2));
         self.search_ask(question, None, true);
@@ -438,15 +576,30 @@ impl App {
     /// One choice of the flow: a question whose options are picked, not typed.
     fn search_question(&mut self, text: &str, options: Vec<String>) {
         self.begin(Kind::Note);
-        self.emit(Line::Words(format!("{BOLD}{FIN}?{RESET} {BOLD}{text}{RESET}"), 2));
+        self.emit(Line::Words(
+            format!("{BOLD}{FIN}?{RESET} {BOLD}{text}{RESET}"),
+            2,
+        ));
         let (reply, _) = tokio::sync::oneshot::channel::<String>();
-        self.asking = Some(Asking { question: Question { text: text.to_string(), options, plan: false, reply }, selected: 0, internal: true, secret: false });
+        self.asking = Some(Asking {
+            question: Question {
+                text: text.to_string(),
+                options,
+                plan: false,
+                reply,
+            },
+            selected: 0,
+            internal: true,
+            secret: false,
+        });
     }
 
     /// One answer of the flow: the Docker offer, the instance URL (validated), or the key;
     /// once all are in, the pick goes to the config file and this session as `Input::Search`.
     pub(super) fn search_answer(&mut self, answer: &str, secret: bool) {
-        let Some(mut flow) = self.search.take() else { return };
+        let Some(mut flow) = self.search.take() else {
+            return;
+        };
         let answer = answer.trim();
         let provider = flow.provider.clone().unwrap_or_default();
         if provider == "searxng" && flow.url.is_none() && flow.docker.is_none() {
@@ -463,7 +616,11 @@ impl App {
             flow.docker = Some(false);
             self.commit(echo);
             self.search = Some(flow);
-            return self.search_ask("SearXNG instance URL:", Some("http://localhost:8888"), false);
+            return self.search_ask(
+                "SearXNG instance URL:",
+                Some("http://localhost:8888"),
+                false,
+            );
         }
         if provider == "searxng" && flow.url.is_none() {
             if !(answer.starts_with("http://") || answer.starts_with("https://")) {
@@ -473,16 +630,32 @@ impl App {
             }
             self.commit(format!("  {FIN}↳{RESET} {answer}"));
             flow.url = Some(answer.to_string());
-            let key = (flow.current.provider.as_deref().unwrap_or("brave") == "searxng").then(|| flow.current.api_key.clone()).flatten();
+            let key = (flow.current.provider.as_deref().unwrap_or("brave") == "searxng")
+                .then(|| flow.current.api_key.clone())
+                .flatten();
             self.search = Some(flow);
-            return self.search_ask("SearXNG API key, if the instance asks for one (Enter for none):", key.as_deref(), true);
+            return self.search_ask(
+                "SearXNG API key, if the instance asks for one (Enter for none):",
+                key.as_deref(),
+                true,
+            );
         }
-        let echo = if answer.is_empty() { "(none)" } else if secret { "(set)" } else { answer };
+        let echo = if answer.is_empty() {
+            "(none)"
+        } else if secret {
+            "(set)"
+        } else {
+            answer
+        };
         self.commit(format!("  {FIN}↳{RESET} {}", text::sanitize(echo)));
         if answer.is_empty() && provider == "tavily" {
             return self.error("web_search with Tavily needs an API key; nothing was changed.");
         }
-        self.next_input = Some(Input::Search(provider, flow.url, (!answer.is_empty()).then(|| answer.to_string())));
+        self.next_input = Some(Input::Search(
+            provider,
+            flow.url,
+            (!answer.is_empty()).then(|| answer.to_string()),
+        ));
     }
 
     pub(super) fn open_effort_picker(&mut self, config: &Config) {
@@ -490,11 +663,28 @@ impl App {
             .efforts(&self.status.model)
             .into_iter()
             .map(|effort| {
-                let current = if effort == self.status.thinking { "current" } else { "" };
-                (effort.clone(), current.to_string(), PickerChoice::Effort(effort))
+                let current = if effort == self.status.thinking {
+                    "current"
+                } else {
+                    ""
+                };
+                (
+                    effort.clone(),
+                    current.to_string(),
+                    PickerChoice::Effort(effort),
+                )
             })
             .collect();
-        let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Effort(e) if *e == self.status.thinking)).unwrap_or(0);
-        self.picker = Some(Picker::new(format!("Thinking effort for {}", self.status.model), options, selected));
+        let selected = options
+            .iter()
+            .position(
+                |(_, _, c)| matches!(c, PickerChoice::Effort(e) if *e == self.status.thinking),
+            )
+            .unwrap_or(0);
+        self.picker = Some(Picker::new(
+            format!("Thinking effort for {}", self.status.model),
+            options,
+            selected,
+        ));
     }
 }

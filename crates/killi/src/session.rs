@@ -47,7 +47,9 @@ pub struct Session {
 }
 
 pub(crate) fn project_dir(cwd: &Path) -> PathBuf {
-    killi_home().join("sessions").join(cwd.to_string_lossy().replace('/', "-"))
+    killi_home()
+        .join("sessions")
+        .join(cwd.to_string_lossy().replace('/', "-"))
 }
 
 impl Session {
@@ -60,10 +62,17 @@ impl Session {
     /// Names a log for this second and this process, taking the next name when the same second
     /// already saw one: `/new` twice in a row, or a pid handed out again.
     fn create_in(root: &Path) -> Result<Self> {
-        let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let stem = format!("{secs}-{}", std::process::id());
         for n in 1..=100 {
-            let name = if n == 1 { stem.clone() } else { format!("{stem}-{n}") };
+            let name = if n == 1 {
+                stem.clone()
+            } else {
+                format!("{stem}-{n}")
+            };
             match Self::open_new(root.join(format!("{name}.jsonl"))) {
                 Ok(session) => return Ok(session),
                 Err(err) if n < 100 && name_taken(&err) => continue,
@@ -112,7 +121,8 @@ impl Session {
             let mut last = [0u8];
             file.read_exact(&mut last)?;
             if last[0] != b'\n' {
-                file.write_all(b"\n").with_context(|| format!("could not write {}", log_path.display()))?;
+                file.write_all(b"\n")
+                    .with_context(|| format!("could not write {}", log_path.display()))?;
             }
         }
         Ok(Self::from_parts(log_path.to_path_buf(), file))
@@ -127,8 +137,17 @@ impl Session {
     }
 
     fn from_parts(log_path: PathBuf, file: File) -> Self {
-        let id = log_path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-        Self { dir: log_path.with_extension(""), id, log_path, file }
+        let id = log_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        Self {
+            dir: log_path.with_extension(""),
+            id,
+            log_path,
+            file,
+        }
     }
 
     /// Deletes the log and its folder, for a session in which nothing happened. A folder that
@@ -143,9 +162,14 @@ impl Session {
     /// The line is built first and written once: formatting straight into the file costs a
     /// `write` per JSON fragment.
     pub fn record(&mut self, entry: &Value) -> Result<()> {
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
         let line = stamped(entry, u64::try_from(ts).unwrap_or(u64::MAX));
-        self.file.write_all(line.as_bytes()).with_context(|| format!("could not write {}", self.log_path.display()))
+        self.file
+            .write_all(line.as_bytes())
+            .with_context(|| format!("could not write {}", self.log_path.display()))
     }
 }
 
@@ -172,7 +196,9 @@ pub fn load(path: &Path) -> Result<Loaded> {
 
 /// Whether `create`'s name was already taken, so it can try the next one.
 fn name_taken(err: &anyhow::Error) -> bool {
-    err.root_cause().downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::AlreadyExists)
+    err.root_cause()
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|e| e.kind() == std::io::ErrorKind::AlreadyExists)
 }
 
 /// Takes the log's exclusive lock for `file`, held until the `Session` is dropped.

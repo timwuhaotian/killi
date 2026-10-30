@@ -61,7 +61,9 @@ impl Launch {
 pub fn socket_path() -> PathBuf {
     // SAFETY: getuid has no preconditions and can't fail.
     let uid = unsafe { libc::getuid() };
-    std::env::temp_dir().join(format!("killi-mcp-{uid}-{}", env!("CARGO_PKG_VERSION"))).join("broker.sock")
+    std::env::temp_dir()
+        .join(format!("killi-mcp-{uid}-{}", env!("CARGO_PKG_VERSION")))
+        .join("broker.sock")
 }
 
 /// Creates the broker socket's folder for this user alone, like the live sessions' sockets.
@@ -70,15 +72,26 @@ pub fn socket_path() -> PathBuf {
 /// socket inside it with a fake broker.
 fn ensure_socket_dir(socket: &Path) -> Result<()> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let Some(dir) = socket.parent() else { return Ok(()) };
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).with_context(|| format!("could not create {}", dir.display()))?;
-    let meta = std::fs::symlink_metadata(dir).with_context(|| format!("could not check {}", dir.display()))?;
+    let Some(dir) = socket.parent() else {
+        return Ok(());
+    };
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .with_context(|| format!("could not create {}", dir.display()))?;
+    let meta = std::fs::symlink_metadata(dir)
+        .with_context(|| format!("could not check {}", dir.display()))?;
     // SAFETY: getuid has no preconditions and can't fail.
     if meta.file_type().is_symlink() || !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } {
-        bail!("{} is not this user's own folder; refusing to put the broker socket there", dir.display());
+        bail!(
+            "{} is not this user's own folder; refusing to put the broker socket there",
+            dir.display()
+        );
     }
     if meta.permissions().mode() & 0o777 != 0o700 {
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).with_context(|| format!("could not tighten {}", dir.display()))?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("could not tighten {}", dir.display()))?;
     }
     Ok(())
 }
@@ -86,7 +99,9 @@ fn ensure_socket_dir(socket: &Path) -> Result<()> {
 /// Whether `stream` comes from this user's own process, like the live sessions' socket check.
 fn own_user(stream: &UnixStream) -> bool {
     // SAFETY: getuid has no preconditions and can't fail.
-    stream.peer_cred().is_ok_and(|cred| cred.uid() == unsafe { libc::getuid() })
+    stream
+        .peer_cred()
+        .is_ok_and(|cred| cred.uid() == unsafe { libc::getuid() })
 }
 
 /// Connects to the broker at `socket` for `launch`, starting the broker when `start` is set and
@@ -97,7 +112,9 @@ pub async fn attach(socket: &Path, launch: &Launch, start: bool) -> Result<UnixS
         Err(_) if start => start_broker(socket).await?,
         Err(e) => return Err(e).with_context(|| format!("no MCP broker at {}", socket.display())),
     };
-    stream.write_all(format!("{}\n", serde_json::to_string(launch)?).as_bytes()).await?;
+    stream
+        .write_all(format!("{}\n", serde_json::to_string(launch)?).as_bytes())
+        .await?;
     let mut reply = Vec::new();
     loop {
         let mut byte = [0u8];
@@ -106,7 +123,8 @@ pub async fn attach(socket: &Path, launch: &Launch, start: bool) -> Result<UnixS
         }
         reply.push(byte[0]);
     }
-    let reply: Value = serde_json::from_slice(&reply).context("the MCP broker closed the connection")?;
+    let reply: Value =
+        serde_json::from_slice(&reply).context("the MCP broker closed the connection")?;
     if let Some(error) = reply["error"].as_str() {
         bail!("{error}");
     }
@@ -127,7 +145,9 @@ async fn start_broker(socket: &Path) -> Result<UnixStream> {
         tokio::time::sleep(Duration::from_millis(50)).await;
         match UnixStream::connect(socket).await {
             Ok(stream) => return Ok(stream),
-            Err(e) if Instant::now() > deadline => return Err(e).context("the MCP broker didn't start"),
+            Err(e) if Instant::now() > deadline => {
+                return Err(e).context("the MCP broker didn't start");
+            }
             Err(_) => {}
         }
     }
@@ -161,11 +181,18 @@ impl Server {
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let Ok(mut message) = serde_json::from_str::<Value>(&line) else { continue };
+                let Ok(mut message) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
                 if message.get("method").is_some() {
                     continue;
                 }
-                let Some(route) = message["id"].as_u64().and_then(|id| reader_routes.lock().expect("routes").remove(&id)) else { continue };
+                let Some(route) = message["id"]
+                    .as_u64()
+                    .and_then(|id| reader_routes.lock().expect("routes").remove(&id))
+                else {
+                    continue;
+                };
                 match route {
                     Route::Client(client, id) => {
                         message["id"] = id;
@@ -183,15 +210,26 @@ impl Server {
                 }
             }
         });
-        let mut server =
-            Self { stdin: tokio::sync::Mutex::new(stdin), routes, next_id: AtomicU64::new(1), exited, child: Mutex::new(child), init: Value::Null };
+        let mut server = Self {
+            stdin: tokio::sync::Mutex::new(stdin),
+            routes,
+            next_id: AtomicU64::new(1),
+            exited,
+            child: Mutex::new(child),
+            init: Value::Null,
+        };
         let params = json!({
             "protocolVersion": crate::mcp::PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {"name": "killi", "version": env!("CARGO_PKG_VERSION")},
         });
         let (tx, rx) = oneshot::channel();
-        let id = server.forward(json!({"jsonrpc": "2.0", "method": "initialize", "params": params}), Route::Broker(tx)).await?;
+        let id = server
+            .forward(
+                json!({"jsonrpc": "2.0", "method": "initialize", "params": params}),
+                Route::Broker(tx),
+            )
+            .await?;
         let reply = tokio::time::timeout(INIT_TIMEOUT, rx)
             .await
             .map_err(|_| anyhow!("initialize timed out"))?
@@ -201,7 +239,9 @@ impl Server {
         }
         server.routes.lock().expect("routes").remove(&id);
         server.init = reply["result"].clone();
-        server.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).await?;
+        server
+            .write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+            .await?;
         Ok(server)
     }
 
@@ -215,7 +255,12 @@ impl Server {
     }
 
     async fn write(&self, message: &Value) -> Result<()> {
-        self.stdin.lock().await.write_all(format!("{message}\n").as_bytes()).await.context("the server closed its input")
+        self.stdin
+            .lock()
+            .await
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .context("the server closed its input")
     }
 
     fn kill(&self) {
@@ -243,8 +288,12 @@ pub async fn serve(socket: &Path) -> Result<()> {
     }
     ensure_socket_dir(socket)?;
     let _ = std::fs::remove_file(socket);
-    let listener = UnixListener::bind(socket).with_context(|| format!("could not listen on {}", socket.display()))?;
-    let broker = Arc::new(Broker { last_left: Mutex::new(Some(Instant::now())), ..Broker::default() });
+    let listener = UnixListener::bind(socket)
+        .with_context(|| format!("could not listen on {}", socket.display()))?;
+    let broker = Arc::new(Broker {
+        last_left: Mutex::new(Some(Instant::now())),
+        ..Broker::default()
+    });
     let mut check = tokio::time::interval(Duration::from_secs(30));
     loop {
         tokio::select! {
@@ -282,11 +331,18 @@ async fn client(broker: &Broker, stream: UnixStream) -> Result<()> {
     }
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
-    let launch: Launch = serde_json::from_str(&lines.next_line().await?.ok_or_else(|| anyhow!("no launch line"))?)?;
+    let launch: Launch = serde_json::from_str(
+        &lines
+            .next_line()
+            .await?
+            .ok_or_else(|| anyhow!("no launch line"))?,
+    )?;
     let server = match server(broker, &launch).await {
         Ok(server) => server,
         Err(e) => {
-            writer.write_all(format!("{}\n", json!({"error": format!("{e:#}")})).as_bytes()).await?;
+            writer
+                .write_all(format!("{}\n", json!({"error": format!("{e:#}")})).as_bytes())
+                .await?;
             return Ok(());
         }
     };
@@ -294,7 +350,11 @@ async fn client(broker: &Broker, stream: UnixStream) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let writing = tokio::spawn(async move {
         while let Some(line) = rx.recv().await {
-            if writer.write_all(format!("{line}\n").as_bytes()).await.is_err() {
+            if writer
+                .write_all(format!("{line}\n").as_bytes())
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -306,11 +366,18 @@ async fn client(broker: &Broker, stream: UnixStream) -> Result<()> {
             _ = exited.wait_for(|gone| *gone) => None,
         };
         let Some(line) = line else { break };
-        let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
-        let Some(id) = message.get("id").filter(|id| !id.is_null()).cloned() else { continue };
+        let Ok(message) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(id) = message.get("id").filter(|id| !id.is_null()).cloned() else {
+            continue;
+        };
         if message["method"] == "initialize" {
             let _ = tx.send(json!({"jsonrpc": "2.0", "id": id, "result": server.init}).to_string());
-        } else if let Err(e) = server.forward(message, Route::Client(tx.clone(), id.clone())).await {
+        } else if let Err(e) = server
+            .forward(message, Route::Client(tx.clone(), id.clone()))
+            .await
+        {
             let _ = tx.send(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": format!("{e:#}")}}).to_string());
         }
     }
@@ -323,16 +390,40 @@ async fn client(broker: &Broker, stream: UnixStream) -> Result<()> {
 /// map lock only guards the lookup and the insert, so one slow server doesn't hold every
 /// other attach behind it.
 async fn server(broker: &Broker, launch: &Launch) -> Result<Arc<Server>> {
-    if let Some(server) = broker.servers.lock().await.get(launch).filter(|s| !*s.exited.borrow()).cloned() {
+    if let Some(server) = broker
+        .servers
+        .lock()
+        .await
+        .get(launch)
+        .filter(|s| !*s.exited.borrow())
+        .cloned()
+    {
         return Ok(server);
     }
-    let start = broker.starts.lock().expect("starts").entry(launch.clone()).or_default().clone();
+    let start = broker
+        .starts
+        .lock()
+        .expect("starts")
+        .entry(launch.clone())
+        .or_default()
+        .clone();
     let _starting = start.lock().await;
-    if let Some(server) = broker.servers.lock().await.get(launch).filter(|s| !*s.exited.borrow()).cloned() {
+    if let Some(server) = broker
+        .servers
+        .lock()
+        .await
+        .get(launch)
+        .filter(|s| !*s.exited.borrow())
+        .cloned()
+    {
         return Ok(server);
     }
     let server = Arc::new(Server::start(launch).await?);
-    broker.servers.lock().await.insert(launch.clone(), server.clone());
+    broker
+        .servers
+        .lock()
+        .await
+        .insert(launch.clone(), server.clone());
     Ok(server)
 }
 
@@ -344,7 +435,12 @@ mod tests {
     fn the_brokers_socket_lives_in_a_private_versioned_folder() {
         let socket = socket_path();
         assert_eq!(socket.file_name().unwrap(), "broker.sock");
-        let dir = socket.parent().unwrap().file_name().unwrap().to_string_lossy();
+        let dir = socket
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
         assert!(dir.contains(env!("CARGO_PKG_VERSION")), "{dir}");
     }
 
@@ -363,9 +459,14 @@ mod tests {
     #[test]
     fn the_socket_folder_is_created_for_this_user_alone() {
         use std::os::unix::fs::PermissionsExt;
-        let socket = std::env::temp_dir().join(format!("killi-broker-test-{}", std::process::id())).join("broker.sock");
+        let socket = std::env::temp_dir()
+            .join(format!("killi-broker-test-{}", std::process::id()))
+            .join("broker.sock");
         ensure_socket_dir(&socket).unwrap();
-        let mode = std::fs::metadata(socket.parent().unwrap()).unwrap().permissions().mode();
+        let mode = std::fs::metadata(socket.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o700, "{mode:o}");
         std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
     }
@@ -382,7 +483,12 @@ done"#;
     async fn a_running_server_is_reused() {
         let dir = std::env::temp_dir().join(format!("killi-broker-reuse-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let launch = Launch { command: "/bin/bash".into(), args: vec!["-c".into(), SERVER.into()], env: Default::default(), cwd: dir.clone() };
+        let launch = Launch {
+            command: "/bin/bash".into(),
+            args: vec!["-c".into(), SERVER.into()],
+            env: Default::default(),
+            cwd: dir.clone(),
+        };
         let broker = Broker::default();
         let first = server(&broker, &launch).await.unwrap();
         let second = server(&broker, &launch).await.unwrap();
@@ -398,7 +504,8 @@ done"#;
         ensure_socket_dir(&dir.join("broker.sock")).unwrap();
         let socket = dir.join("test.sock");
         let listener = UnixListener::bind(&socket).unwrap();
-        let accepted = tokio::spawn(async move { listener.accept().await.map(|(stream, _)| stream) });
+        let accepted =
+            tokio::spawn(async move { listener.accept().await.map(|(stream, _)| stream) });
         let _connecting = UnixStream::connect(&socket).await.unwrap();
         assert!(own_user(&accepted.await.unwrap().unwrap()));
         std::fs::remove_dir_all(&dir).unwrap();

@@ -2,7 +2,10 @@ use super::*;
 
 /// Shift+Enter, Alt+Enter and Ctrl+Enter insert a line break instead of sending.
 pub(super) fn newline_key(key: &KeyEvent) -> bool {
-    key.code == KeyCode::Enter && key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL)
+    key.code == KeyCode::Enter
+        && key
+            .modifiers
+            .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL)
 }
 
 impl App {
@@ -138,7 +141,10 @@ impl App {
             KeyCode::Char('c') if ctrl => {
                 if !self.editor.is_empty() {
                     self.editor.clear();
-                } else if self.exit_armed.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+                } else if self
+                    .exit_armed
+                    .is_some_and(|t| t.elapsed() < Duration::from_secs(2))
+                {
                     return Idle::Exit;
                 } else {
                     // Armed, not printed: the live area shows it until it lapses, so the
@@ -184,7 +190,11 @@ impl App {
     pub(super) fn on_key_asking(&mut self, key: KeyEvent) -> bool {
         // ←/→ walk this turn's questions while one waits: back over the answered ones,
         // forward again to the waiting one. Typing keeps the arrows for the text.
-        let navigable = self.asking.as_ref().is_some_and(|a| !a.internal && !a.question.plan) && !self.ask_past.is_empty();
+        let navigable = self
+            .asking
+            .as_ref()
+            .is_some_and(|a| !a.internal && !a.question.plan)
+            && !self.ask_past.is_empty();
         if navigable && self.editor.is_empty() {
             match key.code {
                 KeyCode::Left => {
@@ -196,7 +206,11 @@ impl App {
                 }
                 KeyCode::Right if self.ask_view.is_some() => {
                     let view = self.ask_view.expect("viewing an answered question");
-                    self.ask_view = if view + 1 >= self.ask_past.len() { None } else { Some(view + 1) };
+                    self.ask_view = if view + 1 >= self.ask_past.len() {
+                        None
+                    } else {
+                        Some(view + 1)
+                    };
                     return false;
                 }
                 _ => {}
@@ -209,9 +223,17 @@ impl App {
         let count = asking.question.options.len();
         match key.code {
             KeyCode::Tab if self.editor.is_empty() => self.answer(None),
-            KeyCode::Up if self.editor.is_empty() => asking.selected = asking.selected.saturating_sub(1),
-            KeyCode::Down if self.editor.is_empty() => asking.selected = (asking.selected + 1).min(count.saturating_sub(1)),
-            KeyCode::Char(c) if self.editor.is_empty() && c.is_ascii_digit() && (1..=count).contains(&(c as usize - '0' as usize)) => {
+            KeyCode::Up if self.editor.is_empty() => {
+                asking.selected = asking.selected.saturating_sub(1)
+            }
+            KeyCode::Down if self.editor.is_empty() => {
+                asking.selected = (asking.selected + 1).min(count.saturating_sub(1))
+            }
+            KeyCode::Char(c)
+                if self.editor.is_empty()
+                    && c.is_ascii_digit()
+                    && (1..=count).contains(&(c as usize - '0' as usize)) =>
+            {
                 asking.selected = c as usize - '1' as usize;
                 self.answer(None);
             }
@@ -223,7 +245,11 @@ impl App {
                 }
                 // A correction with no answer to ride on goes on its own, or it is lost.
                 let note = std::mem::take(&mut self.ask_corrections);
-                let payload = if note.is_empty() { String::new() } else { format!("{}（本问未作答）", note.join("\n")) };
+                let payload = if note.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}（本问未作答）", note.join("\n"))
+                };
                 for line in &note {
                     self.commit(format!("  {FIN}↳{RESET} {line}"));
                 }
@@ -232,11 +258,22 @@ impl App {
                 let _ = asking.question.reply.send(payload);
                 self.commit(format!("{DIM}  (dismissed){RESET}"));
             }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.editor.is_empty() => self.editor.clear(),
+            KeyCode::Char('c')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && !self.editor.is_empty() =>
+            {
+                self.editor.clear()
+            }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
             KeyCode::Enter if !newline_key(&key) => {
-                let secret = self.asking.as_ref().is_some_and(|asking| asking.internal && asking.secret);
-                let typed = if secret { self.editor.take_quiet() } else { self.editor.take() };
+                let secret = self
+                    .asking
+                    .as_ref()
+                    .is_some_and(|asking| asking.internal && asking.secret);
+                let typed = if secret {
+                    self.editor.take_quiet()
+                } else {
+                    self.editor.take()
+                };
                 self.answer(Some(typed).filter(|t| !t.trim().is_empty()));
             }
             _ => self.edit_key(key),
@@ -250,17 +287,28 @@ impl App {
         let view = self.ask_view.expect("viewing an answered question");
         let count = self.ask_past[view].options.len();
         match key.code {
-            KeyCode::Up if self.editor.is_empty() => self.ask_past[view].selected = self.ask_past[view].selected.saturating_sub(1),
-            KeyCode::Down if self.editor.is_empty() => {
-                self.ask_past[view].selected = (self.ask_past[view].selected + 1).min(count.saturating_sub(1))
+            KeyCode::Up if self.editor.is_empty() => {
+                self.ask_past[view].selected = self.ask_past[view].selected.saturating_sub(1)
             }
-            KeyCode::Char(c) if self.editor.is_empty() && c.is_ascii_digit() && (1..=count).contains(&(c as usize - '0' as usize)) => {
+            KeyCode::Down if self.editor.is_empty() => {
+                self.ask_past[view].selected =
+                    (self.ask_past[view].selected + 1).min(count.saturating_sub(1))
+            }
+            KeyCode::Char(c)
+                if self.editor.is_empty()
+                    && c.is_ascii_digit()
+                    && (1..=count).contains(&(c as usize - '0' as usize)) =>
+            {
                 self.ask_past[view].selected = c as usize - '1' as usize;
                 self.confirm_past(None);
             }
             KeyCode::Tab if self.editor.is_empty() => self.confirm_past(None),
             KeyCode::Esc => self.ask_view = None,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.editor.is_empty() => self.editor.clear(),
+            KeyCode::Char('c')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && !self.editor.is_empty() =>
+            {
+                self.editor.clear()
+            }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
             KeyCode::Enter if !newline_key(&key) => {
                 let typed = self.editor.take();
@@ -276,19 +324,30 @@ impl App {
     fn confirm_past(&mut self, typed: Option<String>) {
         let view = self.ask_view.take().expect("viewing an answered question");
         let past = &mut self.ask_past[view];
-        let answer = typed.unwrap_or_else(|| past.options.get(past.selected).cloned().unwrap_or_default());
+        let answer =
+            typed.unwrap_or_else(|| past.options.get(past.selected).cloned().unwrap_or_default());
         if let Some(at) = past.options.iter().position(|option| *option == answer) {
             past.selected = at;
         }
         if answer != past.answer {
             let old = std::mem::replace(&mut past.answer, answer.clone());
-            self.ask_corrections.push(format!("更正之前的问题「{}」：答案改为「{answer}」（原为「{old}」）", first_line(&past.text, 60)));
+            self.ask_corrections.push(format!(
+                "更正之前的问题「{}」：答案改为「{answer}」（原为「{old}」）",
+                first_line(&past.text, 60)
+            ));
         }
     }
 
     fn answer(&mut self, typed: Option<String>) {
         let asking = self.asking.take().expect("a question is open");
-        let answer = typed.unwrap_or_else(|| asking.question.options.get(asking.selected).cloned().unwrap_or_default());
+        let answer = typed.unwrap_or_else(|| {
+            asking
+                .question
+                .options
+                .get(asking.selected)
+                .cloned()
+                .unwrap_or_default()
+        });
         if asking.internal {
             if let Some(flow) = self.provider.take() {
                 return self.provider_answer(flow, &answer);
@@ -296,15 +355,29 @@ impl App {
             return self.search_answer(&answer, asking.secret);
         }
         if !asking.question.plan {
-            let selected = asking.question.options.iter().position(|option| *option == answer).unwrap_or(asking.selected);
-            self.ask_past.push(PastAsk { text: asking.question.text.clone(), options: asking.question.options.clone(), selected, answer: answer.clone() });
+            let selected = asking
+                .question
+                .options
+                .iter()
+                .position(|option| *option == answer)
+                .unwrap_or(asking.selected);
+            self.ask_past.push(PastAsk {
+                text: asking.question.text.clone(),
+                options: asking.question.options.clone(),
+                selected,
+                answer: answer.clone(),
+            });
         }
         let note = std::mem::take(&mut self.ask_corrections);
         for line in &note {
             self.commit(format!("  {FIN}↳{RESET} {line}"));
         }
         self.commit(format!("  {FIN}↳{RESET} {}", text::sanitize(&answer)));
-        let payload = if note.is_empty() { answer } else { format!("{}\n本问答案：{answer}", note.join("\n")) };
+        let payload = if note.is_empty() {
+            answer
+        } else {
+            format!("{}\n本问答案：{answer}", note.join("\n"))
+        };
         let _ = asking.question.reply.send(payload);
     }
 
@@ -362,16 +435,24 @@ impl App {
         if text.is_empty() {
             return self.paste_clipboard_image();
         }
-        let Some(files) = paste::dropped_files(text) else { return self.editor.insert(text) };
+        let Some(files) = paste::dropped_files(text) else {
+            return self.editor.insert(text);
+        };
         for file in files {
             match image_type(&file) {
                 Some(media_type) => {
-                    let name = file.file_name().map_or_else(|| file.display().to_string(), |n| n.to_string_lossy().into_owned());
+                    let name = file.file_name().map_or_else(
+                        || file.display().to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    );
                     self.attach_image(|| image_url(&name, &file, media_type).map(|(url, _)| url));
                 }
                 None => {
                     let shown = file.strip_prefix(&self.cwd).unwrap_or(&file);
-                    self.editor.insert_word(&format!("@{}", mention::escape(&shown.display().to_string())));
+                    self.editor.insert_word(&format!(
+                        "@{}",
+                        mention::escape(&shown.display().to_string())
+                    ));
                 }
             }
         }
@@ -386,7 +467,10 @@ impl App {
     /// model can see it and the prompt is not an answer to a question.
     fn attach_image(&mut self, read: impl FnOnce() -> Result<String, String>) {
         if !self.sees_images {
-            return self.notice(&format!("{} can't see images; /model switches to one that can.", self.status.model));
+            return self.notice(&format!(
+                "{} can't see images; /model switches to one that can.",
+                self.status.model
+            ));
         }
         if self.asking.is_some() {
             return self.notice("An answer is text only; send the image with your next message.");
@@ -399,8 +483,17 @@ impl App {
 
     fn complete_command(&mut self) {
         let text = self.editor.text().to_string();
-        let Some(partial) = text.strip_prefix('/').filter(|p| !p.contains(char::is_whitespace)) else { return };
-        if let Some(name) = COMMANDS.iter().map(|c| c.name).find(|name| name.starts_with(partial)) {
+        let Some(partial) = text
+            .strip_prefix('/')
+            .filter(|p| !p.contains(char::is_whitespace))
+        else {
+            return;
+        };
+        if let Some(name) = COMMANDS
+            .iter()
+            .map(|c| c.name)
+            .find(|name| name.starts_with(partial))
+        {
             self.editor.clear();
             self.editor.insert(&format!("/{name} "));
         }

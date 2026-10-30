@@ -6,9 +6,22 @@ pub type Sink = Rc<dyn Fn(Event)>;
 pub enum Event {
     Text(String),
     Reasoning(String),
-    Retry { attempt: u32, wait: Duration, reason: String },
-    ToolStart { id: String, summary: String },
-    ToolEnd { id: String, is_error: bool, brief: String, display: Option<String>, output: String },
+    Retry {
+        attempt: u32,
+        wait: Duration,
+        reason: String,
+    },
+    ToolStart {
+        id: String,
+        summary: String,
+    },
+    ToolEnd {
+        id: String,
+        is_error: bool,
+        brief: String,
+        display: Option<String>,
+        output: String,
+    },
     /// After each request: that request's usage, and the context it used.
     Usage(Usage),
     Todos(Vec<Todo>),
@@ -16,14 +29,24 @@ pub enum Event {
     Notice(String),
     /// An `agent_swarm` call began: its tool call id, its description, and each subagent's item
     /// in order. Subagents are told apart from the call's other work by their `Slot`.
-    Swarm { id: String, description: String, items: Vec<String> },
+    Swarm {
+        id: String,
+        description: String,
+        items: Vec<String>,
+    },
     /// A subagent began its work. Only seen inside `Sub`.
     Started,
     /// A subagent ended, and whether it failed. Only seen inside `Sub`.
-    Finished { is_error: bool },
+    Finished {
+        is_error: bool,
+    },
     /// Something a subagent did, labeled with its description, and where it sits in an
     /// `agent_swarm` call when it belongs to one.
-    Sub { label: String, slot: Option<Slot>, event: Box<Event> },
+    Sub {
+        label: String,
+        slot: Option<Slot>,
+        event: Box<Event>,
+    },
 }
 
 /// A subagent's place in an `agent_swarm` call: the call's tool id and its item's index.
@@ -100,11 +123,22 @@ impl Aside {
     }
 
     /// Like `ask`, under another note: for a question from another session.
-    pub fn ask_with(&self, note: &str, question: &str) -> impl Future<Output = Result<(String, Usage)>> + 'static {
+    pub fn ask_with(
+        &self,
+        note: &str,
+        question: &str,
+    ) -> impl Future<Output = Result<(String, Usage)>> + 'static {
         let answer = self.side(note, question, self.waiting().as_deref());
         async move {
             let (text, usage) = answer.await?;
-            Ok((if text.trim().is_empty() { "(No answer: the model tried to use tools.)".to_string() } else { text }, usage))
+            Ok((
+                if text.trim().is_empty() {
+                    "(No answer: the model tried to use tools.)".to_string()
+                } else {
+                    text
+                },
+                usage,
+            ))
         }
     }
 
@@ -124,15 +158,33 @@ impl Aside {
 
     /// What the calls in flight are waiting on, as `/btw` is told it.
     pub fn waiting(&self) -> Option<String> {
-        self.ctx.upgrade().and_then(|ctx| ctx.running.borrow().describe())
+        self.ctx
+            .upgrade()
+            .and_then(|ctx| ctx.running.borrow().describe())
     }
 
-    fn side(&self, note: &str, question: &str, running: Option<&str>) -> impl Future<Output = Result<(String, Usage)>> + 'static + use<> {
-        let request = self.messages.upgrade().map(|history| side_request(&history, note, question, running));
-        let (client, tools, cache_key) = (self.client.clone(), self.tools.clone(), self.cache_key.clone());
+    fn side(
+        &self,
+        note: &str,
+        question: &str,
+        running: Option<&str>,
+    ) -> impl Future<Output = Result<(String, Usage)>> + 'static + use<> {
+        let request = self
+            .messages
+            .upgrade()
+            .map(|history| side_request(&history, note, question, running));
+        let (client, tools, cache_key) = (
+            self.client.clone(),
+            self.tools.clone(),
+            self.cache_key.clone(),
+        );
         async move {
-            let (Some(client), Some(request)) = (client, request) else { bail!("there is no conversation to ask about yet") };
-            let reply = client.complete(&request, &tools, &cache_key, &mut |_| {}).await?;
+            let (Some(client), Some(request)) = (client, request) else {
+                bail!("there is no conversation to ask about yet")
+            };
+            let reply = client
+                .complete(&request, &tools, &cache_key, &mut |_| {})
+                .await?;
             Ok((reply.text, reply.usage))
         }
     }
@@ -148,7 +200,10 @@ pub(super) fn fit_recap(text: &str) -> String {
     if chars.len() <= RECAP_MAX {
         return text;
     }
-    let ends = |i: usize| matches!(chars[i], '.' | '!' | '?' | '。' | '！' | '？') && chars.get(i + 1).is_none_or(|c| *c == ' ' || !c.is_ascii());
+    let ends = |i: usize| {
+        matches!(chars[i], '.' | '!' | '?' | '。' | '！' | '？')
+            && chars.get(i + 1).is_none_or(|c| *c == ' ' || !c.is_ascii())
+    };
     if let Some(end) = (0..RECAP_MAX).rev().find(|&i| ends(i)) {
         return chars[..=end].iter().collect();
     }
@@ -159,13 +214,24 @@ pub(super) fn fit_recap(text: &str) -> String {
 /// The history with a side question at the end. Tool calls still running get a placeholder
 /// result first, as providers reject a question between a call and its result; `running` says
 /// what they are waiting on and for how long, so "is it stuck?" has facts to go on.
-pub(super) fn side_request(history: &[Value], note: &str, question: &str, running: Option<&str>) -> Vec<Value> {
+pub(super) fn side_request(
+    history: &[Value],
+    note: &str,
+    question: &str,
+    running: Option<&str>,
+) -> Vec<Value> {
     let mut request = history.to_vec();
     for id in unanswered(history) {
-        request.push(json!({"role": "tool", "tool_call_id": id, "content": "Still running; no result yet."}));
+        request.push(
+            json!({"role": "tool", "tool_call_id": id, "content": "Still running; no result yet."}),
+        );
     }
-    let running = running.map(|r| format!("<system-reminder>Waiting on right now:\n{r}</system-reminder>\n\n")).unwrap_or_default();
-    request.push(json!({"role": "user", "content": format!("{note}\n\n{running}{question}").trim_end()}));
+    let running = running
+        .map(|r| format!("<system-reminder>Waiting on right now:\n{r}</system-reminder>\n\n"))
+        .unwrap_or_default();
+    request.push(
+        json!({"role": "user", "content": format!("{note}\n\n{running}{question}").trim_end()}),
+    );
     request
 }
 
@@ -191,8 +257,13 @@ pub(super) fn last_plan_state(messages: &[Value]) -> bool {
 
 /// IDs of the last assistant message's tool calls that have no result yet.
 pub(super) fn unanswered(messages: &[Value]) -> Vec<String> {
-    let Some(index) = messages.iter().rposition(|m| m["role"] == "assistant") else { return Vec::new() };
-    let answered: HashSet<&str> = messages[index + 1..].iter().filter_map(|m| m["tool_call_id"].as_str()).collect();
+    let Some(index) = messages.iter().rposition(|m| m["role"] == "assistant") else {
+        return Vec::new();
+    };
+    let answered: HashSet<&str> = messages[index + 1..]
+        .iter()
+        .filter_map(|m| m["tool_call_id"].as_str())
+        .collect();
     messages[index]["tool_calls"]
         .as_array()
         .into_iter()

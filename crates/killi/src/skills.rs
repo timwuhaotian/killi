@@ -34,7 +34,10 @@ impl Skills {
     /// The project's `.agents/skills` and `.claude/skills` first, then `dirs`, which default
     /// to `~/.agents/skills`, then the built-in skills. The first skill with a given name wins.
     pub fn discover(cwd: &Path, dirs: &[String]) -> Self {
-        let root = cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd);
+        let root = cwd
+            .ancestors()
+            .find(|d| d.join(".git").exists())
+            .unwrap_or(cwd);
         let mut roots = vec![root.join(".agents/skills"), root.join(".claude/skills")];
         if dirs.is_empty() {
             roots.push(home().join(".agents/skills"));
@@ -47,8 +50,13 @@ impl Skills {
         let mut seen = HashSet::new();
         let mut list = Vec::new();
         for dir in roots {
-            let Ok(entries) = fs::read_dir(&dir) else { continue };
-            let mut found: Vec<Skill> = entries.flatten().filter_map(|e| parse(&e.path().join("SKILL.md"))).collect();
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            let mut found: Vec<Skill> = entries
+                .flatten()
+                .filter_map(|e| parse(&e.path().join("SKILL.md")))
+                .collect();
             found.sort_by(|a, b| a.name.cmp(&b.name));
             for skill in found {
                 if seen.insert(skill.name.clone()) {
@@ -56,10 +64,17 @@ impl Skills {
                 }
             }
         }
-        if let Some(skill) = parse_text(UPDATE_CONFIG, Path::new("")).filter(|s| seen.insert(s.name.clone())) {
-            list.push(Skill { builtin: Some(UPDATE_CONFIG), ..skill });
+        if let Some(skill) =
+            parse_text(UPDATE_CONFIG, Path::new("")).filter(|s| seen.insert(s.name.clone()))
+        {
+            list.push(Skill {
+                builtin: Some(UPDATE_CONFIG),
+                ..skill
+            });
         }
-        Self { list: Rc::new(list) }
+        Self {
+            list: Rc::new(list),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -92,11 +107,20 @@ impl Skills {
 
     fn content(skill: &Skill) -> Option<String> {
         if let Some(text) = skill.builtin {
-            return Some(format!("<skill name=\"{}\">\n{}\n</skill>", skill.name, text.trim()));
+            return Some(format!(
+                "<skill name=\"{}\">\n{}\n</skill>",
+                skill.name,
+                text.trim()
+            ));
         }
         let text = fs::read_to_string(&skill.path).ok()?;
         let folder = skill.path.parent().unwrap_or(Path::new("."));
-        Some(format!("<skill name=\"{}\" folder=\"{}\">\n{}\n</skill>", skill.name, folder.display(), text.trim()))
+        Some(format!(
+            "<skill name=\"{}\" folder=\"{}\">\n{}\n</skill>",
+            skill.name,
+            folder.display(),
+            text.trim()
+        ))
     }
 
     /// The `skill` tool: load by `name`, or search with `query`.
@@ -105,8 +129,15 @@ impl Skills {
             return match self.find(name).and_then(Skills::content) {
                 Some(text) => Output::ok(text).brief("loaded"),
                 None => {
-                    let close: Vec<String> = self.search(name).into_iter().map(|s| s.name.clone()).collect();
-                    Output::error(format!("No skill named `{name}`. Closest: {}.", close.join(", ")))
+                    let close: Vec<String> = self
+                        .search(name)
+                        .into_iter()
+                        .map(|s| s.name.clone())
+                        .collect();
+                    Output::error(format!(
+                        "No skill named `{name}`. Closest: {}.",
+                        close.join(", ")
+                    ))
                 }
             };
         }
@@ -117,7 +148,16 @@ impl Skills {
         if found.is_empty() {
             return Output::ok(format!("No skill matches “{query}”."));
         }
-        let lines: Vec<String> = found.iter().map(|s| format!("- {}: {}", s.name, crate::llm::truncate(&s.description, 300))).collect();
+        let lines: Vec<String> = found
+            .iter()
+            .map(|s| {
+                format!(
+                    "- {}: {}",
+                    s.name,
+                    crate::llm::truncate(&s.description, 300)
+                )
+            })
+            .collect();
         Output::ok(lines.join("\n")).brief(format!("{} matches", found.len()))
     }
 
@@ -132,7 +172,10 @@ impl Skills {
                 let text = tokens(&skill.description);
                 let score = words
                     .iter()
-                    .map(|w| 3 * name.iter().filter(|n| n.starts_with(w.as_str())).count() + text.iter().filter(|t| t.starts_with(w.as_str())).count())
+                    .map(|w| {
+                        3 * name.iter().filter(|n| n.starts_with(w.as_str())).count()
+                            + text.iter().filter(|t| t.starts_with(w.as_str())).count()
+                    })
                     .sum();
                 (score, skill)
             })
@@ -161,7 +204,9 @@ impl Skills {
     fn calls<'s>(&'s self, text: &str) -> (String, Vec<(&'s Skill, String)>) {
         let (mut leading, mut calls, mut rest) = (String::new(), Vec::new(), text);
         while let Some((at, skill)) = self.call_in(rest) {
-            let end = rest[at..].find(char::is_whitespace).map_or(rest.len(), |end| at + end);
+            let end = rest[at..]
+                .find(char::is_whitespace)
+                .map_or(rest.len(), |end| at + end);
             let (before, after) = rest.split_at(end);
             match calls.last_mut() {
                 Some((_, request)) => *request = before[..at].trim().to_string(),
@@ -182,7 +227,11 @@ impl Skills {
     fn call_in<'s>(&'s self, text: &str) -> Option<(usize, &'s Skill)> {
         let mut at = 0;
         for word in text.split_inclusive(char::is_whitespace) {
-            if let Some(skill) = word.trim_end().strip_prefix('/').and_then(|name| self.find(name)) {
+            if let Some(skill) = word
+                .trim_end()
+                .strip_prefix('/')
+                .and_then(|name| self.find(name))
+            {
                 return Some((at, skill));
             }
             at += word.len();
@@ -195,8 +244,15 @@ impl Skills {
 /// came without one.
 fn block(skill: &Skill, request: &str) -> Option<String> {
     let content = Skills::content(skill)?;
-    let request = if request.trim().is_empty() { FOLLOW } else { request.trim() };
-    Some(format!("Use the {} skill for this.\n\n{content}\n\n{request}", skill.name))
+    let request = if request.trim().is_empty() {
+        FOLLOW
+    } else {
+        request.trim()
+    };
+    Some(format!(
+        "Use the {} skill for this.\n\n{content}\n\n{request}",
+        skill.name
+    ))
 }
 
 /// The request `invocation` sends when `/name` comes without one.
@@ -211,9 +267,15 @@ pub fn typed(prompt: &str) -> Option<String> {
     loop {
         let (name, tail) = rest.split_once(" skill for this.\n\n<skill name=\"")?;
         let tail = tail.strip_prefix(name)?.strip_prefix('"')?;
-        let after = tail.split_once("\n</skill>\n\n").map_or("", |(_, after)| after);
+        let after = tail
+            .split_once("\n</skill>\n\n")
+            .map_or("", |(_, after)| after);
         let (request, next) = after.split_once("\n\nUse the ").unwrap_or((after, ""));
-        let request = if request.trim() == FOLLOW { "" } else { request };
+        let request = if request.trim() == FOLLOW {
+            ""
+        } else {
+            request
+        };
         calls.push(format!("/{name} {request}").trim_end().to_string());
         if next.is_empty() {
             return Some(calls.join("\n"));
@@ -223,7 +285,11 @@ pub fn typed(prompt: &str) -> Option<String> {
 }
 
 fn tokens(text: &str) -> Vec<String> {
-    text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 1).map(String::from).collect()
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 1)
+        .map(String::from)
+        .collect()
 }
 
 /// Reads `name` and `description` from SKILL.md's front matter.
@@ -244,7 +310,10 @@ fn parse_text(text: &str, path: &Path) -> Option<Skill> {
         } else if let Some(value) = line.strip_prefix("description:") {
             let value = value.trim();
             if matches!(value, "|" | ">" | "|-" | ">-" | "") {
-                while let Some(next) = lines.peek().filter(|l| l.starts_with(' ') || l.starts_with('\t')) {
+                while let Some(next) = lines
+                    .peek()
+                    .filter(|l| l.starts_with(' ') || l.starts_with('\t'))
+                {
                     description.push_str(next.trim());
                     description.push(' ');
                     lines.next();
@@ -254,13 +323,25 @@ fn parse_text(text: &str, path: &Path) -> Option<Skill> {
             }
         }
     }
-    let name = name.filter(|n| !n.is_empty()).or_else(|| path.parent()?.file_name()?.to_str().map(String::from))?;
-    Some(Skill { name, description: description.trim().to_string(), path: path.to_path_buf(), builtin: None })
+    let name = name
+        .filter(|n| !n.is_empty())
+        .or_else(|| path.parent()?.file_name()?.to_str().map(String::from))?;
+    Some(Skill {
+        name,
+        description: description.trim().to_string(),
+        path: path.to_path_buf(),
+        builtin: None,
+    })
 }
 
 fn unquote(value: &str) -> String {
     let value = value.trim();
-    value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\''))).unwrap_or(value).to_string()
+    value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .unwrap_or(value)
+        .to_string()
 }
 
 pub fn definition() -> Value {
@@ -284,23 +365,63 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join(".git")).unwrap();
         for (dir, front) in [
-            ("ios-shots", "name: ios-shots\ndescription: Capture App Store screenshots on iOS simulators"),
-            ("pdf", "name: pdf\ndescription: >-\n  Read and fill PDF forms\n  and merge files"),
+            (
+                "ios-shots",
+                "name: ios-shots\ndescription: Capture App Store screenshots on iOS simulators",
+            ),
+            (
+                "pdf",
+                "name: pdf\ndescription: >-\n  Read and fill PDF forms\n  and merge files",
+            ),
         ] {
             fs::create_dir_all(root.join(".agents/skills").join(dir)).unwrap();
-            fs::write(root.join(".agents/skills").join(dir).join("SKILL.md"), format!("---\n{front}\n---\nBody of {dir}.")).unwrap();
+            fs::write(
+                root.join(".agents/skills").join(dir).join("SKILL.md"),
+                format!("---\n{front}\n---\nBody of {dir}."),
+            )
+            .unwrap();
         }
         let skills = Skills::discover(&root, &["/nonexistent".to_string()]);
         assert_eq!(skills.len(), 3);
-        assert!(skills.prompt_section().contains("Available: ios-shots, pdf, update-config."));
-        assert_eq!(skills.find("pdf").unwrap().description, "Read and fill PDF forms and merge files");
+        assert!(
+            skills
+                .prompt_section()
+                .contains("Available: ios-shots, pdf, update-config.")
+        );
+        assert_eq!(
+            skills.find("pdf").unwrap().description,
+            "Read and fill PDF forms and merge files"
+        );
         let found = skills.run(&json!({"query": "screenshots simulator"}));
         assert!(found.text.starts_with("- ios-shots:"), "{}", found.text);
-        assert!(skills.run(&json!({"name": "pdf"})).text.contains("Body of pdf."));
-        assert!(skills.invocation("pdf", "merge a.pdf b.pdf").unwrap().ends_with("merge a.pdf b.pdf"));
-        assert_eq!(typed(&skills.invocation("pdf", "merge a.pdf b.pdf").unwrap()).as_deref(), Some("/pdf merge a.pdf b.pdf"));
-        assert_eq!(typed(&skills.invocation("pdf", "").unwrap()).as_deref(), Some("/pdf"));
-        assert_eq!(typed(&format!("{}\n[… 900 characters cut]", &skills.invocation("pdf", "merge").unwrap()[..60])).as_deref(), Some("/pdf"));
+        assert!(
+            skills
+                .run(&json!({"name": "pdf"}))
+                .text
+                .contains("Body of pdf.")
+        );
+        assert!(
+            skills
+                .invocation("pdf", "merge a.pdf b.pdf")
+                .unwrap()
+                .ends_with("merge a.pdf b.pdf")
+        );
+        assert_eq!(
+            typed(&skills.invocation("pdf", "merge a.pdf b.pdf").unwrap()).as_deref(),
+            Some("/pdf merge a.pdf b.pdf")
+        );
+        assert_eq!(
+            typed(&skills.invocation("pdf", "").unwrap()).as_deref(),
+            Some("/pdf")
+        );
+        assert_eq!(
+            typed(&format!(
+                "{}\n[… 900 characters cut]",
+                &skills.invocation("pdf", "merge").unwrap()[..60]
+            ))
+            .as_deref(),
+            Some("/pdf")
+        );
         assert_eq!(typed("Use the pdf skill for this.\n\nmerge them"), None);
         fs::remove_dir_all(root).unwrap();
     }
@@ -311,23 +432,41 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join(".git")).unwrap();
         for (dir, front) in [
-            ("ios-shots", "name: ios-shots\ndescription: Capture screenshots"),
+            (
+                "ios-shots",
+                "name: ios-shots\ndescription: Capture screenshots",
+            ),
             ("pdf", "name: pdf\ndescription: Read PDF files"),
         ] {
             fs::create_dir_all(root.join(".agents/skills").join(dir)).unwrap();
-            fs::write(root.join(".agents/skills").join(dir).join("SKILL.md"), format!("---\n{front}\n---\nBody of {dir}."))
-                .unwrap();
+            fs::write(
+                root.join(".agents/skills").join(dir).join("SKILL.md"),
+                format!("---\n{front}\n---\nBody of {dir}."),
+            )
+            .unwrap();
         }
         let skills = Skills::discover(&root, &["/nonexistent".to_string()]);
         // A newline between the calls, as typed after the first request.
         let prompt = skills.invocation("ios-shots", "one\n/pdf two").unwrap();
-        assert!(prompt.starts_with("Use the ios-shots skill for this."), "{prompt}");
-        assert!(prompt.contains("Body of ios-shots.\n</skill>\n\none\n\nUse the pdf skill for this."), "{prompt}");
-        assert!(prompt.ends_with("Body of pdf.\n</skill>\n\ntwo"), "{prompt}");
+        assert!(
+            prompt.starts_with("Use the ios-shots skill for this."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Body of ios-shots.\n</skill>\n\none\n\nUse the pdf skill for this."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.ends_with("Body of pdf.\n</skill>\n\ntwo"),
+            "{prompt}"
+        );
         assert_eq!(typed(&prompt).as_deref(), Some("/ios-shots one\n/pdf two"));
         // Right after an autocompleted name, with only the filled-in space between them.
         let prompt = skills.invocation("ios-shots", "/pdf merge").unwrap();
-        assert!(prompt.contains("Follow the skill.\n\nUse the pdf skill for this."), "{prompt}");
+        assert!(
+            prompt.contains("Follow the skill.\n\nUse the pdf skill for this."),
+            "{prompt}"
+        );
         assert_eq!(typed(&prompt).as_deref(), Some("/ios-shots\n/pdf merge"));
         // A slash word that isn't a whole skill name stays request text.
         let prompt = skills.invocation("pdf", "see src/pdf and /zzz").unwrap();
@@ -344,16 +483,35 @@ mod tests {
         let skills = Skills::discover(&root, &["/nonexistent".to_string()]);
         assert_eq!(skills.len(), 1);
         let loaded = skills.run(&json!({"name": "update-config"}));
-        assert!(loaded.text.starts_with("<skill name=\"update-config\">\n---\nname: update-config"), "{}", loaded.text);
+        assert!(
+            loaded
+                .text
+                .starts_with("<skill name=\"update-config\">\n---\nname: update-config"),
+            "{}",
+            loaded.text
+        );
         assert!(loaded.text.contains("~/.killi/config.toml"));
-        assert!(skills.invocation("update-config", "where is my config?").is_some());
+        assert!(
+            skills
+                .invocation("update-config", "where is my config?")
+                .is_some()
+        );
 
         let dir = root.join(".agents/skills/update-config");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("SKILL.md"), "---\nname: update-config\ndescription: Mine\n---\nMy own.").unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: update-config\ndescription: Mine\n---\nMy own.",
+        )
+        .unwrap();
         let skills = Skills::discover(&root, &["/nonexistent".to_string()]);
         assert_eq!(skills.len(), 1);
-        assert!(skills.run(&json!({"name": "update-config"})).text.contains("My own."));
+        assert!(
+            skills
+                .run(&json!({"name": "update-config"}))
+                .text
+                .contains("My own.")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -361,21 +519,50 @@ mod tests {
     /// the code: every key the config, hook and MCP server structs read must appear in it.
     #[test]
     fn update_config_names_every_config_key() {
-        let words: HashSet<&str> = UPDATE_CONFIG.split(|c: char| !c.is_alphanumeric() && c != '_').collect();
-        let sources = [include_str!("config.rs"), include_str!("hooks.rs"), include_str!("mcp.rs")];
-        let keys: Vec<String> = sources.iter().flat_map(|source| keys_read_by(source)).collect();
-        for expected in ["default_model", "compact_at", "type", "matcher", "mcpServers", "toolTimeoutMs"] {
-            assert!(keys.iter().any(|k| k == expected), "the key scanner missed `{expected}` in {keys:?}");
+        let words: HashSet<&str> = UPDATE_CONFIG
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .collect();
+        let sources = [
+            include_str!("config.rs"),
+            include_str!("hooks.rs"),
+            include_str!("mcp.rs"),
+        ];
+        let keys: Vec<String> = sources
+            .iter()
+            .flat_map(|source| keys_read_by(source))
+            .collect();
+        for expected in [
+            "default_model",
+            "compact_at",
+            "type",
+            "matcher",
+            "mcpServers",
+            "toolTimeoutMs",
+        ] {
+            assert!(
+                keys.iter().any(|k| k == expected),
+                "the key scanner missed `{expected}` in {keys:?}"
+            );
         }
-        let missing: Vec<&String> = keys.iter().filter(|key| !words.contains(key.as_str())).collect();
-        assert!(missing.is_empty(), "skills/update-config.md doesn't mention: {missing:?}");
+        let missing: Vec<&String> = keys
+            .iter()
+            .filter(|key| !words.contains(key.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "skills/update-config.md doesn't mention: {missing:?}"
+        );
     }
 
     /// The keys the `Deserialize` structs in `source` read, named as serde reads them.
     fn keys_read_by(source: &str) -> Vec<String> {
-        let source = source.split("#[cfg(test)]\nmod tests").next().unwrap_or_default();
+        let source = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or_default();
         let mut keys = Vec::new();
-        let (mut deserialize, mut camel, mut inside, mut skip, mut rename) = (false, false, false, false, None::<String>);
+        let (mut deserialize, mut camel, mut inside, mut skip, mut rename) =
+            (false, false, false, false, None::<String>);
         for line in source.lines().map(str::trim) {
             if !inside {
                 if line.starts_with("#[derive(") {
@@ -392,11 +579,25 @@ mod tests {
                 (inside, camel) = (false, false);
             } else if let Some(attr) = line.strip_prefix("#[serde(") {
                 skip |= attr.starts_with("skip");
-                rename = attr.strip_prefix("rename = \"").and_then(|r| r.split('"').next()).map(String::from).or(rename);
-            } else if let Some((field, _)) = line.strip_prefix("pub ").unwrap_or(line).split_once(':') {
+                rename = attr
+                    .strip_prefix("rename = \"")
+                    .and_then(|r| r.split('"').next())
+                    .map(String::from)
+                    .or(rename);
+            } else if let Some((field, _)) =
+                line.strip_prefix("pub ").unwrap_or(line).split_once(':')
+            {
                 let field = field.trim();
-                if field.chars().all(|c| c.is_alphanumeric() || c == '_') && !std::mem::take(&mut skip) {
-                    keys.push(rename.take().unwrap_or_else(|| if camel { camel_case(field) } else { field.to_string() }));
+                if field.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    && !std::mem::take(&mut skip)
+                {
+                    keys.push(rename.take().unwrap_or_else(|| {
+                        if camel {
+                            camel_case(field)
+                        } else {
+                            field.to_string()
+                        }
+                    }));
                 }
                 rename = None;
             }

@@ -5,12 +5,20 @@ impl Agent {
     pub(super) fn later(&mut self, args: &Value) -> tools::Output {
         if let Some(number) = crate::later::done_arg(args) {
             return match crate::later::done(&self.ctx.cwd, number) {
-                Ok(item) => tools::Output::ok(format!("Crossed off {number}: {item}")).brief("done"),
+                Ok(item) => {
+                    tools::Output::ok(format!("Crossed off {number}: {item}")).brief("done")
+                }
                 Err(e) => tools::Output::error(format!("{e:#}")),
             };
         }
-        let Some(note) = args["note"].as_str().map(str::trim).filter(|note| !note.is_empty()) else {
-            return tools::Output::error("later needs `note` (what, and where) or `done` (an item's number).");
+        let Some(note) = args["note"]
+            .as_str()
+            .map(str::trim)
+            .filter(|note| !note.is_empty())
+        else {
+            return tools::Output::error(
+                "later needs `note` (what, and where) or `done` (an item's number).",
+            );
         };
         match crate::later::add(&self.ctx.cwd, note) {
             Ok(open) => {
@@ -29,14 +37,23 @@ impl Agent {
         let Ok(todos) = serde_json::from_value::<Vec<Todo>>(args["todos"].clone()) else {
             return tools::Output::error("todo_write needs `todos`: a list of {content, status}.");
         };
-        if let Some(bad) = todos.iter().find(|t| !matches!(t.status.as_str(), "pending" | "in_progress" | "completed")) {
-            return tools::Output::error(format!("Unknown status `{}`; use pending, in_progress or completed.", bad.status));
+        if let Some(bad) = todos
+            .iter()
+            .find(|t| !matches!(t.status.as_str(), "pending" | "in_progress" | "completed"))
+        {
+            return tools::Output::error(format!(
+                "Unknown status `{}`; use pending, in_progress or completed.",
+                bad.status
+            ));
         }
         self.todos = todos.clone();
         let open = todos.iter().filter(|t| t.status != "completed").count();
         (self.sink)(Event::Todos(todos));
-        tools::Output::ok(format!("Task list updated: {open} open, {} done.", self.todos.len() - open))
-            .brief(format!("{open} open"))
+        tools::Output::ok(format!(
+            "Task list updated: {open} open, {} done.",
+            self.todos.len() - open
+        ))
+        .brief(format!("{open} open"))
     }
 
     pub(super) async fn ask(&mut self, args: &Value) -> tools::Output {
@@ -51,7 +68,8 @@ impl Agent {
         };
         match self.wait_for_answer(text, options, false).await {
             Some(answer) => tools::Output::ok(format!("The user answered: {answer}")).brief(answer),
-            None => tools::Output::ok("The question was dismissed without an answer.").brief("dismissed"),
+            None => tools::Output::ok("The question was dismissed without an answer.")
+                .brief("dismissed"),
         }
     }
 
@@ -60,13 +78,17 @@ impl Agent {
             return tools::Output::error("Plan mode is off; go ahead without exit_plan_mode.");
         }
         if self.depth > 0 {
-            return tools::Output::error("Only the main agent can leave plan mode; report your plan instead.");
+            return tools::Output::error(
+                "Only the main agent can leave plan mode; report your plan instead.",
+            );
         }
         let plan = args["plan"].as_str().unwrap_or_default().to_string();
         if !self.controls.interactive {
             self.controls.plan.set(false);
             self.plan_announced = false;
-            return tools::Output::ok("No one is here to approve, so plan mode is off. Carry out the plan.");
+            return tools::Output::ok(
+                "No one is here to approve, so plan mode is off. Carry out the plan.",
+            );
         }
         let options = vec!["Approve and start".to_string(), "Keep planning".to_string()];
         match self.wait_for_answer(plan, options, true).await.as_deref() {
@@ -84,9 +106,19 @@ impl Agent {
         }
     }
 
-    async fn wait_for_answer(&self, text: String, options: Vec<String>, plan: bool) -> Option<String> {
+    async fn wait_for_answer(
+        &self,
+        text: String,
+        options: Vec<String>,
+        plan: bool,
+    ) -> Option<String> {
         let (reply, answer) = oneshot::channel();
-        (self.sink)(Event::Ask(Question { text, options, plan, reply }));
+        (self.sink)(Event::Ask(Question {
+            text,
+            options,
+            plan,
+            reply,
+        }));
         answer.await.ok().filter(|a| !a.trim().is_empty())
     }
 }
@@ -100,10 +132,15 @@ pub(super) fn question_args(args: &Value) -> Result<(String, Vec<String>), Strin
     if text.is_empty() {
         return Err(format!("`question` is missing or empty. {SHAPE}"));
     }
-    let items = args["options"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let items = args["options"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let options: Vec<String> = items.iter().filter_map(option_text).collect();
     if options.len() < items.len() {
-        return Err(format!("Every option must be a string, or an object with a `label`. {SHAPE}"));
+        return Err(format!(
+            "Every option must be a string, or an object with a `label`. {SHAPE}"
+        ));
     }
     Ok((text.to_string(), options))
 }
@@ -114,9 +151,18 @@ fn option_text(option: &Value) -> Option<String> {
     if let Some(text) = option.as_str() {
         return Some(text.to_string());
     }
-    let label = option["label"].as_str().map(str::trim).filter(|l| !l.is_empty())?;
-    Some(match option["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) {
-        Some(description) => format!("{label} — {description}"),
-        None => label.to_string(),
-    })
+    let label = option["label"]
+        .as_str()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())?;
+    Some(
+        match option["description"]
+            .as_str()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+        {
+            Some(description) => format!("{label} — {description}"),
+            None => label.to_string(),
+        },
+    )
 }

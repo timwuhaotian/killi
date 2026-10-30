@@ -16,9 +16,17 @@ const GAP: &str = "    ";
 type Stops = [(f32, f32, f32); 3];
 /// Lagoon, sky and periwinkle: the gradient starts where the brand's own color does, and its
 /// other stops are the hues of the status line's figures.
-const STOPS_DARK: Stops = [(79.0, 209.0, 197.0), (100.0, 188.0, 237.0), (157.0, 152.0, 242.0)];
+const STOPS_DARK: Stops = [
+    (79.0, 209.0, 197.0),
+    (100.0, 188.0, 237.0),
+    (157.0, 152.0, 242.0),
+];
 /// The same hues, deeper, for a light terminal.
-const STOPS_LIGHT: Stops = [(4.0, 121.0, 114.0), (1.0, 114.0, 159.0), (93.0, 83.0, 174.0)];
+const STOPS_LIGHT: Stops = [
+    (4.0, 121.0, 114.0),
+    (1.0, 114.0, 159.0),
+    (93.0, 83.0, 174.0),
+];
 
 /// Rows a terminal needs before the block-letter logo is worth its six; with fewer the banner
 /// is the wordmark and the setup lines.
@@ -86,7 +94,12 @@ fn wave_head(frame: usize) -> String {
     let rise = (frame as f32 / RISE).min(1.0);
     let mut out = String::new();
     for i in 0..WAVE {
-        out.push_str(&flow(frame, i as f32 / (WAVE - 1) as f32, 0.0, 0.5 + 0.5 * rise));
+        out.push_str(&flow(
+            frame,
+            i as f32 / (WAVE - 1) as f32,
+            0.0,
+            0.5 + 0.5 * rise,
+        ));
         out.push(cell(dots[2 * i], dots[2 * i + 1]));
     }
     out.push_str(RESET);
@@ -113,7 +126,12 @@ pub fn action(frame: usize, word: &str) -> String {
             out.push_str(&format!("{DIM}·{RESET}"));
             continue;
         }
-        out.push_str(&flow(frame, i as f32 / (chars.len() - 1).max(1) as f32, 0.5, appeared.clamp(0.0, 1.0) * 0.75 + 0.25));
+        out.push_str(&flow(
+            frame,
+            i as f32 / (chars.len() - 1).max(1) as f32,
+            0.5,
+            appeared.clamp(0.0, 1.0) * 0.75 + 0.25,
+        ));
         out.push(*c);
         out.push_str(RESET);
     }
@@ -126,7 +144,12 @@ pub fn steady(frame: usize, word: &str) -> String {
     let mut out = wave_head(frame);
     let chars: Vec<char> = word.chars().collect();
     for (i, c) in chars.iter().enumerate() {
-        out.push_str(&flow(frame, i as f32 / (chars.len() - 1).max(1) as f32, 0.5, 1.0));
+        out.push_str(&flow(
+            frame,
+            i as f32 / (chars.len() - 1).max(1) as f32,
+            0.5,
+            1.0,
+        ));
         out.push(*c);
         out.push_str(RESET);
     }
@@ -159,7 +182,11 @@ pub fn render(columns: usize, side: &[String]) -> Vec<String> {
         return side.to_vec();
     }
     let truecolor = truecolor();
-    let logo: Vec<String> = LOGO.iter().enumerate().map(|(y, row)| paint(row, y, truecolor)).collect();
+    let logo: Vec<String> = LOGO
+        .iter()
+        .enumerate()
+        .map(|(y, row)| paint(row, y, truecolor))
+        .collect();
     let room = columns.saturating_sub(LOGO_WIDTH + GAP.len());
     if room < 24 || side.iter().any(|line| width(line) > room) && room < 40 {
         return logo.into_iter().chain(side.iter().cloned()).collect();
@@ -168,7 +195,11 @@ pub fn render(columns: usize, side: &[String]) -> Vec<String> {
     for (i, line) in side.iter().enumerate() {
         match rows.get_mut(i + 1) {
             Some(row) => row.push_str(&format!("{GAP}{}", super::fit(line, room))),
-            None => rows.push(format!("{}{GAP}{}", " ".repeat(LOGO_WIDTH), super::fit(line, room))),
+            None => rows.push(format!(
+                "{}{GAP}{}",
+                " ".repeat(LOGO_WIDTH),
+                super::fit(line, room)
+            )),
         }
     }
     rows
@@ -192,7 +223,14 @@ fn paint(row: &str, y: usize, truecolor: bool) -> String {
 }
 
 fn gradient(t: f32) -> (f32, f32, f32) {
-    blend(if is_light() { &STOPS_LIGHT } else { &STOPS_DARK }, t)
+    blend(
+        if is_light() {
+            &STOPS_LIGHT
+        } else {
+            &STOPS_DARK
+        },
+        t,
+    )
 }
 
 /// The color `t` of the way, from 0 to 1, along `stops`.
@@ -201,7 +239,11 @@ fn blend(stops: &Stops, t: f32) -> (f32, f32, f32) {
     let i = (t.floor() as usize).min(stops.len() - 2);
     let f = t - i as f32;
     let (a, b) = (stops[i], stops[i + 1]);
-    (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f, a.2 + (b.2 - a.2) * f)
+    (
+        a.0 + (b.0 - a.0) * f,
+        a.1 + (b.1 - a.1) * f,
+        a.2 + (b.2 - a.2) * f,
+    )
 }
 
 /// A 24-bit color, or the nearest in the 256-color cube for terminals without it.
@@ -210,7 +252,10 @@ fn color(r: f32, g: f32, b: f32, truecolor: bool) -> String {
         return format!("\x1b[38;2;{};{};{}m", r as u8, g as u8, b as u8);
     }
     let level = |v: f32| (v / 255.0 * 5.0).round() as u8;
-    format!("\x1b[38;5;{}m", 16 + 36 * level(r) + 6 * level(g) + level(b))
+    format!(
+        "\x1b[38;5;{}m",
+        16 + 36 * level(r) + 6 * level(g) + level(b)
+    )
 }
 
 #[cfg(test)]
@@ -225,8 +270,16 @@ mod tests {
     #[test]
     fn the_spinner_is_always_the_same_width() {
         for frame in 0..200 {
-            assert_eq!(width(&working(frame)), WAVE + 1 + WORD.len(), "frame {frame}");
-            assert_eq!(width(&action(frame, "thinking")), WAVE + 1 + 8, "frame {frame}");
+            assert_eq!(
+                width(&working(frame)),
+                WAVE + 1 + WORD.len(),
+                "frame {frame}"
+            );
+            assert_eq!(
+                width(&action(frame, "thinking")),
+                WAVE + 1 + 8,
+                "frame {frame}"
+            );
         }
         assert!(working(0).contains('·'));
         assert!(!working(20).contains('·'));
@@ -237,9 +290,16 @@ mod tests {
     #[test]
     fn the_steady_word_shows_whole_at_once_and_keeps_its_width() {
         for frame in 0..60 {
-            assert_eq!(width(&steady(frame, "chiaroscuro")), WAVE + 1 + "chiaroscuro".len(), "frame {frame}");
+            assert_eq!(
+                width(&steady(frame, "chiaroscuro")),
+                WAVE + 1 + "chiaroscuro".len(),
+                "frame {frame}"
+            );
         }
-        assert!(!steady(0, "chiaroscuro").contains('·'), "the whole word shows at once");
+        assert!(
+            !steady(0, "chiaroscuro").contains('·'),
+            "the whole word shows at once"
+        );
     }
 
     #[test]
@@ -250,7 +310,10 @@ mod tests {
             let dots = wave(frame);
             rows.extend(dots);
             assert_ne!(dots, wave(frame + 1), "frame {frame} stands still");
-            assert!(dots.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1), "frame {frame} jumps: {dots:?}");
+            assert!(
+                dots.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1),
+                "frame {frame} jumps: {dots:?}"
+            );
         }
         assert_eq!(rows.len(), 3, "the ribbon uses every height");
     }
@@ -264,7 +327,13 @@ mod tests {
         }
         assert_eq!(bar(0.0, 4).matches('─').count(), 4);
         assert_eq!(bar(1.0, 4).matches('━').count(), 4);
-        assert_eq!((bar(0.5, 4).matches('━').count(), bar(0.5, 4).matches('─').count()), (2, 2));
+        assert_eq!(
+            (
+                bar(0.5, 4).matches('━').count(),
+                bar(0.5, 4).matches('─').count()
+            ),
+            (2, 2)
+        );
         assert_eq!(bar(7.0, 4), bar(1.0, 4), "past full is full");
     }
 
@@ -272,7 +341,10 @@ mod tests {
     fn the_logo_gives_way_to_the_wordmark_in_a_small_window() {
         assert!(!compact(118, true));
         assert!(compact(118, false), "too few rows for six of logo");
-        assert!(compact(69, true), "too narrow for the setup lines beside it");
+        assert!(
+            compact(69, true),
+            "too narrow for the setup lines beside it"
+        );
         assert!(!compact(70, true));
         let mark = wordmark("0.3.0");
         assert_eq!(width(&mark), WORD.len() + 1 + 5);
@@ -281,12 +353,25 @@ mod tests {
 
     #[test]
     fn the_gradient_starts_at_lagoon_and_deepens_for_a_light_terminal() {
-        assert_eq!(blend(&STOPS_DARK, 0.0), (79.0, 209.0, 197.0), "lagoon's own color");
+        assert_eq!(
+            blend(&STOPS_DARK, 0.0),
+            (79.0, 209.0, 197.0),
+            "lagoon's own color"
+        );
         assert_eq!(blend(&STOPS_DARK, 1.0), STOPS_DARK[2]);
         assert_eq!(blend(&STOPS_DARK, 0.5), STOPS_DARK[1]);
-        assert_eq!(blend(&STOPS_LIGHT, 7.0), STOPS_LIGHT[2], "past the end is the end");
+        assert_eq!(
+            blend(&STOPS_LIGHT, 7.0),
+            STOPS_LIGHT[2],
+            "past the end is the end"
+        );
         let brightness = |(r, g, b): (f32, f32, f32)| r + g + b;
-        assert!(STOPS_LIGHT.iter().zip(STOPS_DARK).all(|(light, dark)| brightness(*light) < brightness(dark)));
+        assert!(
+            STOPS_LIGHT
+                .iter()
+                .zip(STOPS_DARK)
+                .all(|(light, dark)| brightness(*light) < brightness(dark))
+        );
     }
 
     #[test]

@@ -44,7 +44,11 @@ pub struct ProviderError {
 
 impl fmt::Display for ProviderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (after {} attempt(s)){}", self.message, self.attempts, self.advice)
+        write!(
+            f,
+            "{} (after {} attempt(s)){}",
+            self.message, self.attempts, self.advice
+        )
     }
 }
 
@@ -82,10 +86,17 @@ pub(crate) fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
 /// get `TRANSPORT_ATTEMPTS`; timeouts stay as transient as ever.
 pub(super) fn transport_failure(error: reqwest::Error) -> Failure {
     let chain = error_chain(&error);
-    let fatal = error.is_builder() || error.is_request() || chain.to_ascii_lowercase().contains("certificate");
+    let fatal = error.is_builder()
+        || error.is_request()
+        || chain.to_ascii_lowercase().contains("certificate");
     Failure {
         max_attempts: (!fatal && !error.is_timeout()).then_some(TRANSPORT_ATTEMPTS),
-        ..Failure::of(ErrorKind::Transport, None, !fatal, format!("request failed: {chain}"))
+        ..Failure::of(
+            ErrorKind::Transport,
+            None,
+            !fatal,
+            format!("request failed: {chain}"),
+        )
     }
 }
 
@@ -120,11 +131,24 @@ pub(super) fn excerpt(body: &str) -> String {
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
 
 /// Words in a 429 body that say a usage quota ran out, not that requests came too fast.
-const QUOTA_WORDS: [&str; 5] = ["usage limit", "quota", "reset at", "exceeded your current", "usage_limit_exceeded"];
+const QUOTA_WORDS: [&str; 5] = [
+    "usage limit",
+    "quota",
+    "reset at",
+    "exceeded your current",
+    "usage_limit_exceeded",
+];
 
 /// Words in a rejection body that say the conversation no longer fits the context window.
-const OVERFLOW_WORDS: [&str; 7] =
-    ["context length", "context_length", "maximum context", "context window", "prompt is too long", "too many tokens", "input is too long"];
+const OVERFLOW_WORDS: [&str; 7] = [
+    "context length",
+    "context_length",
+    "maximum context",
+    "context window",
+    "prompt is too long",
+    "too many tokens",
+    "input is too long",
+];
 
 /// Words in a rejection body that say the provider refused an image or other media.
 const MEDIA_WORDS: [&str; 2] = ["image", "media"];
@@ -133,7 +157,8 @@ const MEDIA_WORDS: [&str; 2] = ["image", "media"];
 /// (a 5-hour or monthly limit) resets in hours, so it fails at once with the server's message.
 pub(super) fn classify(status: StatusCode, retry_after: Option<Duration>, body: &str) -> Failure {
     let lower = body.to_lowercase();
-    let quota = status == StatusCode::TOO_MANY_REQUESTS && QUOTA_WORDS.iter().any(|w| lower.contains(w));
+    let quota =
+        status == StatusCode::TOO_MANY_REQUESTS && QUOTA_WORDS.iter().any(|w| lower.contains(w));
     let too_long = retry_after.is_some_and(|wait| wait > LONGEST_WAIT);
     let kind = match status.as_u16() {
         429 if quota => ErrorKind::Quota,
@@ -157,7 +182,10 @@ pub(super) fn classify(status: StatusCode, retry_after: Option<Duration>, body: 
 /// 500 ms doubling to a 32 s cap, plus up to 25% jitter.
 pub(super) fn backoff(attempt: u32) -> Duration {
     let base = (500u64 << (attempt - 1).min(6)).min(32_000);
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
     let jitter = base * u64::from(nanos % 26) / 100;
     Duration::from_millis(base + jitter)
 }

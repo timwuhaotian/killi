@@ -88,25 +88,48 @@ pub struct Listed {
 
 impl Mcp {
     pub fn load(cwd: &Path) -> Self {
-        let root = cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd);
+        let root = cwd
+            .ancestors()
+            .find(|d| d.join(".git").exists())
+            .unwrap_or(cwd);
         let mut servers = BTreeMap::new();
         let mut project = BTreeSet::new();
-        for (path, cwd, is_project) in
-            [(killi_home().join("mcp.json"), home(), false), (root.join(".mcp.json"), root.to_path_buf(), true)]
-        {
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        for (path, cwd, is_project) in [
+            (killi_home().join("mcp.json"), home(), false),
+            (root.join(".mcp.json"), root.to_path_buf(), true),
+        ] {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
             if let Ok(file) = serde_json::from_str::<File>(&text) {
-                for (name, server) in file.servers.into_iter().filter(|(_, s)| s.enabled != Some(false)) {
+                for (name, server) in file
+                    .servers
+                    .into_iter()
+                    .filter(|(_, s)| s.enabled != Some(false))
+                {
                     if is_project {
                         project.insert(name.clone());
                     }
-                    servers.insert(name, ServerConfig { cwd: cwd.clone(), ..server });
+                    servers.insert(
+                        name,
+                        ServerConfig {
+                            cwd: cwd.clone(),
+                            ..server
+                        },
+                    );
                 }
             }
         }
         let off_path = killi_home().join("mcp-off.json");
         let off = read_off(&off_path);
-        Self { servers, project, broker: Some(broker::socket_path()), off: RefCell::new(off), off_path: Some(off_path), ..Self::default() }
+        Self {
+            servers,
+            project,
+            broker: Some(broker::socket_path()),
+            off: RefCell::new(off),
+            off_path: Some(off_path),
+            ..Self::default()
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -116,7 +139,11 @@ impl Mcp {
     /// The servers that are on.
     pub fn names(&self) -> Vec<&str> {
         let off = self.off.borrow();
-        self.servers.keys().filter(|name| !off.contains(*name)).map(String::as_str).collect()
+        self.servers
+            .keys()
+            .filter(|name| !off.contains(*name))
+            .map(String::as_str)
+            .collect()
     }
 
     /// Every configured server, on or off, for /mcp.
@@ -126,10 +153,24 @@ impl Mcp {
             .iter()
             .map(|(name, config)| {
                 let hint = match (&config.url, &config.command) {
-                    (Some(url), _) => url.split("://").nth(1).unwrap_or(url).split('/').next().unwrap_or(url).to_string(),
-                    (None, command) => std::iter::once(command.as_deref().unwrap_or_default()).chain(config.args.iter().map(String::as_str)).collect::<Vec<_>>().join(" "),
+                    (Some(url), _) => url
+                        .split("://")
+                        .nth(1)
+                        .unwrap_or(url)
+                        .split('/')
+                        .next()
+                        .unwrap_or(url)
+                        .to_string(),
+                    (None, command) => std::iter::once(command.as_deref().unwrap_or_default())
+                        .chain(config.args.iter().map(String::as_str))
+                        .collect::<Vec<_>>()
+                        .join(" "),
                 };
-                Listed { name: name.clone(), on: !off.contains(name), hint }
+                Listed {
+                    name: name.clone(),
+                    on: !off.contains(name),
+                    hint,
+                }
             })
             .collect()
     }
@@ -163,7 +204,12 @@ impl Mcp {
     pub fn command_line(&self, name: &str) -> Option<String> {
         let config = self.servers.get(name)?;
         match (&config.command, &config.url) {
-            (Some(command), _) => Some(std::iter::once(expand(command)).chain(config.args.iter().cloned()).collect::<Vec<_>>().join(" ")),
+            (Some(command), _) => Some(
+                std::iter::once(expand(command))
+                    .chain(config.args.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
             (None, Some(url)) => Some(url.clone()),
             (None, None) => None,
         }
@@ -173,7 +219,10 @@ impl Mcp {
     /// it is on now. The tool list stays as it is; calls to a server that is off are refused.
     pub fn toggle(&self, name: &str) -> Result<bool> {
         if !self.servers.contains_key(name) {
-            bail!("no MCP server `{name}`; servers: {}", self.servers.keys().cloned().collect::<Vec<_>>().join(", "));
+            bail!(
+                "no MCP server `{name}`; servers: {}",
+                self.servers.keys().cloned().collect::<Vec<_>>().join(", ")
+            );
         }
         let on = {
             let mut off = self.off.borrow_mut();
@@ -187,12 +236,18 @@ impl Mcp {
             self.live.borrow_mut().remove(name);
         }
         self.notes.borrow_mut().push(match on {
-            true => format!("The user turned on the MCP server {name}; reach it through the `mcp` tool."),
+            true => format!(
+                "The user turned on the MCP server {name}; reach it through the `mcp` tool."
+            ),
             false => format!("The user turned off the MCP server {name}; don't use it."),
         });
         if let Some(path) = &self.off_path {
-            crate::fs_atomic::write(path, serde_json::to_string(&*self.off.borrow())?.as_bytes(), None)
-                .with_context(|| format!("could not write {}", path.display()))?;
+            crate::fs_atomic::write(
+                path,
+                serde_json::to_string(&*self.off.borrow())?.as_bytes(),
+                None,
+            )
+            .with_context(|| format!("could not write {}", path.display()))?;
         }
         Ok(on)
     }
@@ -203,19 +258,32 @@ impl Mcp {
     }
 
     async fn connection(&self, server: &str) -> Result<Rc<Connection>> {
-        if let Some(connection) = self.live.borrow().get(server).filter(|c| !c.closed.load(Ordering::SeqCst)) {
+        if let Some(connection) = self
+            .live
+            .borrow()
+            .get(server)
+            .filter(|c| !c.closed.load(Ordering::SeqCst))
+        {
             return Ok(connection.clone());
         }
-        let config = self.servers.get(server).ok_or_else(|| anyhow!("no MCP server `{server}`"))?;
+        let config = self
+            .servers
+            .get(server)
+            .ok_or_else(|| anyhow!("no MCP server `{server}`"))?;
         let connection = Rc::new(Connection::open(config, self.broker.as_deref()).await?);
-        self.live.borrow_mut().insert(server.to_string(), connection.clone());
+        self.live
+            .borrow_mut()
+            .insert(server.to_string(), connection.clone());
         Ok(connection)
     }
 }
 
 /// The servers turned off, from `path`; none when it is missing or unreadable.
 fn read_off(path: &Path) -> BTreeSet<String> {
-    std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
 }
 
 fn expand(path: &str) -> String {
@@ -251,8 +319,17 @@ impl Drop for PendingSlot {
 enum Transport {
     /// JSON lines to the broker, or to a server started directly when no broker answers.
     /// A directly started server's group stays tracked while it runs, for quitting on a signal.
-    Lines { writer: tokio::sync::Mutex<Box<dyn AsyncWrite + Unpin + Send>>, pending: Pending, _child: Option<(Child, Option<crate::tools::Tracked>)> },
-    Http { client: reqwest::Client, url: String, headers: Vec<(String, String)>, session: RefCell<Option<String>> },
+    Lines {
+        writer: tokio::sync::Mutex<Box<dyn AsyncWrite + Unpin + Send>>,
+        pending: Pending,
+        _child: Option<(Child, Option<crate::tools::Tracked>)>,
+    },
+    Http {
+        client: reqwest::Client,
+        url: String,
+        headers: Vec<(String, String)>,
+        session: RefCell<Option<String>>,
+    },
 }
 
 #[cfg(test)]

@@ -51,13 +51,24 @@ impl HooksConfig {
 
     /// Whether any hook could see a tool call: reads run side by side only when none could.
     pub fn has_tool_hooks(&self) -> bool {
-        ["PreToolUse", "PostToolUse"].iter().any(|event| self.0.get(*event).is_some_and(|hooks| !hooks.is_empty()))
+        ["PreToolUse", "PostToolUse"]
+            .iter()
+            .any(|event| self.0.get(*event).is_some_and(|hooks| !hooks.is_empty()))
     }
 
     /// Runs every hook for `event` whose matcher fits `tool`, in order.
-    pub async fn run(&self, event: &str, tool: Option<&str>, cwd: &Path, session: &str, mut payload: Value) -> Outcome {
+    pub async fn run(
+        &self,
+        event: &str,
+        tool: Option<&str>,
+        cwd: &Path,
+        session: &str,
+        mut payload: Value,
+    ) -> Outcome {
         let mut outcome = Outcome::default();
-        let Some(hooks) = self.0.get(event) else { return outcome };
+        let Some(hooks) = self.0.get(event) else {
+            return outcome;
+        };
         payload["hook_event_name"] = event.into();
         payload["session_id"] = session.into();
         payload["cwd"] = cwd.display().to_string().into();
@@ -67,12 +78,17 @@ impl HooksConfig {
                 continue;
             }
             let timeout = Duration::from_secs(hook.timeout.unwrap_or(60));
-            let Some((code, stdout, stderr)) = execute(&hook.command, cwd, &input, timeout).await else {
+            let Some((code, stdout, stderr)) = execute(&hook.command, cwd, &input, timeout).await
+            else {
                 outcome.failures.push(hook.command.clone());
                 continue;
             };
             if code == 2 {
-                let reason = if stderr.trim().is_empty() { format!("blocked by hook `{}`", hook.command) } else { stderr.trim().to_string() };
+                let reason = if stderr.trim().is_empty() {
+                    format!("blocked by hook `{}`", hook.command)
+                } else {
+                    stderr.trim().to_string()
+                };
                 outcome.block.get_or_insert(reason);
                 continue;
             }
@@ -82,7 +98,10 @@ impl HooksConfig {
             match serde_json::from_str::<Value>(stdout.trim()) {
                 Ok(answer) if answer.is_object() => {
                     let specific = &answer["hookSpecificOutput"];
-                    if answer["decision"] == "block" || specific["permissionDecision"] == "deny" || answer["continue"] == false {
+                    if answer["decision"] == "block"
+                        || specific["permissionDecision"] == "deny"
+                        || answer["continue"] == false
+                    {
                         let reason = answer["reason"]
                             .as_str()
                             .or(specific["permissionDecisionReason"].as_str())
@@ -90,11 +109,16 @@ impl HooksConfig {
                             .unwrap_or("blocked by a hook");
                         outcome.block.get_or_insert(reason.to_string());
                     }
-                    if let Some(context) = specific["additionalContext"].as_str().filter(|c| !c.is_empty()) {
+                    if let Some(context) = specific["additionalContext"]
+                        .as_str()
+                        .filter(|c| !c.is_empty())
+                    {
                         outcome.context.push(context.to_string());
                     }
                 }
-                _ if !stdout.trim().is_empty() && matches!(event, "UserPromptSubmit" | "SessionStart") => {
+                _ if !stdout.trim().is_empty()
+                    && matches!(event, "UserPromptSubmit" | "SessionStart") =>
+                {
                     outcome.context.push(stdout.trim().to_string());
                 }
                 _ => {}
@@ -105,8 +129,13 @@ impl HooksConfig {
 }
 
 fn matches(matcher: Option<&str>, tool: Option<&str>) -> bool {
-    let (Some(matcher), Some(tool)) = (matcher.filter(|m| !m.is_empty() && *m != "*"), tool) else { return true };
-    regex::RegexBuilder::new(&format!("^(?:{matcher})$")).case_insensitive(true).build().is_ok_and(|re| re.is_match(tool))
+    let (Some(matcher), Some(tool)) = (matcher.filter(|m| !m.is_empty() && *m != "*"), tool) else {
+        return true;
+    };
+    regex::RegexBuilder::new(&format!("^(?:{matcher})$"))
+        .case_insensitive(true)
+        .build()
+        .is_ok_and(|re| re.is_match(tool))
 }
 
 /// Ends a hook's whole process group when dropped, unless it finished: a timeout or an
@@ -119,7 +148,10 @@ struct Group {
 
 impl Group {
     fn new(id: Option<u32>) -> Self {
-        Self { pgid: id, _tracked: id.map(track) }
+        Self {
+            pgid: id,
+            _tracked: id.map(track),
+        }
     }
 }
 
@@ -152,7 +184,12 @@ fn spawn_hook(command: &str, cwd: &Path) -> std::io::Result<tokio::process::Chil
         .spawn()
 }
 
-async fn execute(command: &str, cwd: &Path, input: &str, timeout: Duration) -> Option<(i32, String, String)> {
+async fn execute(
+    command: &str,
+    cwd: &Path,
+    input: &str,
+    timeout: Duration,
+) -> Option<(i32, String, String)> {
     let mut child = spawn_hook(command, cwd).ok()?;
     let mut group = Group::new(child.id());
     let mut stdin = child.stdin.take();
@@ -163,7 +200,11 @@ async fn execute(command: &str, cwd: &Path, input: &str, timeout: Duration) -> O
             let _ = stdin.write_all(input.as_bytes()).await;
         }
     };
-    let (_, output) = tokio::time::timeout(timeout, async { tokio::join!(feed, child.wait_with_output()) }).await.ok()?;
+    let (_, output) = tokio::time::timeout(timeout, async {
+        tokio::join!(feed, child.wait_with_output())
+    })
+    .await
+    .ok()?;
     let output = output.ok()?;
     group.pgid = None;
     group._tracked = None;
@@ -197,13 +238,39 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn exit_code_two_blocks_with_stderr() {
-        let hooks = config("[[hooks.PreToolUse]]\nmatcher = \"bash\"\ncommand = \"grep -q 'rm -rf' && echo 'no rm -rf' >&2 && exit 2; exit 0\"\n");
+        let hooks = config(
+            "[[hooks.PreToolUse]]\nmatcher = \"bash\"\ncommand = \"grep -q 'rm -rf' && echo 'no rm -rf' >&2 && exit 2; exit 0\"\n",
+        );
         let cwd = std::env::temp_dir();
-        let blocked = hooks.run("PreToolUse", Some("bash"), &cwd, "s", tool_payload("bash", &json!({"command": "rm -rf /"}), None)).await;
+        let blocked = hooks
+            .run(
+                "PreToolUse",
+                Some("bash"),
+                &cwd,
+                "s",
+                tool_payload("bash", &json!({"command": "rm -rf /"}), None),
+            )
+            .await;
         assert_eq!(blocked.block.as_deref(), Some("no rm -rf"));
-        let allowed = hooks.run("PreToolUse", Some("bash"), &cwd, "s", tool_payload("bash", &json!({"command": "ls"}), None)).await;
+        let allowed = hooks
+            .run(
+                "PreToolUse",
+                Some("bash"),
+                &cwd,
+                "s",
+                tool_payload("bash", &json!({"command": "ls"}), None),
+            )
+            .await;
         assert!(allowed.block.is_none());
-        let other = hooks.run("PreToolUse", Some("read"), &cwd, "s", tool_payload("read", &json!({}), None)).await;
+        let other = hooks
+            .run(
+                "PreToolUse",
+                Some("read"),
+                &cwd,
+                "s",
+                tool_payload("read", &json!({}), None),
+            )
+            .await;
         assert!(other.block.is_none());
     }
 
@@ -218,10 +285,25 @@ mod tests {
         let big = "x".repeat(300_000);
         let cwd = std::env::temp_dir();
         let started = std::time::Instant::now();
-        hooks.run("PostToolUse", Some("bash"), &cwd, "s", tool_payload("bash", &json!({}), Some(&big))).await;
-        assert!(started.elapsed() < Duration::from_secs(5), "the timeout did not apply: {:?}", started.elapsed());
+        hooks
+            .run(
+                "PostToolUse",
+                Some("bash"),
+                &cwd,
+                "s",
+                tool_payload("bash", &json!({}), Some(&big)),
+            )
+            .await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the timeout did not apply: {:?}",
+            started.elapsed()
+        );
         tokio::time::sleep(Duration::from_millis(2500)).await;
-        assert!(!marker.exists(), "a process the hook started outlived its timeout");
+        assert!(
+            !marker.exists(),
+            "a process the hook started outlived its timeout"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -233,7 +315,10 @@ mod tests {
         let pgid = child.id().unwrap();
         {
             let _group = Group::new(child.id());
-            assert!(registered(pgid), "the hook's group is tracked while the hook runs");
+            assert!(
+                registered(pgid),
+                "the hook's group is tracked while the hook runs"
+            );
         }
         assert!(!registered(pgid), "a finished hook unregisters its group");
         let _ = child.kill().await;
@@ -255,9 +340,19 @@ mod tests {
             "[[hooks.Stop]]\ncommand = \"echo '{\\\"decision\\\": \\\"block\\\", \\\"reason\\\": \\\"run the tests first\\\"}'\"\n",
         ));
         let cwd = std::env::temp_dir();
-        let prompt = hooks.run("UserPromptSubmit", None, &cwd, "s", json!({"prompt": "ship it"})).await;
+        let prompt = hooks
+            .run(
+                "UserPromptSubmit",
+                None,
+                &cwd,
+                "s",
+                json!({"prompt": "ship it"}),
+            )
+            .await;
         assert_eq!(prompt.context, vec!["Today is release day.".to_string()]);
-        let stop = hooks.run("Stop", None, &cwd, "s", json!({"stop_hook_active": false})).await;
+        let stop = hooks
+            .run("Stop", None, &cwd, "s", json!({"stop_hook_active": false}))
+            .await;
         assert_eq!(stop.block.as_deref(), Some("run the tests first"));
     }
 }

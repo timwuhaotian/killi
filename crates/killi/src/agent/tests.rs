@@ -5,7 +5,11 @@ mod turn;
 mod units;
 
 fn call(arguments: &str) -> ToolCall {
-    ToolCall { id: "c".into(), name: "read".into(), arguments: arguments.into() }
+    ToolCall {
+        id: "c".into(),
+        name: "read".into(),
+        arguments: arguments.into(),
+    }
 }
 
 /// A client that talks to a test stub instead of a provider.
@@ -62,7 +66,9 @@ async fn stub_replies(replies: Vec<String>) -> String {
                     Ok(n) => buffer.extend_from_slice(&chunk[..n]),
                 }
             }
-            let body = format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{reply}");
+            let body = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{reply}"
+            );
             let _ = socket.write_all(body.as_bytes()).await;
             let _ = socket.shutdown().await;
         }
@@ -79,7 +85,9 @@ async fn serve_raw(replies: Vec<String>) -> String {
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
         for reply in replies {
-            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
             let mut buffer = Vec::new();
             let mut chunk = [0u8; 4096];
             loop {
@@ -119,8 +127,18 @@ fn idle_agent(name: &str, controls: Controls, sink: Sink) -> Agent {
     let tmp = crate::test_temp::TempDir::new(&format!("killi-{name}"));
     let log = tmp.join("session.jsonl");
     std::fs::write(&log, "").unwrap();
-    let mut agent = Agent::assemble(test_client(), tmp.path(), Vec::new(), Settings::default(), controls, sink, Session::open(&log).unwrap());
-    Rc::get_mut(&mut agent.ctx).expect("a fresh agent owns its context").temp = Some(tmp);
+    let mut agent = Agent::assemble(
+        test_client(),
+        tmp.path(),
+        Vec::new(),
+        Settings::default(),
+        controls,
+        sink,
+        Session::open(&log).unwrap(),
+    );
+    Rc::get_mut(&mut agent.ctx)
+        .expect("a fresh agent owns its context")
+        .temp = Some(tmp);
     agent
 }
 

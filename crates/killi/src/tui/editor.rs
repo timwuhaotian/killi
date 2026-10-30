@@ -22,7 +22,10 @@ pub struct Editor {
 
 impl Editor {
     pub fn with_history(history: Vec<String>) -> Self {
-        Self { history, ..Self::default() }
+        Self {
+            history,
+            ..Self::default()
+        }
     }
 
     pub fn text(&self) -> &str {
@@ -59,7 +62,11 @@ impl Editor {
     /// Inserts `word` at the cursor as a word of its own: a space before it when the cursor
     /// follows one, and a space after.
     pub fn insert_word(&mut self, word: &str) {
-        let lead = if self.before_cursor().ends_with(|c: char| !c.is_whitespace()) { " " } else { "" };
+        let lead = if self.before_cursor().ends_with(|c: char| !c.is_whitespace()) {
+            " "
+        } else {
+            ""
+        };
         self.insert(&format!("{lead}{word} "));
     }
 
@@ -75,7 +82,10 @@ impl Editor {
     pub fn take_with_images(&mut self) -> (String, Vec<Image>) {
         let images = std::mem::take(&mut self.images);
         let text = self.take();
-        let images = images.into_iter().filter(|image| text.contains(&image.label)).collect();
+        let images = images
+            .into_iter()
+            .filter(|image| text.contains(&image.label))
+            .collect();
         (text, images)
     }
 
@@ -134,19 +144,29 @@ impl Editor {
     }
 
     pub fn end(&mut self) {
-        self.cursor = self.text[self.cursor..].find('\n').map_or(self.text.len(), |i| self.cursor + i);
+        self.cursor = self.text[self.cursor..]
+            .find('\n')
+            .map_or(self.text.len(), |i| self.cursor + i);
     }
 
     pub fn word_left(&mut self) {
         let before = &self.text[..self.cursor];
         let trimmed = before.trim_end_matches(|c: char| !c.is_alphanumeric());
-        self.cursor = trimmed.rfind(|c: char| !c.is_alphanumeric()).map_or(0, |i| i + trimmed[i..].chars().next().map_or(1, char::len_utf8));
+        self.cursor = trimmed
+            .rfind(|c: char| !c.is_alphanumeric())
+            .map_or(0, |i| {
+                i + trimmed[i..].chars().next().map_or(1, char::len_utf8)
+            });
     }
 
     pub fn word_right(&mut self) {
         let after = &self.text[self.cursor..];
-        let skip = after.find(|c: char| c.is_alphanumeric()).unwrap_or(after.len());
-        let end = after[skip..].find(|c: char| !c.is_alphanumeric()).map_or(after.len(), |i| skip + i);
+        let skip = after
+            .find(|c: char| c.is_alphanumeric())
+            .unwrap_or(after.len());
+        let end = after[skip..]
+            .find(|c: char| !c.is_alphanumeric())
+            .map_or(after.len(), |i| skip + i);
         self.cursor += end;
     }
 
@@ -158,14 +178,24 @@ impl Editor {
 
     pub fn kill_to_start(&mut self) {
         let start = self.line_start(self.cursor);
-        let start = if start == self.cursor && start > 0 { self.line_start(start - 1) } else { start };
+        let start = if start == self.cursor && start > 0 {
+            self.line_start(start - 1)
+        } else {
+            start
+        };
         self.text.replace_range(start..self.cursor, "");
         self.cursor = start;
     }
 
     pub fn kill_to_end(&mut self) {
-        let end = self.text[self.cursor..].find('\n').map_or(self.text.len(), |i| self.cursor + i);
-        let end = if end == self.cursor && end < self.text.len() { end + 1 } else { end };
+        let end = self.text[self.cursor..]
+            .find('\n')
+            .map_or(self.text.len(), |i| self.cursor + i);
+        let end = if end == self.cursor && end < self.text.len() {
+            end + 1
+        } else {
+            end
+        };
         self.text.replace_range(self.cursor..end, "");
     }
 
@@ -199,7 +229,10 @@ impl Editor {
             None => self.history.len().checked_sub(1),
         };
         if let Some(index) = index {
-            let draft = self.browsing.take().map_or_else(|| self.text.clone(), |(_, draft)| draft);
+            let draft = self
+                .browsing
+                .take()
+                .map_or_else(|| self.text.clone(), |(_, draft)| draft);
             self.text = self.history[index].clone();
             self.cursor = self.text.len();
             self.browsing = Some((index, draft));
@@ -221,7 +254,9 @@ impl Editor {
             }
         }
         if let Some(i) = self.text[self.cursor..].find('\n') {
-            let column = self.text[self.line_start(self.cursor)..self.cursor].chars().count();
+            let column = self.text[self.line_start(self.cursor)..self.cursor]
+                .chars()
+                .count();
             self.cursor = self.at_column(self.cursor + i + 1, column);
             return;
         }
@@ -245,8 +280,13 @@ impl Editor {
     }
 
     fn at_column(&self, line_start: usize, column: usize) -> usize {
-        let line_end = self.text[line_start..].find('\n').map_or(self.text.len(), |i| line_start + i);
-        self.text[line_start..line_end].char_indices().nth(column).map_or(line_end, |(i, _)| line_start + i)
+        let line_end = self.text[line_start..]
+            .find('\n')
+            .map_or(self.text.len(), |i| line_start + i);
+        self.text[line_start..line_end]
+            .char_indices()
+            .nth(column)
+            .map_or(line_end, |(i, _)| line_start + i)
     }
 
     /// The visual rows at the room from the last render, laid out as `render` lays them
@@ -273,7 +313,10 @@ impl Editor {
                     column += w;
                 }
             }
-            let bounds: Vec<usize> = std::iter::once(0).chain(row_starts(&chars, room)).chain([chars.len()]).collect();
+            let bounds: Vec<usize> = std::iter::once(0)
+                .chain(row_starts(&chars, room))
+                .chain([chars.len()])
+                .collect();
             for (r, span) in bounds.windows(2).enumerate() {
                 let mut positions = Vec::new();
                 let mut column = 0;
@@ -284,8 +327,16 @@ impl Editor {
                     }
                     column += w;
                 }
-                let end = if span[1] == chars.len() { offset + line.len() } else { offset + chars[span[1]].0 };
-                rows.push(VisualRow { positions, end: (end, column), last: r + 2 == bounds.len() });
+                let end = if span[1] == chars.len() {
+                    offset + line.len()
+                } else {
+                    offset + chars[span[1]].0
+                };
+                rows.push(VisualRow {
+                    positions,
+                    end: (end, column),
+                    last: r + 2 == bounds.len(),
+                });
             }
             offset += line.len() + 1;
         }
@@ -297,12 +348,19 @@ impl Editor {
     /// holds it, so a byte starting a wrapped row is on that row and a tab byte is at
     /// the tab's first column in its row.
     fn visual_cursor(&self, rows: &[VisualRow]) -> Option<(usize, usize)> {
-        if let Some(row) = rows.iter().position(|row| row.last && row.end.0 == self.cursor) {
+        if let Some(row) = rows
+            .iter()
+            .position(|row| row.last && row.end.0 == self.cursor)
+        {
             return Some((row, rows[row].end.1));
         }
         let mut found = None;
         for (row, visual) in rows.iter().enumerate() {
-            if let Some(&(_, column)) = visual.positions.iter().find(|&&(byte, _)| byte == self.cursor) {
+            if let Some(&(_, column)) = visual
+                .positions
+                .iter()
+                .find(|&&(byte, _)| byte == self.cursor)
+            {
                 found = Some((row, column));
             }
         }
@@ -357,7 +415,12 @@ impl Editor {
     /// accepts are drawn in lagoon, like other commands. A tab stays in the text but is laid
     /// out as the spaces to the next 4-column stop, counted from its line's first column, so
     /// the row widths and the cursor agree with what the screen shows.
-    pub fn render(&self, prompt: &str, width: usize, known: &dyn Fn(&str) -> bool) -> (Vec<String>, usize, usize) {
+    pub fn render(
+        &self,
+        prompt: &str,
+        width: usize,
+        known: &dyn Fn(&str) -> bool,
+    ) -> (Vec<String>, usize, usize) {
         let prompt_width = super::text::width(prompt);
         let room = width.saturating_sub(prompt_width).max(1);
         self.room.set(room);
@@ -366,7 +429,11 @@ impl Editor {
         let mut cursor = (0, prompt_width);
         let mut offset = 0;
         for (n, line) in self.text.split('\n').enumerate() {
-            let lead = if n == 0 { prompt.to_string() } else { " ".repeat(prompt_width) };
+            let lead = if n == 0 {
+                prompt.to_string()
+            } else {
+                " ".repeat(prompt_width)
+            };
             let mut chars: Vec<(usize, char, usize)> = Vec::new();
             let mut column = 0;
             for (i, c) in line.char_indices() {
@@ -381,7 +448,10 @@ impl Editor {
                     column += w;
                 }
             }
-            let bounds: Vec<usize> = std::iter::once(0).chain(row_starts(&chars, room)).chain([chars.len()]).collect();
+            let bounds: Vec<usize> = std::iter::once(0)
+                .chain(row_starts(&chars, room))
+                .chain([chars.len()])
+                .collect();
             for (r, span) in bounds.windows(2).enumerate() {
                 let mut row = String::new();
                 let mut row_width = 0;
@@ -394,14 +464,22 @@ impl Editor {
                     // at the tab's first column, as the cursor on the tab itself.
                     if offset + i == self.cursor && placed != i {
                         placed = i;
-                        cursor = if hanging { (rows.len() + 1, prompt_width) } else { (rows.len(), prompt_width + row_width) };
+                        cursor = if hanging {
+                            (rows.len() + 1, prompt_width)
+                        } else {
+                            (rows.len(), prompt_width + row_width)
+                        };
                     }
                     if hanging {
                         continue;
                     }
                     let on = marked.iter().any(|&(s, e)| (s..e).contains(&(offset + i)));
                     if on != lit {
-                        row.push_str(&if on { LAGOON.to_string() } else { RESET.to_string() });
+                        row.push_str(&if on {
+                            LAGOON.to_string()
+                        } else {
+                            RESET.to_string()
+                        });
                         lit = on;
                     }
                     row.push(c);
@@ -411,9 +489,20 @@ impl Editor {
                     row.push_str(RESET);
                 }
                 if span[1] == chars.len() && offset + line.len() == self.cursor {
-                    cursor = if row_width >= room { (rows.len() + 1, prompt_width) } else { (rows.len(), prompt_width + row_width) };
+                    cursor = if row_width >= room {
+                        (rows.len() + 1, prompt_width)
+                    } else {
+                        (rows.len(), prompt_width + row_width)
+                    };
                 }
-                rows.push(format!("{}{row}", if r == 0 { lead.clone() } else { " ".repeat(prompt_width) }));
+                rows.push(format!(
+                    "{}{row}",
+                    if r == 0 {
+                        lead.clone()
+                    } else {
+                        " ".repeat(prompt_width)
+                    }
+                ));
             }
             offset += line.len() + 1;
         }
@@ -450,7 +539,11 @@ fn row_starts(chars: &[(usize, char, usize)], room: usize) -> Vec<usize> {
             continue;
         }
         if width + w > room {
-            let at = if word_start > row_start { word_start } else { k };
+            let at = if word_start > row_start {
+                word_start
+            } else {
+                k
+            };
             starts.push(at);
             row_start = at;
             width = chars[at..k].iter().map(|&(.., w)| w).sum();

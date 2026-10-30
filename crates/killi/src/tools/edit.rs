@@ -26,7 +26,11 @@ pub fn edit(ctx: &Context, args: &Value) -> Output {
     let full = resolve(ctx, path);
     let bytes = match fs::read(&full) {
         Ok(bytes) => bytes,
-        Err(e) => return Output::error(format!("Could not read {path}: {e}. To create a file, use write.")),
+        Err(e) => {
+            return Output::error(format!(
+                "Could not read {path}: {e}. To create a file, use write."
+            ));
+        }
     };
     if is_binary(&bytes) {
         return Output::error(format!("{path} is a binary file; edit only works on text."));
@@ -41,8 +45,11 @@ pub fn edit(ctx: &Context, args: &Value) -> Output {
     match apply(&file.text, &edits, path) {
         Ok(applied) => match fs::write(&full, file.encode(&applied.text)) {
             Ok(()) => {
-                let mut output = Output::ok(format!("Applied {} replacement(s) to {path}.", applied.count))
-                    .brief(format!("+{} −{}", applied.added, applied.removed));
+                let mut output = Output::ok(format!(
+                    "Applied {} replacement(s) to {path}.",
+                    applied.count
+                ))
+                .brief(format!("+{} −{}", applied.added, applied.removed));
                 output.display = Some(applied.diff);
                 output
             }
@@ -59,14 +66,21 @@ fn parse_edits(args: &Value) -> Result<Vec<Edit>, String> {
         Some(Edit {
             old: v.get("old_string")?.as_str()?.to_string(),
             new: v.get("new_string")?.as_str()?.to_string(),
-            all: v.get("replace_all").and_then(Value::as_bool).unwrap_or(false),
+            all: v
+                .get("replace_all")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     };
     let Some(list) = args.get("edits") else {
-        return one(args).map(|e| vec![e]).ok_or_else(|| "edit needs `edits`: a list of {old_string, new_string}.".into());
+        return one(args)
+            .map(|e| vec![e])
+            .ok_or_else(|| "edit needs `edits`: a list of {old_string, new_string}.".into());
     };
     let list = match list {
-        Value::String(s) => serde_json::from_str(s).map_err(|e| format!("`edits` is not valid JSON: {e}"))?,
+        Value::String(s) => {
+            serde_json::from_str(s).map_err(|e| format!("`edits` is not valid JSON: {e}"))?
+        }
         other => other.clone(),
     };
     let Some(items) = list.as_array().filter(|items| !items.is_empty()) else {
@@ -75,7 +89,10 @@ fn parse_edits(args: &Value) -> Result<Vec<Edit>, String> {
     items
         .iter()
         .enumerate()
-        .map(|(i, item)| one(item).ok_or_else(|| format!("edits[{i}] needs string `old_string` and `new_string`.")))
+        .map(|(i, item)| {
+            one(item)
+                .ok_or_else(|| format!("edits[{i}] needs string `old_string` and `new_string`."))
+        })
         .collect()
 }
 
@@ -91,7 +108,13 @@ struct Applied {
 /// Matches every edit against the original text: exactly first, then ignoring trailing
 /// whitespace, smart quotes, Unicode dashes and special spaces.
 fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
-    let label = |i: usize| if edits.len() == 1 { "old_string".to_string() } else { format!("edits[{i}].old_string") };
+    let label = |i: usize| {
+        if edits.len() == 1 {
+            "old_string".to_string()
+        } else {
+            format!("edits[{i}].old_string")
+        }
+    };
     let mut normalized: Option<Normalized> = None;
     let mut ranges: Vec<(usize, usize, usize)> = Vec::new();
     for (i, edit) in edits.iter().enumerate() {
@@ -99,7 +122,10 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
         if old.is_empty() {
             return Err(format!("{} must not be empty in {path}.", label(i)));
         }
-        let mut found: Vec<(usize, usize)> = text.match_indices(&old).map(|(s, m)| (s, s + m.len())).collect();
+        let mut found: Vec<(usize, usize)> = text
+            .match_indices(&old)
+            .map(|(s, m)| (s, s + m.len()))
+            .collect();
         if found.is_empty() {
             let haystack = normalized.get_or_insert_with(|| Normalized::new(text));
             let needle = Normalized::new(&old).text;
@@ -138,7 +164,10 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
         }
     }
     // One pass over the sorted ranges: the new text, the line each range starts on, and its hunk.
-    let news: Vec<String> = edits.iter().map(|edit| edit.new.replace("\r\n", "\n")).collect();
+    let news: Vec<String> = edits
+        .iter()
+        .map(|edit| edit.new.replace("\r\n", "\n"))
+        .collect();
     let mut out = String::with_capacity(text.len());
     let mut diff = String::new();
     let (mut added, mut removed) = (0, 0);
@@ -149,7 +178,12 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
         out.push_str(&news[i]);
         copied = end;
         let shift = added as isize - removed as isize;
-        let (hunk, plus, minus) = line_diff(&text[start..end], &news[i], line, line.saturating_add_signed(shift));
+        let (hunk, plus, minus) = line_diff(
+            &text[start..end],
+            &news[i],
+            line,
+            line.saturating_add_signed(shift),
+        );
         if hunks < MAX_HUNKS {
             if hunks > 0 {
                 diff.push_str("⋮\n");
@@ -162,12 +196,23 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
     }
     out.push_str(&text[copied..]);
     if ranges.len() > hunks {
-        diff.push_str(&format!("⋮\n{} more changes not shown\n", ranges.len() - hunks));
+        diff.push_str(&format!(
+            "⋮\n{} more changes not shown\n",
+            ranges.len() - hunks
+        ));
     }
     if out == text {
-        return Err(format!("No changes made to {path}: the replacement produced identical content."));
+        return Err(format!(
+            "No changes made to {path}: the replacement produced identical content."
+        ));
     }
-    Ok(Applied { text: out, count: ranges.len(), added, removed, diff })
+    Ok(Applied {
+        text: out,
+        count: ranges.len(),
+        added,
+        removed,
+        diff,
+    })
 }
 
 /// The lines that changed between `old` and `new`, and how many were added and removed. Each
@@ -178,13 +223,21 @@ fn line_diff(old: &str, new: &str, old_line: usize, new_line: usize) -> (String,
     let b: Vec<&str> = new.lines().collect();
     let mut ops: Vec<(char, &str)> = Vec::new();
     if a.len() * b.len() > 250_000 {
-        ops.extend(a.iter().map(|l| ('-', *l)).chain(b.iter().map(|l| ('+', *l))));
+        ops.extend(
+            a.iter()
+                .map(|l| ('-', *l))
+                .chain(b.iter().map(|l| ('+', *l))),
+        );
     } else {
         // lcs[i][j]: the longest common subsequence of a[i..] and b[j..].
         let mut lcs = vec![vec![0u32; b.len() + 1]; a.len() + 1];
         for i in (0..a.len()).rev() {
             for j in (0..b.len()).rev() {
-                lcs[i][j] = if a[i] == b[j] { lcs[i + 1][j + 1] + 1 } else { lcs[i + 1][j].max(lcs[i][j + 1]) };
+                lcs[i][j] = if a[i] == b[j] {
+                    lcs[i + 1][j + 1] + 1
+                } else {
+                    lcs[i + 1][j].max(lcs[i][j + 1])
+                };
             }
         }
         let (mut i, mut j) = (0, 0);
@@ -201,7 +254,11 @@ fn line_diff(old: &str, new: &str, old_line: usize, new_line: usize) -> (String,
             }
         }
     }
-    let near = |k: usize| ops[k.saturating_sub(2)..(k + 3).min(ops.len())].iter().any(|(sign, _)| *sign != ' ');
+    let near = |k: usize| {
+        ops[k.saturating_sub(2)..(k + 3).min(ops.len())]
+            .iter()
+            .any(|(sign, _)| *sign != ' ')
+    };
     let (mut out, mut folded) = (String::new(), false);
     let (mut old_no, mut new_no) = (old_line, new_line);
     for (k, (sign, text)) in ops.iter().enumerate() {
@@ -227,9 +284,14 @@ fn line_diff(old: &str, new: &str, old_line: usize, new_line: usize) -> (String,
 /// An unrelated file gets no hint.
 fn closest_hint(text: &str, old: &str) -> Option<String> {
     let start = nearest_line(text, old)?;
-    let expected: Vec<&str> = old.lines().skip_while(|line| line.trim().is_empty()).collect();
+    let expected: Vec<&str> = old
+        .lines()
+        .skip_while(|line| line.trim().is_empty())
+        .collect();
     if expected.len() < 2 {
-        return Some(format!(" The closest line is line {start}; read from there."));
+        return Some(format!(
+            " The closest line is line {start}; read from there."
+        ));
     }
     let lines: Vec<&str> = text.lines().collect();
     let distance = edit_distance(expected[0].trim(), lines[start - 1].trim());
@@ -238,25 +300,39 @@ fn closest_hint(text: &str, old: &str) -> Option<String> {
         if edit_distance(expected[0].trim(), line.trim()) != distance {
             continue;
         }
-        let prefix = expected.iter().zip(&lines[index..]).take_while(|(want, actual)| want == actual).count();
+        let prefix = expected
+            .iter()
+            .zip(&lines[index..])
+            .take_while(|(want, actual)| want == actual)
+            .count();
         if prefix > matched {
             (best, matched) = (index, prefix);
         }
     }
     if matched == expected.len() {
-        return Some(format!(" The closest line is line {}; read from there.", best + 1));
+        return Some(format!(
+            " The closest line is line {}; read from there.",
+            best + 1
+        ));
     }
     let line = best + matched + 1;
     let actual = lines.get(best + matched);
     let detail = match actual {
         Some(actual) => {
             let excerpt: String = actual.chars().take(160).collect();
-            let suffix = if actual.chars().count() > 160 { "…" } else { "" };
+            let suffix = if actual.chars().count() > 160 {
+                "…"
+            } else {
+                ""
+            };
             format!("the file has {excerpt:?}{suffix}.")
         }
         None => "the file ends there.".to_string(),
     };
-    Some(format!(" The closest block starts at line {}; first differing line is line {line}: {detail}", best + 1))
+    Some(format!(
+        " The closest block starts at line {}; first differing line is line {line}: {detail}",
+        best + 1
+    ))
 }
 
 /// The 1-based line of `text` closest to `old`'s first non-empty line, trimmed on both sides.
@@ -281,7 +357,11 @@ fn edit_distance(a: &str, b: &str) -> usize {
         row[0] = i + 1;
         for (j, cb) in b.iter().enumerate() {
             let above = row[j + 1];
-            row[j + 1] = if ca == *cb { diagonal } else { 1 + diagonal.min(row[j]).min(above) };
+            row[j + 1] = if ca == *cb {
+                diagonal
+            } else {
+                1 + diagonal.min(row[j]).min(above)
+            };
             diagonal = above;
         }
     }
@@ -342,50 +422,94 @@ mod tests {
         let new = "a\nb\nc\nD\ne\nf\ng\nh\n";
         let (diff, added, removed) = line_diff(old, new, 10, 10);
         assert_eq!((added, removed), (2, 1));
-        assert_eq!(diff, "⋮\n 11\tb\n 12\tc\n-13\td\n+13\tD\n 14\te\n 15\tf\n 16\tg\n+17\th\n");
+        assert_eq!(
+            diff,
+            "⋮\n 11\tb\n 12\tc\n-13\td\n+13\tD\n 14\te\n 15\tf\n 16\tg\n+17\th\n"
+        );
     }
 
     #[test]
     fn exact_multi_edit_against_the_original() {
-        let out = run("a b c", json!({"edits": [
-            {"old_string": "a", "new_string": "b"},
-            {"old_string": "b", "new_string": "x"}
-        ]}));
+        let out = run(
+            "a b c",
+            json!({"edits": [
+                {"old_string": "a", "new_string": "b"},
+                {"old_string": "b", "new_string": "x"}
+            ]}),
+        );
         assert_eq!(out.unwrap(), "b x c");
     }
 
     #[test]
     fn ambiguous_and_missing_matches_are_errors() {
-        assert!(run("x x", json!({"old_string": "x", "new_string": "y"})).unwrap_err().contains("Found 2 matches"));
-        assert_eq!(run("x x", json!({"old_string": "x", "new_string": "y", "replace_all": true})).unwrap(), "y y");
-        assert!(run("abc", json!({"old_string": "zzz", "new_string": "y"})).unwrap_err().contains("Could not find"));
+        assert!(
+            run("x x", json!({"old_string": "x", "new_string": "y"}))
+                .unwrap_err()
+                .contains("Found 2 matches")
+        );
+        assert_eq!(
+            run(
+                "x x",
+                json!({"old_string": "x", "new_string": "y", "replace_all": true})
+            )
+            .unwrap(),
+            "y y"
+        );
+        assert!(
+            run("abc", json!({"old_string": "zzz", "new_string": "y"}))
+                .unwrap_err()
+                .contains("Could not find")
+        );
     }
 
     #[test]
     fn a_missing_match_points_at_the_closest_line() {
         let text = "fn main() {\n    let credits_balance = 0;\n}\n";
-        let err = run(text, json!({"old_string": "\tlet credits_balanc = 0;", "new_string": "x"})).unwrap_err();
+        let err = run(
+            text,
+            json!({"old_string": "\tlet credits_balanc = 0;", "new_string": "x"}),
+        )
+        .unwrap_err();
         assert!(err.contains("closest line is line 2"), "{err}");
-        let far = run(text, json!({"old_string": "something unrelated entirely", "new_string": "x"})).unwrap_err();
+        let far = run(
+            text,
+            json!({"old_string": "something unrelated entirely", "new_string": "x"}),
+        )
+        .unwrap_err();
         assert!(!far.contains("closest line"), "{far}");
     }
 
     #[test]
     fn a_missing_block_points_at_the_later_difference_in_the_best_window() {
         let text = "fn a() {\n    let x = 0;\n    let y = 2;\n}\nfn a() {\n    let x = 1;\n    let y = 3;\n}\n";
-        let err = run(text, json!({"old_string": "fn a() {\n    let x = 1;\n    let y = 4;\n}", "new_string": "x"})).unwrap_err();
+        let err = run(
+            text,
+            json!({"old_string": "fn a() {\n    let x = 1;\n    let y = 4;\n}", "new_string": "x"}),
+        )
+        .unwrap_err();
         assert!(err.contains("closest block starts at line 5; first differing line is line 7: the file has \"    let y = 3;\"."), "{err}");
     }
 
     #[test]
     fn a_missing_block_can_point_at_end_of_file() {
-        let err = run("first\nsecond\n", json!({"old_string": "first\nsecond\nthird", "new_string": "x"})).unwrap_err();
-        assert!(err.contains("first differing line is line 3: the file ends there."), "{err}");
+        let err = run(
+            "first\nsecond\n",
+            json!({"old_string": "first\nsecond\nthird", "new_string": "x"}),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("first differing line is line 3: the file ends there."),
+            "{err}"
+        );
     }
 
     #[test]
     fn each_change_in_the_diff_carries_its_own_line_number() {
-        let edits = [Edit { old: "foo".into(), new: "bar".into(), all: true }];
+        let edits = [Edit {
+            old: "foo".into(),
+            new: "bar".into(),
+            all: true,
+        }];
         let applied = apply("a\nfoo\nb\nfoo\n", &edits, "f").unwrap();
         assert_eq!(applied.text, "a\nbar\nb\nbar\n");
         assert_eq!(applied.diff, "-2\tfoo\n+2\tbar\n⋮\n-4\tfoo\n+4\tbar\n");
@@ -394,35 +518,55 @@ mod tests {
     #[test]
     fn replace_all_over_many_matches_is_one_pass_and_its_diff_is_short() {
         let text = "let foo = 1;\n".repeat(100_000);
-        let edits = [Edit { old: "foo".into(), new: "bar".into(), all: true }];
+        let edits = [Edit {
+            old: "foo".into(),
+            new: "bar".into(),
+            all: true,
+        }];
         let started = std::time::Instant::now();
         let applied = apply(&text, &edits, "f").unwrap();
-        assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
         assert_eq!(applied.text, text.replace("foo", "bar"));
-        assert_eq!((applied.count, applied.added, applied.removed), (100_000, 100_000, 100_000));
+        assert_eq!(
+            (applied.count, applied.added, applied.removed),
+            (100_000, 100_000, 100_000)
+        );
         assert!(applied.diff.ends_with("⋮\n99900 more changes not shown\n"));
         assert!(applied.diff.len() < 20_000, "{} bytes", applied.diff.len());
     }
 
     #[test]
     fn overlapping_edits_are_rejected() {
-        let err = run("abcdef", json!({"edits": [
-            {"old_string": "abcd", "new_string": "1"},
-            {"old_string": "cdef", "new_string": "2"}
-        ]}));
+        let err = run(
+            "abcdef",
+            json!({"edits": [
+                {"old_string": "abcd", "new_string": "1"},
+                {"old_string": "cdef", "new_string": "2"}
+            ]}),
+        );
         assert!(err.unwrap_err().contains("overlap"));
     }
 
     #[test]
     fn fuzzy_match_ignores_trailing_space_and_smart_quotes() {
         let text = "let s = \u{201C}hi\u{201D};   \nnext\n";
-        let out = run(text, json!({"old_string": "let s = \"hi\";\nnext", "new_string": "let s = \"yo\";\nnext"}));
+        let out = run(
+            text,
+            json!({"old_string": "let s = \"hi\";\nnext", "new_string": "let s = \"yo\";\nnext"}),
+        );
         assert_eq!(out.unwrap(), "let s = \"yo\";\nnext\n");
     }
 
     #[test]
     fn edits_sent_as_a_json_string_are_accepted() {
-        let out = run("one", json!({"edits": "[{\"old_string\":\"one\",\"new_string\":\"two\"}]"}));
+        let out = run(
+            "one",
+            json!({"edits": "[{\"old_string\":\"one\",\"new_string\":\"two\"}]"}),
+        );
         assert_eq!(out.unwrap(), "two");
     }
 
@@ -432,7 +576,10 @@ mod tests {
         let file = dir.join("latin1.txt");
         fs::write(&file, b"caf\xe9 au lait\n").unwrap();
         let ctx = Context::new(dir.path().to_path_buf(), dir.join("spill"));
-        let out = edit(&ctx, &json!({"path": "latin1.txt", "old_string": "caf", "new_string": "tea"}));
+        let out = edit(
+            &ctx,
+            &json!({"path": "latin1.txt", "old_string": "caf", "new_string": "tea"}),
+        );
         assert!(out.is_error, "{}", out.text);
         assert_eq!(
             out.text,

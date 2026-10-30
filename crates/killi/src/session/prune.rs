@@ -11,7 +11,12 @@ pub fn prune(keep: usize, current: &Path) -> Result<Pruned> {
 pub(super) fn prune_in(root: &Path, keep: usize, current: &Path) -> Result<Pruned> {
     let mut pruned = Pruned::default();
     let live = live_logs();
-    let old: Vec<PathBuf> = list_all_in(root).into_iter().map(|(path, _)| path).filter(|path| deletable(path, current, &live)).skip(keep).collect();
+    let old: Vec<PathBuf> = list_all_in(root)
+        .into_iter()
+        .map(|(path, _)| path)
+        .filter(|path| deletable(path, current, &live))
+        .skip(keep)
+        .collect();
     for log in old {
         // Checked again per log: a session may have resumed this one since the list above
         // was taken, while earlier (larger) side folders were being removed.
@@ -21,7 +26,8 @@ pub(super) fn prune_in(root: &Path, keep: usize, current: &Path) -> Result<Prune
         let dir = log.with_extension("");
         if dir.is_dir() {
             pruned.bytes += dir_size(&dir);
-            fs::remove_dir_all(&dir).with_context(|| format!("could not remove {}", dir.display()))?;
+            fs::remove_dir_all(&dir)
+                .with_context(|| format!("could not remove {}", dir.display()))?;
         }
         pruned.bytes += fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
         fs::remove_file(&log).with_context(|| format!("could not remove {}", log.display()))?;
@@ -44,7 +50,10 @@ pub(super) fn deletable(path: &Path, current: &Path, live: &HashSet<PathBuf>) ->
 
 /// The logs live sessions list as theirs in `~/.killi/live` (`live::Entry::log`).
 fn live_logs() -> HashSet<PathBuf> {
-    crate::live::list().into_iter().map(|entry| entry.log).collect()
+    crate::live::list()
+        .into_iter()
+        .map(|entry| entry.log)
+        .collect()
 }
 
 fn dir_size(dir: &Path) -> u64 {
@@ -54,7 +63,11 @@ fn dir_size(dir: &Path) -> u64 {
         .flatten()
         .map(|entry| {
             let path = entry.path();
-            if path.is_dir() { dir_size(&path) } else { fs::metadata(&path).map(|m| m.len()).unwrap_or(0) }
+            if path.is_dir() {
+                dir_size(&path)
+            } else {
+                fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+            }
         })
         .sum()
 }

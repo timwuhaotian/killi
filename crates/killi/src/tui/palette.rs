@@ -46,7 +46,10 @@ const ROLES: usize = 8;
 impl Role {
     /// Whether the color is painted behind text rather than on it.
     fn is_ground(self) -> bool {
-        matches!(self, Role::Tint | Role::Select | Role::Add | Role::Del | Role::Chip)
+        matches!(
+            self,
+            Role::Tint | Role::Select | Role::Add | Role::Del | Role::Chip
+        )
     }
 }
 
@@ -72,7 +75,12 @@ impl Palette {
     /// The escape for `role`: a foreground, or a background for the grounds. In a terminal
     /// without 24-bit color only text roles have a shade (the nearest of the 256), since a
     /// tint that subtle would land on the ground's own color; None for the rest.
-    pub fn write(&self, f: &mut fmt::Formatter<'_>, role: Role, truecolor: bool) -> Option<fmt::Result> {
+    pub fn write(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        role: Role,
+        truecolor: bool,
+    ) -> Option<fmt::Result> {
         let color = self.colors[role as usize];
         let (r, g, b) = color;
         Some(match (truecolor, role.is_ground()) {
@@ -96,13 +104,20 @@ impl Palette {
 pub fn derive(ground: Ground) -> Palette {
     let background = to_lab(ground.background);
     let light = background[0] > 0.6;
-    let foreground = ground.foreground.unwrap_or(if light { (0, 0, 0) } else { (255, 255, 255) });
+    let foreground = ground
+        .foreground
+        .unwrap_or(if light { (0, 0, 0) } else { (255, 255, 255) });
     let toward = to_lab(foreground);
     let full = contrast(foreground, ground.background);
-    let target = |share: f64, floor: f64, ceiling: f64| (1.0 + share * (full - 1.0)).clamp(floor, ceiling);
+    let target =
+        |share: f64, floor: f64, ceiling: f64| (1.0 + share * (full - 1.0)).clamp(floor, ceiling);
     let step = |goal: f64| from_lab(reach(background, toward, ground.background, goal));
     let lift = |amount: f64| mix(background, toward, amount);
-    let lagoon = to_lab(if light { (10, 110, 101) } else { (79, 209, 197) });
+    let lagoon = to_lab(if light {
+        (10, 110, 101)
+    } else {
+        (79, 209, 197)
+    });
     let cast = |amount: f64, of: Lab| mix(background, of, amount);
     let mut colors = [(0, 0, 0); ROLES];
     colors[Role::Rule as usize] = step(target(0.04, 1.25, 1.42));
@@ -136,12 +151,20 @@ type Lab = [f64; 3];
 
 fn linear(channel: u8) -> f64 {
     let c = f64::from(channel) / 255.0;
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 fn gamma(linear: f64) -> u8 {
     let c = linear.clamp(0.0, 1.0);
-    let encoded = if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+    let encoded = if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
     (encoded * 255.0).round() as u8
 }
 
@@ -211,11 +234,23 @@ fn nearest_256((r, g, b): Rgb) -> u8 {
 mod tests {
     use super::*;
 
-    const NIGHT: Ground = Ground { background: (0x11, 0x13, 0x16), foreground: Some((0xd7, 0xda, 0xe0)) };
-    const EMBER: Ground = Ground { background: (0x1d, 0x19, 0x15), foreground: Some((0xe8, 0xdc, 0xc6)) };
-    const PAPER: Ground = Ground { background: (0xfb, 0xfa, 0xf7), foreground: Some((0x2e, 0x31, 0x38)) };
+    const NIGHT: Ground = Ground {
+        background: (0x11, 0x13, 0x16),
+        foreground: Some((0xd7, 0xda, 0xe0)),
+    };
+    const EMBER: Ground = Ground {
+        background: (0x1d, 0x19, 0x15),
+        foreground: Some((0xe8, 0xdc, 0xc6)),
+    };
+    const PAPER: Ground = Ground {
+        background: (0xfb, 0xfa, 0xf7),
+        foreground: Some((0x2e, 0x31, 0x38)),
+    };
     /// Solarized dark: a foreground with little contrast.
-    const SOLARIZED: Ground = Ground { background: (0x00, 0x2b, 0x36), foreground: Some((0x83, 0x94, 0x96)) };
+    const SOLARIZED: Ground = Ground {
+        background: (0x00, 0x2b, 0x36),
+        foreground: Some((0x83, 0x94, 0x96)),
+    };
 
     fn near(value: f64, goal: f64) {
         assert!((value - goal).abs() < 0.08, "{value} is not {goal}");
@@ -236,9 +271,13 @@ mod tests {
         for ground in [NIGHT, EMBER, PAPER, SOLARIZED] {
             let palette = derive(ground);
             let foreground = ground.foreground.unwrap();
-            let [rule, faint, muted] = [Role::Rule, Role::Faint, Role::Muted].map(|role| contrast(palette.rgb(role), ground.background));
+            let [rule, faint, muted] = [Role::Rule, Role::Faint, Role::Muted]
+                .map(|role| contrast(palette.rgb(role), ground.background));
             let body = contrast(foreground, ground.background);
-            assert!(1.0 < rule && rule < faint && faint < muted && muted < body, "{ground:?}: {rule} {faint} {muted} {body}");
+            assert!(
+                1.0 < rule && rule < faint && faint < muted && muted < body,
+                "{ground:?}: {rule} {faint} {muted} {body}"
+            );
         }
     }
 
@@ -246,8 +285,14 @@ mod tests {
     fn a_light_ground_gets_darker_grays_not_lighter_ones() {
         let palette = derive(PAPER);
         let lightness = |role| to_lab(palette.rgb(role))[0];
-        assert!(lightness(Role::Rule) > lightness(Role::Faint) && lightness(Role::Faint) > lightness(Role::Muted));
-        assert!(lightness(Role::Tint) < to_lab(PAPER.background)[0], "a tint on paper is a little darker");
+        assert!(
+            lightness(Role::Rule) > lightness(Role::Faint)
+                && lightness(Role::Faint) > lightness(Role::Muted)
+        );
+        assert!(
+            lightness(Role::Tint) < to_lab(PAPER.background)[0],
+            "a tint on paper is a little darker"
+        );
     }
 
     #[test]
@@ -258,8 +303,14 @@ mod tests {
         };
         let ember = derive(EMBER);
         let (warm, tint) = (hue(ember.rgb(Role::Muted)), hue(ember.rgb(Role::Tint)));
-        assert!((30.0..110.0).contains(&warm), "muted on Ember is warm, not {warm}");
-        assert!((30.0..200.0).contains(&tint), "the band on Ember is not the fixed blue-teal: {tint}");
+        assert!(
+            (30.0..110.0).contains(&warm),
+            "muted on Ember is warm, not {warm}"
+        );
+        assert!(
+            (30.0..200.0).contains(&tint),
+            "the band on Ember is not the fixed blue-teal: {tint}"
+        );
     }
 
     #[test]
@@ -268,30 +319,56 @@ mod tests {
             let palette = derive(ground);
             for role in [Role::Tint, Role::Select, Role::Add, Role::Del, Role::Chip] {
                 let against = contrast(palette.rgb(role), ground.background);
-                assert!((1.02..1.45).contains(&against), "{role:?} on {ground:?}: {against}");
+                assert!(
+                    (1.02..1.45).contains(&against),
+                    "{role:?} on {ground:?}: {against}"
+                );
             }
             let foreground = ground.foreground.unwrap();
             for role in [Role::Tint, Role::Select, Role::Add, Role::Del, Role::Chip] {
-                assert!(contrast(foreground, palette.rgb(role)) > 7.0, "body text reads on {role:?}");
+                assert!(
+                    contrast(foreground, palette.rgb(role)) > 7.0,
+                    "body text reads on {role:?}"
+                );
             }
-            assert!(contrast(palette.rgb(Role::Muted), palette.rgb(Role::Tint)) > 4.5, "muted text reads on the band");
+            assert!(
+                contrast(palette.rgb(Role::Muted), palette.rgb(Role::Tint)) > 4.5,
+                "muted text reads on the band"
+            );
         }
     }
 
     #[test]
     fn without_a_foreground_the_ground_alone_gives_the_same_kind_of_ramp() {
-        let night = Ground { foreground: None, ..NIGHT };
+        let night = Ground {
+            foreground: None,
+            ..NIGHT
+        };
         let palette = derive(night);
         near(contrast(palette.rgb(Role::Muted), night.background), 5.8);
-        let paper = derive(Ground { foreground: None, ..PAPER });
+        let paper = derive(Ground {
+            foreground: None,
+            ..PAPER
+        });
         assert!(to_lab(paper.rgb(Role::Muted))[0] < to_lab(PAPER.background)[0]);
     }
 
     #[test]
     fn colors_survive_the_trip_through_oklab() {
-        for rgb in [(0, 0, 0), (255, 255, 255), (79, 209, 197), (255, 140, 90), (17, 19, 22)] {
+        for rgb in [
+            (0, 0, 0),
+            (255, 255, 255),
+            (79, 209, 197),
+            (255, 140, 90),
+            (17, 19, 22),
+        ] {
             let back = from_lab(to_lab(rgb));
-            assert!([(back.0, rgb.0), (back.1, rgb.1), (back.2, rgb.2)].iter().all(|(a, b)| a.abs_diff(*b) <= 1), "{rgb:?} came back as {back:?}");
+            assert!(
+                [(back.0, rgb.0), (back.1, rgb.1), (back.2, rgb.2)]
+                    .iter()
+                    .all(|(a, b)| a.abs_diff(*b) <= 1),
+                "{rgb:?} came back as {back:?}"
+            );
         }
         near(contrast((255, 255, 255), (0, 0, 0)), 21.0);
     }
@@ -314,9 +391,21 @@ mod tests {
             }
         }
         let palette = derive(NIGHT);
-        assert!(Show(palette.clone(), Role::Muted, true).to_string().starts_with("\x1b[38;2;"));
-        assert!(Show(palette.clone(), Role::Muted, false).to_string().starts_with("\x1b[38;5;"));
-        assert!(Show(palette.clone(), Role::Tint, true).to_string().starts_with("\x1b[48;2;"));
+        assert!(
+            Show(palette.clone(), Role::Muted, true)
+                .to_string()
+                .starts_with("\x1b[38;2;")
+        );
+        assert!(
+            Show(palette.clone(), Role::Muted, false)
+                .to_string()
+                .starts_with("\x1b[38;5;")
+        );
+        assert!(
+            Show(palette.clone(), Role::Tint, true)
+                .to_string()
+                .starts_with("\x1b[48;2;")
+        );
         assert_eq!(Show(palette, Role::Tint, false).to_string(), "");
     }
 }

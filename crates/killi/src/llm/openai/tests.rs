@@ -14,7 +14,10 @@ fn stream_events_assemble_a_reply() {
     ];
     let mut parser = Parser::default();
     for event in events {
-        parser.event(&serde_json::from_str(event).unwrap(), &mut reply, &mut sink).ok().unwrap();
+        parser
+            .event(&serde_json::from_str(event).unwrap(), &mut reply, &mut sink)
+            .ok()
+            .unwrap();
     }
     assert_eq!(reply.text, "Hi");
     assert_eq!(reply.reasoning, "think");
@@ -41,7 +44,12 @@ fn a_refusal_delta_is_fatal() {
     let mut reply = Reply::default();
     let mut sink = |_: Delta| {};
     let event = json!({"choices":[{"delta":{"refusal":"cannot help"}}]});
-    assert!(!parser.event(&event, &mut reply, &mut sink).unwrap_err().retryable);
+    assert!(
+        !parser
+            .event(&event, &mut reply, &mut sink)
+            .unwrap_err()
+            .retryable
+    );
 }
 
 #[test]
@@ -59,7 +67,14 @@ fn sparse_call_indices_do_not_create_nameless_calls() {
     }
     parser.finish(&mut reply).unwrap();
     assert_eq!(reply.tool_calls.len(), 2);
-    assert_eq!(reply.tool_calls.iter().map(|call| call.name.as_str()).collect::<Vec<_>>(), ["read", "grep"]);
+    assert_eq!(
+        reply
+            .tool_calls
+            .iter()
+            .map(|call| call.name.as_str())
+            .collect::<Vec<_>>(),
+        ["read", "grep"]
+    );
 }
 
 #[test]
@@ -102,7 +117,10 @@ fn calls_without_names_are_dropped_when_the_stream_finishes() {
         json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
     ];
     for event in &events {
-        Parser::default().event(event, &mut reply, &mut sink).ok().unwrap();
+        Parser::default()
+            .event(event, &mut reply, &mut sink)
+            .ok()
+            .unwrap();
     }
     let mut parser = Parser::default();
     assert!(parser.finish(&mut reply).unwrap_err().retryable);
@@ -131,16 +149,31 @@ fn reasoning_detail_deltas_accumulate_by_item() {
 #[test]
 fn reasoning_detail_types_with_one_index_stay_separate_and_null_ids_continue_a_block() {
     let mut reply = Reply::default();
-    merge_reasoning_detail(&mut reply, &json!({"type":"reasoning.summary","index":0,"summary":"think "}));
-    merge_reasoning_detail(&mut reply, &json!({"type":"reasoning.encrypted","index":0,"data":"cipher"}));
-    merge_reasoning_detail(&mut reply, &json!({"type":"reasoning.summary","index":0,"summary":"more"}));
+    merge_reasoning_detail(
+        &mut reply,
+        &json!({"type":"reasoning.summary","index":0,"summary":"think "}),
+    );
+    merge_reasoning_detail(
+        &mut reply,
+        &json!({"type":"reasoning.encrypted","index":0,"data":"cipher"}),
+    );
+    merge_reasoning_detail(
+        &mut reply,
+        &json!({"type":"reasoning.summary","index":0,"summary":"more"}),
+    );
     assert_eq!(reply.reasoning_items.len(), 2);
     assert_eq!(reply.reasoning_items[0]["summary"], "think more");
     assert!(reply.reasoning_items[0].get("data").is_none());
     assert_eq!(reply.reasoning_items[1]["data"], "cipher");
 
-    merge_reasoning_detail(&mut reply, &json!({"type":"summary","id":null,"summary":"part "}));
-    merge_reasoning_detail(&mut reply, &json!({"type":"summary","id":null,"summary":"two"}));
+    merge_reasoning_detail(
+        &mut reply,
+        &json!({"type":"summary","id":null,"summary":"part "}),
+    );
+    merge_reasoning_detail(
+        &mut reply,
+        &json!({"type":"summary","id":null,"summary":"two"}),
+    );
     assert_eq!(reply.reasoning_items[2]["summary"], "part two");
 }
 
@@ -173,7 +206,10 @@ fn reasoning_items_replay_as_details_without_mutating_history() {
     let original = messages.clone();
     let replayed = replay_history(&messages);
     assert_eq!(messages, original);
-    assert_eq!(replayed[0]["reasoning_details"], json!([{"type": "reasoning.text", "index": 0, "text": "plan"}]));
+    assert_eq!(
+        replayed[0]["reasoning_details"],
+        json!([{"type": "reasoning.text", "index": 0, "text": "plan"}])
+    );
     assert!(replayed[0].get("reasoning_items").is_none());
 }
 
@@ -189,10 +225,16 @@ fn cache_breakpoints_mark_the_system_and_newest_message_on_the_copy_only() {
     let mut sent = history.clone();
     mark_cache_breakpoints(&mut sent);
     let mark = json!({"type": "ephemeral"});
-    assert_eq!(sent[0]["content"], json!([{"type": "text", "text": "rules", "cache_control": mark}]));
+    assert_eq!(
+        sent[0]["content"],
+        json!([{"type": "text", "text": "rules", "cache_control": mark}])
+    );
     assert_eq!(sent[1]["content"], "run it");
     assert!(sent[2]["content"].is_null());
-    assert_eq!(sent[3]["content"], json!([{"type": "text", "text": "done", "cache_control": mark}]));
+    assert_eq!(
+        sent[3]["content"],
+        json!([{"type": "text", "text": "done", "cache_control": mark}])
+    );
     assert_eq!(history, original);
     assert_eq!(sent.iter().filter(|m| m["content"].is_array()).count(), 2);
 }
@@ -204,7 +246,10 @@ fn cache_breakpoints_go_on_the_last_text_block_and_skip_images() {
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}},
     ]})];
     mark_cache_breakpoints(&mut sent);
-    assert_eq!(sent[0]["content"][0]["cache_control"], json!({"type": "ephemeral"}));
+    assert_eq!(
+        sent[0]["content"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
     assert!(sent[0]["content"][1].get("cache_control").is_none());
 }
 
@@ -217,7 +262,7 @@ fn prepare_marks_breakpoints_only_when_the_model_asks() {
         base_url: "http://localhost".into(),
         api_key: String::new(),
         headers: Default::default(),
-            tool_names: Default::default(),
+        tool_names: Default::default(),
         session_header: None,
         max_output: None,
         context_window: None,
@@ -226,12 +271,20 @@ fn prepare_marks_breakpoints_only_when_the_model_asks() {
         cache_control: false,
         chatgpt: false,
     };
-    let messages = vec![json!({"role": "system", "content": "rules"}), json!({"role": "user", "content": "hi"})];
-    let plain: Value = serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
+    let messages = vec![
+        json!({"role": "system", "content": "rules"}),
+        json!({"role": "user", "content": "hi"}),
+    ];
+    let plain: Value =
+        serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
     assert_eq!(plain["messages"][1]["content"], "hi");
     model.cache_control = true;
-    let marked: Value = serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
-    assert_eq!(marked["messages"][1]["content"][0]["cache_control"], json!({"type": "ephemeral"}));
+    let marked: Value =
+        serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
+    assert_eq!(
+        marked["messages"][1]["content"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
     assert_eq!(messages[1]["content"], "hi");
 }
 
@@ -244,7 +297,7 @@ fn images_become_text_when_the_model_cannot_see_them() {
         base_url: "http://localhost".into(),
         api_key: String::new(),
         headers: Default::default(),
-            tool_names: Default::default(),
+        tool_names: Default::default(),
         session_header: None,
         max_output: None,
         context_window: None,
@@ -257,11 +310,29 @@ fn images_become_text_when_the_model_cannot_see_them() {
         {"type": "text", "text": "look"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
     ]})];
-    let body: Value = serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
+    let body: Value =
+        serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
     let content = body["messages"][0]["content"].clone();
-    assert!(content.as_array().unwrap().iter().all(|part| part["type"] != "image_url"), "{content}");
-    assert!(content.as_array().unwrap().iter().any(|part| part["text"] == super::IMAGE_OMITTED), "{content}");
-    assert_eq!(messages[0]["content"][1]["type"], "image_url", "history itself stays as sent");
+    assert!(
+        content
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|part| part["type"] != "image_url"),
+        "{content}"
+    );
+    assert!(
+        content
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|part| part["text"] == super::IMAGE_OMITTED),
+        "{content}"
+    );
+    assert_eq!(
+        messages[0]["content"][1]["type"], "image_url",
+        "history itself stays as sent"
+    );
 }
 
 #[test]
@@ -273,7 +344,7 @@ fn prepare_caps_output_from_context_and_preserves_string_reasoning() {
         base_url: "http://localhost".into(),
         api_key: String::new(),
         headers: Default::default(),
-            tool_names: Default::default(),
+        tool_names: Default::default(),
         session_header: None,
         max_output: Some(2_000),
         context_window: Some(2_000),
@@ -308,7 +379,68 @@ fn unknown_delta_fields_are_kept_and_an_empty_reasoning_field_is_evidence() {
     for event in &events {
         parser.event(event, &mut reply, &mut sink).unwrap();
     }
-    assert_eq!(reply.reasoning_key, Some("reasoning_content"), "an empty field is still the field the provider used");
+    assert_eq!(
+        reply.reasoning_key,
+        Some("reasoning_content"),
+        "an empty field is still the field the provider used"
+    );
     assert!(!reply.reasoning_kept());
-    assert_eq!(reply.unread_fields, vec!["deep_thought".to_string()], "deduped, and role/content don't count");
+    assert_eq!(
+        reply.unread_fields,
+        vec!["deep_thought".to_string()],
+        "deduped, and role/content don't count"
+    );
+}
+
+#[test]
+fn mapped_tool_names_go_out_and_come_back() {
+    let model = ResolvedModel {
+        alias: "m".into(),
+        model: "gpt".into(),
+        protocol: crate::config::Protocol::OpenAi,
+        base_url: "http://localhost".into(),
+        api_key: String::new(),
+        headers: Default::default(),
+        tool_names: BTreeMap::from([("bash".to_string(), "run_command".to_string())]),
+        session_header: None,
+        max_output: None,
+        context_window: None,
+        images: false,
+        thinking: Thinking::Off,
+        cache_control: false,
+        chatgpt: false,
+    };
+    let messages = vec![
+        json!({"role": "assistant", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "bash", "arguments": "{}"}}]}),
+    ];
+    let tools = vec![
+        json!({"type": "function", "function": {"name": "bash", "description": "Run", "parameters": {}}}),
+    ];
+    let prepared = prepare(&model, &messages, &tools, "k").unwrap();
+    let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+    assert_eq!(body["tools"][0]["function"]["name"], "run_command");
+    assert_eq!(
+        body["messages"][0]["tool_calls"][0]["function"]["name"], "run_command",
+        "the copy being sent carries the provider's names"
+    );
+    assert_eq!(
+        messages[0]["tool_calls"][0]["function"]["name"], "bash",
+        "history stays as stored"
+    );
+
+    let mut parser = Parser::new(&model.tool_names);
+    let mut reply = Reply::default();
+    let mut sink = |_: Delta| {};
+    for event in [
+        json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "run_command", "arguments": "{}"}}]}}]}),
+        json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+    ] {
+        parser.event(&event, &mut reply, &mut sink).unwrap();
+    }
+    parser.done();
+    parser.finish(&mut reply).unwrap();
+    assert_eq!(
+        reply.tool_calls[0].name, "bash",
+        "the call comes back under killi's name"
+    );
 }

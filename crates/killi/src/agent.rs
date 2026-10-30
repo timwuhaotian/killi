@@ -15,8 +15,8 @@ mod types;
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -28,13 +28,18 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use crate::config::Thinking;
-use crate::llm::{Client, Delta, ErrorKind, IMAGE_OMITTED, IMAGE_TOKEN_RESERVE, ProviderError, Reply, ToolCall, Usage, truncate};
-use crate::session::Session;
 use crate::hooks::{HooksConfig, tool_payload};
+use crate::llm::{
+    Client, Delta, ErrorKind, IMAGE_OMITTED, IMAGE_TOKEN_RESERVE, ProviderError, Reply, ToolCall,
+    Usage, truncate,
+};
+use crate::session::Session;
 use crate::skills::Skills;
 use crate::{goal, live, plan, swarm, tools};
 
-pub use types::{Aside, Controls, Event, Image, Question, Settings, Sink, Slot, Stats, Steered, Stop, Todo};
+pub use types::{
+    Aside, Controls, Event, Image, Question, Settings, Sink, Slot, Stats, Steered, Stop, Todo,
+};
 
 use compact::CompactMode;
 use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
@@ -44,15 +49,23 @@ use types::{PartialSwarm, Repeat, last_plan_state, unanswered};
 #[cfg(test)]
 use ask::question_args;
 #[cfg(test)]
-use compact::{COMPACT_INSTRUCTION, DEFAULT_COMPACT_AT, DEFAULT_OUTPUT_RESERVE, REDUCED_RESULT_CHARS, REDUCED_TEXT_CHARS, estimate_tokens, kept_prompt, reduced};
+use compact::{
+    COMPACT_INSTRUCTION, DEFAULT_COMPACT_AT, DEFAULT_OUTPUT_RESERVE, REDUCED_RESULT_CHARS,
+    REDUCED_TEXT_CHARS, estimate_tokens, kept_prompt, reduced,
+};
 #[cfg(test)]
-use dispatch::{REPEAT_STOP, REPEAT_WARNINGS, SKIPPED_FOR_MESSAGE, dispatch_tool, hash_call, image_parts, parallel_read, repeat_key};
+use dispatch::{
+    REPEAT_STOP, REPEAT_WARNINGS, SKIPPED_FOR_MESSAGE, dispatch_tool, hash_call, image_parts,
+    parallel_read, repeat_key,
+};
 #[cfg(test)]
 use request::hides_reasoning;
 #[cfg(test)]
 use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm};
 #[cfg(test)]
-use turn::{STALE_TASKS_AFTER, ends_with_colon, ends_with_question, open_tasks_note, stale_tasks_note};
+use turn::{
+    STALE_TASKS_AFTER, ends_with_colon, ends_with_question, open_tasks_note, stale_tasks_note,
+};
 #[cfg(test)]
 use types::{BTW_NOTE, RECAP_CHARS, RECAP_MAX, RECAP_NOTE, fit_recap, side_request};
 

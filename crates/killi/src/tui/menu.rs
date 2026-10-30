@@ -47,7 +47,11 @@ const MAX_FILES_SHOWN: usize = 200;
 ///
 /// A `/` that starts a word anywhere in the text offers commands and skills; only the one at
 /// the very start can be followed by that command's choices.
-pub fn suggest(before: &str, entries: &[Entry], arguments: impl Fn(&str) -> Vec<Item>) -> Option<Suggestions> {
+pub fn suggest(
+    before: &str,
+    entries: &[Entry],
+    arguments: impl Fn(&str) -> Vec<Item>,
+) -> Option<Suggestions> {
     let word = word_start(before);
     if let Some(typed) = before[word..].strip_prefix('/') {
         let items = commands(entries, typed);
@@ -56,7 +60,11 @@ pub fn suggest(before: &str, entries: &[Entry], arguments: impl Fn(&str) -> Vec<
         if items.first().is_some_and(|item| item.value == typed) {
             return None;
         }
-        return (!items.is_empty()).then_some(Suggestions { items, start: word, fill: Fill::Command });
+        return (!items.is_empty()).then_some(Suggestions {
+            items,
+            start: word,
+            fill: Fill::Command,
+        });
     }
     let typed = before.strip_prefix('/')?;
     let (space, space_char) = typed.char_indices().find(|(_, c)| c.is_whitespace())?;
@@ -69,7 +77,11 @@ pub fn suggest(before: &str, entries: &[Entry], arguments: impl Fn(&str) -> Vec<
     if items.len() == 1 && items[0].value == argument {
         items.clear();
     }
-    (!items.is_empty()).then_some(Suggestions { items, start: 1 + space + space_char.len_utf8(), fill: Fill::Argument })
+    (!items.is_empty()).then_some(Suggestions {
+        items,
+        start: 1 + space + space_char.len_utf8(),
+        fill: Fill::Argument,
+    })
 }
 
 /// The file menu for `before`: the `files` of the workspace that fuzzy-match the word at the
@@ -83,21 +95,45 @@ pub fn files(before: &str, files: &[String]) -> Option<Suggestions> {
     if matched.is_empty() || matched == [typed] {
         return None;
     }
-    let items = matched.into_iter().take(MAX_FILES_SHOWN).map(|path| Item { value: path.to_string(), description: String::new() }).collect();
-    Some(Suggestions { items, start, fill: Fill::File })
+    let items = matched
+        .into_iter()
+        .take(MAX_FILES_SHOWN)
+        .map(|path| Item {
+            value: path.to_string(),
+            description: String::new(),
+        })
+        .collect();
+    Some(Suggestions {
+        items,
+        start,
+        fill: Fill::File,
+    })
 }
 
 /// The byte offset where the word the cursor is in begins.
 fn word_start(before: &str) -> usize {
-    before.char_indices().rev().find(|(_, c)| c.is_whitespace()).map_or(0, |(i, c)| i + c.len_utf8())
+    before
+        .char_indices()
+        .rev()
+        .find(|(_, c)| c.is_whitespace())
+        .map_or(0, |(i, c)| i + c.len_utf8())
 }
 
 /// Entries whose name or alias fuzzy-matches `query`, best first, each shown under the name
 /// that matched best; then entries whose description contains it.
 fn commands(entries: &[Entry], query: &str) -> Vec<Item> {
-    let tokens: Vec<&str> = query.split(|c: char| c.is_whitespace() || c == '/').filter(|t| !t.is_empty()).collect();
+    let tokens: Vec<&str> = query
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .filter(|t| !t.is_empty())
+        .collect();
     if tokens.is_empty() {
-        return entries.iter().map(|e| Item { value: e.name.clone(), description: e.description.clone() }).collect();
+        return entries
+            .iter()
+            .map(|e| Item {
+                value: e.name.clone(),
+                description: e.description.clone(),
+            })
+            .collect();
     }
     let mut scored: Vec<(f64, Item)> = Vec::new();
     let mut rest = Vec::new();
@@ -107,7 +143,13 @@ fn commands(entries: &[Entry], query: &str) -> Vec<Item> {
             .filter_map(|name| Some((score_tokens(&tokens, name)?, name)))
             .min_by(|a, b| a.0.total_cmp(&b.0));
         match best {
-            Some((score, name)) => scored.push((score, Item { value: name.clone(), description: entry.description.clone() })),
+            Some((score, name)) => scored.push((
+                score,
+                Item {
+                    value: name.clone(),
+                    description: entry.description.clone(),
+                },
+            )),
             None => rest.push(entry),
         }
     }
@@ -118,19 +160,32 @@ fn commands(entries: &[Entry], query: &str) -> Vec<Item> {
         items.extend(
             rest.into_iter()
                 .filter(|e| e.description.to_lowercase().contains(&needle))
-                .map(|e| Item { value: e.name.clone(), description: e.description.clone() }),
+                .map(|e| Item {
+                    value: e.name.clone(),
+                    description: e.description.clone(),
+                }),
         );
     }
     items
 }
 
 /// pi-tui's `fuzzyFilter`: tokens split on whitespace and `/` must all match; best first.
-pub fn fuzzy_filter<'a, T: Clone>(items: &'a [T], query: &str, text: impl Fn(&'a T) -> &'a str) -> Vec<T> {
-    let tokens: Vec<&str> = query.split(|c: char| c.is_whitespace() || c == '/').filter(|t| !t.is_empty()).collect();
+pub fn fuzzy_filter<'a, T: Clone>(
+    items: &'a [T],
+    query: &str,
+    text: impl Fn(&'a T) -> &'a str,
+) -> Vec<T> {
+    let tokens: Vec<&str> = query
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .filter(|t| !t.is_empty())
+        .collect();
     if tokens.is_empty() {
         return items.to_vec();
     }
-    let mut scored: Vec<(f64, &T)> = items.iter().filter_map(|item| Some((score_tokens(&tokens, text(item))?, item))).collect();
+    let mut scored: Vec<(f64, &T)> = items
+        .iter()
+        .filter_map(|item| Some((score_tokens(&tokens, text(item))?, item)))
+        .collect();
     scored.sort_by(|a, b| a.0.total_cmp(&b.0));
     scored.into_iter().map(|(_, item)| item.clone()).collect()
 }
@@ -148,9 +203,12 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<f64> {
     if let Some(score) = match_chars(&query.chars().collect::<Vec<_>>(), &text) {
         return Some(score);
     }
-    let split = query.find(|c: char| c.is_ascii_digit() != query.starts_with(|f: char| f.is_ascii_digit()))?;
+    let split = query
+        .find(|c: char| c.is_ascii_digit() != query.starts_with(|f: char| f.is_ascii_digit()))?;
     let (head, tail) = query.split_at(split);
-    let letters_digits = |a: &str, b: &str| a.chars().all(|c| c.is_ascii_lowercase()) && b.chars().all(|c| c.is_ascii_digit());
+    let letters_digits = |a: &str, b: &str| {
+        a.chars().all(|c| c.is_ascii_lowercase()) && b.chars().all(|c| c.is_ascii_digit())
+    };
     if !(letters_digits(head, tail) || letters_digits(tail, head)) {
         return None;
     }
@@ -183,7 +241,12 @@ fn match_chars(query: &[char], text: &[char]) -> Option<f64> {
                 score += (i - last - 1) as f64 * 2.0;
             }
         }
-        if i == 0 || matches!(text[i as usize - 1], ' ' | '\t' | '\n' | '-' | '_' | '.' | '/' | ':') {
+        if i == 0
+            || matches!(
+                text[i as usize - 1],
+                ' ' | '\t' | '\n' | '-' | '_' | '.' | '/' | ':'
+            )
+        {
             score -= 10.0;
         }
         score += i as f64 * 0.1;
@@ -204,7 +267,11 @@ mod tests {
     use super::*;
 
     fn entry(name: &str, aliases: &[&str], description: &str) -> Entry {
-        Entry { name: name.into(), aliases: aliases.iter().map(|a| a.to_string()).collect(), description: description.into() }
+        Entry {
+            name: name.into(),
+            aliases: aliases.iter().map(|a| a.to_string()).collect(),
+            description: description.into(),
+        }
     }
 
     fn values(s: &Suggestions) -> Vec<&str> {
@@ -226,7 +293,18 @@ mod tests {
     #[test]
     fn a_slash_alone_lists_everything_in_order() {
         let s = suggest("/", &entries(), |_| Vec::new()).unwrap();
-        assert_eq!(values(&s), ["model", "effort", "new", "exit", "code-review", "pdf", "make-pdf-report"]);
+        assert_eq!(
+            values(&s),
+            [
+                "model",
+                "effort",
+                "new",
+                "exit",
+                "code-review",
+                "pdf",
+                "make-pdf-report"
+            ]
+        );
         assert_eq!(s.fill, Fill::Command);
     }
 
@@ -258,24 +336,48 @@ mod tests {
     #[test]
     fn a_name_typed_in_full_gets_no_menu_so_enter_sends() {
         let none = |_: &str| Vec::new();
-        assert!(suggest("/pdf", &entries(), none).is_none(), "a skill typed in full sends");
-        assert!(suggest("/exit", &entries(), none).is_none(), "a command typed in full sends");
-        assert!(suggest("/clear", &entries(), none).is_none(), "an alias typed in full sends");
+        assert!(
+            suggest("/pdf", &entries(), none).is_none(),
+            "a skill typed in full sends"
+        );
+        assert!(
+            suggest("/exit", &entries(), none).is_none(),
+            "a command typed in full sends"
+        );
+        assert!(
+            suggest("/clear", &entries(), none).is_none(),
+            "an alias typed in full sends"
+        );
         assert!(suggest("use /pdf now", &entries(), none).is_none());
-        assert!(suggest("/pd", &entries(), none).is_some(), "a prefix still completes");
-        assert!(suggest("/pdf ", &entries(), none).is_none(), "a skill has no argument choices");
+        assert!(
+            suggest("/pd", &entries(), none).is_some(),
+            "a prefix still completes"
+        );
+        assert!(
+            suggest("/pdf ", &entries(), none).is_none(),
+            "a skill has no argument choices"
+        );
     }
 
     #[test]
     fn arguments_complete_after_the_command() {
         let efforts = |name: &str| match name {
-            "effort" => ["off", "low", "medium", "high"].iter().map(|e| Item { value: e.to_string(), description: String::new() }).collect(),
+            "effort" => ["off", "low", "medium", "high"]
+                .iter()
+                .map(|e| Item {
+                    value: e.to_string(),
+                    description: String::new(),
+                })
+                .collect(),
             _ => Vec::new(),
         };
         let s = suggest("/effort h", &entries(), efforts).unwrap();
         assert_eq!(values(&s), ["high"]);
         assert_eq!((s.start, s.fill), (8, Fill::Argument));
-        assert_eq!(values(&suggest("/effort ", &entries(), efforts).unwrap()).len(), 4);
+        assert_eq!(
+            values(&suggest("/effort ", &entries(), efforts).unwrap()).len(),
+            4
+        );
         assert!(suggest("/effort high", &entries(), efforts).is_none());
         assert!(suggest("/model x", &entries(), efforts).is_none());
         assert!(suggest("/effort high now", &entries(), efforts).is_none());
@@ -296,28 +398,49 @@ mod tests {
 
     #[test]
     fn an_at_word_offers_the_files_that_match_it() {
-        let paths: Vec<String> = ["README.md", "src/main.rs", "src/tui/", "src/tui/mod.rs"].iter().map(|p| p.to_string()).collect();
+        let paths: Vec<String> = ["README.md", "src/main.rs", "src/tui/", "src/tui/mod.rs"]
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
         let s = files("see @", &paths).unwrap();
         assert_eq!((values(&s).len(), s.start, s.fill), (4, 4, Fill::File));
-        assert_eq!(values(&files("@tuimod", &paths).unwrap()), ["src/tui/mod.rs"]);
+        assert_eq!(
+            values(&files("@tuimod", &paths).unwrap()),
+            ["src/tui/mod.rs"]
+        );
         assert_eq!(values(&files("@tui/", &paths).unwrap())[0], "src/tui/");
-        assert!(files("@src/main.rs", &paths).is_none(), "the path typed in full needs no menu");
+        assert!(
+            files("@src/main.rs", &paths).is_none(),
+            "the path typed in full needs no menu"
+        );
         assert!(files("@zzz", &paths).is_none());
-        assert!(files("mail me@", &paths).is_none(), "an @ inside a word is not a mention");
+        assert!(
+            files("mail me@", &paths).is_none(),
+            "an @ inside a word is not a mention"
+        );
         assert!(files("hello", &paths).is_none());
     }
 
     #[test]
     fn nbsp_and_ideographic_space_after_a_command() {
         let efforts = |name: &str| match name {
-            "effort" => ["off", "high"].iter().map(|e| Item { value: e.to_string(), description: String::new() }).collect(),
+            "effort" => ["off", "high"]
+                .iter()
+                .map(|e| Item {
+                    value: e.to_string(),
+                    description: String::new(),
+                })
+                .collect(),
             _ => Vec::new(),
         };
         for space in ['\u{a0}', '\u{3000}'] {
             let before = format!("/effort{space}hig");
             let s = suggest(&before, &entries(), efforts).unwrap();
             assert_eq!(values(&s), ["high"]);
-            assert_eq!((s.start, s.fill), (before.len() - "hig".len(), Fill::Argument));
+            assert_eq!(
+                (s.start, s.fill),
+                (before.len() - "hig".len(), Fill::Argument)
+            );
         }
     }
 

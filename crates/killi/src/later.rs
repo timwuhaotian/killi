@@ -31,7 +31,12 @@ pub fn done(cwd: &Path, number: usize) -> Result<String> {
 /// For the `later` tool result in `agent.rs`, which owns that display.
 #[allow(dead_code)]
 pub fn numbered(items: &[String]) -> String {
-    items.iter().enumerate().map(|(i, item)| format!("{}. {item}", i + 1)).collect::<Vec<_>>().join("\n")
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| format!("{}. {item}", i + 1))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A `later` call's `done` number, whether sent as a number or a string holding one.
@@ -73,7 +78,8 @@ fn save(file: &Path, items: &[String]) -> Result<()> {
         fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
     let text: String = items.iter().map(|item| format!("- {item}\n")).collect();
-    crate::fs_atomic::write(file, text.as_bytes(), None).with_context(|| format!("could not write {}", file.display()))
+    crate::fs_atomic::write(file, text.as_bytes(), None)
+        .with_context(|| format!("could not write {}", file.display()))
 }
 
 #[cfg(test)]
@@ -89,8 +95,16 @@ mod tests {
         assert!(list_in(&file).is_empty());
         assert_eq!(add_in(&file, "fix the flaky   test\nin ci").unwrap(), 1);
         assert_eq!(add_in(&file, "cache the glob").unwrap(), 2);
-        assert_eq!(list_in(&file), ["fix the flaky test in ci", "cache the glob"]);
-        assert!(done_in(&file, 3).unwrap_err().to_string().contains("no item 3"));
+        assert_eq!(
+            list_in(&file),
+            ["fix the flaky test in ci", "cache the glob"]
+        );
+        assert!(
+            done_in(&file, 3)
+                .unwrap_err()
+                .to_string()
+                .contains("no item 3")
+        );
         assert!(done_in(&file, 0).is_err());
         assert_eq!(done_in(&file, 1).unwrap(), "fix the flaky test in ci");
         assert_eq!(list_in(&file), ["cache the glob"]);
@@ -100,7 +114,10 @@ mod tests {
 
     #[test]
     fn items_list_numbered_as_done_counts_them() {
-        assert_eq!(numbered(&["fix it".to_string(), "cache it".to_string()]), "1. fix it\n2. cache it");
+        assert_eq!(
+            numbered(&["fix it".to_string(), "cache it".to_string()]),
+            "1. fix it\n2. cache it"
+        );
         assert!(numbered(&[]).is_empty());
     }
 

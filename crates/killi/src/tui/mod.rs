@@ -18,13 +18,13 @@ mod format;
 mod history;
 mod input;
 mod layout;
-mod menu;
 mod mention;
+mod menu;
 mod notify;
 mod palette;
 mod paste;
-mod picker;
 mod peers;
+mod picker;
 mod rows;
 mod run;
 mod select;
@@ -35,11 +35,11 @@ pub(crate) mod text;
 mod turn;
 mod undo;
 
+use std::cell::RefCell;
 use std::io::{Stdout, Write, stdout};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::ExitCode;
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -47,11 +47,13 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::cursor::{Hide, MoveDown, MoveTo, MoveToColumn, MoveUp, Show};
 use crossterm::event::{
-    DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, EventStream, KeyCode,
+    KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
-    self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+    self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen,
+    LeaveAlternateScreen,
 };
 use crossterm::{execute, queue};
 use futures_util::StreamExt;
@@ -61,31 +63,50 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::{Agent, Controls, Event, Image, Question, Sink, Slot, Steered, Stop, Todo};
 use crate::config::{Config, Thinking};
-use crate::setup::{Overview, Setup};
 use crate::live;
 use crate::llm::{Client, ErrorKind, ProviderError, Usage};
 use crate::mcp::Mcp;
 use crate::session::{Choice, Replayed};
+use crate::setup::{Overview, Setup};
 use crate::snapshot::Snapshots;
 use crate::tools::{CONTAINER, image_type, image_url};
 use editor::Editor;
 use history::{Entry as Line, History};
 use menu::{Entry, Fill, Item, Suggestions};
 use palette::Ground;
-use text::{ADD, BOLD, BRANCH, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, RULE, SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_code, wrap_words};
+use text::{
+    ADD, BOLD, BRANCH, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, RULE,
+    SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_code, wrap_words,
+};
 
-use commands::{BUSY_COMMANDS, COMMANDS, KEYS, entries, effort_named, is_command, runs_at_once, submission};
-pub use start::{install_crash_hook, restore_terminal};
+use commands::{
+    BUSY_COMMANDS, COMMANDS, KEYS, effort_named, entries, is_command, runs_at_once, submission,
+};
 pub(crate) use format::megabytes;
-use format::{ago, changed_rows, clip, clock, dot, error_hint, fit, gauge, gist, move_rows, near_full, padding, precise_clock, short, thinking_parts, tint};
+use format::{
+    ago, changed_rows, clip, clock, dot, error_hint, fit, gauge, gist, move_rows, near_full,
+    padding, precise_clock, short, thinking_parts, tint,
+};
 use input::newline_key;
 use notify::{copy_to_clipboard, first_line, notify};
 use picker::{Picker, ProviderFlow, SearchFlow};
-use rows::{ask_rows, aside_rows, choice_rows, diff_rows, first_sentence, handoff, help_rows, hidden_row, hint_row, is_bookkeeping, key_hints, label, overview_rows, placeholder, prompt_rows, queued_row, question_rows, recap_rows, rule, shorten_path, snapshot_rows, tilde, title_rule, tool_summary, tool_text, working_rows, wrap_items};
+use rows::{
+    aside_rows, ask_rows, choice_rows, diff_rows, first_sentence, handoff, help_rows, hidden_row,
+    hint_row, is_bookkeeping, key_hints, label, overview_rows, placeholder, prompt_rows,
+    question_rows, queued_row, recap_rows, rule, shorten_path, snapshot_rows, tilde, title_rule,
+    tool_summary, tool_text, working_rows, wrap_items,
+};
 use run::{handle_command, next_incoming, peer_label, prompt_turn, provider_add};
 use select::Selection;
-use start::{CURSOR_ROW, ENHANCED, RESUMED, TerminalGuard, leave_fullscreen, query_ground, resume_command, resumed, terminal_gone, wants_fullscreen};
-use state::{App, Asking, Ended, Idle, Input, Kind, LastEnd, PastAsk, PeerAnswer, PendingAside, Running, SinceBanner, Status, Totals};
+use start::{
+    CURSOR_ROW, ENHANCED, RESUMED, TerminalGuard, leave_fullscreen, query_ground, resume_command,
+    resumed, terminal_gone, wants_fullscreen,
+};
+pub use start::{install_crash_hook, restore_terminal};
+use state::{
+    App, Asking, Ended, Idle, Input, Kind, LastEnd, PastAsk, PeerAnswer, PendingAside, Running,
+    SinceBanner, Status, Totals,
+};
 use undo::{restore_steered, undo_empty, undo_note, undo_paths};
 
 const MAX_INPUT_ROWS: usize = 10;
@@ -127,18 +148,33 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     let sink: Sink = Rc::new(move |event| {
         let _ = tx.send(event);
     });
-    let mut controls = Controls { interactive: true, ..Controls::default() };
+    let mut controls = Controls {
+        interactive: true,
+        ..Controls::default()
+    };
     controls.swarm.set(config.agent.swarm_on());
-    let (live, peers) = match config.agent.peers_on().then(|| live::join(&cwd, true)).flatten() {
+    let (live, peers) = match config
+        .agent
+        .peers_on()
+        .then(|| live::join(&cwd, true))
+        .flatten()
+    {
         Some((registration, peers)) => (Some(registration), peers),
         None => (None, None),
     };
     controls.here = live.as_ref().map(|l| Rc::new(l.here()));
-    let fullscreen = wants_fullscreen(config.ui.fullscreen, &std::env::var("TERM_PROGRAM").unwrap_or_default());
+    let fullscreen = wants_fullscreen(
+        config.ui.fullscreen,
+        &std::env::var("TERM_PROGRAM").unwrap_or_default(),
+    );
     if terminal_gone(libc::STDIN_FILENO) {
         return Ok(ExitCode::SUCCESS);
     }
-    let ground = if config.ui.theme.is_none() { query_ground() } else { None };
+    let ground = if config.ui.theme.is_none() {
+        query_ground()
+    } else {
+        None
+    };
     text::init_theme(config.ui.theme.as_deref(), ground);
     let mut session = Setup::new(config, &cwd, start.model.as_deref()).await?;
     // Only once killi has a model to start on: a broken config ends on the reason instead.
@@ -190,15 +226,39 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         match input {
             Input::Prompt(prompt, images) => {
                 let sent = mention::expand(&cwd, &prompt);
-                prompt_turn(&mut app, &mut agent, &mut snapshots, &mut keys, &mut rx, &prompt, &sent, &images).await?;
+                prompt_turn(
+                    &mut app,
+                    &mut agent,
+                    &mut snapshots,
+                    &mut keys,
+                    &mut rx,
+                    &prompt,
+                    &sent,
+                    &images,
+                )
+                .await?;
             }
             Input::Command(command, arg, images) => {
-                if !handle_command(&mut app, &mut agent, &mut session, &mut snapshots, &mut keys, &mut rx, &cwd, &command, &arg, &images).await? {
+                if !handle_command(
+                    &mut app,
+                    &mut agent,
+                    &mut session,
+                    &mut snapshots,
+                    &mut keys,
+                    &mut rx,
+                    &cwd,
+                    &command,
+                    &arg,
+                    &images,
+                )
+                .await?
+                {
                     break;
                 }
             }
             Input::Resume(_) if agent.goal().is_some() => {
-                let note = crate::goal::blocks("Resuming another session", agent.goal()).expect("a goal stands");
+                let note = crate::goal::blocks("Resuming another session", agent.goal())
+                    .expect("a goal stands");
                 app.notice(&note);
             }
             Input::Resume(path) if crate::session::is_locked(&path) => {
@@ -216,7 +276,13 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                             agent = resumed;
                             app.show_model(&agent, session.config());
                             app.status.context = agent.stats.context;
-                            app.notice(&format!("Resumed the session started with “{}”.", agent.user_prompts().first().map_or("", |s| s.lines().next().unwrap_or(""))));
+                            app.notice(&format!(
+                                "Resumed the session started with “{}”.",
+                                agent
+                                    .user_prompts()
+                                    .first()
+                                    .map_or("", |s| s.lines().next().unwrap_or(""))
+                            ));
                             if let Some(note) = stopped_note(&stopped) {
                                 app.notice(&note);
                             }
@@ -227,60 +293,84 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     }
                 }
             },
-            Input::Model(alias) => match session.config().resolve(Some(&alias)).and_then(Client::new) {
-                Ok(client) => {
-                    if let Err(e) = agent.switch_model(client) {
-                        app.error_report(&e);
+            Input::Model(alias) => {
+                match session.config().resolve(Some(&alias)).and_then(Client::new) {
+                    Ok(client) => {
+                        if let Err(e) = agent.switch_model(client) {
+                            app.error_report(&e);
+                        }
+                        app.show_model(&agent, session.config());
+                        app.redraw_banner(&agent, &session, &snapshots);
+                        app.save_choice(&agent);
+                        app.notice(&format!("Switched to {alias}, keeping the conversation so far. The cache starts over with the new model."));
                     }
-                    app.show_model(&agent, session.config());
-                    app.redraw_banner(&agent, &session, &snapshots);
-                    app.save_choice(&agent);
-                    app.notice(&format!("Switched to {alias}, keeping the conversation so far. The cache starts over with the new model."));
+                    Err(e) => app.error_report(&e),
                 }
-                Err(e) => app.error_report(&e),
-            },
+            }
             Input::BackupModel(alias) => {
                 let alias = alias.trim().to_string();
-                let cleared = alias.is_empty() || matches!(alias.as_str(), "none" | "off" | "clear");
+                let cleared =
+                    alias.is_empty() || matches!(alias.as_str(), "none" | "off" | "clear");
                 // The pick is validated before it is saved, so the config never names a model
                 // it can't run on.
-                let client = if cleared { Ok(None) } else { session.config().resolve(Some(&alias)).and_then(Client::new).map(Some) };
+                let client = if cleared {
+                    Ok(None)
+                } else {
+                    session
+                        .config()
+                        .resolve(Some(&alias))
+                        .and_then(Client::new)
+                        .map(Some)
+                };
                 let path = crate::config::killi_home().join("config.toml");
                 match client {
-                    Ok(Some(client)) => match crate::config::set_backup_model(&path, Some(&alias)) {
-                        Ok(()) => {
-                            agent.set_backup(client);
-                            session.set_backup_model(Some(&alias));
-                            app.show_model(&agent, session.config());
-                            app.redraw_banner(&agent, &session, &snapshots);
-                            app.notice(&format!("Backup model {alias}, here and in every new session. A rate limit on {} switches to it.", agent.model_alias()));
+                    Ok(Some(client)) => {
+                        match crate::config::set_backup_model(&path, Some(&alias)) {
+                            Ok(()) => {
+                                agent.set_backup(client);
+                                session.set_backup_model(Some(&alias));
+                                app.show_model(&agent, session.config());
+                                app.redraw_banner(&agent, &session, &snapshots);
+                                app.notice(&format!("Backup model {alias}, here and in every new session. A rate limit on {} switches to it.", agent.model_alias()));
+                            }
+                            Err(e) => app.error_from("/backup-model", &e),
                         }
-                        Err(e) => app.error_from("/backup-model", &e),
-                    },
-                    Ok(None) => match crate::config::set_backup_model(&path, None) {
-                        Ok(()) => {
-                            agent.clear_backup();
-                            session.set_backup_model(None);
-                            app.show_model(&agent, session.config());
-                            app.redraw_banner(&agent, &session, &snapshots);
-                            app.notice(&format!("No backup model, here or in new sessions; this one stays on {}.", agent.model_alias()));
+                    }
+                    Ok(None) => {
+                        match crate::config::set_backup_model(&path, None) {
+                            Ok(()) => {
+                                agent.clear_backup();
+                                session.set_backup_model(None);
+                                app.show_model(&agent, session.config());
+                                app.redraw_banner(&agent, &session, &snapshots);
+                                app.notice(&format!("No backup model, here or in new sessions; this one stays on {}.", agent.model_alias()));
+                            }
+                            Err(e) => app.error_from("/backup-model", &e),
                         }
-                        Err(e) => app.error_from("/backup-model", &e),
-                    },
+                    }
                     Err(e) => app.error_report(&e),
                 }
             }
             Input::Search(provider, url, key) => {
                 let path = crate::config::killi_home().join("config.toml");
-                let pick = crate::config::SearchConfig { provider: Some(provider.clone()), url: url.clone(), api_key: key.clone(), api_key_env: None };
+                let pick = crate::config::SearchConfig {
+                    provider: Some(provider.clone()),
+                    url: url.clone(),
+                    api_key: key.clone(),
+                    api_key_env: None,
+                };
                 match crate::config::set_search(&path, &provider, url.as_deref(), key.as_deref()) {
                     Ok(()) => {
                         agent.set_search(pick.settings());
                         session.set_search(pick);
                         let what = match (provider.as_str(), url.as_deref(), key.is_some()) {
-                            ("searxng", Some(url), true) => format!("SearXNG at {url}, with its key"),
+                            ("searxng", Some(url), true) => {
+                                format!("SearXNG at {url}, with its key")
+                            }
                             ("searxng", Some(url), false) => format!("SearXNG at {url}"),
-                            ("brave", _, false) => "Brave, reading its public results page".to_string(),
+                            ("brave", _, false) => {
+                                "Brave, reading its public results page".to_string()
+                            }
                             (other, _, true) => format!("{other}, with an API key"),
                             (other, _, false) => other.to_string(),
                         };
@@ -331,9 +421,14 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     app.show_model(&agent, session.config());
                     app.redraw_banner(&agent, &session, &snapshots);
                     app.save_choice(&agent);
-                    app.notice(&format!("Thinking effort {effort}, saved as {alias}'s default."));
+                    app.notice(&format!(
+                        "Thinking effort {effort}, saved as {alias}'s default."
+                    ));
                 } else {
-                    app.error(&format!("{alias} has no effort “{effort}”; choose one of {}.", efforts.join(", ")));
+                    app.error(&format!(
+                        "{alias} has no effort “{effort}”; choose one of {}.",
+                        efforts.join(", ")
+                    ));
                 }
             }
         }
@@ -351,14 +446,20 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     agent.discard_if_unused();
     if !agent.user_prompts().is_empty() {
         // The command on its own line, so a triple-click or a drag copies it alone.
-        println!("{DIM}To continue this session:{RESET}\n{}", resume_command(&agent.session.log_path));
+        println!(
+            "{DIM}To continue this session:{RESET}\n{}",
+            resume_command(&agent.session.log_path)
+        );
     }
     Ok(ExitCode::SUCCESS)
 }
 
 /// Says which background commands were stopped as a session ended, if any.
 pub fn stopped_note(stopped: &[String]) -> Option<String> {
-    let list: Vec<String> = stopped.iter().map(|command| format!("`{command}`")).collect();
+    let list: Vec<String> = stopped
+        .iter()
+        .map(|command| format!("`{command}`"))
+        .collect();
     (!list.is_empty()).then(|| format!("Stopped what was still running: {}.", list.join(", ")))
 }
 

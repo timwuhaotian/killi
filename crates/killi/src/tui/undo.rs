@@ -35,7 +35,11 @@ pub(super) fn undo_paths(changes: &[String]) -> Vec<String> {
 pub(super) fn undo_note(first_line: &str, paths: &[String]) -> String {
     const MAX_PATHS: usize = 30;
     let listed = if paths.len() > MAX_PATHS {
-        format!("{}, and {} more", paths[..MAX_PATHS].join(", "), paths.len() - MAX_PATHS)
+        format!(
+            "{}, and {} more",
+            paths[..MAX_PATHS].join(", "),
+            paths.len() - MAX_PATHS
+        )
     } else {
         paths.join(", ")
     };

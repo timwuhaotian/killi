@@ -12,7 +12,10 @@ use crate::tools::{image_type, image_url};
 /// path, shell-escaped, so a paste that is nothing but existing absolute paths is one. Anything
 /// else, text with a path in it included, is None.
 pub fn dropped_files(text: &str) -> Option<Vec<PathBuf>> {
-    let paths: Vec<PathBuf> = mention::words(text).into_iter().map(PathBuf::from).collect();
+    let paths: Vec<PathBuf> = mention::words(text)
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
     (!paths.is_empty() && paths.iter().all(|p| p.is_absolute() && p.exists())).then_some(paths)
 }
 
@@ -46,7 +49,10 @@ pub fn clipboard_image() -> Result<String, String> {
     let image = if answer == "png" {
         image_url("the clipboard's image", &file, "image/png")
     } else if let Some(path) = answer.strip_prefix("file:").map(Path::new) {
-        let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
         match image_type(path) {
             Some(media_type) => image_url(&name, path, media_type),
             None => Err(format!("{name} isn't an image (png, jpg, gif or webp).")),
@@ -71,11 +77,32 @@ mod tests {
         fs::write(root.join("c.rs"), b"x").unwrap();
         let a = root.join("a b.png");
         let c = root.join("c.rs");
-        assert_eq!(dropped_files(&format!("{} {} ", mention::escape(&a.display().to_string()), c.display())), Some(vec![a.clone(), c.clone()]));
-        assert_eq!(dropped_files(&format!("'{}'\n", a.display())), Some(vec![a.clone()]));
-        assert_eq!(dropped_files(&format!("see {}", c.display())), None, "text with a path in it is text");
-        assert_eq!(dropped_files(&format!("{}", root.join("nope").display())), None);
-        assert_eq!(dropped_files("src/main.rs"), None, "a relative path is typed, not dropped");
+        assert_eq!(
+            dropped_files(&format!(
+                "{} {} ",
+                mention::escape(&a.display().to_string()),
+                c.display()
+            )),
+            Some(vec![a.clone(), c.clone()])
+        );
+        assert_eq!(
+            dropped_files(&format!("'{}'\n", a.display())),
+            Some(vec![a.clone()])
+        );
+        assert_eq!(
+            dropped_files(&format!("see {}", c.display())),
+            None,
+            "text with a path in it is text"
+        );
+        assert_eq!(
+            dropped_files(&format!("{}", root.join("nope").display())),
+            None
+        );
+        assert_eq!(
+            dropped_files("src/main.rs"),
+            None,
+            "a relative path is typed, not dropped"
+        );
         assert_eq!(dropped_files(""), None);
         fs::remove_dir_all(&root).unwrap();
     }

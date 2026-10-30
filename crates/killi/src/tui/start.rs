@@ -34,7 +34,11 @@ pub(super) fn query_ground() -> Option<Ground> {
             if left.is_zero() {
                 break;
             }
-            let mut poll = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
+            let mut poll = libc::pollfd {
+                fd: libc::STDIN_FILENO,
+                events: libc::POLLIN,
+                revents: 0,
+            };
             // SAFETY: `poll` points at one pollfd that lives for the whole call.
             if unsafe { libc::poll(&mut poll, 1, left.as_millis() as i32) } <= 0 {
                 break;
@@ -63,7 +67,10 @@ pub(super) fn query_ground() -> Option<Ground> {
 
 /// The terminal's answers to the color queries, the background being the one that must be there.
 pub(super) fn parse_ground(reply: &str) -> Option<Ground> {
-    Some(Ground { background: parse_background(reply)?, foreground: parse_foreground(reply) })
+    Some(Ground {
+        background: parse_background(reply)?,
+        foreground: parse_foreground(reply),
+    })
 }
 
 /// The color in a terminal's OSC 11 answer, `rgb:rrrr/gggg/bbbb` with 1 to 4 hex digits per
@@ -102,7 +109,11 @@ pub(super) fn terminal_gone(fd: libc::c_int) -> bool {
     if fd < 0 {
         return true;
     }
-    let mut poll = libc::pollfd { fd, events: libc::POLLHUP, revents: 0 };
+    let mut poll = libc::pollfd {
+        fd,
+        events: libc::POLLHUP,
+        revents: 0,
+    };
     // SAFETY: `poll` points at one pollfd that lives for the whole call.
     if unsafe { libc::poll(&mut poll, 1, 0) } < 0 {
         return true;
@@ -115,8 +126,14 @@ pub(super) fn terminal_gone(fd: libc::c_int) -> bool {
 /// The command that reopens the session logged at `log`, quoted for the shell when needed.
 pub(super) fn resume_command(log: &Path) -> String {
     let path = log.to_string_lossy();
-    let plain = path.chars().all(|c| c.is_ascii_alphanumeric() || "/._-@+:,=".contains(c));
-    if plain { format!("killi -r {path}") } else { format!("killi -r '{}'", path.replace('\'', r"'\''")) }
+    let plain = path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-@+:,=".contains(c));
+    if plain {
+        format!("killi -r {path}")
+    } else {
+        format!("killi -r '{}'", path.replace('\'', r"'\''"))
+    }
 }
 
 /// Raw mode and bracketed paste while the UI runs, and the alternate screen with the mouse in
@@ -171,11 +188,19 @@ fn take_terminal(fullscreen: bool, enhanced: bool) -> Result<()> {
     let mut out = stdout();
     execute!(out, EnableBracketedPaste)?;
     if enhanced {
-        execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
+        execute!(
+            out,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
         ENHANCED.store(true, Ordering::Relaxed);
     }
     if fullscreen {
-        execute!(out, EnterAlternateScreen, Clear(ClearType::All), MoveTo(0, 0))?;
+        execute!(
+            out,
+            EnterAlternateScreen,
+            Clear(ClearType::All),
+            MoveTo(0, 0)
+        )?;
         write!(out, "\x1b[?1002h\x1b[?1006h")?;
         out.flush()?;
         FULLSCREEN.store(true, Ordering::Relaxed);
@@ -238,14 +263,20 @@ fn suspend_cleanly() {
         let mut read = || unsafe { libc::read(reader, bytes.as_mut_ptr().cast(), bytes.len()) };
         loop {
             let n = read();
-            if n == 0 || (n < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted) {
+            if n == 0
+                || (n < 0
+                    && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted)
+            {
                 return;
             }
             if n < 0 {
                 continue;
             }
             let taken = terminal::is_raw_mode_enabled().unwrap_or(false);
-            let (fullscreen, enhanced) = (FULLSCREEN.load(Ordering::Relaxed), ENHANCED.load(Ordering::Relaxed));
+            let (fullscreen, enhanced) = (
+                FULLSCREEN.load(Ordering::Relaxed),
+                ENHANCED.load(Ordering::Relaxed),
+            );
             if taken && !fullscreen {
                 let mut out = stdout();
                 let row = CURSOR_ROW.load(Ordering::Relaxed);
@@ -259,7 +290,11 @@ fn suspend_cleanly() {
             unsafe { libc::kill(libc::getpid(), libc::SIGSTOP) };
             // Continued. A poke that arrived before the stop is stale.
             loop {
-                let mut poll = libc::pollfd { fd: reader, events: libc::POLLIN, revents: 0 };
+                let mut poll = libc::pollfd {
+                    fd: reader,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
                 // SAFETY: `poll` points at one pollfd that lives for the whole call.
                 if unsafe { libc::poll(&mut poll, 1, 0) } <= 0 || read() <= 0 {
                     break;
@@ -316,7 +351,10 @@ fn panic_message(info: &std::panic::PanicHookInfo) -> String {
 
 /// The crash record in the session log's shape: one JSON object with a millisecond stamp.
 pub(super) fn crash_line(message: &str, ts: u128) -> String {
-    format!("{{\"type\":\"crash\",\"message\":{},\"ts\":{ts}}}\n", serde_json::Value::String(message.to_string()))
+    format!(
+        "{{\"type\":\"crash\",\"message\":{},\"ts\":{ts}}}\n",
+        serde_json::Value::String(message.to_string())
+    )
 }
 
 /// Notes the crash in the session log, best effort: nothing is left running to retry with.
@@ -325,8 +363,14 @@ pub(super) fn crash_line(message: &str, ts: u128) -> String {
 fn append_crash(message: String) {
     use std::io::{Read, Seek, SeekFrom};
 
-    let Some(path) = crate::agent::crash_log() else { return };
-    let mut file = match std::fs::OpenOptions::new().append(true).read(true).open(&path) {
+    let Some(path) = crate::agent::crash_log() else {
+        return;
+    };
+    let mut file = match std::fs::OpenOptions::new()
+        .append(true)
+        .read(true)
+        .open(&path)
+    {
         Ok(file) => file,
         Err(_) => return,
     };
@@ -341,7 +385,9 @@ fn append_crash(message: String) {
             .unwrap_or(false),
         Err(_) => false,
     };
-    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
     let mut line = crash_line(&message, ts);
     if torn {
         line.insert(0, '\n');

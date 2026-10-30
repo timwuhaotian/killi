@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::{Context, MAX_BYTES, MAX_LINES, Output, spill};
-use process::{Exit, Process, wait_for_group};
 #[cfg(test)]
 use process::groups;
+use process::{Exit, Process, wait_for_group};
 pub use process::{OwnSession, Tracked, kill_all, track};
 pub use running::Running;
 use running::waiting;
@@ -68,27 +68,42 @@ fn leading_sleep(command: &str) -> Option<f64> {
     if !rest.starts_with(char::is_whitespace) {
         return None;
     }
-    let number: String = rest.trim_start().chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    let number: String = rest
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
     number.parse().ok()
 }
 
 /// Where a command runs: the working directory, or `cwd` when given (absolute, `~/…`, or
 /// relative to the working directory), which must exist.
 fn run_dir(ctx: &Context, cwd: Option<&str>) -> Result<PathBuf, String> {
-    let Some(cwd) = cwd.filter(|c| !c.is_empty()) else { return Ok(ctx.cwd.clone()) };
+    let Some(cwd) = cwd.filter(|c| !c.is_empty()) else {
+        return Ok(ctx.cwd.clone());
+    };
     let dir = match cwd.strip_prefix("~/") {
         Some(rest) => crate::config::home().join(rest),
         None => ctx.cwd.join(cwd),
     };
-    if dir.is_dir() { Ok(dir) } else { Err(format!("cwd {cwd} is not a directory.")) }
+    if dir.is_dir() {
+        Ok(dir)
+    } else {
+        Err(format!("cwd {cwd} is not a directory."))
+    }
 }
 
 pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
     let Some(command) = args.get("command").and_then(Value::as_str) else {
         return Output::error("bash needs `command`.");
     };
-    let timeout = super::uint(args, "timeout").unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT);
-    let background = args.get("run_in_background").and_then(Value::as_bool).unwrap_or(false);
+    let timeout = super::uint(args, "timeout")
+        .unwrap_or(DEFAULT_TIMEOUT)
+        .clamp(1, MAX_TIMEOUT);
+    let background = args
+        .get("run_in_background")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if let Some(secs) = leading_sleep(command).filter(|&secs| !background && secs >= MAX_SLEEP) {
         return Output::error(format!(
             "Not run: `sleep {secs}` waits the whole time even if the job ends in a second. To wait for a background task, call task_output with `wait`: it returns the moment the task ends. For anything else, loop on the condition: `until <check>; do sleep 5; done`, with a `timeout`."
@@ -104,11 +119,17 @@ pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
     };
     if background {
         let id = ctx.tasks.borrow_mut().add(command, process, 0);
-        return Output::ok(format!("Started background task {id}. Read its output with task_output."))
-            .brief(format!("task {id}"));
+        return Output::ok(format!(
+            "Started background task {id}. Read its output with task_output."
+        ))
+        .brief(format!("task {id}"));
     }
 
-    let _waiting = waiting(ctx, format!("bash `{}`", first_line(command)), process.output.clone());
+    let _waiting = waiting(
+        ctx,
+        format!("bash `{}`", first_line(command)),
+        process.output.clone(),
+    );
     let started = Instant::now();
     let exit = tokio::select! {
         biased;
@@ -124,7 +145,9 @@ pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
                 started.elapsed().as_secs()
             )
         } else {
-            format!("Still running after {timeout}s, so it moved to background task {id}. Use task_output to wait for it or read more, task_stop to end it.")
+            format!(
+                "Still running after {timeout}s, so it moved to background task {id}. Use task_output to wait for it or read more, task_stop to end it."
+            )
         };
         return Output::ok(format!("{text}\n[{why}]")).brief(format!("still running → task {id}"));
     };
@@ -135,7 +158,11 @@ pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
         1 => "1 line".to_string(),
         n => format!("{n} lines"),
     };
-    let left = if process.running() { Some(ctx.tasks.borrow_mut().add(command, process, shown)) } else { None };
+    let left = if process.running() {
+        Some(ctx.tasks.borrow_mut().add(command, process, shown))
+    } else {
+        None
+    };
     let mut output = match exit {
         Exit::Code(0) => {
             if text == NO_OUTPUT {
@@ -158,12 +185,18 @@ pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
 /// The output after `from`, cut to its last 2000 lines within 50KB, and the new read offset.
 fn take_output(ctx: &Context, process: &Process, from: usize, failed: bool) -> (String, usize) {
     let captured = process.output.lock().expect("output lock");
-    let start = from.saturating_sub(captured.dropped).min(captured.bytes.len());
+    let start = from
+        .saturating_sub(captured.dropped)
+        .min(captured.bytes.len());
     let lost = captured.dropped.saturating_sub(from);
     let read_to = captured.dropped + captured.bytes.len();
     if failed && from == 0 {
         let missing = lost.saturating_sub(captured.head.len());
-        let overlap = captured.head.len().saturating_sub(captured.dropped).min(captured.bytes.len());
+        let overlap = captured
+            .head
+            .len()
+            .saturating_sub(captured.dropped)
+            .min(captured.bytes.len());
         let mut bytes = Vec::with_capacity(captured.head.len() + captured.bytes.len() - overlap);
         bytes.extend_from_slice(&captured.head);
         bytes.extend_from_slice(&captured.bytes[overlap..]);
@@ -185,7 +218,13 @@ pub async fn task_output(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output 
             return Output::error(format!("No background task {id}."));
         };
         let what = format!("task_output on task {id} `{}`", first_line(&task.command));
-        (task.process.exit.clone(), task.started, task.process.pgid, what, task.process.output.clone())
+        (
+            task.process.exit.clone(),
+            task.started,
+            task.process.pgid,
+            what,
+            task.process.output.clone(),
+        )
     };
     let mut interrupted = false;
     if wait > 0 {
@@ -198,7 +237,10 @@ pub async fn task_output(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output 
     }
     let mut tasks = ctx.tasks.borrow_mut();
     let task = tasks.list.get_mut(&id).expect("task exists");
-    let failed = task.process.exit().is_some_and(|exit| !matches!(exit, Exit::Code(0)));
+    let failed = task
+        .process
+        .exit()
+        .is_some_and(|exit| !matches!(exit, Exit::Code(0)));
     let (text, read_to) = take_output(ctx, &task.process, task.read_to, failed);
     task.read_to = read_to;
     task.release();
@@ -206,15 +248,25 @@ pub async fn task_output(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output 
         Some(exit) => {
             task.reported = true;
             let left = if task.process.running() {
-                format!("; what it started is still running ({}s)", started.elapsed().as_secs())
+                format!(
+                    "; what it started is still running ({}s)",
+                    started.elapsed().as_secs()
+                )
             } else {
                 String::new()
             };
             format!("Task {id} {}{left}.", exit.describe())
         }
-        None => format!("Task {id} is still running ({}s).", started.elapsed().as_secs()),
+        None => format!(
+            "Task {id} is still running ({}s).",
+            started.elapsed().as_secs()
+        ),
     };
-    let mut body = if text == NO_OUTPUT { "(no new output)".to_string() } else { text };
+    let mut body = if text == NO_OUTPUT {
+        "(no new output)".to_string()
+    } else {
+        text
+    };
     if interrupted && task.process.exit().is_none() {
         body.push_str("\n[Stopped waiting: a message from the user is waiting. Read it first; task_output with `wait` picks the wait up again.]");
     }
@@ -263,13 +315,24 @@ fn tail(ctx: &Context, output: &str, dropped: usize) -> String {
         return output.to_string();
     }
     let shown = &output[output.len() - (bytes - 1)..];
-    let shown = if shown.len() > MAX_BYTES { &shown[shown.len() - floor_boundary(shown, MAX_BYTES)..] } else { shown };
+    let shown = if shown.len() > MAX_BYTES {
+        &shown[shown.len() - floor_boundary(shown, MAX_BYTES)..]
+    } else {
+        shown
+    };
     let saved = match spill(ctx, "bash", output) {
         Some(path) => format!(" Full output: {}", path.display()),
         None => String::new(),
     };
-    let lost = if dropped > 0 { format!(" The first {dropped} bytes were not kept.") } else { String::new() };
-    format!("[Showing lines {}-{total} of {total}.{saved}{lost}]\n{shown}", start + 1)
+    let lost = if dropped > 0 {
+        format!(" The first {dropped} bytes were not kept.")
+    } else {
+        String::new()
+    };
+    format!(
+        "[Showing lines {}-{total} of {total}.{saved}{lost}]\n{shown}",
+        start + 1
+    )
 }
 
 /// Keeps both ends of a failed command within the same display budget as `tail`.
@@ -285,7 +348,15 @@ fn failed_tail(ctx: &Context, output: &str, missing: usize) -> String {
     }
     let saved = match spill(ctx, "bash", output) {
         Some(path) => {
-            format!(" {}: {}", if missing > 0 { "Retained output" } else { "Full output" }, path.display())
+            format!(
+                " {}: {}",
+                if missing > 0 {
+                    "Retained output"
+                } else {
+                    "Full output"
+                },
+                path.display()
+            )
         }
         None => String::new(),
     };

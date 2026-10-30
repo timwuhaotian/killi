@@ -37,7 +37,10 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
         Err(e) => return Output::error(format!("Could not read {path}: {e}")),
     };
     if is_binary(&bytes) {
-        return Output::error(format!("{path} is a binary file ({} bytes); not shown.", bytes.len()));
+        return Output::error(format!(
+            "{path} is a binary file ({} bytes); not shown.",
+            bytes.len()
+        ));
     }
     let text = TextFile::decode(&bytes).text;
     if text.is_empty() {
@@ -48,7 +51,9 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
     let total = lines().count();
     let offset = super::uint(args, "offset").unwrap_or(1).max(1) as usize;
     if offset > total {
-        return Output::error(format!("Offset {offset} is beyond the end of {path} ({total} lines)."));
+        return Output::error(format!(
+            "Offset {offset} is beyond the end of {path} ({total} lines)."
+        ));
     }
     let limit = super::uint(args, "limit").map_or(MAX_LINES, |l| (l as usize).clamp(1, MAX_LINES));
 
@@ -57,7 +62,12 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
     let mut hit_bytes = false;
     for (i, line) in lines().enumerate().skip(offset - 1).take(limit) {
         let entry = if line.len() > MAX_LINE_CHARS {
-            format!("{}\t{}… [line truncated: {} chars]\n", i + 1, truncate(line, MAX_LINE_CHARS), line.len())
+            format!(
+                "{}\t{}… [line truncated: {} chars]\n",
+                i + 1,
+                truncate(line, MAX_LINE_CHARS),
+                line.len()
+            )
         } else {
             format!("{}\t{line}\n", i + 1)
         };
@@ -75,7 +85,10 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
     };
     if last < total {
         let why = if hit_bytes { " (50KB limit)" } else { "" };
-        out.push_str(&format!("[Showing lines {offset}-{last} of {total}{why}. Use offset={} to continue.]", last + 1));
+        out.push_str(&format!(
+            "[Showing lines {offset}-{last} of {total}{why}. Use offset={} to continue.]",
+            last + 1
+        ));
     }
     Output::ok(out).brief(brief)
 }
@@ -96,12 +109,17 @@ const SHRINK_ABOVE: u64 = 500 * 1024;
 
 pub(super) fn read_image(ctx: &Context, path: &str, full: &Path, media_type: &str) -> Output {
     if !ctx.images.get() {
-        return Output::error(format!("{path} is an image, and this model can't see images."));
+        return Output::error(format!(
+            "{path} is an image, and this model can't see images."
+        ));
     }
     match image_url(path, full, media_type) {
         Ok((url, bytes)) => {
-            let mut output = Output::ok(format!("{path} is an image ({} KB); it is attached below.", bytes / 1024))
-                .brief(format!("image, {} KB", bytes / 1024));
+            let mut output = Output::ok(format!(
+                "{path} is an image ({} KB); it is attached below.",
+                bytes / 1024
+            ))
+            .brief(format!("image, {} KB", bytes / 1024));
             output.image = Some(url);
             output
         }
@@ -135,7 +153,9 @@ fn check_magic(name: &str, full: &Path, media_type: &str) -> Result<(), String> 
         .map_err(|e| format!("Could not read {name}: {e}"))?;
     let head = &head[..n];
     if head.starts_with(b"version https://git-lfs") {
-        return Err(format!("{name} is a Git LFS pointer, not the image itself; fetch it with `git lfs pull` and try again."));
+        return Err(format!(
+            "{name} is a Git LFS pointer, not the image itself; fetch it with `git lfs pull` and try again."
+        ));
     }
     let expected = match media_type {
         "image/png" => "PNG",
@@ -146,9 +166,20 @@ fn check_magic(name: &str, full: &Path, media_type: &str) -> Result<(), String> 
     };
     match detected_kind(head) {
         Some(found) if found == expected => Ok(()),
-        Some(found) => Err(format!("{name} claims to be {media_type} but its bytes look like {found}; rename it or save it in the right format.")),
-        None if head.iter().all(|b| b.is_ascii_graphic() || b.is_ascii_whitespace()) => Err(format!("{name} claims to be {media_type} but its contents look like text; save it in the right format or fix the extension.")),
-        None => Err(format!("{name} claims to be {media_type} but its magic bytes don't match; save it in the right format or fix the extension.")),
+        Some(found) => Err(format!(
+            "{name} claims to be {media_type} but its bytes look like {found}; rename it or save it in the right format."
+        )),
+        None if head
+            .iter()
+            .all(|b| b.is_ascii_graphic() || b.is_ascii_whitespace()) =>
+        {
+            Err(format!(
+                "{name} claims to be {media_type} but its contents look like text; save it in the right format or fix the extension."
+            ))
+        }
+        None => Err(format!(
+            "{name} claims to be {media_type} but its magic bytes don't match; save it in the right format or fix the extension."
+        )),
     }
 }
 
@@ -156,11 +187,22 @@ fn check_magic(name: &str, full: &Path, media_type: &str) -> Result<(), String> 
 /// sent as a JPEG that `sips` made. `name` is how errors refer to it.
 pub fn image_url(name: &str, full: &Path, media_type: &str) -> Result<(String, usize), String> {
     check_magic(name, full, media_type)?;
-    let size = fs::metadata(full).map_err(|e| format!("Could not read {name}: {e}"))?.len();
+    let size = fs::metadata(full)
+        .map_err(|e| format!("Could not read {name}: {e}"))?
+        .len();
     let (bytes, media_type) = if size > SHRINK_ABOVE {
         let out = std::env::temp_dir().join(format!("killi-image-{}.jpg", std::process::id()));
         let shrunk = Command::new("/usr/bin/sips")
-            .args(["-Z", "1568", "-s", "format", "jpeg", "-s", "formatOptions", "80"])
+            .args([
+                "-Z",
+                "1568",
+                "-s",
+                "format",
+                "jpeg",
+                "-s",
+                "formatOptions",
+                "80",
+            ])
             .arg(full)
             .arg("--out")
             .arg(&out)
@@ -170,12 +212,23 @@ pub fn image_url(name: &str, full: &Path, media_type: &str) -> Result<(String, u
         let _ = fs::remove_file(&out);
         match bytes {
             Some(bytes) => (bytes, "image/jpeg"),
-            None => return Err(format!("Could not shrink {name} ({} KB) to send it.", size / 1024)),
+            None => {
+                return Err(format!(
+                    "Could not shrink {name} ({} KB) to send it.",
+                    size / 1024
+                ));
+            }
         }
     } else {
-        (fs::read(full).map_err(|e| format!("Could not read {name}: {e}"))?, media_type)
+        (
+            fs::read(full).map_err(|e| format!("Could not read {name}: {e}"))?,
+            media_type,
+        )
     };
-    Ok((format!("data:{media_type};base64,{}", base64(&bytes)), bytes.len()))
+    Ok((
+        format!("data:{media_type};base64,{}", base64(&bytes)),
+        bytes.len(),
+    ))
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -197,9 +250,10 @@ fn base64(bytes: &[u8]) -> String {
 }
 
 pub fn write(ctx: &Context, args: &Value) -> Output {
-    let (Some(path), Some(content)) =
-        (args.get("path").and_then(Value::as_str), args.get("content").and_then(Value::as_str))
-    else {
+    let (Some(path), Some(content)) = (
+        args.get("path").and_then(Value::as_str),
+        args.get("content").and_then(Value::as_str),
+    ) else {
         return Output::error("write needs `path` and `content`.");
     };
     let full = resolve(ctx, path);
@@ -214,7 +268,11 @@ pub fn write(ctx: &Context, args: &Value) -> Output {
     }
     let verb = if existed { "Overwrote" } else { "Created" };
     let lines = content.lines().count();
-    Output::ok(format!("{verb} {path} ({}).", super::count(lines, "line"))).brief(format!("{} {}", verb.to_lowercase(), super::count(lines, "line")))
+    Output::ok(format!("{verb} {path} ({}).", super::count(lines, "line"))).brief(format!(
+        "{} {}",
+        verb.to_lowercase(),
+        super::count(lines, "line")
+    ))
 }
 
 /// A text file as read and edit see it: BOM removed, and CRLF shown as LF when every line
@@ -239,8 +297,16 @@ impl TextFile {
     }
 
     pub fn encode(&self, text: &str) -> String {
-        let body = if self.crlf { text.replace('\n', "\r\n") } else { text.to_string() };
-        if self.bom { format!("\u{feff}{body}") } else { body }
+        let body = if self.crlf {
+            text.replace('\n', "\r\n")
+        } else {
+            text.to_string()
+        };
+        if self.bom {
+            format!("\u{feff}{body}")
+        } else {
+            body
+        }
     }
 }
 
@@ -267,16 +333,28 @@ mod tests {
         let dir = crate::test_temp::TempDir::new("killi-read");
         let body: String = (1..=5).map(|n| format!("line {n}\r\n")).collect();
         fs::write(dir.join("a.txt"), body).unwrap();
-        let out = read(&ctx(&dir), &json!({"path": "a.txt", "offset": 2, "limit": 2}));
-        assert_eq!(out.text, "2\tline 2\n3\tline 3\n[Showing lines 2-3 of 5. Use offset=4 to continue.]");
+        let out = read(
+            &ctx(&dir),
+            &json!({"path": "a.txt", "offset": 2, "limit": 2}),
+        );
+        assert_eq!(
+            out.text,
+            "2\tline 2\n3\tline 3\n[Showing lines 2-3 of 5. Use offset=4 to continue.]"
+        );
     }
 
     #[test]
     fn offset_and_limit_arrive_as_strings_too() {
         let dir = crate::test_temp::TempDir::new("killi-read-str");
         fs::write(dir.join("a.txt"), "a\nb\nc\n").unwrap();
-        let out = read(&ctx(&dir), &json!({"path": "a.txt", "offset": "2", "limit": "1"}));
-        assert_eq!(out.text, "2\tb\n[Showing lines 2-2 of 3. Use offset=3 to continue.]");
+        let out = read(
+            &ctx(&dir),
+            &json!({"path": "a.txt", "offset": "2", "limit": "1"}),
+        );
+        assert_eq!(
+            out.text,
+            "2\tb\n[Showing lines 2-2 of 3. Use offset=3 to continue.]"
+        );
     }
 
     #[test]
@@ -285,9 +363,16 @@ mod tests {
         let file = fs::File::create(dir.join("big.log")).unwrap();
         file.set_len(MAX_READ + 1).unwrap();
         let out = read(&ctx(&dir), &json!({"path": "big.log"}));
-        assert!(out.is_error && out.text.contains("too large to read whole"), "{}", out.text);
+        assert!(
+            out.is_error && out.text.contains("too large to read whole"),
+            "{}",
+            out.text
+        );
         fs::write(dir.join("ok.txt"), "a\nb\n").unwrap();
-        assert_eq!(read(&ctx(&dir), &json!({"path": "ok.txt", "offset": 2})).text, "2\tb\n");
+        assert_eq!(
+            read(&ctx(&dir), &json!({"path": "ok.txt", "offset": 2})).text,
+            "2\tb\n"
+        );
         assert!(read(&ctx(&dir), &json!({"path": "ok.txt", "offset": 3})).is_error);
     }
 
@@ -305,7 +390,11 @@ mod tests {
         assert!(err.contains("JPEG") && err.contains("image/png"), "{err}");
 
         let lfs = dir.join("c.png");
-        fs::write(&lfs, "version https://git-lfs/spec/v1\noid sha256:abc\nsize 12\n").unwrap();
+        fs::write(
+            &lfs,
+            "version https://git-lfs/spec/v1\noid sha256:abc\nsize 12\n",
+        )
+        .unwrap();
         let err = image_url("c.png", &lfs, "image/png").unwrap_err();
         assert!(err.contains("Git LFS"), "{err}");
 

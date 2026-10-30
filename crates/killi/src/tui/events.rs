@@ -13,7 +13,11 @@ impl App {
         }
         match event {
             Event::Text(text) => {
-                let text = if self.last_kind == Kind::Text { text.as_str() } else { text.trim_start() };
+                let text = if self.last_kind == Kind::Text {
+                    text.as_str()
+                } else {
+                    text.trim_start()
+                };
                 if text.is_empty() {
                     return;
                 }
@@ -44,7 +48,11 @@ impl App {
                     None => self.thinking = Some((Instant::now(), clean)),
                 }
             }
-            Event::Retry { attempt, wait, reason } => {
+            Event::Retry {
+                attempt,
+                wait,
+                reason,
+            } => {
                 self.retry = Some((attempt, Instant::now() + wait));
                 let discarded = self.flush_partial();
                 self.thinking = None;
@@ -52,7 +60,11 @@ impl App {
                 if discarded {
                     self.notice("the partial reply above was discarded; retrying …");
                 }
-                let line = format!("{WARN}⚠ retry {attempt} in {}:{RESET}{DIM} {}{RESET}", clock(wait), text::sanitize_row(&gist(&reason)));
+                let line = format!(
+                    "{WARN}⚠ retry {attempt} in {}:{RESET}{DIM} {}{RESET}",
+                    clock(wait),
+                    text::sanitize_row(&gist(&reason))
+                );
                 self.begin(Kind::Tool);
                 self.emit(Line::Fit(line));
             }
@@ -64,9 +76,20 @@ impl App {
                 self.flush_partial();
                 self.end_thinking();
                 self.begin(Kind::Tool);
-                self.running.push(Running { id, summary, label: None, started: Instant::now() });
+                self.running.push(Running {
+                    id,
+                    summary,
+                    label: None,
+                    started: Instant::now(),
+                });
             }
-            Event::ToolEnd { id, is_error, brief, display, output } => {
+            Event::ToolEnd {
+                id,
+                is_error,
+                brief,
+                display,
+                output,
+            } => {
                 if self.swarm.as_ref().is_some_and(|s| s.id == id) {
                     self.swarm = None;
                 }
@@ -83,7 +106,11 @@ impl App {
                     self.output_preview(&output, is_error);
                 }
                 if let Some(display) = display {
-                    let shown: Vec<String> = display.lines().take(DIFF_ROWS).map(str::to_string).collect();
+                    let shown: Vec<String> = display
+                        .lines()
+                        .take(DIFF_ROWS)
+                        .map(str::to_string)
+                        .collect();
                     self.emit(Line::block(move |width| diff_rows(&shown, width)));
                     self.hidden_note(display.lines().count().saturating_sub(DIFF_ROWS), "more");
                     let detail = text::sanitize(&display).into_owned();
@@ -94,7 +121,9 @@ impl App {
             }
             Event::Usage(usage) => self.add_usage(&usage, true),
             Event::Todos(mut todos) => {
-                todos.iter_mut().for_each(|todo| todo.content = text::sanitize_row(&todo.content).into_owned());
+                todos
+                    .iter_mut()
+                    .for_each(|todo| todo.content = text::sanitize_row(&todo.content).into_owned());
                 self.todos = todos;
             }
             Event::Ask(question) => {
@@ -106,7 +135,8 @@ impl App {
                     let plan = text::sanitize(&question.text).into_owned();
                     self.emit(Line::block(move |width| {
                         let mut markdown = Markdown::new(width.saturating_sub(2));
-                        let mut rows: Vec<String> = plan.lines().flat_map(|line| markdown.line(line)).collect();
+                        let mut rows: Vec<String> =
+                            plan.lines().flat_map(|line| markdown.line(line)).collect();
                         rows.extend(markdown.finish());
                         rows.into_iter()
                             .flat_map(|row| {
@@ -122,7 +152,12 @@ impl App {
                 }
                 let asked = first_line(&question.text, 120);
                 self.ask_view = None;
-                self.asking = Some(Asking { question, selected: 0, internal: false, secret: false });
+                self.asking = Some(Asking {
+                    question,
+                    selected: 0,
+                    internal: false,
+                    secret: false,
+                });
                 notify("Waiting for your answer", &asked);
             }
             Event::Notice(text) => {
@@ -130,11 +165,18 @@ impl App {
                 self.end_thinking();
                 self.notice(&text);
             }
-            Event::Swarm { id, description, items } => {
+            Event::Swarm {
+                id,
+                description,
+                items,
+            } => {
                 self.flush_partial();
                 self.end_thinking();
                 let description = text::sanitize_row(&description).into_owned();
-                let items = items.iter().map(|item| text::sanitize_row(item).into_owned()).collect();
+                let items = items
+                    .iter()
+                    .map(|item| text::sanitize_row(item).into_owned())
+                    .collect();
                 self.swarm = Some(swarm::Swarm::new(id, description, items));
             }
             Event::Started | Event::Finished { .. } => {}
@@ -144,7 +186,9 @@ impl App {
 
     pub(super) fn on_sub(&mut self, label: String, slot: Option<Slot>, event: Event) {
         // A swarm's subagents show in its panel and leave a line when they end, not a line per call.
-        let member = slot.filter(|slot| self.swarm.as_ref().is_some_and(|s| s.id == slot.swarm)).map(|slot| slot.index);
+        let member = slot
+            .filter(|slot| self.swarm.as_ref().is_some_and(|s| s.id == slot.swarm))
+            .map(|slot| slot.index);
         match event {
             Event::ToolStart { id, summary, .. } => match (member, &mut self.swarm) {
                 (Some(index), Some(swarm)) => {
@@ -155,15 +199,31 @@ impl App {
                 }
                 _ => {
                     let summary = text::sanitize_row(&summary).into_owned();
-                    self.running.push(Running { id: sub_key(&label, &id), summary, label: Some(label), started: Instant::now() })
+                    self.running.push(Running {
+                        id: sub_key(&label, &id),
+                        summary,
+                        label: Some(label),
+                        started: Instant::now(),
+                    })
                 }
             },
-            Event::ToolEnd { id, is_error, brief, .. } if member.is_none() => {
+            Event::ToolEnd {
+                id,
+                is_error,
+                brief,
+                ..
+            } if member.is_none() => {
                 let running = self.take_running(&sub_key(&label, &id));
                 let elapsed = running.as_ref().map(|r| r.started.elapsed());
                 let summary = running.map(|r| r.summary).unwrap_or_default();
                 if !is_bookkeeping(&summary, is_error) {
-                    self.tool_line(Some(&label), &summary, is_error, &text::sanitize_row(&brief), elapsed);
+                    self.tool_line(
+                        Some(&label),
+                        &summary,
+                        is_error,
+                        &text::sanitize_row(&brief),
+                        elapsed,
+                    );
                 }
             }
             Event::Started => {
@@ -172,10 +232,16 @@ impl App {
                 }
             }
             Event::Finished { is_error } => {
-                let Some((index, swarm)) = member.zip(self.swarm.as_mut()) else { return };
-                let Some((item, calls, took)) = swarm.finish(index, is_error) else { return };
+                let Some((index, swarm)) = member.zip(self.swarm.as_mut()) else {
+                    return;
+                };
+                let Some((item, calls, took)) = swarm.finish(index, is_error) else {
+                    return;
+                };
                 self.begin(Kind::Tool);
-                self.emit(Line::block(move |width| vec![swarm::finished_row(&item, is_error, calls, took, width)]));
+                self.emit(Line::block(move |width| {
+                    vec![swarm::finished_row(&item, is_error, calls, took, width)]
+                }));
             }
             Event::Usage(usage) => self.add_usage(&usage, false),
             Event::Notice(text) => self.notice(&format!("{label}: {text}")),
@@ -191,23 +257,43 @@ impl App {
         Some(self.running.remove(index))
     }
 
-    fn tool_line(&mut self, label: Option<&str>, summary: &str, is_error: bool, brief: &str, elapsed: Option<Duration>) {
+    fn tool_line(
+        &mut self,
+        label: Option<&str>,
+        summary: &str,
+        is_error: bool,
+        brief: &str,
+        elapsed: Option<Duration>,
+    ) {
         let (glyph, note) = if is_error {
-            (format!("{DANGER}✗{RESET}"), format!(" {DANGER}{brief}{RESET}"))
+            (
+                format!("{DANGER}✗{RESET}"),
+                format!(" {DANGER}{brief}{RESET}"),
+            )
         } else if brief.is_empty() {
             (format!("{FAINT}✓{RESET}"), String::new())
         } else {
-            (format!("{FAINT}✓{RESET}"), format!(" {DIM}· {brief}{RESET}"))
+            (
+                format!("{FAINT}✓{RESET}"),
+                format!(" {DIM}· {brief}{RESET}"),
+            )
         };
-        let took = elapsed.filter(|e| e.as_secs() >= 1).map(|e| format!(" {DIM}· {}{RESET}", precise_clock(e)));
+        let took = elapsed
+            .filter(|e| e.as_secs() >= 1)
+            .map(|e| format!(" {DIM}· {}{RESET}", precise_clock(e)));
         let note = format!("{note}{}", took.unwrap_or_default());
         let (label, summary) = (label.map(str::to_string), summary.to_string());
         self.begin(Kind::Tool);
         self.emit(Line::block(move |width| {
             let lead = label.as_ref().map_or(0, |l| text::width(l) + 5);
-            let summary = clip(&tool_text(&summary), width.saturating_sub(lead + 2 + text::width(&note)).max(20));
+            let summary = clip(
+                &tool_text(&summary),
+                width.saturating_sub(lead + 2 + text::width(&note)).max(20),
+            );
             let line = match &label {
-                Some(label) => format!("  {DIM}↳ {label}:{RESET} {glyph} {DIM}{summary}{RESET}{note}"),
+                Some(label) => {
+                    format!("  {DIM}↳ {label}:{RESET} {glyph} {DIM}{summary}{RESET}{note}")
+                }
                 None => format!("{glyph} {}{note}", tool_summary(&summary)),
             };
             vec![fit(&line, width)]
@@ -219,13 +305,22 @@ impl App {
         let lines: Vec<String> = output
             .lines()
             .filter(|l| !l.trim().is_empty() && !l.starts_with("[Command "))
-            .map(|l| l.chars().filter(|c| !c.is_control() || *c == '\t').collect::<String>().replace('\t', "    "))
+            .map(|l| {
+                l.chars()
+                    .filter(|c| !c.is_control() || *c == '\t')
+                    .collect::<String>()
+                    .replace('\t', "    ")
+            })
             .collect();
         if lines.is_empty() || (lines.len() == 1 && lines[0].starts_with("(no output")) {
             return;
         }
         let skipped = lines.len().saturating_sub(PREVIEW_ROWS);
-        let shown = if is_error { &lines[skipped..] } else { &lines[..lines.len() - skipped] };
+        let shown = if is_error {
+            &lines[skipped..]
+        } else {
+            &lines[..lines.len() - skipped]
+        };
         for line in shown {
             self.emit(Line::Fit(format!("  {FAINT}│{RESET} {DIM}{line}{RESET}")));
         }

@@ -5,14 +5,28 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-use super::{Delta, ErrorKind, Failure, Prepared, Reply, StreamParser, ToolCall, IMAGE_OMITTED, cap_output, content_text, system_text, truncate};
+use super::{
+    Delta, ErrorKind, Failure, IMAGE_OMITTED, Prepared, Reply, StreamParser, ToolCall, cap_output,
+    content_text, system_text, truncate,
+};
 use crate::config::{ResolvedModel, Thinking};
 
-pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value], cache_key: &str) -> Result<Prepared> {
+pub(super) fn prepare(
+    model: &ResolvedModel,
+    messages: &[Value],
+    tools: &[Value],
+    cache_key: &str,
+) -> Result<Prepared> {
     let (system, history) = system_text(messages);
     let wire = |name: &Value| {
         let name = name.as_str().unwrap_or_default();
-        Value::String(model.tool_names.get(name).cloned().unwrap_or_else(|| name.to_string()))
+        Value::String(
+            model
+                .tool_names
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| name.to_string()),
+        )
     };
     let mut body = Map::new();
     body.insert("model".into(), model.model.clone().into());
@@ -21,7 +35,10 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
     if !system.is_empty() {
         body.insert("instructions".into(), system.into());
     }
-    body.insert("input".into(), convert_input(history, model.images, &model.tool_names).into());
+    body.insert(
+        "input".into(),
+        convert_input(history, model.images, &model.tool_names).into(),
+    );
     let tools: Vec<Value> = tools
         .iter()
         .map(|tool| {
@@ -32,7 +49,12 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
     body.insert("prompt_cache_key".into(), cache_key.into());
     // A ChatGPT plan turns `max_output_tokens` away.
     if let Some(max) = model.max_output.filter(|_| !model.chatgpt) {
-        body.insert("max_output_tokens".into(), cap_output(model, messages, &tools, max).clamp(1, 131_072).into());
+        body.insert(
+            "max_output_tokens".into(),
+            cap_output(model, messages, &tools, max)
+                .clamp(1, 131_072)
+                .into(),
+        );
     }
     body.insert("tools".into(), tools.into());
     match &model.thinking {
@@ -41,7 +63,10 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
             body.insert("reasoning".into(), json!({"summary": "auto"}));
         }
         Thinking::Effort(effort) => {
-            body.insert("reasoning".into(), json!({"effort": effort, "summary": "auto"}));
+            body.insert(
+                "reasoning".into(),
+                json!({"effort": effort, "summary": "auto"}),
+            );
         }
     }
     if model.thinking != Thinking::Off {
@@ -52,13 +77,26 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
     if !model.chatgpt {
         headers.push(("authorization".into(), format!("Bearer {}", model.api_key)));
     }
-    Ok(Prepared { url: format!("{}/responses", model.base_url), body: serde_json::to_vec(&body)?, headers })
+    Ok(Prepared {
+        url: format!("{}/responses", model.base_url),
+        body: serde_json::to_vec(&body)?,
+        headers,
+    })
 }
 
-fn convert_input(history: &[Value], images: bool, tool_names: &BTreeMap<String, String>) -> Vec<Value> {
+fn convert_input(
+    history: &[Value],
+    images: bool,
+    tool_names: &BTreeMap<String, String>,
+) -> Vec<Value> {
     let wire = |name: &Value| {
         let name = name.as_str().unwrap_or_default();
-        Value::String(tool_names.get(name).cloned().unwrap_or_else(|| name.to_string()))
+        Value::String(
+            tool_names
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| name.to_string()),
+        )
     };
     let mut input = Vec::new();
     for message in history {
@@ -99,7 +137,9 @@ fn convert_input(history: &[Value], images: bool, tool_names: &BTreeMap<String, 
                         .collect();
                     input.push(json!({"role": role, "content": content}));
                 }
-                other => input.push(json!({"role": role, "content": other.as_str().unwrap_or_default()})),
+                other => {
+                    input.push(json!({"role": role, "content": other.as_str().unwrap_or_default()}))
+                }
             },
             None => {}
         }
@@ -112,7 +152,9 @@ fn convert_input(history: &[Value], images: bool, tool_names: &BTreeMap<String, 
 fn replayable_reasoning(item: &Value) -> bool {
     item.get("encrypted_content").is_some()
         || item["summary"].as_array().is_some_and(|summary| {
-            summary.iter().any(|part| part["text"].as_str().is_some_and(|text| !text.is_empty()))
+            summary
+                .iter()
+                .any(|part| part["text"].as_str().is_some_and(|text| !text.is_empty()))
         })
 }
 
@@ -127,12 +169,23 @@ pub(super) struct Parser {
 
 impl Parser {
     pub(super) fn new(tool_names: &BTreeMap<String, String>) -> Self {
-        Self { names: tool_names.iter().map(|(ours, wire)| (wire.clone(), ours.clone())).collect(), ..Parser::default() }
+        Self {
+            names: tool_names
+                .iter()
+                .map(|(ours, wire)| (wire.clone(), ours.clone()))
+                .collect(),
+            ..Parser::default()
+        }
     }
 }
 
 impl StreamParser for Parser {
-    fn event(&mut self, event: &Value, reply: &mut Reply, on_delta: &mut dyn FnMut(Delta)) -> Result<(), Failure> {
+    fn event(
+        &mut self,
+        event: &Value,
+        reply: &mut Reply,
+        on_delta: &mut dyn FnMut(Delta),
+    ) -> Result<(), Failure> {
         let index = event["output_index"].as_u64().unwrap_or(0);
         match event["type"].as_str() {
             Some("response.refusal.delta") => {
@@ -153,7 +206,11 @@ impl StreamParser for Parser {
             Some("response.output_item.added") if event["item"]["type"] == "function_call" => {
                 let item = &event["item"];
                 let name = item["name"].as_str().unwrap_or_default();
-                let ours = self.names.get(name).cloned().unwrap_or_else(|| name.to_string());
+                let ours = self
+                    .names
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| name.to_string());
                 reply.tool_calls.push(ToolCall {
                     id: item["call_id"].as_str().unwrap_or_default().to_string(),
                     name: ours,
@@ -163,7 +220,9 @@ impl StreamParser for Parser {
             }
             Some("response.function_call_arguments.delta") => {
                 if let Some(&i) = self.calls.get(&index) {
-                    reply.tool_calls[i].arguments.push_str(event["delta"].as_str().unwrap_or_default());
+                    reply.tool_calls[i]
+                        .arguments
+                        .push_str(event["delta"].as_str().unwrap_or_default());
                 }
             }
             Some("response.output_item.done") => {
@@ -171,7 +230,9 @@ impl StreamParser for Parser {
                 match item["type"].as_str() {
                     Some("reasoning") => reply.reasoning_items.push(item.clone()),
                     Some("function_call") => {
-                        if let (Some(&i), Some(arguments)) = (self.calls.get(&index), item["arguments"].as_str()) {
+                        if let (Some(&i), Some(arguments)) =
+                            (self.calls.get(&index), item["arguments"].as_str())
+                        {
                             reply.tool_calls[i].arguments = arguments.to_string();
                         }
                     }
@@ -182,7 +243,8 @@ impl StreamParser for Parser {
                 self.terminal = true;
                 let response = &event["response"];
                 let usage = &response["usage"];
-                let num = |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
+                let num =
+                    |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
                 reply.usage.prompt = num("/input_tokens");
                 reply.usage.cached = num("/input_tokens_details/cached_tokens");
                 reply.usage.completion = num("/output_tokens");
@@ -190,7 +252,10 @@ impl StreamParser for Parser {
                 let incomplete = event["type"] == "response.incomplete";
                 let reason = response["incomplete_details"]["reason"].as_str();
                 if incomplete && reason != Some("max_output_tokens") {
-                    let message = format!("response incomplete: {}", reason.unwrap_or("unknown reason"));
+                    let message = format!(
+                        "response incomplete: {}",
+                        reason.unwrap_or("unknown reason")
+                    );
                     return Err(if reason == Some("content_filter") {
                         Failure::fatal(message)
                     } else {
@@ -209,8 +274,15 @@ impl StreamParser for Parser {
                 );
             }
             Some("response.failed" | "error") => {
-                let error = if event["type"] == "error" { event.clone() } else { event["response"]["error"].clone() };
-                let message = format!("provider error mid-stream: {}", truncate(&error.to_string(), 2000));
+                let error = if event["type"] == "error" {
+                    event.clone()
+                } else {
+                    event["response"]["error"].clone()
+                };
+                let message = format!(
+                    "provider error mid-stream: {}",
+                    truncate(&error.to_string(), 2000)
+                );
                 let code = error["code"].as_str().unwrap_or_default();
                 let kind = if code.contains("rate_limit") {
                     ErrorKind::RateLimited
@@ -219,7 +291,10 @@ impl StreamParser for Parser {
                 } else {
                     ErrorKind::Other
                 };
-                let retry = code.contains("rate_limit") || code.contains("server_error") || code.ends_with("_unavailable") || code.is_empty();
+                let retry = code.contains("rate_limit")
+                    || code.contains("server_error")
+                    || code.ends_with("_unavailable")
+                    || code.is_empty();
                 return Err(if retry {
                     Failure::of(kind, None, true, message)
                 } else {
@@ -260,8 +335,14 @@ mod tests {
         let input = convert_input(&history, true, &Default::default());
         assert_eq!(input[0], json!({"role": "user", "content": "hi"}));
         assert_eq!(input[1]["encrypted_content"], "e");
-        assert_eq!(input[2], json!({"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"}));
-        assert_eq!(input[3], json!({"type": "function_call_output", "call_id": "c1", "output": "data"}));
+        assert_eq!(
+            input[2],
+            json!({"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"})
+        );
+        assert_eq!(
+            input[3],
+            json!({"type": "function_call_output", "call_id": "c1", "output": "data"})
+        );
     }
 
     #[test]
@@ -272,9 +353,26 @@ mod tests {
         ]})];
         let input = convert_input(&history, false, &Default::default());
         let content = input[0]["content"].clone();
-        assert!(content.as_array().unwrap().iter().all(|part| part["type"] != "input_image"), "{content}");
-        assert!(content.as_array().unwrap().iter().any(|part| part["text"] == super::IMAGE_OMITTED), "{content}");
-        assert_eq!(history[0]["content"][1]["type"], "image_url", "history itself stays as sent");
+        assert!(
+            content
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|part| part["type"] != "input_image"),
+            "{content}"
+        );
+        assert!(
+            content
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|part| part["text"] == super::IMAGE_OMITTED),
+            "{content}"
+        );
+        assert_eq!(
+            history[0]["content"][1]["type"], "image_url",
+            "history itself stays as sent"
+        );
     }
 
     #[test]
@@ -307,9 +405,19 @@ mod tests {
         assert!(parser.finish(&mut reply).unwrap_err().retryable);
 
         let incomplete = json!({"type": "response.incomplete", "response": {"incomplete_details": {"reason": "content_filter"}}});
-        assert!(!parser.event(&incomplete, &mut reply, &mut sink).unwrap_err().retryable);
+        assert!(
+            !parser
+                .event(&incomplete, &mut reply, &mut sink)
+                .unwrap_err()
+                .retryable
+        );
         let incomplete = json!({"type": "response.incomplete", "response": {"incomplete_details": {"reason": "internal_error"}}});
-        assert!(parser.event(&incomplete, &mut reply, &mut sink).unwrap_err().retryable);
+        assert!(
+            parser
+                .event(&incomplete, &mut reply, &mut sink)
+                .unwrap_err()
+                .retryable
+        );
         let truncated = json!({"type": "response.incomplete", "response": {"incomplete_details": {"reason": "max_output_tokens"}}});
         parser.event(&truncated, &mut reply, &mut sink).unwrap();
         assert_eq!(reply.finish_reason.as_deref(), Some("length"));
@@ -344,11 +452,25 @@ mod tests {
         ];
         let prepared = prepare(&model, &messages, &[], "k").unwrap();
         let body: Value = serde_json::from_slice(&prepared.body).unwrap();
-        let ids: Vec<&str> = body["input"].as_array().unwrap().iter().filter_map(|item| item["id"].as_str()).collect();
-        assert!(!ids.contains(&"rs_bare"), "a reasoning item with nothing to replay must not be sent");
+        let ids: Vec<&str> = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect();
+        assert!(
+            !ids.contains(&"rs_bare"),
+            "a reasoning item with nothing to replay must not be sent"
+        );
         assert!(ids.contains(&"rs_encrypted"));
-        assert!(ids.contains(&"rs_summary"), "summary text is kept for gateways");
-        assert!(body.get("include").is_none(), "thinking off does not ask for encrypted reasoning");
+        assert!(
+            ids.contains(&"rs_summary"),
+            "summary text is kept for gateways"
+        );
+        assert!(
+            body.get("include").is_none(),
+            "thinking off does not ask for encrypted reasoning"
+        );
     }
 
     #[test]
@@ -394,12 +516,41 @@ mod tests {
             cache_control: false,
             chatgpt: true,
         };
-        let prepared = prepare(&model, &[json!({"role": "system", "content": "sys"}), json!({"role": "user", "content": "hi"})], &[], "cache").unwrap();
+        let prepared = prepare(
+            &model,
+            &[
+                json!({"role": "system", "content": "sys"}),
+                json!({"role": "user", "content": "hi"}),
+            ],
+            &[],
+            "cache",
+        )
+        .unwrap();
         let body: Value = serde_json::from_slice(&prepared.body).unwrap();
         assert!(body.get("max_output_tokens").is_none());
-        assert_eq!((body["store"].clone(), body["stream"].clone(), body["instructions"].clone()), (json!(false), json!(true), json!("sys")));
-        assert!(body["input"].as_array().unwrap().iter().all(|item| item["role"] != "system"), "the plan rejects system items");
-        assert!(prepared.headers.iter().all(|(name, _)| name != "authorization"), "the token is added per attempt");
+        assert_eq!(
+            (
+                body["store"].clone(),
+                body["stream"].clone(),
+                body["instructions"].clone()
+            ),
+            (json!(false), json!(true), json!("sys"))
+        );
+        assert!(
+            body["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["role"] != "system"),
+            "the plan rejects system items"
+        );
+        assert!(
+            prepared
+                .headers
+                .iter()
+                .all(|(name, _)| name != "authorization"),
+            "the token is added per attempt"
+        );
     }
 
     #[test]
@@ -434,16 +585,31 @@ mod tests {
         ];
         let prepared = prepare(&model, &messages, &tools, "k").unwrap();
         let body: Value = serde_json::from_slice(&prepared.body).unwrap();
-        let names: Vec<&str> = body["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["run_command", "search_web"], "the names the API refuses are mapped");
-        assert_eq!(body["input"][1]["name"], "run_command", "a replayed call keeps the wire name");
+        let names: Vec<&str> = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["run_command", "search_web"],
+            "the names the API refuses are mapped"
+        );
+        assert_eq!(
+            body["input"][1]["name"], "run_command",
+            "a replayed call keeps the wire name"
+        );
 
         let mut parser = Parser::new(&model.tool_names);
         let mut reply = Reply::default();
         let mut sink = |_: Delta| {};
         let added = json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "call_id": "c2", "name": "search_web"}});
         parser.event(&added, &mut reply, &mut sink).unwrap();
-        assert_eq!(reply.tool_calls[0].name, "web_search", "the call comes back under killi's name");
+        assert_eq!(
+            reply.tool_calls[0].name, "web_search",
+            "the call comes back under killi's name"
+        );
     }
 
     #[test]
@@ -452,15 +618,39 @@ mod tests {
         let mut reply = Reply::default();
         let mut sink = |_: Delta| {};
         let event = json!({"type": "response.refusal.delta", "delta": "cannot help"});
-        assert!(!parser.event(&event, &mut reply, &mut sink).unwrap_err().retryable);
+        assert!(
+            !parser
+                .event(&event, &mut reply, &mut sink)
+                .unwrap_err()
+                .retryable
+        );
     }
 
     #[test]
     fn plan_errors_mid_stream_retry_only_when_temporary() {
         let mut sink = |_: Delta| {};
-        let failed = |code: &str| json!({"type": "response.failed", "response": {"error": {"code": code}}});
+        let failed =
+            |code: &str| json!({"type": "response.failed", "response": {"error": {"code": code}}});
         let mut reply = Reply::default();
-        assert!(Parser::default().event(&failed("subscription_sharing_usage_unavailable"), &mut reply, &mut sink).unwrap_err().retryable);
-        assert!(!Parser::default().event(&failed("subscription_sharing_usage_limit_exceeded"), &mut reply, &mut sink).unwrap_err().retryable);
+        assert!(
+            Parser::default()
+                .event(
+                    &failed("subscription_sharing_usage_unavailable"),
+                    &mut reply,
+                    &mut sink
+                )
+                .unwrap_err()
+                .retryable
+        );
+        assert!(
+            !Parser::default()
+                .event(
+                    &failed("subscription_sharing_usage_limit_exceeded"),
+                    &mut reply,
+                    &mut sink
+                )
+                .unwrap_err()
+                .retryable
+        );
     }
 }

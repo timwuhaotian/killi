@@ -2,10 +2,23 @@ use super::*;
 
 /// Rows for a list of (name, note) choices, `visible` at a time around `selected`, the names
 /// in a column at most `column` wide and the notes dimmed beside them.
-pub(super) fn choice_rows(options: &[(&str, &str)], selected: usize, visible: usize, width: usize, column: usize) -> Vec<String> {
-    let start = selected.saturating_sub(visible / 2).min(options.len() - visible);
+pub(super) fn choice_rows(
+    options: &[(&str, &str)],
+    selected: usize,
+    visible: usize,
+    width: usize,
+    column: usize,
+) -> Vec<String> {
+    let start = selected
+        .saturating_sub(visible / 2)
+        .min(options.len() - visible);
     let shown = &options[start..start + visible];
-    let column = shown.iter().map(|(name, _)| text::width(name)).max().unwrap_or(0).clamp(12, column.max(12));
+    let column = shown
+        .iter()
+        .map(|(name, _)| text::width(name))
+        .max()
+        .unwrap_or(0)
+        .clamp(12, column.max(12));
     shown
         .iter()
         .enumerate()
@@ -14,7 +27,12 @@ pub(super) fn choice_rows(options: &[(&str, &str)], selected: usize, visible: us
             let pad = " ".repeat(column.saturating_sub(text::width(&name)));
             let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
             if start + i == selected {
-                let line = fit(&format!("{SELECT}{LAGOON}❯ {RESET}{SELECT}{BOLD}{name}{RESET}{SELECT}{pad}  {note}"), width);
+                let line = fit(
+                    &format!(
+                        "{SELECT}{LAGOON}❯ {RESET}{SELECT}{BOLD}{name}{RESET}{SELECT}{pad}  {note}"
+                    ),
+                    width,
+                );
                 let fill = " ".repeat(width.saturating_sub(text::width(&line)));
                 format!("{line}{SELECT}{fill}{RESET}")
             } else {
@@ -28,24 +46,35 @@ pub(super) fn choice_rows(options: &[(&str, &str)], selected: usize, visible: us
 /// takes the rows it needs instead of being cut with an ellipsis. The selected block sits
 /// on the select stripe to the window's edge; continuation rows hang under the option's
 /// text. `visible` options show at a time around `selected`, like `choice_rows`.
-pub(super) fn ask_rows(names: &[String], selected: usize, visible: usize, width: usize) -> Vec<String> {
+pub(super) fn ask_rows(
+    names: &[String],
+    selected: usize,
+    visible: usize,
+    width: usize,
+) -> Vec<String> {
     if names.is_empty() || width == 0 {
         return Vec::new();
     }
     let visible = visible.clamp(1, names.len());
-    let start = selected.saturating_sub(visible / 2).min(names.len() - visible);
+    let start = selected
+        .saturating_sub(visible / 2)
+        .min(names.len() - visible);
     names[start..start + visible]
         .iter()
         .enumerate()
         .flat_map(|(i, name)| {
             if start + i == selected {
-                wrap_words(&format!("{SELECT}{LAGOON}❯ {RESET}{SELECT}{BOLD}{name}{RESET}"), width, 5)
-                    .into_iter()
-                    .map(|row| {
-                        let fill = " ".repeat(width.saturating_sub(text::width(&row)));
-                        format!("{row}{SELECT}{fill}{RESET}")
-                    })
-                    .collect::<Vec<_>>()
+                wrap_words(
+                    &format!("{SELECT}{LAGOON}❯ {RESET}{SELECT}{BOLD}{name}{RESET}"),
+                    width,
+                    5,
+                )
+                .into_iter()
+                .map(|row| {
+                    let fill = " ".repeat(width.saturating_sub(text::width(&row)));
+                    format!("{row}{SELECT}{fill}{RESET}")
+                })
+                .collect::<Vec<_>>()
             } else {
                 wrap_words(&format!("  {name}"), width, 5)
             }
@@ -62,7 +91,11 @@ pub(super) fn prompt_rows(prompt: &str, width: usize) -> Vec<String> {
     let weight = if text::no_color() { BOLD } else { "" };
     for line in prompt.lines() {
         for row in text::wrap_words(line, width.saturating_sub(3), 0) {
-            let lead = if std::mem::take(&mut first) { format!("{FIN}{BOLD}❯{RESET}{TINT}") } else { " ".to_string() };
+            let lead = if std::mem::take(&mut first) {
+                format!("{FIN}{BOLD}❯{RESET}{TINT}")
+            } else {
+                " ".to_string()
+            };
             let pad = " ".repeat(width.saturating_sub(3 + text::width(&row)));
             rows.push(format!("{TINT} {lead} {weight}{row}{pad}{RESET}"));
         }
@@ -78,7 +111,11 @@ pub(super) fn question_rows(text: &str, width: usize) -> Vec<String> {
         .lines()
         .enumerate()
         .flat_map(|(n, line)| {
-            let mark = if n == 0 { format!("{BOLD}{FIN}?{RESET} ") } else { String::new() };
+            let mark = if n == 0 {
+                format!("{BOLD}{FIN}?{RESET} ")
+            } else {
+                String::new()
+            };
             wrap_words(&format!("{mark}{BOLD}{FIN}{line}{RESET}"), width, 2)
         })
         .collect()
@@ -86,14 +123,27 @@ pub(super) fn question_rows(text: &str, width: usize) -> Vec<String> {
 
 /// A /btw question and its answer as one block: the question, the answer hung off the output
 /// gutter like a tool's output, and `note` last, so it reads as set aside from the conversation.
-pub(super) fn aside_rows(tag: &str, question: &str, answer: &str, note: &str, width: usize) -> Vec<String> {
+pub(super) fn aside_rows(
+    tag: &str,
+    question: &str,
+    answer: &str,
+    note: &str,
+    width: usize,
+) -> Vec<String> {
     let question = question.split_whitespace().collect::<Vec<_>>().join(" ");
-    let head = if question.is_empty() { format!("{BOLD}{FIN}{tag}{RESET}") } else { format!("{BOLD}{FIN}{tag}{RESET} {BOLD}{question}{RESET}") };
+    let head = if question.is_empty() {
+        format!("{BOLD}{FIN}{tag}{RESET}")
+    } else {
+        format!("{BOLD}{FIN}{tag}{RESET} {BOLD}{question}{RESET}")
+    };
     let mut rows = wrap_words(&head, width, 4);
     let gutter = format!("  {FAINT}│{RESET}");
     let inner = width.saturating_sub(4);
     let mut markdown = Markdown::new(inner);
-    let mut styled: Vec<String> = answer.lines().flat_map(|line| markdown.line(line)).collect();
+    let mut styled: Vec<String> = answer
+        .lines()
+        .flat_map(|line| markdown.line(line))
+        .collect();
     styled.extend(markdown.finish());
     while styled.last().is_some_and(|row| text::width(row) == 0) {
         styled.pop();
@@ -116,30 +166,56 @@ pub(super) fn aside_rows(tag: &str, question: &str, answer: &str, note: &str, wi
 
 /// `/help`: the commands, then the keys, each description wrapped under its own column.
 pub(super) fn help_rows(width: usize, enhanced: bool) -> Vec<String> {
-    let mut rows = vec![format!("{BOLD}Commands{RESET} {DIM}type / to search them and your skills{RESET}")];
+    let mut rows = vec![format!(
+        "{BOLD}Commands{RESET} {DIM}type / to search them and your skills{RESET}"
+    )];
     let commands: Vec<(String, String, &str)> = COMMANDS
         .iter()
         .map(|c| {
             let aliases: String = c.aliases.iter().map(|a| format!(", /{a}")).collect();
-            let args = if c.args.is_empty() { String::new() } else { format!(" {}", c.args) };
+            let args = if c.args.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", c.args)
+            };
             (format!("/{}", c.name), format!("{aliases}{args}"), c.about)
         })
-        .chain([("/<skill>".to_string(), " [request]".to_string(), "Run a skill")])
+        .chain([(
+            "/<skill>".to_string(),
+            " [request]".to_string(),
+            "Run a skill",
+        )])
         .collect();
-    let column = commands.iter().map(|(name, rest, _)| text::width(name) + text::width(rest)).max().unwrap_or(0);
+    let column = commands
+        .iter()
+        .map(|(name, rest, _)| text::width(name) + text::width(rest))
+        .max()
+        .unwrap_or(0);
     for (name, rest, about) in commands {
         let pad = " ".repeat(column - text::width(&name) - text::width(&rest));
-        rows.extend(wrap_words(&format!("  {LAGOON}{name}{RESET}{DIM}{rest}{RESET}{pad}  {about}"), width, column + 4));
+        rows.extend(wrap_words(
+            &format!("  {LAGOON}{name}{RESET}{DIM}{rest}{RESET}{pad}  {about}"),
+            width,
+            column + 4,
+        ));
     }
     rows.push(String::new());
     rows.push(format!("{BOLD}Keys{RESET}"));
-    let column = KEYS.iter().map(|(key, _)| text::width(key)).max().unwrap_or(0);
+    let column = KEYS
+        .iter()
+        .map(|(key, _)| text::width(key))
+        .max()
+        .unwrap_or(0);
     for (key, about) in KEYS {
         let (key, about) = match *key {
             "Shift+Enter" if !enhanced => ("Ctrl+J", "new line; also \\ then Enter"),
             _ => (*key, *about),
         };
-        rows.extend(wrap_words(&format!("  {BOLD}{key:<column$}{RESET}  {DIM}{about}{RESET}"), width, column + 4));
+        rows.extend(wrap_words(
+            &format!("  {BOLD}{key:<column$}{RESET}  {DIM}{about}{RESET}"),
+            width,
+            column + 4,
+        ));
     }
     rows.push(String::new());
     rows
@@ -147,7 +223,14 @@ pub(super) fn help_rows(width: usize, enhanced: bool) -> Vec<String> {
 
 /// A recap as one block: its label, the text wrapped under it, and what asking for it cost.
 pub(super) fn recap_rows(text: &str, note: &str, width: usize) -> Vec<String> {
-    wrap_words(&format!("{BOLD}{LAGOON}recap{RESET} {} {DIM}· {note}{RESET}", text::sanitize_row(text)), width, 6)
+    wrap_words(
+        &format!(
+            "{BOLD}{LAGOON}recap{RESET} {} {DIM}· {note}{RESET}",
+            text::sanitize_row(text)
+        ),
+        width,
+        6,
+    )
 }
 
 /// What the empty prompt says it takes, in fg-faint: nothing once something is typed or while
@@ -156,7 +239,11 @@ pub(super) fn placeholder(empty: bool, busy: bool, waits: bool) -> Option<&'stat
     if !empty || waits {
         return None;
     }
-    Some(if busy { "a message for the next step · Ctrl+S sends it now · /btw asks on the side" } else { "ask, / for commands and skills, @ for files" })
+    Some(if busy {
+        "a message for the next step · Ctrl+S sends it now · /btw asks on the side"
+    } else {
+        "ask, / for commands and skills, @ for files"
+    })
 }
 
 /// A full-width line around the prompt, in lagoon with `label` on it in plan mode.
@@ -166,7 +253,10 @@ pub(super) fn rule(label: Option<&str>, width: usize) -> String {
         Some("") => format!("{LAGOON}{}{RESET}", "─".repeat(width)),
         Some(label) => {
             let rest = width.saturating_sub(text::width(label) + 4);
-            format!("{LAGOON}── {BOLD}{label}{RESET}{LAGOON} {}{RESET}", "─".repeat(rest))
+            format!(
+                "{LAGOON}── {BOLD}{label}{RESET}{LAGOON} {}{RESET}",
+                "─".repeat(rest)
+            )
         }
     }
 }
@@ -174,17 +264,31 @@ pub(super) fn rule(label: Option<&str>, width: usize) -> String {
 /// A full-width line with `title` on it in lagoon, above a list of choices.
 pub(super) fn title_rule(title: &str, width: usize) -> String {
     let rest = width.saturating_sub(text::width(title) + 4);
-    format!("{LAGOON}── {BOLD}{title}{RESET}{LAGOON} {}{RESET}", "─".repeat(rest))
+    format!(
+        "{LAGOON}── {BOLD}{title}{RESET}{LAGOON} {}{RESET}",
+        "─".repeat(rest)
+    )
 }
 
 /// A row of key hints under a list: each `(rank, hint)` in its place, the lowest ranks left out
 /// first when the window is too narrow, so what stays reads whole.
 pub(super) fn hint_row(hints: &[(u8, String)], width: usize) -> String {
     let mut keep: Vec<&(u8, String)> = hints.iter().filter(|(_, hint)| !hint.is_empty()).collect();
-    let line = |keep: &[&(u8, String)]| format!("  {DIM}{}{RESET}", keep.iter().map(|(_, hint)| hint.as_str()).collect::<Vec<_>>().join(&dot()));
+    let line = |keep: &[&(u8, String)]| {
+        format!(
+            "  {DIM}{}{RESET}",
+            keep.iter()
+                .map(|(_, hint)| hint.as_str())
+                .collect::<Vec<_>>()
+                .join(&dot())
+        )
+    };
     while keep.len() > 1 && text::width(&line(&keep)) > width {
         let lowest = keep.iter().map(|(rank, _)| *rank).min().unwrap_or(0);
-        let at = keep.iter().position(|(rank, _)| *rank == lowest).unwrap_or(0);
+        let at = keep
+            .iter()
+            .position(|(rank, _)| *rank == lowest)
+            .unwrap_or(0);
         keep.remove(at);
     }
     fit(&line(&keep), width)
@@ -197,7 +301,11 @@ pub(super) fn wrap_items(items: &[String], width: usize) -> Vec<String> {
     let mut rows = Vec::new();
     let mut row = String::new();
     for item in items {
-        let joined = if row.is_empty() { item.clone() } else { format!("{row}{dot}{item}") };
+        let joined = if row.is_empty() {
+            item.clone()
+        } else {
+            format!("{row}{dot}{item}")
+        };
         if row.is_empty() || text::width(&joined) <= width {
             row = joined;
         } else {
@@ -210,15 +318,24 @@ pub(super) fn wrap_items(items: &[String], width: usize) -> Vec<String> {
 
 /// The rows of an edit's diff behind the output gutter: the line number, the sign, the text.
 pub(super) fn diff_rows(lines: &[String], width: usize) -> Vec<String> {
-    lines.iter().map(|line| diff_row(line, width, text::truecolor())).collect()
+    lines
+        .iter()
+        .map(|line| diff_row(line, width, text::truecolor()))
+        .collect()
 }
 
 /// One row of a diff. With `stripes` an added or removed line sits on a soft stripe that runs to
 /// the window's edge, its sign in lagoon or danger and its text left as it is; without, the sign
 /// and the text take those colors. Context lines are muted either way.
 pub(super) fn diff_row(line: &str, width: usize, stripes: bool) -> String {
-    let Some((head, text)) = line.split_once('\t').filter(|(head, _)| head.len() > 1 && head.is_char_boundary(1)) else {
-        return fit(&format!("  {FAINT}│{RESET} {DIM}{}{RESET}", text::sanitize(line)), width);
+    let Some((head, text)) = line
+        .split_once('\t')
+        .filter(|(head, _)| head.len() > 1 && head.is_char_boundary(1))
+    else {
+        return fit(
+            &format!("  {FAINT}│{RESET} {DIM}{}{RESET}", text::sanitize(line)),
+            width,
+        );
     };
     let (sign, number) = head.split_at(1);
     let text = text::sanitize(text);
@@ -233,16 +350,30 @@ pub(super) fn diff_row(line: &str, width: usize, stripes: bool) -> String {
         _ => None,
     };
     let Some(ground) = ground else {
-        return fit(&format!("  {FAINT}│{RESET} {DIM}{number:>4}{RESET} {ink}{sign} {text}{RESET}"), width);
+        return fit(
+            &format!("  {FAINT}│{RESET} {DIM}{number:>4}{RESET} {ink}{sign} {text}{RESET}"),
+            width,
+        );
     };
-    let row = fit(&format!("  {FAINT}│{RESET}{ground} {DIM}{number:>4}{RESET}{ground} {ink}{sign}{RESET}{ground} {text}"), width);
-    format!("{row}{ground}{}{RESET}", " ".repeat(width.saturating_sub(text::width(&row))))
+    let row = fit(
+        &format!(
+            "  {FAINT}│{RESET}{ground} {DIM}{number:>4}{RESET}{ground} {ink}{sign}{RESET}{ground} {text}"
+        ),
+        width,
+    );
+    format!(
+        "{row}{ground}{}{RESET}",
+        " ".repeat(width.saturating_sub(text::width(&row)))
+    )
 }
 
 /// The row under a call's output that counts what was left out, naming Ctrl+O when `teach`.
 pub(super) fn hidden_row(count: usize, which: &str, teach: bool) -> String {
     let key = if teach { " · Ctrl+O" } else { "" };
-    format!("  {FAINT}│ … {count} {which} line{}{key}{RESET}", if count == 1 { "" } else { "s" })
+    format!(
+        "  {FAINT}│ … {count} {which} line{}{key}{RESET}",
+        if count == 1 { "" } else { "s" }
+    )
 }
 
 /// A call that only keeps the task list, which is on screen already, gets no row of its own
@@ -284,7 +415,9 @@ fn path_style(rest: &str) -> String {
 
 pub(super) fn first_sentence(text: &str) -> String {
     let text = text.trim().replace('\n', " ");
-    let end = text.find(['.', '。', '!', '?']).map_or(text.len(), |i| i + text[i..].chars().next().map_or(1, char::len_utf8));
+    let end = text.find(['.', '。', '!', '?']).map_or(text.len(), |i| {
+        i + text[i..].chars().next().map_or(1, char::len_utf8)
+    });
     crate::llm::truncate(&text[..end], 100).to_string()
 }
 
@@ -298,8 +431,17 @@ pub(super) fn label(name: &str) -> String {
 pub(super) fn overview_rows(overview: &Overview) -> Vec<String> {
     let mut rows = Vec::new();
     if !overview.instructions.is_empty() {
-        let names: Vec<String> = overview.instructions.iter().map(|path| tilde(path)).collect();
-        rows.push(format!("{}{} {DIM}·{RESET} {TOKENS}~{}{RESET} {DIM}tokens{RESET}", label("rules"), names.join(", "), short(overview.instruction_tokens as u64)));
+        let names: Vec<String> = overview
+            .instructions
+            .iter()
+            .map(|path| tilde(path))
+            .collect();
+        rows.push(format!(
+            "{}{} {DIM}·{RESET} {TOKENS}~{}{RESET} {DIM}tokens{RESET}",
+            label("rules"),
+            names.join(", "),
+            short(overview.instruction_tokens as u64)
+        ));
     }
     if overview.skills > 0 {
         rows.push(format!("{}{}", label("skills"), overview.skills));
@@ -308,10 +450,17 @@ pub(super) fn overview_rows(overview: &Overview) -> Vec<String> {
         rows.push(format!("{}{}", label("mcp"), overview.mcp.join(", ")));
     }
     if overview.custom_prompt {
-        rows.push(format!("{}custom {DIM}· [prompt] in config.toml{RESET}", label("prompt")));
+        rows.push(format!(
+            "{}custom {DIM}· [prompt] in config.toml{RESET}",
+            label("prompt")
+        ));
     }
     if overview.later > 0 {
-        rows.push(format!("{}{} noted {DIM}·{RESET} {LAGOON}/later{RESET}", label("later"), overview.later));
+        rows.push(format!(
+            "{}{} noted {DIM}·{RESET} {LAGOON}/later{RESET}",
+            label("later"),
+            overview.later
+        ));
     }
     rows
 }
@@ -320,10 +469,16 @@ pub(super) fn overview_rows(overview: &Overview) -> Vec<String> {
 /// starts a new line only when the terminal speaks the kitty keyboard protocol; Ctrl+J does.
 pub(super) fn key_hints(enhanced: bool) -> Vec<String> {
     let newline = if enhanced { "Shift+Enter" } else { "Ctrl+J" };
-    [("/", "commands and skills"), ("@", "files"), (newline, "new line"), ("Shift+Tab", "plan mode"), ("Esc", "interrupts")]
-        .iter()
-        .map(|(key, what)| format!("{LAGOON}{key}{RESET} {DIM}{what}{RESET}"))
-        .collect()
+    [
+        ("/", "commands and skills"),
+        ("@", "files"),
+        (newline, "new line"),
+        ("Shift+Tab", "plan mode"),
+        ("Esc", "interrupts"),
+    ]
+    .iter()
+    .map(|(key, what)| format!("{LAGOON}{key}{RESET} {DIM}{what}{RESET}"))
+    .collect()
 }
 
 /// `path` cut from the left to fit `room` columns, at a folder boundary where there is one:
@@ -332,7 +487,14 @@ pub(super) fn shorten_path(path: &str, room: usize) -> String {
     if text::width(path) <= room {
         return path.to_string();
     }
-    let tail: String = path.chars().rev().take(room.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = path
+        .chars()
+        .rev()
+        .take(room.saturating_sub(1))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     match tail.find('/') {
         Some(at) => format!("…{}", &tail[at..]),
         None => format!("…{tail}"),
@@ -376,10 +538,20 @@ pub(super) fn handoff(
         ),
     ];
     if let Some((path, open)) = later {
-        out.push(format!("later: {} ({open} open: what the agent noted to do later)", path.display()));
+        out.push(format!(
+            "later: {} ({open} open: what the agent noted to do later)",
+            path.display()
+        ));
     }
     for (i, prompt) in prompts.iter().enumerate() {
-        out.push(format!("{}. {}", i + 1, crate::llm::truncate(&prompt.split_whitespace().collect::<Vec<_>>().join(" "), 160)));
+        out.push(format!(
+            "{}. {}",
+            i + 1,
+            crate::llm::truncate(
+                &prompt.split_whitespace().collect::<Vec<_>>().join(" "),
+                160
+            )
+        ));
     }
     out.push(
         "The log is JSON lines, one record per `type`: `session` (cwd, model, effort, tools), every `message` exactly as sent \
@@ -411,7 +583,10 @@ pub(super) fn snapshot_word(seq: usize, frame: usize) -> String {
 pub(super) fn snapshot_rows(seq: usize, frame: usize, elapsed: Duration) -> Vec<String> {
     vec![
         banner::steady(frame, &snapshot_word(seq, frame)),
-        format!("{BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}", clock(elapsed)),
+        format!(
+            "{BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}",
+            clock(elapsed)
+        ),
     ]
 }
 
@@ -419,17 +594,28 @@ pub(super) fn snapshot_rows(seq: usize, frame: usize, elapsed: Duration) -> Vec<
 /// what it is doing after it, plain; then the turn's elapsed time and the interrupt hint on
 /// their own row, left-aligned with the wave. While a failed request waits to be
 /// retried the first row counts that wait down instead, since nothing is working then.
-pub(super) fn working_rows(frame: usize, elapsed: Duration, action: &str, detail: &str) -> Vec<String> {
+pub(super) fn working_rows(
+    frame: usize,
+    elapsed: Duration,
+    action: &str,
+    detail: &str,
+) -> Vec<String> {
     let first = match detail.is_empty() {
         true => banner::action(frame, action),
         false => format!("{} {detail}", banner::action(frame, action)),
     };
-    let second = format!("{BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}", clock(elapsed));
+    let second = format!(
+        "{BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}",
+        clock(elapsed)
+    );
     vec![first, second]
 }
 
 /// A message queued while the agent works, saying Ctrl+S can send it now instead of
 /// waiting for the next step.
 pub(super) fn queued_row(queued: &str) -> String {
-    format!("{FIN}❯{RESET} {DIM}{} (sent at the next step · Ctrl+S sends it now){RESET}", text::sanitize(queued).replace('\n', " "))
+    format!(
+        "{FIN}❯{RESET} {DIM}{} (sent at the next step · Ctrl+S sends it now){RESET}",
+        text::sanitize(queued).replace('\n', " ")
+    )
 }

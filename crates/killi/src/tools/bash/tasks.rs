@@ -25,7 +25,9 @@ impl Task {
     /// Lets go of a finished task's output: all of it once the model has read it, else the last
     /// megabyte. A task that ran for hours would otherwise hold up to 16 MB until the session ends.
     pub(super) fn release(&mut self) {
-        let Some(exit) = self.process.exit() else { return };
+        let Some(exit) = self.process.exit() else {
+            return;
+        };
         if self.process.running() {
             return;
         }
@@ -45,7 +47,14 @@ impl Tasks {
     pub(super) fn add(&mut self, command: &str, process: Process, read_to: usize) -> u32 {
         self.next += 1;
         let reported = process.exit().is_some();
-        let task = Task { command: command.to_string(), process, started: Instant::now(), read_to, reported, reminded: false };
+        let task = Task {
+            command: command.to_string(),
+            process,
+            started: Instant::now(),
+            read_to,
+            reported,
+            reminded: false,
+        };
         self.list.insert(self.next, task);
         self.next
     }
@@ -57,7 +66,11 @@ impl Tasks {
         for (id, task) in &mut self.list {
             if !task.reminded && task.process.running() {
                 task.reminded = true;
-                left.push(format!("task {id} `{}` ({}s)", first_line(&task.command), task.started.elapsed().as_secs()));
+                left.push(format!(
+                    "task {id} `{}` ({}s)",
+                    first_line(&task.command),
+                    task.started.elapsed().as_secs()
+                ));
             }
         }
         left
@@ -82,7 +95,11 @@ impl Tasks {
             task.release();
             if let Some(exit) = task.process.exit().filter(|_| !task.reported) {
                 task.reported = true;
-                lines.push(format!("Background task {id} (`{}`) {}.", first_line(&task.command), exit.describe()));
+                lines.push(format!(
+                    "Background task {id} (`{}`) {}.",
+                    first_line(&task.command),
+                    exit.describe()
+                ));
             }
         }
         lines

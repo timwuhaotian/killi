@@ -1,7 +1,9 @@
 use super::*;
 
 /// The next request from another session; never, for a session that takes none.
-pub(super) async fn next_incoming(peers: &mut Option<mpsc::UnboundedReceiver<live::Incoming>>) -> Option<live::Incoming> {
+pub(super) async fn next_incoming(
+    peers: &mut Option<mpsc::UnboundedReceiver<live::Incoming>>,
+) -> Option<live::Incoming> {
     match peers {
         Some(peers) => peers.recv().await,
         None => std::future::pending().await,
@@ -16,9 +18,14 @@ pub(super) fn peer_label(from: Option<u32>) -> String {
 /// The other live sessions in `tree` that worked since `since` (ms since the epoch), or still
 /// do: an undo back to then would undo their changes too.
 fn worked_since(tree: &Path, since: Option<u64>) -> Vec<live::Entry> {
-    let Some(since) = since else { return Vec::new() };
+    let Some(since) = since else {
+        return Vec::new();
+    };
     let me = std::process::id();
-    live::list().into_iter().filter(|e| e.pid != me && e.tree == tree && (e.working || e.since >= since)).collect()
+    live::list()
+        .into_iter()
+        .filter(|e| e.pid != me && e.tree == tree && (e.working || e.since >= since))
+        .collect()
 }
 
 /// Runs one future that drives the agent, showing its events and handling keys meanwhile.
@@ -116,7 +123,13 @@ pub(super) async fn handle_command(
         "btw" => {
             app.aside_asked = Some(arg.to_string());
             app.begin_busy();
-            run_turn(app, keys, rx, std::future::ready(Ok((String::new(), Stop::Completed)))).await?;
+            run_turn(
+                app,
+                keys,
+                rx,
+                std::future::ready(Ok((String::new(), Stop::Completed))),
+            )
+            .await?;
             app.end_busy();
         }
         "recap" if agent.user_prompts().is_empty() => app.notice("Nothing to recap yet."),
@@ -141,7 +154,17 @@ pub(super) async fn handle_command(
         "goal" => goal_command(app, agent, arg),
         "swarm" => {
             let was_on = app.controls.swarm.replace(true);
-            let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {arg}"), &mention::expand(cwd, arg), images).await;
+            let result = prompt_turn(
+                app,
+                agent,
+                snapshots,
+                keys,
+                rx,
+                &format!("/swarm {arg}"),
+                &mention::expand(cwd, arg),
+                images,
+            )
+            .await;
             // A /swarm off typed mid-turn stays off: only an untouched mode goes back.
             if app.controls.swarm.get() {
                 app.controls.swarm.set(was_on);
@@ -150,10 +173,17 @@ pub(super) async fn handle_command(
         }
         "undo" => {
             // Said once: the next /undo goes ahead.
-            let others = if app.undo_warned { Vec::new() } else { worked_since(snapshots.work_tree(), snapshots.last_taken()) };
+            let others = if app.undo_warned {
+                Vec::new()
+            } else {
+                worked_since(snapshots.work_tree(), snapshots.last_taken())
+            };
             app.undo_warned = !others.is_empty();
             if !others.is_empty() {
-                let who: Vec<String> = others.iter().map(|e| format!("session {}", e.pid)).collect();
+                let who: Vec<String> = others
+                    .iter()
+                    .map(|e| format!("session {}", e.pid))
+                    .collect();
                 app.notice(&format!(
                     "{} also worked in this repository since the last turn began. Undo puts every file back as it was then, so those changes go too. /undo again to undo anyway.",
                     who.join(" and ")
@@ -161,12 +191,17 @@ pub(super) async fn handle_command(
                 return Ok(true);
             }
             match snapshots.undo() {
-                Ok(changes) if changes.is_empty() => app.notice("Undone. No files had changed in the last turn."),
+                Ok(changes) if changes.is_empty() => {
+                    app.notice("Undone. No files had changed in the last turn.")
+                }
                 Err(_) if undo_empty(snapshots) => {
                     app.notice("Nothing to undo yet.");
                 }
                 Ok(changes) => {
-                    app.notice(&format!("Undone: {} restored to how they were before the last turn.", crate::tools::count(changes.len(), "file")));
+                    app.notice(&format!(
+                        "Undone: {} restored to how they were before the last turn.",
+                        crate::tools::count(changes.len(), "file")
+                    ));
                     for change in changes.iter().take(20) {
                         app.commit(format!("  {DIM}{change}{RESET}"));
                     }
@@ -184,7 +219,13 @@ pub(super) async fn handle_command(
         "compact" => {
             let focus = arg.to_string();
             app.begin_busy();
-            let ended = run_turn(app, keys, rx, async { agent.compact(Some(&focus)).await.map(|()| (String::new(), Stop::Completed)) }).await?;
+            let ended = run_turn(app, keys, rx, async {
+                agent
+                    .compact(Some(&focus))
+                    .await
+                    .map(|()| (String::new(), Stop::Completed))
+            })
+            .await?;
             app.end_busy();
             match ended {
                 Ended::Done(Err(e)) => app.error_from("Compaction failed", &e),
@@ -198,21 +239,25 @@ pub(super) async fn handle_command(
                 return Ok(true);
             }
             match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
-            Ok(fresh) => {
-                app.reset_conversation(snapshots, cwd);
-                let saved = !agent.user_prompts().is_empty();
-                let stopped = agent.stop_tasks();
-                agent.discard_if_unused();
-                *agent = fresh;
-                app.show_model(agent, session.config());
-                app.wipe_screen();
-                app.banner(agent, session, snapshots, false);
-                app.notice(if saved { "Started a new session. The last one is saved; /resume picks it up again." } else { "Started a new session." });
-                if let Some(note) = stopped_note(&stopped) {
-                    app.notice(&note);
+                Ok(fresh) => {
+                    app.reset_conversation(snapshots, cwd);
+                    let saved = !agent.user_prompts().is_empty();
+                    let stopped = agent.stop_tasks();
+                    agent.discard_if_unused();
+                    *agent = fresh;
+                    app.show_model(agent, session.config());
+                    app.wipe_screen();
+                    app.banner(agent, session, snapshots, false);
+                    app.notice(if saved {
+                        "Started a new session. The last one is saved; /resume picks it up again."
+                    } else {
+                        "Started a new session."
+                    });
+                    if let Some(note) = stopped_note(&stopped) {
+                        app.notice(&note);
+                    }
                 }
-            }
-            Err(e) => app.error_report(&e),
+                Err(e) => app.error_report(&e),
             }
         }
         "resume" => {
@@ -233,7 +278,12 @@ pub(super) async fn handle_command(
         "web-search-config" => {
             let provider = arg.to_lowercase();
             if ["brave", "tavily", "searxng"].contains(&provider.as_str()) {
-                app.search = Some(SearchFlow { provider: None, docker: None, url: None, current: session.config().search.clone() });
+                app.search = Some(SearchFlow {
+                    provider: None,
+                    docker: None,
+                    url: None,
+                    current: session.config().search.clone(),
+                });
                 app.search_pick(&provider);
             } else {
                 app.error("Pick brave, tavily or searxng; /web-search-config alone lists them.");
@@ -269,9 +319,21 @@ pub(super) async fn handle_command(
                     Some(files) => format!("{prompt}\n\n{files}"),
                     None => prompt,
                 };
-                prompt_turn(app, agent, snapshots, keys, rx, format!("/{other} {arg}").trim_end(), &sent, images).await?;
+                prompt_turn(
+                    app,
+                    agent,
+                    snapshots,
+                    keys,
+                    rx,
+                    format!("/{other} {arg}").trim_end(),
+                    &sent,
+                    images,
+                )
+                .await?;
             }
-            None => app.error(&format!("Unknown command /{other}. Type /help for the list.")),
+            None => app.error(&format!(
+                "Unknown command /{other}. Type /help for the list."
+            )),
         },
     }
     Ok(true)
@@ -294,23 +356,32 @@ pub(super) async fn provider_add(
     app.begin_busy();
     run_turn(app, keys, rx, async move {
         *slot.borrow_mut() = Some(match preset.as_str() {
-            "opencode-go" => crate::login::opencode_go_add(Some(&key)).await.map(|go| (go.added, go.notes)),
+            "opencode-go" => crate::login::opencode_go_add(Some(&key))
+                .await
+                .map(|go| (go.added, go.notes)),
             _ => crate::config::add_muse(&key).map(|added| (added, Vec::new())),
         });
         Ok((String::new(), Stop::Completed))
     })
     .await?;
     app.end_busy();
-    let Some(outcome) = outcome.take() else { return Ok(()) };
+    let Some(outcome) = outcome.take() else {
+        return Ok(());
+    };
     match outcome {
         Err(e) => app.error_from("/provider", &e),
         Ok((added, notes)) => {
             if added.aliases.is_empty() {
                 app.notice("Its models are already in the config; /model picks one.");
             } else {
-                app.notice(&format!("Added {} — /model picks one.", added.aliases.join(", ")));
+                app.notice(&format!(
+                    "Added {} — /model picks one.",
+                    added.aliases.join(", ")
+                ));
                 if let Some(default) = &added.starts_on {
-                    app.notice(&format!("killi starts on `{default}`; /model picks another."));
+                    app.notice(&format!(
+                        "killi starts on `{default}`; /model picks another."
+                    ));
                 }
             }
             for note in &notes {
@@ -426,7 +497,11 @@ pub(super) async fn prompt_turn(
     if matches!(app.last_end, Some(LastEnd::Interrupted)) {
         agent.recover()?;
     }
-    if wants_recap(app.auto_recap, completed, Totals::of(agent).tool_calls - before.tool_calls) {
+    if wants_recap(
+        app.auto_recap,
+        completed,
+        Totals::of(agent).tool_calls - before.tool_calls,
+    ) {
         app.recap = Some(Box::pin(app.controls.aside.borrow().recap()));
     }
     Ok(())

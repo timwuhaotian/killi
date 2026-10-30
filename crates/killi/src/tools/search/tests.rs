@@ -16,17 +16,35 @@ fn tree() -> crate::test_temp::TempDir {
 fn grep_finds_matches_with_line_numbers_and_skips_dot_git() {
     let dir = tree();
     let out = grep_blocking(&dir, &dir, &json!({"pattern": "alpha"}));
-    assert_eq!(out.text, "notes.txt:1: alpha notes\nsrc/a.rs:1: fn alpha() {}");
-    let out = grep_blocking(&dir, &dir, &json!({"pattern": "ALPHA", "ignore_case": true, "glob": "*.rs"}));
+    assert_eq!(
+        out.text,
+        "notes.txt:1: alpha notes\nsrc/a.rs:1: fn alpha() {}"
+    );
+    let out = grep_blocking(
+        &dir,
+        &dir,
+        &json!({"pattern": "ALPHA", "ignore_case": true, "glob": "*.rs"}),
+    );
     assert_eq!(out.text, "src/a.rs:1: fn alpha() {}");
 }
 
 #[test]
 fn grep_shows_context_and_other_output_modes() {
     let dir = tree();
-    std::fs::write(dir.join("long.txt"), "a\nb\nneedle\nc\nd\ne\nf\ng\nneedle\nh\n").unwrap();
-    let out = grep_blocking(&dir, &dir, &json!({"pattern": "needle", "context": 1, "glob": "long.txt"}));
-    assert_eq!(out.text, "long.txt-2- b\nlong.txt:3: needle\nlong.txt-4- c\n--\nlong.txt-8- g\nlong.txt:9: needle\nlong.txt-10- h");
+    std::fs::write(
+        dir.join("long.txt"),
+        "a\nb\nneedle\nc\nd\ne\nf\ng\nneedle\nh\n",
+    )
+    .unwrap();
+    let out = grep_blocking(
+        &dir,
+        &dir,
+        &json!({"pattern": "needle", "context": 1, "glob": "long.txt"}),
+    );
+    assert_eq!(
+        out.text,
+        "long.txt-2- b\nlong.txt:3: needle\nlong.txt-4- c\n--\nlong.txt-8- g\nlong.txt:9: needle\nlong.txt-10- h"
+    );
     let out = grep_blocking(&dir, &dir, &json!({"pattern": "alpha", "output": "files"}));
     assert_eq!(out.text, "notes.txt\nsrc/a.rs");
     let out = grep_blocking(&dir, &dir, &json!({"pattern": "needle", "output": "count"}));
@@ -59,9 +77,20 @@ fn streaming_grep_keeps_every_match_and_overlapping_context() {
 #[test]
 fn grep_matches_across_lines() {
     let dir = tree();
-    let out = grep_blocking(&dir, &dir, &json!({"pattern": r"alpha\(\) \{\}\nfn beta", "multiline": true}));
-    assert_eq!(out.text, "src/a.rs:1: fn alpha() {}\nsrc/a.rs:2: fn beta() {}");
-    let out = grep_blocking(&dir, &dir, &json!({"pattern": "$", "multiline": true, "glob": "*.txt"}));
+    let out = grep_blocking(
+        &dir,
+        &dir,
+        &json!({"pattern": r"alpha\(\) \{\}\nfn beta", "multiline": true}),
+    );
+    assert_eq!(
+        out.text,
+        "src/a.rs:1: fn alpha() {}\nsrc/a.rs:2: fn beta() {}"
+    );
+    let out = grep_blocking(
+        &dir,
+        &dir,
+        &json!({"pattern": "$", "multiline": true, "glob": "*.txt"}),
+    );
     assert!(!out.is_error, "{}", out.text);
 }
 
@@ -72,11 +101,19 @@ fn grep_reports_traversal_errors_instead_of_no_matches() {
     let out = grep_blocking(&dir, &missing, &json!({"pattern": "alpha"}));
     assert!(out.is_error, "{}", out.text);
     assert!(out.text.contains("No matches found."));
-    assert!(out.text.contains("Search incomplete: 1 error"), "{}", out.text);
+    assert!(
+        out.text.contains("Search incomplete: 1 error"),
+        "{}",
+        out.text
+    );
     assert!(out.text.contains("missing"), "{}", out.text);
     let out = glob_blocking(&dir, &missing, &json!({"pattern": "**/*.rs"}));
     assert!(out.is_error, "{}", out.text);
-    assert!(out.text.contains("Search incomplete: 1 error"), "{}", out.text);
+    assert!(
+        out.text.contains("Search incomplete: 1 error"),
+        "{}",
+        out.text
+    );
 }
 
 #[cfg(unix)]
@@ -92,7 +129,11 @@ fn grep_marks_partial_results_when_a_file_cannot_be_read() {
     std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert!(!out.is_error, "{}", out.text);
     assert!(out.text.contains("notes.txt:1: alpha notes"));
-    assert!(out.text.contains("Search incomplete: 1 error"), "{}", out.text);
+    assert!(
+        out.text.contains("Search incomplete: 1 error"),
+        "{}",
+        out.text
+    );
     assert!(out.text.contains("denied.txt"), "{}", out.text);
 }
 
@@ -118,15 +159,22 @@ fn grep_names_files_it_skipped_for_size() {
     assert!(out.is_error, "{}", out.text);
     assert!(out.text.contains("No matches found."), "{}", out.text);
     assert!(
-        out.text.contains("Skipped 1 file over 10 MB: big.log — search them with bash (`rg`/`grep`)."),
+        out.text
+            .contains("Skipped 1 file over 10 MB: big.log — search them with bash (`rg`/`grep`)."),
         "{}",
         out.text
     );
     let out = grep_blocking(&dir, &dir, &json!({"pattern": "alpha"}));
     assert!(!out.is_error, "{}", out.text);
-    assert!(out.text.contains("notes.txt:1: alpha notes"), "{}", out.text);
     assert!(
-        out.text.ends_with("[Skipped 1 file over 10 MB: big.log — search them with bash (`rg`/`grep`).]"),
+        out.text.contains("notes.txt:1: alpha notes"),
+        "{}",
+        out.text
+    );
+    assert!(
+        out.text.ends_with(
+            "[Skipped 1 file over 10 MB: big.log — search them with bash (`rg`/`grep`).]"
+        ),
         "{}",
         out.text
     );
@@ -135,6 +183,13 @@ fn grep_names_files_it_skipped_for_size() {
 #[test]
 fn glob_matches_relative_paths() {
     let dir = tree();
-    assert_eq!(glob_blocking(&dir, &dir, &json!({"pattern": "**/*.rs"})).text, "src/a.rs");
-    assert!(glob_blocking(&dir, &dir, &json!({"pattern": "*.rs"})).text.starts_with("No files match"));
+    assert_eq!(
+        glob_blocking(&dir, &dir, &json!({"pattern": "**/*.rs"})).text,
+        "src/a.rs"
+    );
+    assert!(
+        glob_blocking(&dir, &dir, &json!({"pattern": "*.rs"}))
+            .text
+            .starts_with("No files match")
+    );
 }

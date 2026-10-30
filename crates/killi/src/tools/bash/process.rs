@@ -28,7 +28,9 @@ pub(super) struct Captured {
 
 impl Captured {
     fn append(&mut self, chunk: &[u8]) {
-        let head = HEAD_CAPTURE.saturating_sub(self.head.len()).min(chunk.len());
+        let head = HEAD_CAPTURE
+            .saturating_sub(self.head.len())
+            .min(chunk.len());
         self.head.extend_from_slice(&chunk[..head]);
         self.bytes.extend_from_slice(chunk);
         self.last = Some(Instant::now());
@@ -126,7 +128,11 @@ pub trait OwnSession {
 
 fn setsid() -> std::io::Result<()> {
     // SAFETY: setsid takes no arguments and is async-signal-safe, as `pre_exec` requires.
-    if unsafe { libc::setsid() } == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+    if unsafe { libc::setsid() } == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 impl OwnSession for Command {
@@ -233,7 +239,11 @@ impl Drop for Process {
 /// Waits up to `limit` for a command and what it left running: its shell's exit, then until
 /// its process group is empty. `nohup job &` exits at once while the job runs on, so waiting
 /// for the shell alone would return at once too.
-pub(super) async fn wait_for_group(pgid: u32, mut exit: watch::Receiver<Option<Exit>>, limit: Duration) {
+pub(super) async fn wait_for_group(
+    pgid: u32,
+    mut exit: watch::Receiver<Option<Exit>>,
+    limit: Duration,
+) {
     let deadline = Instant::now() + limit;
     let _ = tokio::time::timeout(limit, exit.wait_for(Option::is_some)).await;
     while exit.borrow().is_some() && group_running(pgid, true) && Instant::now() < deadline {

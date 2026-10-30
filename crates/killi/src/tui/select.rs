@@ -29,7 +29,11 @@ pub(super) struct Selection {
 impl Selection {
     /// Where the press landed, before the pointer has moved.
     fn at(point: (usize, usize), epoch: u64) -> Self {
-        Self { anchor: point, head: point, epoch }
+        Self {
+            anchor: point,
+            head: point,
+            epoch,
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -38,7 +42,11 @@ impl Selection {
 
     /// The first and the last point, in conversation order.
     fn ordered(&self) -> ((usize, usize), (usize, usize)) {
-        if self.anchor <= self.head { (self.anchor, self.head) } else { (self.head, self.anchor) }
+        if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
     }
 
     /// The columns of `row` the selection covers, both ends included; None for rows outside it.
@@ -57,7 +65,11 @@ impl Selection {
 /// column it starts at and the columns it takes.
 enum Piece<'a> {
     Escape(&'a str),
-    Char { text: &'a str, col: usize, width: usize },
+    Char {
+        text: &'a str,
+        col: usize,
+        width: usize,
+    },
 }
 
 fn pieces(line: &str) -> Vec<Piece<'_>> {
@@ -71,7 +83,11 @@ fn pieces(line: &str) -> Vec<Piece<'_>> {
             rest = &rest[len..];
         } else {
             let width = c.width().unwrap_or(0);
-            out.push(Piece::Char { text: &rest[..c.len_utf8()], col, width });
+            out.push(Piece::Char {
+                text: &rest[..c.len_utf8()],
+                col,
+                width,
+            });
             col += width;
             rest = &rest[c.len_utf8()..];
         }
@@ -84,7 +100,10 @@ fn pieces(line: &str) -> Vec<Piece<'_>> {
 fn escape_len(text: &str) -> usize {
     let bytes = text.as_bytes();
     if bytes.get(1) == Some(&b'[') {
-        bytes[2..].iter().position(|b| (0x40..=0x7e).contains(b)).map_or(bytes.len(), |end| end + 3)
+        bytes[2..]
+            .iter()
+            .position(|b| (0x40..=0x7e).contains(b))
+            .map_or(bytes.len(), |end| end + 3)
     } else {
         1 + text[1..].chars().next().map_or(0, char::len_utf8)
     }
@@ -146,7 +165,9 @@ fn word_on(line: &str, col: usize) -> Option<(usize, usize)> {
             _ => None,
         })
         .collect();
-    let at = chars.iter().position(|&(_, start, width)| covers(start, width, col, col))?;
+    let at = chars
+        .iter()
+        .position(|&(_, start, width)| covers(start, width, col, col))?;
     if chars[at].0.is_whitespace() {
         return None;
     }
@@ -204,10 +225,14 @@ impl App {
     /// after selects the word under it and a third the whole row; anywhere else a press only ends
     /// the last selection.
     fn press(&mut self, (row, col): (usize, usize)) {
-        let point = (row < self.view_rows).then(|| self.point_at(row, col)).flatten();
+        let point = (row < self.view_rows)
+            .then(|| self.point_at(row, col))
+            .flatten();
         let run = point
             .zip(self.pressed)
-            .and_then(|(point, (last, at, n))| (last == point && at.elapsed() < DOUBLE_CLICK).then(|| (n + 1).min(3)))
+            .and_then(|(point, (last, at, n))| {
+                (last == point && at.elapsed() < DOUBLE_CLICK).then(|| (n + 1).min(3))
+            })
             .unwrap_or(1);
         self.clear_selection();
         self.pressed = point.map(|point| (point, Instant::now(), run));
@@ -216,12 +241,18 @@ impl App {
         let span = if run >= 3 {
             Some((0, usize::MAX))
         } else if run == 2 {
-            self.history.row(point.0).and_then(|line| word_on(line, point.1))
+            self.history
+                .row(point.0)
+                .and_then(|line| word_on(line, point.1))
         } else {
             None
         };
         self.selection = Some(match span {
-            Some((from, to)) => Selection { anchor: (point.0, from), head: (point.0, to), epoch: self.history.epoch() },
+            Some((from, to)) => Selection {
+                anchor: (point.0, from),
+                head: (point.0, to),
+                epoch: self.history.epoch(),
+            },
             None => Selection::at(point, self.history.epoch()),
         });
     }
@@ -260,7 +291,11 @@ impl App {
         let text = (first..=last)
             .filter_map(|row| {
                 let (from, to) = selection.columns_on(row)?;
-                Some(columns_text(self.history.row(row)?, from, to).trim_end().to_string())
+                Some(
+                    columns_text(self.history.row(row)?, from, to)
+                        .trim_end()
+                        .to_string(),
+                )
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -280,7 +315,11 @@ impl App {
 
     /// Drops the selection when the conversation was laid out again, since its rows moved.
     pub(super) fn forget_stale(&mut self) {
-        if self.selection.as_ref().is_some_and(|selection| selection.epoch != self.history.epoch()) {
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.epoch != self.history.epoch())
+        {
             self.clear_selection();
         }
     }
@@ -304,7 +343,10 @@ impl App {
     /// The rows the view scrolls for a drag at its edge: up on its first row, down on its last row
     /// or below the view. Zero otherwise.
     fn edge_rows(&self) -> isize {
-        let Some((row, _)) = self.drag.filter(|_| self.selection.is_some() && self.view_rows > 0) else {
+        let Some((row, _)) = self
+            .drag
+            .filter(|_| self.selection.is_some() && self.view_rows > 0)
+        else {
             return 0;
         };
         if row + 1 >= self.view_rows {
@@ -326,7 +368,11 @@ impl App {
             .enumerate()
             .map(|(i, row)| {
                 let plain = text::plain(row);
-                match self.selection.as_ref().and_then(|selection| selection.columns_on(first + i)) {
+                match self
+                    .selection
+                    .as_ref()
+                    .and_then(|selection| selection.columns_on(first + i))
+                {
                     Some((from, to)) => highlight(&plain, from, to),
                     None => plain.into_owned(),
                 }
@@ -343,7 +389,12 @@ mod tests {
     use crate::tui::tests::test_app;
 
     fn mouse(kind: MouseEventKind, row: u16, column: u16) -> MouseEvent {
-        MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
     }
 
     fn press(row: u16, column: u16) -> MouseEvent {
@@ -372,7 +423,10 @@ mod tests {
 
     #[test]
     fn highlight_keeps_the_reverse_video_across_a_reset_inside_the_range() {
-        assert_eq!(highlight("\x1b[1mab\x1b[0mcd", 1, 2), "\x1b[1ma\x1b[7mb\x1b[0m\x1b[7mc\x1b[27md");
+        assert_eq!(
+            highlight("\x1b[1mab\x1b[0mcd", 1, 2),
+            "\x1b[1ma\x1b[7mb\x1b[0m\x1b[7mc\x1b[27md"
+        );
     }
 
     #[test]
@@ -389,8 +443,16 @@ mod tests {
 
     #[test]
     fn the_columns_of_a_selection_run_from_its_first_point_to_its_last_either_way() {
-        let forward = Selection { anchor: (1, 2), head: (3, 5), epoch: 0 };
-        let backward = Selection { anchor: (3, 5), head: (1, 2), epoch: 0 };
+        let forward = Selection {
+            anchor: (1, 2),
+            head: (3, 5),
+            epoch: 0,
+        };
+        let backward = Selection {
+            anchor: (3, 5),
+            head: (1, 2),
+            epoch: 0,
+        };
         for selection in [forward, backward] {
             assert_eq!(selection.columns_on(0), None);
             assert_eq!(selection.columns_on(1), Some((2, usize::MAX)));
@@ -409,7 +471,10 @@ mod tests {
         assert!(app.selection.is_none(), "a single press selects nothing");
         app.on_mouse(press(2, 1));
         assert_eq!(app.release().as_deref(), Some("row"));
-        assert!(app.selection.is_some(), "the word stays selected after the copy");
+        assert!(
+            app.selection.is_some(),
+            "the word stays selected after the copy"
+        );
     }
 
     #[test]
@@ -423,7 +488,11 @@ mod tests {
         app.on_mouse(press(2, 1));
         app.pressed = Some(((24, 1), Instant::now(), 1));
         app.on_mouse(press(2, 1));
-        assert_eq!(app.release(), None, "a press on another point is not a double-click");
+        assert_eq!(
+            app.release(),
+            None,
+            "a press on another point is not a double-click"
+        );
     }
 
     #[test]
@@ -433,7 +502,11 @@ mod tests {
         assert_eq!(app.release().as_deref(), Some("row 22"));
 
         app.on_mouse(press(2, 1));
-        assert_eq!(app.release().as_deref(), Some("row 22"), "a fourth press keeps the row");
+        assert_eq!(
+            app.release().as_deref(),
+            Some("row 22"),
+            "a fourth press keeps the row"
+        );
         assert!(app.selection.is_some());
     }
 
@@ -453,7 +526,10 @@ mod tests {
         app.on_mouse(press(2, 0));
         app.on_mouse(drag(4, 3));
         assert_eq!(app.release().as_deref(), Some("row 22\nrow 23\nrow"));
-        assert!(app.selection.is_some(), "the selection stays on screen after the copy");
+        assert!(
+            app.selection.is_some(),
+            "the selection stays on screen after the copy"
+        );
         assert!(app.drag.is_none());
     }
 
@@ -482,7 +558,11 @@ mod tests {
         app.on_mouse(mouse(MouseEventKind::ScrollUp, 4, 3));
         assert_eq!(app.history.span(10), (17, 27));
         assert_eq!(app.selection.as_ref().map(|s| s.head), Some((21, 3)));
-        assert_eq!(app.selection.as_ref().map(|s| s.anchor), Some((22, 0)), "the press stays on its row");
+        assert_eq!(
+            app.selection.as_ref().map(|s| s.anchor),
+            Some((22, 0)),
+            "the press stays on its row"
+        );
     }
 
     #[test]

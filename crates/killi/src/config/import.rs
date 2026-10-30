@@ -8,19 +8,37 @@ use anyhow::{Context, Result, bail};
 
 /// Writes an imported config with the `[prompt]` table, and copies the source agent's MCP
 /// servers when killi has none. Every importer ends here.
-fn write_import(out: toml::Table, mcp_src: Option<&Path>, dst_dir: &Path, force: bool) -> Result<()> {
+fn write_import(
+    out: toml::Table,
+    mcp_src: Option<&Path>,
+    dst_dir: &Path,
+    force: bool,
+) -> Result<()> {
     let dst = dst_dir.join("config.toml");
     if dst.exists() && !force {
-        bail!("{} already exists; pass --force to overwrite it", dst.display());
+        bail!(
+            "{} already exists; pass --force to overwrite it",
+            dst.display()
+        );
     }
-    fs::DirBuilder::new().recursive(true).mode(0o700).create(dst_dir)?;
-    let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&dst)?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dst_dir)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&dst)?;
     file.write_all(toml::to_string(&out)?.as_bytes())?;
     file.write_all(prompt_section().as_bytes())?;
     if let Some(src) = mcp_src.filter(|src| src.exists()) {
         let mcp_dst = dst_dir.join("mcp.json");
         if !mcp_dst.exists() || force {
-            fs::copy(src, &mcp_dst).with_context(|| format!("could not copy {} to {}", src.display(), mcp_dst.display()))?;
+            fs::copy(src, &mcp_dst).with_context(|| {
+                format!("could not copy {} to {}", src.display(), mcp_dst.display())
+            })?;
             println!("Copied MCP servers into {}", mcp_dst.display());
         }
     }
@@ -35,17 +53,26 @@ pub fn import_kimi(force: bool) -> Result<()> {
     let dir = killi_home();
     let dst = dir.join("config.toml");
     if dst.exists() && !force {
-        bail!("{} already exists; pass --force to overwrite it", dst.display());
+        bail!(
+            "{} already exists; pass --force to overwrite it",
+            dst.display()
+        );
     }
-    let text = fs::read_to_string(&src).with_context(|| format!("could not read {}", src.display()))?;
-    let kimi: toml::Table = toml::from_str(&text).with_context(|| format!("invalid TOML in {}", src.display()))?;
+    let text =
+        fs::read_to_string(&src).with_context(|| format!("could not read {}", src.display()))?;
+    let kimi: toml::Table =
+        toml::from_str(&text).with_context(|| format!("invalid TOML in {}", src.display()))?;
 
     let mut providers = toml::Table::new();
     let mut skipped = Vec::new();
     if let Some(toml::Value::Table(all)) = kimi.get("providers") {
         for (name, provider) in all {
-            let kind = provider.get("type").and_then(toml::Value::as_str).unwrap_or_default();
-            let has_key = provider.get("api_key").is_some() || provider.get("api_key_env").is_some();
+            let kind = provider
+                .get("type")
+                .and_then(toml::Value::as_str)
+                .unwrap_or_default();
+            let has_key =
+                provider.get("api_key").is_some() || provider.get("api_key_env").is_some();
             if kind == "kimi" || !has_key {
                 skipped.push(name.clone());
                 continue;
@@ -59,7 +86,10 @@ pub fn import_kimi(force: bool) -> Result<()> {
     let mut models = toml::Table::new();
     if let Some(toml::Value::Table(all)) = kimi.get("models") {
         for (alias, model) in all {
-            let provider = model.get("provider").and_then(toml::Value::as_str).unwrap_or_default();
+            let provider = model
+                .get("provider")
+                .and_then(toml::Value::as_str)
+                .unwrap_or_default();
             if providers.contains_key(provider) {
                 models.insert(alias.clone(), model.clone());
             }
@@ -81,8 +111,10 @@ pub fn import_kimi(force: bool) -> Result<()> {
         if let Some(enabled) = thinking.get("enabled") {
             ours.insert("enabled".into(), enabled.clone());
         }
-        if let (Some(alias), Some(effort)) = (default.as_deref(), thinking.get("effort").and_then(toml::Value::as_str))
-            && let Some(toml::Value::Table(model)) = models.get_mut(alias)
+        if let (Some(alias), Some(effort)) = (
+            default.as_deref(),
+            thinking.get("effort").and_then(toml::Value::as_str),
+        ) && let Some(toml::Value::Table(model)) = models.get_mut(alias)
         {
             model.insert("default_effort".into(), effort.to_string().into());
         }
@@ -94,10 +126,21 @@ pub fn import_kimi(force: bool) -> Result<()> {
     out.insert("providers".into(), toml::Value::Table(providers));
     out.insert("models".into(), toml::Value::Table(models));
 
-    write_import(out, Some(&home().join(".kimi-code/mcp.json")), &killi_home(), force)?;
-    println!("Imported {provider_count} providers and {model_count} models into {}", dst.display());
+    write_import(
+        out,
+        Some(&home().join(".kimi-code/mcp.json")),
+        &killi_home(),
+        force,
+    )?;
+    println!(
+        "Imported {provider_count} providers and {model_count} models into {}",
+        dst.display()
+    );
     if !skipped.is_empty() {
-        println!("Skipped providers without an API key (Kimi account login): {}", skipped.join(", "));
+        println!(
+            "Skipped providers without an API key (Kimi account login): {}",
+            skipped.join(", ")
+        );
     }
     Ok(())
 }
@@ -115,9 +158,21 @@ pub(super) fn import_pi_from(dir: &Path, dst_dir: &Path, force: bool) -> Result<
     };
     let catalog = read_json(&dir.join("models-store.json"))?.unwrap_or_default();
     let settings = read_json(&dir.join("settings.json"))?.unwrap_or_default();
-    let configured = json_str(&settings, "defaultProvider").zip(json_str(&settings, "defaultModel")).map(|(p, m)| format!("{p}/{m}"));
+    let configured = json_str(&settings, "defaultProvider")
+        .zip(json_str(&settings, "defaultModel"))
+        .map(|(p, m)| format!("{p}/{m}"));
     let effort = json_str(&settings, "defaultThinkingLevel").filter(|level| level != "auto");
-    import_pi_shape(dir, dst_dir, force, &config, &catalog, configured.as_deref(), effort.as_deref(), "pi", PiKey::Pi)
+    import_pi_shape(
+        dir,
+        dst_dir,
+        force,
+        &config,
+        &catalog,
+        configured.as_deref(),
+        effort.as_deref(),
+        "pi",
+        PiKey::Pi,
+    )
 }
 
 /// How a pi-shaped `apiKey` reads. pi's is the key itself; omp's names an environment
@@ -135,7 +190,9 @@ fn pi_key_fields(provider: &serde_json::Value, key: &PiKey) -> Option<(&'static 
     match key {
         PiKey::Pi => Some(("api_key", raw)),
         PiKey::Omp if raw.starts_with('!') => None,
-        PiKey::Omp if std::env::var(&raw).is_ok_and(|value| !value.is_empty()) => Some(("api_key_env", raw)),
+        PiKey::Omp if std::env::var(&raw).is_ok_and(|value| !value.is_empty()) => {
+            Some(("api_key_env", raw))
+        }
         PiKey::Omp => Some(("api_key", raw)),
     }
 }
@@ -155,7 +212,10 @@ fn import_pi_shape(
     source: &str,
     key: PiKey,
 ) -> Result<()> {
-    let Some(all) = config.get("providers").and_then(serde_json::Value::as_object) else {
+    let Some(all) = config
+        .get("providers")
+        .and_then(serde_json::Value::as_object)
+    else {
         bail!("no providers in {}", dir.display())
     };
 
@@ -168,19 +228,29 @@ fn import_pi_shape(
             skipped.push(name.clone());
             continue;
         };
-        let listed = pi_models(provider, catalog.get(name).unwrap_or(&serde_json::Value::Null));
+        let listed = pi_models(
+            provider,
+            catalog.get(name).unwrap_or(&serde_json::Value::Null),
+        );
         if listed.is_empty() {
             skipped.push(name.clone());
             continue;
         }
-        let kind = pi_protocol(json_str(provider, "api").as_deref().or(listed[0].api.as_deref()));
+        let kind = pi_protocol(
+            json_str(provider, "api")
+                .as_deref()
+                .or(listed[0].api.as_deref()),
+        );
         let mut table = toml::Table::new();
         table.insert("type".into(), kind.into());
         if let Some(url) = json_str(provider, "baseUrl").or_else(|| listed[0].base_url.clone()) {
             table.insert("base_url".into(), url.into());
         }
         table.insert(key_field.into(), api_key.into());
-        if let Some(headers) = provider.get("headers").and_then(serde_json::Value::as_object) {
+        if let Some(headers) = provider
+            .get("headers")
+            .and_then(serde_json::Value::as_object)
+        {
             let mut custom = toml::Table::new();
             for (header, value) in headers {
                 if let Some(value) = value.as_str() {
@@ -233,7 +303,10 @@ fn import_pi_shape(
     if let Some(alias) = &default {
         out.insert("default_model".into(), alias.clone().into());
         if configured != Some(alias.as_str()) {
-            eprintln!("{source}'s default model {} wasn't imported, so `{alias}` is the default", configured.unwrap_or("(none)"));
+            eprintln!(
+                "{source}'s default model {} wasn't imported, so `{alias}` is the default",
+                configured.unwrap_or("(none)")
+            );
         }
         // The thinking level the agent had is per model here, so it lands on the default.
         if let Some(effort) = effort
@@ -247,9 +320,15 @@ fn import_pi_shape(
     out.insert("models".into(), toml::Value::Table(models));
 
     write_import(out, Some(&dir.join("mcp.json")), dst_dir, force)?;
-    println!("Imported {provider_count} providers and {model_count} models into {}", dst_dir.join("config.toml").display());
+    println!(
+        "Imported {provider_count} providers and {model_count} models into {}",
+        dst_dir.join("config.toml").display()
+    );
     if !skipped.is_empty() {
-        println!("Skipped providers without an API key ({source} account login): {}", skipped.join(", "));
+        println!(
+            "Skipped providers without an API key ({source} account login): {}",
+            skipped.join(", ")
+        );
     }
     Ok(())
 }
@@ -268,10 +347,17 @@ struct PiModel {
 
 /// The provider's own models, or its catalog's when it lists none.
 fn pi_models(provider: &serde_json::Value, catalog: &serde_json::Value) -> Vec<PiModel> {
-    let inline = provider.get("models").and_then(serde_json::Value::as_array).filter(|models| !models.is_empty());
+    let inline = provider
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .filter(|models| !models.is_empty());
     let listed: Vec<&serde_json::Value> = match inline {
         Some(models) => models.iter().collect(),
-        None => catalog.get("models").and_then(serde_json::Value::as_array).map(|m| m.iter().collect()).unwrap_or_default(),
+        None => catalog
+            .get("models")
+            .and_then(serde_json::Value::as_array)
+            .map(|m| m.iter().collect())
+            .unwrap_or_default(),
     };
     listed
         .iter()
@@ -282,8 +368,14 @@ fn pi_models(provider: &serde_json::Value, catalog: &serde_json::Value) -> Vec<P
                 base_url: json_str(model, "baseUrl"),
                 context: json_u64(model, "contextWindow"),
                 output: json_u64(model, "maxTokens"),
-                reasoning: model.get("reasoning").and_then(serde_json::Value::as_bool).unwrap_or(false),
-                image: model.get("input").and_then(serde_json::Value::as_array).is_some_and(|input| input.iter().any(|kind| kind.as_str() == Some("image"))),
+                reasoning: model
+                    .get("reasoning")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                image: model
+                    .get("input")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|input| input.iter().any(|kind| kind.as_str() == Some("image"))),
             })
         })
         .collect()
@@ -292,7 +384,9 @@ fn pi_models(provider: &serde_json::Value, catalog: &serde_json::Value) -> Vec<P
 /// The API pi (or omp) names for a provider or model, as killi's provider type.
 fn pi_protocol(api: Option<&str>) -> &'static str {
     match api {
-        Some("openai-responses" | "openai-codex-responses" | "azure-openai-responses") => "openai_responses",
+        Some("openai-responses" | "openai-codex-responses" | "azure-openai-responses") => {
+            "openai_responses"
+        }
         Some("anthropic-messages") => "anthropic",
         _ => "openai",
     }
@@ -310,29 +404,51 @@ pub fn import_omp(force: bool) -> Result<()> {
 }
 
 pub(super) fn import_omp_from(dir: &Path, dst_dir: &Path, force: bool) -> Result<()> {
-    let Some(config) = read_yaml(&dir.join("models.yml"))?.or(read_json(&dir.join("models.json"))?) else {
-        bail!("no models.yml or models.json in {} to import", dir.display())
+    let Some(config) = read_yaml(&dir.join("models.yml"))?.or(read_json(&dir.join("models.json"))?)
+    else {
+        bail!(
+            "no models.yml or models.json in {} to import",
+            dir.display()
+        )
     };
     let catalog = read_json(&dir.join("models-store.json"))?.unwrap_or_default();
-    let settings = read_yaml(&dir.join("config.yml"))?.or(read_json(&dir.join("settings.json"))?).unwrap_or_default();
+    let settings = read_yaml(&dir.join("config.yml"))?
+        .or(read_json(&dir.join("settings.json"))?)
+        .unwrap_or_default();
     let (configured, effort) = omp_default(&settings);
-    import_pi_shape(dir, dst_dir, force, &config, &catalog, configured.as_deref(), effort.as_deref(), "omp", PiKey::Omp)
+    import_pi_shape(
+        dir,
+        dst_dir,
+        force,
+        &config,
+        &catalog,
+        configured.as_deref(),
+        effort.as_deref(),
+        "omp",
+        PiKey::Omp,
+    )
 }
 
 /// omp's configured default model and thinking level: its `modelRoles.default` (the first
 /// of a comma list, with any `:effort` off its end), else the pi-era settings it migrates
 /// from. A role alias (`@smol`) or a glob names no one model, so pressing on falls back.
 fn omp_default(settings: &serde_json::Value) -> (Option<String>, Option<String>) {
-    let role = settings.get("modelRoles").and_then(|roles| json_str(roles, "default"));
+    let role = settings
+        .get("modelRoles")
+        .and_then(|roles| json_str(roles, "default"));
     if let Some(role) = role.filter(|value| !value.starts_with('@') && !value.starts_with('*')) {
         let first = role.split(',').next().unwrap_or_default().trim();
         let (alias, effort) = match first.rsplit_once(':') {
-            Some((alias, effort)) if !effort.is_empty() && effort != "auto" => (alias, Some(effort.to_string())),
+            Some((alias, effort)) if !effort.is_empty() && effort != "auto" => {
+                (alias, Some(effort.to_string()))
+            }
             _ => (first, None),
         };
         return ((!alias.is_empty()).then(|| alias.to_string()), effort);
     }
-    let configured = json_str(settings, "defaultProvider").zip(json_str(settings, "defaultModel")).map(|(p, m)| format!("{p}/{m}"));
+    let configured = json_str(settings, "defaultProvider")
+        .zip(json_str(settings, "defaultModel"))
+        .map(|(p, m)| format!("{p}/{m}"));
     let effort = json_str(settings, "defaultThinkingLevel").filter(|level| level != "auto");
     (configured, effort)
 }
@@ -341,15 +457,28 @@ fn omp_default(settings: &serde_json::Value) -> (Option<String>, Option<String>)
 /// (`~/.config/opencode/opencode.json`, with keys from `~/.local/share/opencode/auth.json`).
 /// Providers opencode signs into with OAuth have no key to copy and are skipped.
 pub fn import_opencode(force: bool) -> Result<()> {
-    import_opencode_from(&home().join(".config/opencode/opencode.json"), &home().join(".local/share/opencode/auth.json"), &killi_home(), force)
+    import_opencode_from(
+        &home().join(".config/opencode/opencode.json"),
+        &home().join(".local/share/opencode/auth.json"),
+        &killi_home(),
+        force,
+    )
 }
 
-pub(super) fn import_opencode_from(config_path: &Path, auth_path: &Path, dst_dir: &Path, force: bool) -> Result<()> {
+pub(super) fn import_opencode_from(
+    config_path: &Path,
+    auth_path: &Path,
+    dst_dir: &Path,
+    force: bool,
+) -> Result<()> {
     let Some(config) = read_json(config_path)? else {
         bail!("no opencode config at {} to import", config_path.display())
     };
     let auth = read_json(auth_path)?.unwrap_or_default();
-    let Some(all) = config.get("provider").and_then(serde_json::Value::as_object) else {
+    let Some(all) = config
+        .get("provider")
+        .and_then(serde_json::Value::as_object)
+    else {
         bail!("no providers in {}", config_path.display())
     };
 
@@ -362,13 +491,23 @@ pub(super) fn import_opencode_from(config_path: &Path, auth_path: &Path, dst_dir
             skipped.push(name.clone());
             continue;
         };
-        let Some(listed) = provider.get("models").and_then(serde_json::Value::as_object).filter(|models| !models.is_empty()) else {
+        let Some(listed) = provider
+            .get("models")
+            .and_then(serde_json::Value::as_object)
+            .filter(|models| !models.is_empty())
+        else {
             skipped.push(name.clone());
             continue;
         };
         let mut table = toml::Table::new();
-        table.insert("type".into(), opencode_protocol(json_str(provider, "npm").as_deref()).into());
-        if let Some(url) = provider.get("options").and_then(|options| json_str(options, "baseURL")) {
+        table.insert(
+            "type".into(),
+            opencode_protocol(json_str(provider, "npm").as_deref()).into(),
+        );
+        if let Some(url) = provider
+            .get("options")
+            .and_then(|options| json_str(options, "baseURL"))
+        {
             table.insert("base_url".into(), url.into());
         }
         table.insert("api_key".into(), api_key.into());
@@ -386,10 +525,18 @@ pub(super) fn import_opencode_from(config_path: &Path, auth_path: &Path, dst_dir
                 table.insert("max_output_size".into(), toml_int(output));
             }
             let mut capabilities = Vec::new();
-            if model.get("reasoning").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            if model
+                .get("reasoning")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
                 capabilities.push("thinking".to_string());
             }
-            if model.get("attachment").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            if model
+                .get("attachment")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
                 capabilities.push("image_in".to_string());
             }
             if !capabilities.is_empty() {
@@ -403,11 +550,18 @@ pub(super) fn import_opencode_from(config_path: &Path, auth_path: &Path, dst_dir
     }
 
     let configured = json_str(&config, "model");
-    let default = configured.as_ref().filter(|alias| models.contains_key(*alias)).or_else(|| models.keys().next()).cloned();
+    let default = configured
+        .as_ref()
+        .filter(|alias| models.contains_key(*alias))
+        .or_else(|| models.keys().next())
+        .cloned();
     if let Some(alias) = &default {
         out.insert("default_model".into(), alias.clone().into());
         if configured.as_deref() != Some(alias.as_str()) {
-            eprintln!("opencode's default model {} wasn't imported, so `{alias}` is the default", configured.as_deref().unwrap_or("(none)"));
+            eprintln!(
+                "opencode's default model {} wasn't imported, so `{alias}` is the default",
+                configured.as_deref().unwrap_or("(none)")
+            );
         }
     }
     let (provider_count, model_count) = (providers.len(), models.len());
@@ -416,21 +570,35 @@ pub(super) fn import_opencode_from(config_path: &Path, auth_path: &Path, dst_dir
 
     write_import(out, None, dst_dir, force)?;
     copy_opencode_mcp(&config, dst_dir, force)?;
-    println!("Imported {provider_count} providers and {model_count} models into {}", dst_dir.join("config.toml").display());
+    println!(
+        "Imported {provider_count} providers and {model_count} models into {}",
+        dst_dir.join("config.toml").display()
+    );
     if !skipped.is_empty() {
-        println!("Skipped providers without an API key (opencode OAuth, or no models): {}", skipped.join(", "));
+        println!(
+            "Skipped providers without an API key (opencode OAuth, or no models): {}",
+            skipped.join(", ")
+        );
     }
     Ok(())
 }
 
 /// The key opencode keeps for a provider: the config's `options.apiKey`, else the API key
 /// `/connect` stored in `auth.json`. An OAuth sign-in has no key to copy.
-fn opencode_key(provider: &serde_json::Value, auth: &serde_json::Value, name: &str) -> Option<String> {
-    if let Some(key) = provider.get("options").and_then(|options| json_str(options, "apiKey")) {
+fn opencode_key(
+    provider: &serde_json::Value,
+    auth: &serde_json::Value,
+    name: &str,
+) -> Option<String> {
+    if let Some(key) = provider
+        .get("options")
+        .and_then(|options| json_str(options, "apiKey"))
+    {
         return Some(key);
     }
     let entry = auth.get(name)?;
-    (entry.get("type").and_then(serde_json::Value::as_str) == Some("api")).then(|| json_str(entry, "key"))?
+    (entry.get("type").and_then(serde_json::Value::as_str) == Some("api"))
+        .then(|| json_str(entry, "key"))?
 }
 
 /// The npm package opencode names for a provider, as killi's provider type.
@@ -445,7 +613,11 @@ fn opencode_protocol(npm: Option<&str>) -> &'static str {
 /// Writes opencode's MCP servers in killi's `mcpServers` shape: a local server's command
 /// array becomes the command and its args, a remote one its URL. Disabled ones are left out.
 fn copy_opencode_mcp(config: &serde_json::Value, dst_dir: &Path, force: bool) -> Result<()> {
-    let Some(all) = config.get("mcp").and_then(serde_json::Value::as_object).filter(|servers| !servers.is_empty()) else {
+    let Some(all) = config
+        .get("mcp")
+        .and_then(serde_json::Value::as_object)
+        .filter(|servers| !servers.is_empty())
+    else {
         return Ok(());
     };
     let dst = dst_dir.join("mcp.json");
@@ -460,7 +632,11 @@ fn copy_opencode_mcp(config: &serde_json::Value, dst_dir: &Path, force: bool) ->
         let mut entry = serde_json::Map::new();
         let command = server.get("command").and_then(serde_json::Value::as_array);
         if let Some(command) = command.filter(|command| !command.is_empty()) {
-            let args: Vec<&str> = command.iter().skip(1).filter_map(serde_json::Value::as_str).collect();
+            let args: Vec<&str> = command
+                .iter()
+                .skip(1)
+                .filter_map(serde_json::Value::as_str)
+                .collect();
             entry.insert("command".into(), command[0].clone());
             if !args.is_empty() {
                 entry.insert("args".into(), args.into());
@@ -475,9 +651,13 @@ fn copy_opencode_mcp(config: &serde_json::Value, dst_dir: &Path, force: bool) ->
     if servers.is_empty() {
         return Ok(());
     }
-    fs::DirBuilder::new().recursive(true).mode(0o700).create(dst_dir)?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dst_dir)?;
     let file = serde_json::json!({ "mcpServers": servers });
-    fs::write(&dst, serde_json::to_string_pretty(&file)?).with_context(|| format!("could not write {}", dst.display()))?;
+    fs::write(&dst, serde_json::to_string_pretty(&file)?)
+        .with_context(|| format!("could not write {}", dst.display()))?;
     println!("Copied MCP servers into {}", dst.display());
     Ok(())
 }
@@ -487,14 +667,22 @@ fn read_json(path: &Path) -> Result<Option<serde_json::Value>> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("could not read {}", path.display())),
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not read {}", path.display()));
+        }
     };
-    Ok(Some(serde_json::from_str(&text).with_context(|| format!("invalid JSON in {}", path.display()))?))
+    Ok(Some(serde_json::from_str(&text).with_context(|| {
+        format!("invalid JSON in {}", path.display())
+    })?))
 }
 
 /// A JSON object's string field, when it is set and not blank.
 fn json_str(value: &serde_json::Value, field: &str) -> Option<String> {
-    value.get(field).and_then(serde_json::Value::as_str).map(String::from).filter(|text| !text.is_empty())
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(String::from)
+        .filter(|text| !text.is_empty())
 }
 
 /// A JSON object's number field.

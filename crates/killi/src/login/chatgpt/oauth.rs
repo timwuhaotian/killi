@@ -1,12 +1,23 @@
 use super::*;
 use anyhow::{anyhow, bail};
 
-pub(super) fn authorize_url(saved: &Credentials, attempt: &Attempt, redirect_uri: &str) -> Result<reqwest::Url> {
+pub(super) fn authorize_url(
+    saved: &Credentials,
+    attempt: &Attempt,
+    redirect_uri: &str,
+) -> Result<reqwest::Url> {
     let challenge = challenge(&attempt.verifier);
     let registered = !saved.client_id.is_empty();
     let mut params = vec![
         ("response_type", "code"),
-        ("client_id", if registered { &saved.client_id } else { REGISTER }),
+        (
+            "client_id",
+            if registered {
+                &saved.client_id
+            } else {
+                REGISTER
+            },
+        ),
         ("redirect_uri", redirect_uri),
         ("scope", SCOPES),
         ("resource", RESOURCE),
@@ -44,11 +55,25 @@ pub(super) async fn wait_for_callback(listener: &TcpListener, state: &str) -> Re
         let target = request.split_whitespace().nth(1).unwrap_or("/");
         let (status, page, outcome) = match parse_callback(target, state) {
             Ok(None) => ("404 Not Found", "Nothing here.".to_string(), None),
-            Ok(Some(callback)) => ("200 OK", "Signed in to killi. You can close this tab.".to_string(), Some(Ok(callback))),
-            Err(message) => ("200 OK", format!("Sign-in didn't finish: {}. You can close this tab.", escape(&message)), Some(Err(anyhow!(message)))),
+            Ok(Some(callback)) => (
+                "200 OK",
+                "Signed in to killi. You can close this tab.".to_string(),
+                Some(Ok(callback)),
+            ),
+            Err(message) => (
+                "200 OK",
+                format!(
+                    "Sign-in didn't finish: {}. You can close this tab.",
+                    escape(&message)
+                ),
+                Some(Err(anyhow!(message))),
+            ),
         };
         let body = format!("<!doctype html><meta charset=utf-8><title>killi</title><p>{page}</p>");
-        let head = format!("HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+        let head = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
         let _ = stream.write_all(format!("{head}{body}").as_bytes()).await;
         let _ = stream.shutdown().await;
         if let Some(outcome) = outcome {
@@ -60,22 +85,36 @@ pub(super) async fn wait_for_callback(listener: &TcpListener, state: &str) -> Re
 /// Reads a callback request's `target` (path and query). `Ok(None)` is a request to ignore —
 /// another path, or a state from an older attempt — and an `Err` ends the attempt.
 pub(super) fn parse_callback(target: &str, state: &str) -> Result<Option<Callback>, String> {
-    let Ok(url) = reqwest::Url::parse(&format!("http://127.0.0.1{target}")) else { return Ok(None) };
+    let Ok(url) = reqwest::Url::parse(&format!("http://127.0.0.1{target}")) else {
+        return Ok(None);
+    };
     if url.path() != CALLBACK_PATH {
         return Ok(None);
     }
-    let param = |name: &str| url.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned());
+    let param = |name: &str| {
+        url.query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+    };
     if param("state").as_deref() != Some(state) {
         return Ok(None);
     }
     if let Some(error) = param("error") {
         return Err(match error.as_str() {
             "access_denied" => "ChatGPT plan use wasn't allowed for killi".to_string(),
-            _ => format!("{error} {}", param("error_description").unwrap_or_default()).trim().to_string(),
+            _ => format!("{error} {}", param("error_description").unwrap_or_default())
+                .trim()
+                .to_string(),
         });
     }
-    let code = param("code").filter(|code| !code.is_empty()).ok_or("the browser came back without a code")?;
-    Ok(Some(Callback { code, client_id: param("client_id"), scope: param("scope") }))
+    let code = param("code")
+        .filter(|code| !code.is_empty())
+        .ok_or("the browser came back without a code")?;
+    Ok(Some(Callback {
+        code,
+        client_id: param("client_id"),
+        scope: param("scope"),
+    }))
 }
 
 /// The client ID after a callback: the one this sign-in registered, or the saved one, which a
@@ -83,8 +122,12 @@ pub(super) fn parse_callback(target: &str, state: &str) -> Result<Option<Callbac
 pub(super) fn issued_client(saved: &str, returned: Option<&str>) -> Result<String> {
     match (saved.is_empty(), returned) {
         (true, Some(issued)) if !issued.is_empty() && issued != REGISTER => Ok(issued.to_string()),
-        (true, _) => bail!("ChatGPT didn't return a client ID for killi, so its registration didn't finish; run `killi login chatgpt` again"),
-        (false, Some(other)) if other != saved => bail!("ChatGPT returned a client ID ({other}) other than killi's registration ({saved}); sign-in stopped"),
+        (true, _) => bail!(
+            "ChatGPT didn't return a client ID for killi, so its registration didn't finish; run `killi login chatgpt` again"
+        ),
+        (false, Some(other)) if other != saved => bail!(
+            "ChatGPT returned a client ID ({other}) other than killi's registration ({saved}); sign-in stopped"
+        ),
         (false, _) => Ok(saved.to_string()),
     }
 }
@@ -93,7 +136,12 @@ pub(super) fn issued_client(saved: &str, returned: Option<&str>) -> Result<Strin
 /// Its signature isn't checked: the token came straight from the token endpoint over TLS,
 /// which OpenID Connect accepts instead (Core 1.0, 3.1.3.7), and killi uses it only to name
 /// the account.
-pub(super) fn identity(id_token: &str, client_id: &str, nonce: &str, now: u64) -> Result<(String, String)> {
+pub(super) fn identity(
+    id_token: &str,
+    client_id: &str,
+    nonce: &str,
+    now: u64,
+) -> Result<(String, String)> {
     let claims = id_token
         .split('.')
         .nth(1)
@@ -116,10 +164,19 @@ pub(super) fn identity(id_token: &str, client_id: &str, nonce: &str, now: u64) -
     if claims["nonce"] != nonce {
         bail!("the ID token's nonce doesn't match this sign-in");
     }
-    let subject = claims["sub"].as_str().filter(|subject| !subject.is_empty()).ok_or_else(|| anyhow!("the ID token names no account"))?;
-    Ok((subject.to_string(), claims["email"].as_str().unwrap_or_default().to_string()))
+    let subject = claims["sub"]
+        .as_str()
+        .filter(|subject| !subject.is_empty())
+        .ok_or_else(|| anyhow!("the ID token names no account"))?;
+    Ok((
+        subject.to_string(),
+        claims["email"].as_str().unwrap_or_default().to_string(),
+    ))
 }
 
 fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

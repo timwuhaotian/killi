@@ -43,7 +43,11 @@ pub async fn glob(ctx: &Context, args: Value) -> Output {
 }
 
 fn search_root(ctx: &Context, args: &Value) -> PathBuf {
-    match args.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+    match args
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|p| !p.is_empty())
+    {
         Some(path) => resolve(ctx, path),
         None => ctx.cwd.clone(),
     }
@@ -52,11 +56,20 @@ fn search_root(ctx: &Context, args: &Value) -> PathBuf {
 /// Walks files under `root`, honoring .gitignore, including dotfiles but never `.git`.
 fn walker(root: &Path, glob: Option<&str>) -> Result<ignore::Walk, String> {
     let mut builder = WalkBuilder::new(root);
-    builder.hidden(false).sort_by_file_name(|a, b| a.cmp(b)).filter_entry(|e| e.file_name() != ".git");
+    builder
+        .hidden(false)
+        .sort_by_file_name(|a, b| a.cmp(b))
+        .filter_entry(|e| e.file_name() != ".git");
     if let Some(glob) = glob {
         let mut overrides = OverrideBuilder::new(root);
-        overrides.add(glob).map_err(|e| format!("Invalid glob `{glob}`: {e}"))?;
-        builder.overrides(overrides.build().map_err(|e| format!("Invalid glob `{glob}`: {e}"))?);
+        overrides
+            .add(glob)
+            .map_err(|e| format!("Invalid glob `{glob}`: {e}"))?;
+        builder.overrides(
+            overrides
+                .build()
+                .map_err(|e| format!("Invalid glob `{glob}`: {e}"))?,
+        );
     }
     Ok(builder.build())
 }
@@ -102,7 +115,9 @@ struct FileResult {
 fn walk_error_path(error: &ignore::Error) -> Option<&Path> {
     match error {
         ignore::Error::WithPath { path, .. } => Some(path),
-        ignore::Error::WithLineNumber { err, .. } | ignore::Error::WithDepth { err, .. } => walk_error_path(err),
+        ignore::Error::WithLineNumber { err, .. } | ignore::Error::WithDepth { err, .. } => {
+            walk_error_path(err)
+        }
         ignore::Error::Partial(errors) => errors.iter().find_map(walk_error_path),
         ignore::Error::Loop { child, .. } => Some(child),
         _ => None,

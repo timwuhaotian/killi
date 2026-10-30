@@ -48,7 +48,10 @@ fn segment_verb(segment: &str) -> Option<&'static str> {
     while let Some(word) = words.get(i) {
         if *word == "-C" || *word == "--git-dir" || *word == "--work-tree" {
             i += 2;
-        } else if word.starts_with("--git-dir=") || word.starts_with("--work-tree=") || word.starts_with("-C") && word.len() > 2 {
+        } else if word.starts_with("--git-dir=")
+            || word.starts_with("--work-tree=")
+            || word.starts_with("-C") && word.len() > 2
+        {
             i += 1;
         } else if *word == "-c" {
             i += 2;
@@ -87,7 +90,9 @@ fn segment_dir(segment: &str) -> Option<String> {
         }
         break;
     }
-    let Some(first) = words.first() else { return found; };
+    let Some(first) = words.first() else {
+        return found;
+    };
     if *first != "git" && !first.ends_with("/git") {
         return found;
     }
@@ -98,7 +103,10 @@ fn segment_dir(segment: &str) -> Option<String> {
                 found = Some(dir.to_string());
             }
             i += 2;
-        } else if let Some(dir) = word.strip_prefix("--work-tree=").or_else(|| word.strip_prefix("--git-dir=")) {
+        } else if let Some(dir) = word
+            .strip_prefix("--work-tree=")
+            .or_else(|| word.strip_prefix("--git-dir="))
+        {
             found = Some(dir.to_string());
             i += 1;
         } else if let Some(dir) = word.strip_prefix("-C") {
@@ -122,9 +130,13 @@ fn is_env_assign(word: &str) -> bool {
     if word.starts_with('-') {
         return false;
     }
-    let Some(eq) = word.find('=') else { return false };
+    let Some(eq) = word.find('=') else {
+        return false;
+    };
     let (name, _) = word.split_at(eq);
-    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.chars().next().is_some_and(|c| c.is_ascii_digit())
+    !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !name.chars().next().is_some_and(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -172,7 +184,10 @@ mod tests {
 
     #[test]
     fn the_literal_directory_is_reported() {
-        assert_eq!(command_dir("cd sub && git restore f"), Some("sub".to_string()));
+        assert_eq!(
+            command_dir("cd sub && git restore f"),
+            Some("sub".to_string())
+        );
         assert_eq!(command_dir("git -C . restore f"), Some(".".to_string()));
         assert_eq!(command_dir("git status"), None);
     }

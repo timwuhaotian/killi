@@ -63,7 +63,8 @@ pub fn init() -> Result<()> {
     let path = dir.join("config.toml");
     if path.exists() {
         let text = fs::read_to_string(&path)?;
-        let table: toml::Table = toml::from_str(&text).with_context(|| format!("invalid config in {}", path.display()))?;
+        let table: toml::Table = toml::from_str(&text)
+            .with_context(|| format!("invalid config in {}", path.display()))?;
         if table.contains_key("prompt") {
             bail!("{} already exists and has a [prompt] table", path.display());
         }
@@ -72,14 +73,27 @@ pub fn init() -> Result<()> {
             file.write_all(b"\n")?;
         }
         file.write_all(prompt_section().as_bytes())?;
-        println!("Added the system prompt to {} under [prompt]; edit it there.", path.display());
+        println!(
+            "Added the system prompt to {} under [prompt]; edit it there.",
+            path.display()
+        );
         return Ok(());
     }
-    fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
-    let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
     file.write_all(TEMPLATE.as_bytes())?;
     file.write_all(prompt_section().as_bytes())?;
-    println!("Wrote {}. Set your providers' keys and models there.", path.display());
+    println!(
+        "Wrote {}. Set your providers' keys and models there.",
+        path.display()
+    );
     Ok(())
 }
 
@@ -99,7 +113,11 @@ fn import_sources() -> Vec<ImportSource> {
         sources.push(("pi", pi, import_pi));
     }
     let omp_dir = home().join(".omp/agent");
-    if let Some(omp) = ["models.yml", "models.yaml", "models.json"].into_iter().map(|name| omp_dir.join(name)).find(|path| path.exists()) {
+    if let Some(omp) = ["models.yml", "models.yaml", "models.json"]
+        .into_iter()
+        .map(|name| omp_dir.join(name))
+        .find(|path| path.exists())
+    {
         sources.push(("omp", omp, import_omp));
     }
     let opencode = home().join(".config/opencode/opencode.json");
@@ -120,7 +138,10 @@ pub fn set_up_if_missing() -> Result<()> {
     }
     eprintln!("killi has no config yet at {}.", path.display());
     for (name, source, import) in import_sources() {
-        if confirm(&format!("Import providers, models and MCP servers from {name} ({})?", source.display()))? {
+        if confirm(&format!(
+            "Import providers, models and MCP servers from {name} ({})?",
+            source.display()
+        ))? {
             if let Err(error) = import(false) {
                 eprintln!("killi: {error:#}");
                 continue;
@@ -145,11 +166,21 @@ pub fn guide_model(model: Option<&str>) -> Result<()> {
     let path = killi_home().join("config.toml");
     loop {
         let config = Config::load()?;
-        let Some(missing) = config.missing_key(model) else { return Ok(()) };
-        let Some(provider) = config.providers.get(&missing.provider) else { return Ok(()) };
+        let Some(missing) = config.missing_key(model) else {
+            return Ok(());
+        };
+        let Some(provider) = config.providers.get(&missing.provider) else {
+            return Ok(());
+        };
         eprintln!("{}", no_key_yet(&missing.alias, provider));
-        let otherwise = if model.is_some() { "press Enter to quit" } else { "press Enter to choose another model" };
-        let key = read_secret(&format!("Paste the key to store it in ~/.killi/config.toml, or {otherwise}: "))?;
+        let otherwise = if model.is_some() {
+            "press Enter to quit"
+        } else {
+            "press Enter to choose another model"
+        };
+        let key = read_secret(&format!(
+            "Paste the key to store it in ~/.killi/config.toml, or {otherwise}: "
+        ))?;
         if !key.is_empty() {
             set_provider_key(&path, &missing.provider, &key)?;
             continue;
@@ -168,7 +199,11 @@ fn pick_model(config: &Config, path: &Path) -> Result<bool> {
     for (index, alias) in aliases.iter().enumerate() {
         let note = match config.missing_key(Some(alias)) {
             Some(missing) => key_reason(&config.providers[&missing.provider]),
-            None if config.chatgpt_model(Some(alias)).is_some() && !crate::login::chatgpt::signed_in() => "needs `killi login chatgpt`".to_string(),
+            None if config.chatgpt_model(Some(alias)).is_some()
+                && !crate::login::chatgpt::signed_in() =>
+            {
+                "needs `killi login chatgpt`".to_string()
+            }
             None => "ready".to_string(),
         };
         eprintln!("  {}. {alias} — {note}", index + 1);

@@ -3,15 +3,18 @@
 //! a request whose tools include `bash`, `shell`, `web_search` or `search` is answered with
 //! `client_attestation_denied`, so killi sends and reads the mapped names instead.
 
-use anyhow::Result;
 use super::*;
+use anyhow::Result;
 
 /// Where Muse Code's models answer.
 pub const BASE_URL: &str = "https://api.meta.ai/v1";
 
 /// The configured provider that is Muse Code: the one on Meta's API.
 pub fn ours(provider: &Provider) -> bool {
-    provider.base_url.as_deref().is_some_and(|url| url.starts_with("https://api.meta.ai"))
+    provider
+        .base_url
+        .as_deref()
+        .is_some_and(|url| url.starts_with("https://api.meta.ai"))
 }
 
 /// `/provider muse-code`: writes the provider and its models with `api_key`.
@@ -34,7 +37,10 @@ fn additions(api_key: &str) -> Additions {
         name: "meta",
         ours,
         provider,
-        models: vec![wonder("muse-wonder-1.0-contributor", "muse wonder"), wonder("muse-wonder-full-1.0-contributor", "muse wonder full")],
+        models: vec![
+            wonder("muse-wonder-1.0-contributor", "muse wonder"),
+            wonder("muse-wonder-full-1.0-contributor", "muse wonder full"),
+        ],
         comment: "Meta's Muse Code, added with /provider muse-code.",
     }
 }
@@ -61,7 +67,13 @@ mod tests {
     /// The preset, rendered into an empty config the way `add_models` writes it.
     fn written() -> String {
         let (out, _, _, added) = models::with_models("", &additions("LLM|1|k")).unwrap();
-        assert_eq!(added, ["meta/muse-wonder-1.0-contributor", "meta/muse-wonder-full-1.0-contributor"]);
+        assert_eq!(
+            added,
+            [
+                "meta/muse-wonder-1.0-contributor",
+                "meta/muse-wonder-full-1.0-contributor"
+            ]
+        );
         out
     }
 
@@ -69,8 +81,16 @@ mod tests {
     fn the_provider_maps_the_tool_names_meta_refuses() {
         let out = written();
         assert!(out.contains("type = \"openai_responses\""), "{out}");
-        assert!(out.contains("base_url = \"https://api.meta.ai/v1\""), "{out}");
-        assert!(out.contains("[providers.meta.tool_names]\nbash = \"run_command\"\nweb_search = \"search_web\""), "{out}");
+        assert!(
+            out.contains("base_url = \"https://api.meta.ai/v1\""),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "[providers.meta.tool_names]\nbash = \"run_command\"\nweb_search = \"search_web\""
+            ),
+            "{out}"
+        );
     }
 
     #[test]
@@ -79,7 +99,16 @@ mod tests {
         assert!(out.contains("display_name = \"muse wonder\""), "{out}");
         let config: Config = toml::from_str(&out).unwrap();
         let model = &config.models["meta/muse-wonder-1.0-contributor"];
-        assert_eq!(model.capabilities, ["image_in", "tool_use", "video_in", "audio_in", "always_thinking"]);
+        assert_eq!(
+            model.capabilities,
+            [
+                "image_in",
+                "tool_use",
+                "video_in",
+                "audio_in",
+                "always_thinking"
+            ]
+        );
         assert_eq!(model.default_effort.as_deref(), Some("high"));
     }
 }

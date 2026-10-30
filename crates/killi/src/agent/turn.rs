@@ -7,7 +7,7 @@ const LEFT_RUNNING: &str = "Stop with task_stop what nothing needs anymore, such
 
 /// Told once when a reply ends on a colon with no tool call after it: the sentence promised a
 /// lookup or a list and the turn ended before giving it.
-pub(super) const UNFINISHED: &str ="<system-reminder>Your reply ends with a colon, so something was meant to follow it, but nothing did. If you meant to look something up or run something, do it now with a tool call. If you had nothing more to say, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
+pub(super) const UNFINISHED: &str = "<system-reminder>Your reply ends with a colon, so something was meant to follow it, but nothing did. If you meant to look something up or run something, do it now with a tool call. If you had nothing more to say, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
 
 impl Agent {
     /// Runs one user turn to completion and returns the final reply text.
@@ -17,7 +17,9 @@ impl Agent {
         self.swarm_used = 0;
         // A blocked prompt leaves no trace: the notes below are taken only once this passes,
         // so nothing already consumed is lost to a prompt the model never sees.
-        let submitted = self.hook("UserPromptSubmit", None, json!({"prompt": user})).await;
+        let submitted = self
+            .hook("UserPromptSubmit", None, json!({"prompt": user}))
+            .await;
         if let Some(reason) = submitted.block {
             return Err(anyhow!("a hook blocked this prompt: {reason}"));
         }
@@ -35,7 +37,11 @@ impl Agent {
             ));
         }
         if !std::mem::replace(&mut self.session_started, true) {
-            notes.extend(self.hook("SessionStart", None, json!({"source": "startup"})).await.context);
+            notes.extend(
+                self.hook("SessionStart", None, json!({"source": "startup"}))
+                    .await
+                    .context,
+            );
         }
         notes.extend(submitted.context);
         // Messages left while the session was idle come before the prompt, so it stays last.
@@ -43,7 +49,10 @@ impl Agent {
         let content = if notes.is_empty() {
             user.to_string()
         } else {
-            format!("<system-reminder>{}</system-reminder>\n\n{user}", notes.join("\n"))
+            format!(
+                "<system-reminder>{}</system-reminder>\n\n{user}",
+                notes.join("\n")
+            )
         };
         self.push(json!({"role": "user", "content": content}))?;
         self.push_images(images)?;
@@ -92,12 +101,15 @@ impl Agent {
                     continue;
                 }
                 // `-p` stops everything as it exits, so only a session that goes on asks.
-                if self.depth == 0 && self.controls.interactive && !truncated && !told_left_running {
+                if self.depth == 0 && self.controls.interactive && !truncated && !told_left_running
+                {
                     let left = self.ctx.tasks.borrow_mut().left_running();
                     if !left.is_empty() {
                         told_left_running = true;
                         let left = left.join(", ");
-                        (self.sink)(Event::Notice(format!("Still running: {left}. Asked the agent to stop what nothing needs.")));
+                        (self.sink)(Event::Notice(format!(
+                            "Still running: {left}. Asked the agent to stop what nothing needs."
+                        )));
                         self.push(json!({"role": "user", "content": format!("<system-reminder>Still running: {left}. {LEFT_RUNNING}</system-reminder>")}))?;
                         continue;
                     }
@@ -110,19 +122,34 @@ impl Agent {
                     && let Some(note) = open_tasks_note(&self.todos)
                 {
                     told_open_tasks = true;
-                    (self.sink)(Event::Notice("The task list still has open items. Asked the agent to update it.".into()));
+                    (self.sink)(Event::Notice(
+                        "The task list still has open items. Asked the agent to update it.".into(),
+                    ));
                     self.push(json!({"role": "user", "content": note}))?;
                     continue;
                 }
-                let event = if self.depth == 0 { "Stop" } else { "SubagentStop" };
-                let stop = self.hook(event, None, json!({"stop_hook_active": stop_blocks > 0})).await;
+                let event = if self.depth == 0 {
+                    "Stop"
+                } else {
+                    "SubagentStop"
+                };
+                let stop = self
+                    .hook(event, None, json!({"stop_hook_active": stop_blocks > 0}))
+                    .await;
                 if let Some(reason) = stop.block.filter(|_| stop_blocks < 3) {
                     stop_blocks += 1;
                     self.push(json!({"role": "user", "content": format!("<system-reminder>A hook asked you to keep going: {reason}</system-reminder>")}))?;
                     continue;
                 }
                 continued_text.push_str(&reply.text);
-                return Ok((continued_text, if truncated { Stop::MaxTokens } else { Stop::Completed }));
+                return Ok((
+                    continued_text,
+                    if truncated {
+                        Stop::MaxTokens
+                    } else {
+                        Stop::Completed
+                    },
+                ));
             }
             if self.execute_calls(calls, truncated).await? {
                 return Ok((String::new(), Stop::RepeatBreaker));
@@ -139,7 +166,9 @@ impl Agent {
         {
             // Proactive compaction is a saving, not a need: the request may still fit, and an
             // overflow compacts the reduced history on the way back.
-            (self.sink)(Event::Notice(format!("Compaction failed: {error:#}. Continuing without it.")));
+            (self.sink)(Event::Notice(format!(
+                "Compaction failed: {error:#}. Continuing without it."
+            )));
         }
         let steered: Vec<_> = self.controls.steer.borrow_mut().drain(..).collect();
         for (text, images) in steered {
@@ -154,7 +183,9 @@ impl Agent {
         let swarming = self.controls.swarm.get();
         if swarming != self.swarm_announced && self.depth == 0 {
             self.swarm_announced = swarming;
-            self.push(json!({"role": "user", "content": if swarming { swarm::ON } else { swarm::OFF }}))?;
+            self.push(
+                json!({"role": "user", "content": if swarming { swarm::ON } else { swarm::OFF }}),
+            )?;
         }
         let goal = self.controls.goal.borrow().clone();
         if goal != self.goal_announced && self.depth == 0 {
@@ -182,7 +213,10 @@ impl Agent {
             // parent still has to report.
             let finished = self.ctx.tasks.borrow_mut().newly_finished();
             if !finished.is_empty() {
-                let text = format!("<system-reminder>{} Read the output with task_output.</system-reminder>", finished.join(" "));
+                let text = format!(
+                    "<system-reminder>{} Read the output with task_output.</system-reminder>",
+                    finished.join(" ")
+                );
                 self.push(json!({"role": "user", "content": text}))?;
             }
         }
@@ -214,9 +248,17 @@ impl Agent {
         }
         self.peers_announced = pids;
         let shown = match peers.as_slice() {
-            [] => "No other killi session works in this repository now; told the agent.".to_string(),
-            [one] => format!("Session {} also works in this repository; told the agent to leave its changes alone.", one.pid),
-            many => format!("{} other sessions also work in this repository; told the agent to leave their changes alone.", many.len()),
+            [] => {
+                "No other killi session works in this repository now; told the agent.".to_string()
+            }
+            [one] => format!(
+                "Session {} also works in this repository; told the agent to leave its changes alone.",
+                one.pid
+            ),
+            many => format!(
+                "{} other sessions also work in this repository; told the agent to leave their changes alone.",
+                many.len()
+            ),
         };
         (self.sink)(Event::Notice(shown));
         Some(live::tree_note(&peers, live::now()))
@@ -236,7 +278,10 @@ pub(super) fn ends_with_colon(text: &str) -> bool {
 }
 
 fn last_line_ends_with(text: &str, marks: &[char]) -> bool {
-    text.lines().rev().find(|line| !line.trim().is_empty()).is_some_and(|line| line.trim_end().ends_with(marks))
+    text.lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| line.trim_end().ends_with(marks))
 }
 
 /// Tool calls the task list may go unchanged for with an item open before the model is
@@ -247,7 +292,10 @@ pub(super) const STALE_TASKS_AFTER: usize = 10;
 /// Told to the agent mid-turn when its task list hasn't changed in `calls` tool calls with
 /// items still open. None when the list is empty or finished.
 pub(super) fn stale_tasks_note(todos: &[Todo], calls: usize) -> Option<String> {
-    let current = todos.iter().find(|t| t.status == "in_progress").or_else(|| todos.iter().find(|t| t.status != "completed"))?;
+    let current = todos
+        .iter()
+        .find(|t| t.status == "in_progress")
+        .or_else(|| todos.iter().find(|t| t.status != "completed"))?;
     Some(format!(
         "<system-reminder>Your task list hasn't changed in {calls} tool calls; `{}` still shows as the current item. If it or others are finished, call todo_write now with them completed and the next one in_progress; if not, carry on.</system-reminder>",
         truncate(&current.content, 120)
@@ -257,7 +305,11 @@ pub(super) fn stale_tasks_note(todos: &[Todo], calls: usize) -> Option<String> {
 /// Told to the agent when it ends a turn with its task list unfinished, which shows on the
 /// user's screen as work still going: finished items are marked done, or the rest is carried on.
 pub(super) fn open_tasks_note(todos: &[Todo]) -> Option<String> {
-    let open: Vec<&str> = todos.iter().filter(|t| t.status != "completed").map(|t| t.content.as_str()).collect();
+    let open: Vec<&str> = todos
+        .iter()
+        .filter(|t| t.status != "completed")
+        .map(|t| t.content.as_str())
+        .collect();
     if open.is_empty() {
         return None;
     }

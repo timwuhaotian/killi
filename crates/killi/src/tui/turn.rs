@@ -3,21 +3,40 @@ use super::*;
 /// The question in `/btw <question>`, if that is what `text` is.
 pub(super) fn aside_question(text: &str) -> Option<String> {
     let rest = text.trim().strip_prefix("/btw")?;
-    rest.starts_with(char::is_whitespace).then(|| rest.trim().to_string()).filter(|q| !q.is_empty())
+    rest.starts_with(char::is_whitespace)
+        .then(|| rest.trim().to_string())
+        .filter(|q| !q.is_empty())
 }
 
 /// Whether a reply says it left work undone, by the words replies use for that.
 pub(super) fn leaves_something_for_later(text: &str) -> bool {
     let text = text.to_lowercase();
-    ["for later", "follow-up", "follow up", "deferred", "left out", "not done", "out of scope", "didn't do", "后续", "待办", "留到", "之后再", "没有做", "未做"]
-        .iter()
-        .any(|phrase| text.contains(phrase))
+    [
+        "for later",
+        "follow-up",
+        "follow up",
+        "deferred",
+        "left out",
+        "not done",
+        "out of scope",
+        "didn't do",
+        "后续",
+        "待办",
+        "留到",
+        "之后再",
+        "没有做",
+        "未做",
+    ]
+    .iter()
+    .any(|phrase| text.contains(phrase))
 }
 
 /// The queued messages the agent has taken, oldest first: all but the `waiting` ones still in
 /// the steer queue.
 pub(super) fn take_sent(queued: &mut Vec<String>, waiting: usize) -> Vec<String> {
-    queued.drain(..queued.len().saturating_sub(waiting)).collect()
+    queued
+        .drain(..queued.len().saturating_sub(waiting))
+        .collect()
 }
 
 impl App {
@@ -81,9 +100,13 @@ impl App {
             return;
         }
         if let Some(command) = self.editor.text().trim().strip_prefix('/') {
-            let (name, arg) = command.split_once(char::is_whitespace).unwrap_or((command, ""));
+            let (name, arg) = command
+                .split_once(char::is_whitespace)
+                .unwrap_or((command, ""));
             let (name, arg) = (name.to_string(), arg.trim().to_string());
-            if !is_command(&name) && let Some(prompt) = self.skills.invocation(&name, &arg) {
+            if !is_command(&name)
+                && let Some(prompt) = self.skills.invocation(&name, &arg)
+            {
                 // A skill sent while the agent works queues like a typed message: the queue
                 // shows `/name arg` as typed, the agent gets the skill's expanded prompt.
                 let sent = match mention::attachment(&self.cwd, &arg) {
@@ -105,7 +128,10 @@ impl App {
         }
         let (text, images) = self.editor.take_with_images();
         if !text.trim().is_empty() {
-            self.controls.steer.borrow_mut().push_back((mention::expand(&self.cwd, &text), images));
+            self.controls
+                .steer
+                .borrow_mut()
+                .push_back((mention::expand(&self.cwd, &text), images));
             self.queued.push(text);
         }
     }
@@ -163,10 +189,16 @@ impl App {
     /// `read_input` applies it as soon as the turn ends. A bare /effort never reaches here:
     /// `command_while_busy` leaves it in the prompt, where the menu offers the levels.
     fn effort_after_turn(&mut self, arg: &str) {
-        let efforts: Vec<&str> = self.effort_choices.iter().map(|item| item.value.as_str()).collect();
+        let efforts: Vec<&str> = self
+            .effort_choices
+            .iter()
+            .map(|item| item.value.as_str())
+            .collect();
         match effort_named(&self.status.model, &efforts, arg) {
             Ok(effort) => {
-                self.notice(&format!("Thinking effort {effort} starts when this turn ends."));
+                self.notice(&format!(
+                    "Thinking effort {effort} starts when this turn ends."
+                ));
                 self.effort_later = Some(effort);
             }
             Err(reason) => self.error(&reason),
@@ -201,16 +233,33 @@ impl App {
                     self.commit_prompt(&shown.join("\n"));
                     let more = prompt.lines().count().saturating_sub(shown.len());
                     if more > 0 {
-                        self.notice(&format!("… {more} more line{}", if more == 1 { "" } else { "s" }));
+                        self.notice(&format!(
+                            "… {more} more line{}",
+                            if more == 1 { "" } else { "s" }
+                        ));
                     }
                 }
                 Replayed::Text(text) => {
                     self.on_agent(Event::Text(text));
                     self.flush_partial();
                 }
-                Replayed::Tool { summary, output, is_error, brief } => {
-                    self.on_agent(Event::ToolStart { id: "replay".into(), summary });
-                    self.on_agent(Event::ToolEnd { id: "replay".into(), is_error, brief, display: None, output });
+                Replayed::Tool {
+                    summary,
+                    output,
+                    is_error,
+                    brief,
+                } => {
+                    self.on_agent(Event::ToolStart {
+                        id: "replay".into(),
+                        summary,
+                    });
+                    self.on_agent(Event::ToolEnd {
+                        id: "replay".into(),
+                        is_error,
+                        brief,
+                        display: None,
+                        output,
+                    });
                 }
             }
         }
@@ -235,7 +284,13 @@ impl App {
         self.busy = None;
     }
 
-    pub(super) fn finish_turn(&mut self, agent: &mut Agent, ended: Ended, before: Totals, after: Totals) {
+    pub(super) fn finish_turn(
+        &mut self,
+        agent: &mut Agent,
+        ended: Ended,
+        before: Totals,
+        after: Totals,
+    ) {
         let elapsed = self.busy.map(|t| t.elapsed()).unwrap_or_default();
         self.end_busy();
         if let Some(asking) = self.asking.take() {
@@ -255,9 +310,13 @@ impl App {
                 self.last_end = Some(LastEnd::Interrupted);
                 self.begin(Kind::Note);
                 if self.send_now {
-                    self.commit(format!("{WARN}Interrupted{RESET} {DIM}to send your message now.{RESET}"));
+                    self.commit(format!(
+                        "{WARN}Interrupted{RESET} {DIM}to send your message now.{RESET}"
+                    ));
                 } else {
-                    self.commit(format!("{WARN}Interrupted.{RESET} {DIM}Tell killi what to do instead.{RESET}"));
+                    self.commit(format!(
+                        "{WARN}Interrupted.{RESET} {DIM}Tell killi what to do instead.{RESET}"
+                    ));
                     self.controls.steer.borrow_mut().clear();
                 }
             }
@@ -288,7 +347,9 @@ impl App {
                 let restored: Vec<Steered> = steered
                     .into_iter()
                     .enumerate()
-                    .map(|(i, (expanded, images))| (typed.get(i).cloned().unwrap_or(expanded), images))
+                    .map(|(i, (expanded, images))| {
+                        (typed.get(i).cloned().unwrap_or(expanded), images)
+                    })
                     .collect();
                 restore_steered(&mut self.editor, restored);
                 self.notice("Your queued message wasn't sent; it's back in the prompt.");
@@ -298,7 +359,9 @@ impl App {
         let cached = (after.cached - before.cached) * 100 / prompt.max(1);
         self.commit(String::new());
         let requests = after.requests - before.requests;
-        let quick = matches!(self.last_end, Some(LastEnd::Done)) && elapsed < Duration::from_secs(3) && requests <= 1;
+        let quick = matches!(self.last_end, Some(LastEnd::Done))
+            && elapsed < Duration::from_secs(3)
+            && requests <= 1;
         let spent = prompt > 0 || after.completion > before.completion;
         if spent && !quick {
             self.commit(format!(
@@ -351,7 +414,9 @@ impl App {
     /// Whether the turn just ended earns a desktop notification: a completed turn that ran
     /// long, not one the user ended themselves with Esc or Ctrl+S.
     pub(super) fn wants_notify(&self, elapsed: Duration) -> bool {
-        matches!(self.last_end, Some(LastEnd::Done)) && elapsed >= self.notify_after && !self.send_now
+        matches!(self.last_end, Some(LastEnd::Done))
+            && elapsed >= self.notify_after
+            && !self.send_now
     }
 
     /// Prints the streamed line still being held and lays out the table it held back, ending
@@ -388,7 +453,11 @@ impl App {
                 return;
             }
             let first = first_sentence(&text);
-            let gist = if first.is_empty() { String::new() } else { format!(": {first}") };
+            let gist = if first.is_empty() {
+                String::new()
+            } else {
+                format!(": {first}")
+            };
             let line = format!("{DIM}∴ Thought for {took}{gist}{RESET}");
             self.begin(Kind::Tool);
             self.emit(Line::Fit(line));
@@ -403,7 +472,11 @@ impl App {
         let back = self.detail_back % self.details.len();
         let (title, body) = self.details[self.details.len() - 1 - back].clone();
         self.detail_back = back + 1;
-        let place = if self.details.len() > 1 { format!(" ({}/{})", back + 1, self.details.len()) } else { String::new() };
+        let place = if self.details.len() > 1 {
+            format!(" ({}/{})", back + 1, self.details.len())
+        } else {
+            String::new()
+        };
         self.begin(Kind::Note);
         self.commit(format!("{DIM}── {title}{place} ──{RESET}"));
         let lines: Vec<&str> = body.lines().collect();

@@ -71,7 +71,13 @@ pub struct Entry {
 
 /// Milliseconds since the epoch.
 pub fn now() -> u64 {
-    u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()).unwrap_or(u64::MAX)
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
 }
 
 /// The folder of the sessions' files.
@@ -82,7 +88,10 @@ pub fn dir() -> PathBuf {
 /// The git work tree `cwd` is in (a worktree's own root, since its `.git` is a file), or
 /// `cwd` outside one.
 pub fn work_tree(cwd: &Path) -> PathBuf {
-    cwd.ancestors().find(|dir| dir.join(".git").exists()).unwrap_or(cwd).to_path_buf()
+    cwd.ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(cwd)
+        .to_path_buf()
 }
 
 /// Where the session with `pid` listens, in the temporary folder because socket paths are
@@ -90,15 +99,24 @@ pub fn work_tree(cwd: &Path) -> PathBuf {
 pub fn socket_path(pid: u32) -> PathBuf {
     // SAFETY: getuid has no preconditions and can't fail.
     let uid = unsafe { libc::getuid() };
-    std::env::temp_dir().join(format!("killi-live-{uid}")).join(format!("{pid}.sock"))
+    std::env::temp_dir()
+        .join(format!("killi-live-{uid}"))
+        .join(format!("{pid}.sock"))
 }
 
 /// Joins the live sessions from `cwd`: writes this session's file and, when `listen`, opens
 /// the socket other sessions reach it on. None when the file can't be written.
-pub fn join(cwd: &Path, listen: bool) -> Option<(Registration, Option<mpsc::UnboundedReceiver<Incoming>>)> {
+pub fn join(
+    cwd: &Path,
+    listen: bool,
+) -> Option<(Registration, Option<mpsc::UnboundedReceiver<Incoming>>)> {
     let pid = std::process::id();
     let socket = socket_path(pid);
-    let incoming = if listen { self::listen(&socket).ok() } else { None };
+    let incoming = if listen {
+        self::listen(&socket).ok()
+    } else {
+        None
+    };
     let started = now();
     let entry = Entry {
         pid,
@@ -135,10 +153,20 @@ impl Registration {
     /// unlocked and takes it for a session that ended; the lock goes with the file when it
     /// is renamed.
     pub(crate) fn open_in(dir: &Path, entry: Entry) -> Result<Self> {
-        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).with_context(|| format!("could not create {}", dir.display()))?;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .with_context(|| format!("could not create {}", dir.display()))?;
         let path = dir.join(format!("{}.json", entry.pid));
         let staging = path.with_extension("json.new");
-        let file = OpenOptions::new().create(true).truncate(true).read(true).write(true).mode(0o600).open(&staging)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(&staging)?;
         file.lock()?;
         let mut registration = Self { file, path, entry };
         registration.write()?;
@@ -163,7 +191,15 @@ impl Registration {
 
     /// Where this session works, for the agent to find the sessions that work there too.
     pub fn here(&self) -> Here {
-        Here { pid: self.entry.pid, tree: self.entry.tree.clone(), dir: self.path.parent().map(Path::to_path_buf).unwrap_or_else(dir) }
+        Here {
+            pid: self.entry.pid,
+            tree: self.entry.tree.clone(),
+            dir: self
+                .path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(dir),
+        }
     }
 }
 
@@ -195,7 +231,10 @@ pub struct Here {
 impl Here {
     /// The other sessions working in this tree now, oldest first.
     pub fn others(&self) -> Vec<Entry> {
-        list_in(&self.dir).into_iter().filter(|e| e.pid != self.pid && e.tree == self.tree).collect()
+        list_in(&self.dir)
+            .into_iter()
+            .filter(|e| e.pid != self.pid && e.tree == self.tree)
+            .collect()
     }
 }
 
@@ -206,19 +245,31 @@ pub fn list() -> Vec<Entry> {
 }
 
 fn list_in(dir: &Path) -> Vec<Entry> {
-    let Ok(read) = fs::read_dir(dir) else { return Vec::new() };
+    let Ok(read) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let mut entries = Vec::new();
     for path in read.flatten().map(|e| e.path()) {
-        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let staging = name.ends_with(".json.new");
         if !staging && !name.ends_with(".json") {
             continue;
         }
-        let Ok(mut file) = File::open(&path) else { continue };
+        let Ok(mut file) = File::open(&path) else {
+            continue;
+        };
         match file.try_lock_shared() {
             Ok(()) => {
                 // A file still being written can be unlocked for a moment; one left behind is old.
-                let old = fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > Duration::from_secs(10));
+                let old = fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|age| age > Duration::from_secs(10));
                 if !staging || old {
                     if let Some(socket) = read_entry(&mut file).and_then(|e| e.socket) {
                         let _ = fs::remove_file(socket);
@@ -238,7 +289,8 @@ fn list_in(dir: &Path) -> Vec<Entry> {
 fn read_entry(file: &mut File) -> Option<Entry> {
     for _ in 0..2 {
         let mut text = String::new();
-        if file.rewind().is_ok() && file.read_to_string(&mut text).is_ok()
+        if file.rewind().is_ok()
+            && file.read_to_string(&mut text).is_ok()
             && let Ok(entry) = serde_json::from_str(&text)
         {
             return Some(entry);
@@ -286,10 +338,15 @@ pub struct Incoming {
 /// receiver; the connection waits for the reply.
 pub fn listen(socket: &Path) -> Result<mpsc::UnboundedReceiver<Incoming>> {
     if let Some(dir) = socket.parent() {
-        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).with_context(|| format!("could not create {}", dir.display()))?;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .with_context(|| format!("could not create {}", dir.display()))?;
     }
     let _ = fs::remove_file(socket);
-    let listener = UnixListener::bind(socket).with_context(|| format!("could not listen on {}", socket.display()))?;
+    let listener = UnixListener::bind(socket)
+        .with_context(|| format!("could not listen on {}", socket.display()))?;
     let (tx, rx) = mpsc::unbounded_channel();
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
@@ -309,16 +366,25 @@ async fn serve(stream: UnixStream, session: mpsc::UnboundedSender<Incoming>) -> 
     }
     let (reader, mut writer) = stream.into_split();
     let mut line = String::new();
-    BufReader::new(reader.take(MAX_REQUEST)).read_line(&mut line).await?;
+    BufReader::new(reader.take(MAX_REQUEST))
+        .read_line(&mut line)
+        .await?;
     let reply = match serde_json::from_str::<Envelope>(&line) {
         Ok(envelope) => {
             let (reply, answer) = oneshot::channel();
-            match session.send(Incoming { request: envelope.request, reply }) {
-                Ok(()) => answer.await.unwrap_or_else(|_| json!({"error": "the session ended before it answered"})),
+            match session.send(Incoming {
+                request: envelope.request,
+                reply,
+            }) {
+                Ok(()) => answer
+                    .await
+                    .unwrap_or_else(|_| json!({"error": "the session ended before it answered"})),
                 Err(_) => json!({"error": "the session is ending"}),
             }
         }
-        Err(e) => json!({"error": format!("killi {} doesn't understand this request: {e}", env!("CARGO_PKG_VERSION"))}),
+        Err(e) => {
+            json!({"error": format!("killi {} doesn't understand this request: {e}", env!("CARGO_PKG_VERSION"))})
+        }
     };
     writer.write_all(format!("{reply}\n").as_bytes()).await?;
     Ok(())
@@ -326,16 +392,38 @@ async fn serve(stream: UnixStream, session: mpsc::UnboundedSender<Incoming>) -> 
 
 /// Sends `request` to the session `to` and gives back its reply.
 pub async fn send(to: &Entry, request: Request) -> Result<Value> {
-    let socket = to.socket.as_ref().ok_or_else(|| anyhow!("session {} runs headless (-p) and takes no questions or messages", to.pid))?;
-    let wait = if matches!(request, Request::Ask { .. }) { ASK_TIMEOUT } else { QUICK_TIMEOUT };
+    let socket = to.socket.as_ref().ok_or_else(|| {
+        anyhow!(
+            "session {} runs headless (-p) and takes no questions or messages",
+            to.pid
+        )
+    })?;
+    let wait = if matches!(request, Request::Ask { .. }) {
+        ASK_TIMEOUT
+    } else {
+        QUICK_TIMEOUT
+    };
     let exchange = async {
-        let mut stream = UnixStream::connect(socket).await.with_context(|| format!("could not reach session {}", to.pid))?;
-        stream.write_all(format!("{}\n", serde_json::to_string(&Envelope { v: 1, request })?).as_bytes()).await?;
+        let mut stream = UnixStream::connect(socket)
+            .await
+            .with_context(|| format!("could not reach session {}", to.pid))?;
+        stream
+            .write_all(
+                format!("{}\n", serde_json::to_string(&Envelope { v: 1, request })?).as_bytes(),
+            )
+            .await?;
         let mut line = String::new();
         BufReader::new(stream).read_line(&mut line).await?;
-        serde_json::from_str::<Value>(&line).context("the session closed the connection without answering")
+        serde_json::from_str::<Value>(&line)
+            .context("the session closed the connection without answering")
     };
-    let reply = tokio::time::timeout(wait, exchange).await.map_err(|_| anyhow!("session {} didn't answer within {} s", to.pid, wait.as_secs()))??;
+    let reply = tokio::time::timeout(wait, exchange).await.map_err(|_| {
+        anyhow!(
+            "session {} didn't answer within {} s",
+            to.pid,
+            wait.as_secs()
+        )
+    })??;
     if let Some(error) = reply["error"].as_str() {
         bail!("{error}");
     }
@@ -344,17 +432,32 @@ pub async fn send(to: &Entry, request: Request) -> Result<Value> {
 
 /// `killi sessions [<pid>] [--json]`, `killi ask <pid> <question>` and `killi tell <pid> <message>`.
 pub async fn command(args: &[String]) -> Result<ExitCode> {
-    let me = std::env::var(PID_VAR).ok().and_then(|pid| pid.parse::<u32>().ok());
+    let me = std::env::var(PID_VAR)
+        .ok()
+        .and_then(|pid| pid.parse::<u32>().ok());
     let sessions = list();
     let find = |pid: Option<&String>| -> Result<Entry> {
-        let pid: u32 = pid.and_then(|p| p.parse().ok()).ok_or_else(|| anyhow!("say which session, by its pid; `killi sessions` lists them"))?;
+        let pid: u32 = pid
+            .and_then(|p| p.parse().ok())
+            .ok_or_else(|| anyhow!("say which session, by its pid; `killi sessions` lists them"))?;
         if Some(pid) == me && args[0] != "sessions" {
             bail!("session {pid} is this session");
         }
-        sessions.iter().find(|e| e.pid == pid).cloned().ok_or_else(|| anyhow!("no killi session with pid {pid} is running; `killi sessions` lists them"))
+        sessions
+            .iter()
+            .find(|e| e.pid == pid)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!("no killi session with pid {pid} is running; `killi sessions` lists them")
+            })
     };
     let text = || -> Result<String> {
-        let text = args.get(2..).unwrap_or_default().join(" ").trim().to_string();
+        let text = args
+            .get(2..)
+            .unwrap_or_default()
+            .join(" ")
+            .trim()
+            .to_string();
         if text.is_empty() {
             bail!("say what to send: killi {} <pid> \"…\"", args[0]);
         }
@@ -370,7 +473,11 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
             match pid {
                 Some(pid) => {
                     let entry = find(Some(pid))?;
-                    let status = if entry.socket.is_some() { Some(send(&entry, Request::Status).await?) } else { None };
+                    let status = if entry.socket.is_some() {
+                        Some(send(&entry, Request::Status).await?)
+                    } else {
+                        None
+                    };
                     if json_mode {
                         println!("{}", json!({"session": entry, "status": status}));
                     } else {
@@ -383,12 +490,26 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
         }
         "ask" => {
             let to = find(args.get(1))?;
-            let reply = send(&to, Request::Ask { from: me, text: text()? }).await?;
+            let reply = send(
+                &to,
+                Request::Ask {
+                    from: me,
+                    text: text()?,
+                },
+            )
+            .await?;
             println!("{}", reply["answer"].as_str().unwrap_or_default());
         }
         "tell" => {
             let to = find(args.get(1))?;
-            let reply = send(&to, Request::Tell { from: me, text: text()? }).await?;
+            let reply = send(
+                &to,
+                Request::Tell {
+                    from: me,
+                    text: text()?,
+                },
+            )
+            .await?;
             println!("{}", reply["delivered"].as_str().unwrap_or("Delivered."));
         }
         other => bail!("unknown command `{other}`"),
@@ -419,8 +540,15 @@ fn list_text(sessions: &[Entry], me: Option<u32>, now: u64) -> String {
 
 /// `killi sessions <pid>`: the line from the list, then what it is doing now.
 fn status_text(entry: &Entry, status: Option<&Value>, now: u64) -> String {
-    let mut text = format!("{} · {} · killi {}", describe(entry, now), entry.model, entry.version);
-    let Some(status) = status else { return text + "\nIt runs headless (-p) and can't say more." };
+    let mut text = format!(
+        "{} · {} · killi {}",
+        describe(entry, now),
+        entry.model,
+        entry.version
+    );
+    let Some(status) = status else {
+        return text + "\nIt runs headless (-p) and can't say more.";
+    };
     if status["plan"].as_bool() == Some(true) {
         text.push_str("\nIn plan mode.");
     }
@@ -434,7 +562,10 @@ fn status_text(entry: &Entry, status: Option<&Value>, now: u64) -> String {
                 Some("in_progress") => "◐",
                 _ => "○",
             };
-            text.push_str(&format!("\n  {mark} {}", todo["content"].as_str().unwrap_or_default()));
+            text.push_str(&format!(
+                "\n  {mark} {}",
+                todo["content"].as_str().unwrap_or_default()
+            ));
         }
     }
     if let Some(waiting) = status["waiting"].as_str() {
@@ -447,17 +578,35 @@ fn status_text(entry: &Entry, status: Option<&Value>, now: u64) -> String {
 pub fn describe(entry: &Entry, now: u64) -> String {
     let state = if entry.working { "working" } else { "idle" };
     let took = span(now.saturating_sub(entry.since));
-    let branch = entry.branch.as_ref().map(|b| format!(" ({b})")).unwrap_or_default();
-    let prompt = if entry.prompt.is_empty() { String::new() } else { format!(" · “{}”", crate::llm::truncate(&entry.prompt, 80)) };
-    format!("{} · {state} for {took} · {}{branch}{prompt}", entry.pid, tilde(&entry.cwd))
+    let branch = entry
+        .branch
+        .as_ref()
+        .map(|b| format!(" ({b})"))
+        .unwrap_or_default();
+    let prompt = if entry.prompt.is_empty() {
+        String::new()
+    } else {
+        format!(" · “{}”", crate::llm::truncate(&entry.prompt, 80))
+    };
+    format!(
+        "{} · {state} for {took} · {}{branch}{prompt}",
+        entry.pid,
+        tilde(&entry.cwd)
+    )
 }
 
 /// The sender of a question or message in a few words, from its file when it has one.
 pub fn sender(from: Option<u32>) -> String {
-    let Some(pid) = from else { return "outside any killi session, through `killi tell` or `killi ask`".into() };
+    let Some(pid) = from else {
+        return "outside any killi session, through `killi tell` or `killi ask`".into();
+    };
     match list().into_iter().find(|e| e.pid == pid) {
         Some(entry) => {
-            let prompt = if entry.prompt.is_empty() { String::new() } else { format!(", on “{}”", crate::llm::truncate(&entry.prompt, 80)) };
+            let prompt = if entry.prompt.is_empty() {
+                String::new()
+            } else {
+                format!(", on “{}”", crate::llm::truncate(&entry.prompt, 80))
+            };
             format!("killi session {pid}, in {}{prompt}", tilde(&entry.cwd))
         }
         None => format!("killi session {pid}"),

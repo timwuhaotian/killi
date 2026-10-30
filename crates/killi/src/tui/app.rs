@@ -1,7 +1,12 @@
 use super::*;
 
 impl App {
-    pub(super) fn new(agent: &Agent, controls: Controls, cwd: &Path, skills: crate::skills::Skills) -> Self {
+    pub(super) fn new(
+        agent: &Agent,
+        controls: Controls,
+        cwd: &Path,
+        skills: crate::skills::Skills,
+    ) -> Self {
         let (columns, rows) = terminal::size().unwrap_or((100, 40));
         let mut app = Self {
             out: stdout(),
@@ -102,7 +107,13 @@ impl App {
         }
     }
 
-    pub(super) fn banner(&mut self, agent: &Agent, session: &Setup, snapshots: &Snapshots, resumed: bool) {
+    pub(super) fn banner(
+        &mut self,
+        agent: &Agent,
+        session: &Setup,
+        snapshots: &Snapshots,
+        resumed: bool,
+    ) {
         self.banner_resumed = resumed;
         let cwd = tilde(&self.cwd);
         let thinking = match thinking_parts(agent.thinking().label()) {
@@ -110,9 +121,16 @@ impl App {
             None => String::new(),
         };
         let overview = session.overview();
-        let model = format!("{}{BOLD}{}{RESET}{thinking}", label("model"), agent.model_alias());
+        let model = format!(
+            "{}{BOLD}{}{RESET}{thinking}",
+            label("model"),
+            agent.model_alias()
+        );
         let setup = overview_rows(&overview);
-        self.since_banner = self.pending.is_empty().then(|| SinceBanner { resumed, ..SinceBanner::default() });
+        self.since_banner = self.pending.is_empty().then(|| SinceBanner {
+            resumed,
+            ..SinceBanner::default()
+        });
         self.history.banner_starts();
         self.commit(String::new());
         let tall = self.height >= banner::COMPACT_ROWS;
@@ -120,7 +138,11 @@ impl App {
             let version = env!("CARGO_PKG_VERSION");
             if banner::compact(width, tall) {
                 let cwd = shorten_path(&cwd, width.saturating_sub(7).max(20));
-                let mut rows = vec![banner::wordmark(version), model.clone(), format!("{}{cwd}", label("folder"))];
+                let mut rows = vec![
+                    banner::wordmark(version),
+                    model.clone(),
+                    format!("{}{cwd}", label("folder")),
+                ];
                 rows.extend(setup.iter().cloned());
                 return rows.iter().map(|row| fit(row, width)).collect();
             }
@@ -148,9 +170,18 @@ impl App {
         }
         if resumed {
             let prompts = agent.user_prompts();
-            self.commit(format!("{DIM}Resumed a session with {} prompt{}; the last was “{}”.{RESET}", prompts.len(), if prompts.len() == 1 { "" } else { "s" }, prompts.last().map_or("", |s| s.lines().next().unwrap_or(""))));
+            self.commit(format!(
+                "{DIM}Resumed a session with {} prompt{}; the last was “{}”.{RESET}",
+                prompts.len(),
+                if prompts.len() == 1 { "" } else { "s" },
+                prompts
+                    .last()
+                    .map_or("", |s| s.lines().next().unwrap_or(""))
+            ));
         }
-        self.emit(Line::block(|width| wrap_items(&key_hints(ENHANCED.load(Ordering::Relaxed)), width)));
+        self.emit(Line::block(|width| {
+            wrap_items(&key_hints(ENHANCED.load(Ordering::Relaxed)), width)
+        }));
         self.commit(String::new());
         self.last_kind = Kind::None;
         self.history.banner_ends();
@@ -163,7 +194,9 @@ impl App {
     /// still on screen; everything printed below it is printed again as it was.
     pub(super) fn redraw_banner(&mut self, agent: &Agent, session: &Setup, snapshots: &Snapshots) {
         if self.fullscreen {
-            let Some(rest) = self.history.cut_banner() else { return };
+            let Some(rest) = self.history.cut_banner() else {
+                return;
+            };
             let (last_kind, last_blank) = (self.last_kind, self.last_blank);
             self.last_blank = false;
             self.banner(agent, session, snapshots, self.banner_resumed);
@@ -171,11 +204,18 @@ impl App {
             (self.last_kind, self.last_blank) = (last_kind, last_blank);
             return;
         }
-        let Some(since) = self.since_banner.take() else { return };
+        let Some(since) = self.since_banner.take() else {
+            return;
+        };
         if since.rows + self.shown.len() > self.height {
             return;
         }
-        let _ = queue!(self.out, MoveUp((self.cursor_row + since.rows) as u16), MoveToColumn(0), Clear(ClearType::FromCursorDown));
+        let _ = queue!(
+            self.out,
+            MoveUp((self.cursor_row + since.rows) as u16),
+            MoveToColumn(0),
+            Clear(ClearType::FromCursorDown)
+        );
         self.cursor_row = 0;
         self.shown.clear();
         self.content_rows = self.content_rows.saturating_sub(since.rows);
@@ -184,7 +224,8 @@ impl App {
         self.last_blank = false;
         self.banner(agent, session, snapshots, since.resumed);
         if since.lines.len() > since.banner || !waiting.is_empty() {
-            self.pending.extend(since.lines.into_iter().skip(since.banner));
+            self.pending
+                .extend(since.lines.into_iter().skip(since.banner));
             self.pending.extend(waiting);
             (self.last_kind, self.last_blank) = (last_kind, last_blank);
         }
@@ -203,7 +244,10 @@ impl App {
     /// Remembers the model just picked for the sessions started after this one; its effort
     /// is the model's `default_effort` in the config, which `/effort` keeps up to date.
     pub(super) fn save_choice(&mut self, agent: &Agent) {
-        let choice = Choice { model: Some(agent.model_alias().to_string()), effort: None };
+        let choice = Choice {
+            model: Some(agent.model_alias().to_string()),
+            effort: None,
+        };
         if let Err(e) = crate::session::save_choice(&choice) {
             self.error_report(&e);
         }
@@ -218,7 +262,10 @@ impl App {
         self.model_choices = config
             .models
             .iter()
-            .map(|(alias, model)| Item { value: alias.clone(), description: mark(&model.provider, *alias == self.status.model) })
+            .map(|(alias, model)| Item {
+                value: alias.clone(),
+                description: mark(&model.provider, *alias == self.status.model),
+            })
             .collect();
         self.effort_choices = config
             .efforts(&self.status.model)
@@ -230,7 +277,10 @@ impl App {
                     _ => "",
                 };
                 let description = mark(about, effort == self.status.thinking);
-                Item { value: effort, description }
+                Item {
+                    value: effort,
+                    description,
+                }
             })
             .collect();
     }
@@ -246,7 +296,12 @@ impl App {
             self.shown.clear();
             return;
         }
-        let _ = execute!(self.out, Clear(ClearType::All), Clear(ClearType::Purge), MoveTo(0, 0));
+        let _ = execute!(
+            self.out,
+            Clear(ClearType::All),
+            Clear(ClearType::Purge),
+            MoveTo(0, 0)
+        );
         self.cursor_row = 0;
         self.shown.clear();
         self.since_banner = None;

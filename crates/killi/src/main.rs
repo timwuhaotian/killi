@@ -67,7 +67,10 @@ struct Options {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
     match runtime.block_on(dispatch(args)) {
         Ok(code) => code,
         Err(error) => {
@@ -80,11 +83,19 @@ fn main() -> ExitCode {
 async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
     match args.first().map(String::as_str) {
         Some("init") => config::init().map(|()| ExitCode::SUCCESS),
-        Some("import-kimi") => config::import_kimi(args.iter().any(|a| a == "--force")).map(|()| ExitCode::SUCCESS),
+        Some("import-kimi") => {
+            config::import_kimi(args.iter().any(|a| a == "--force")).map(|()| ExitCode::SUCCESS)
+        }
         Some("update") => update::update().await.map(|()| ExitCode::SUCCESS),
-        Some("login") => login::login(args.get(1).map(String::as_str)).await.map(|()| ExitCode::SUCCESS),
-        Some("logout") => login::logout(args.get(1).map(String::as_str)).await.map(|()| ExitCode::SUCCESS),
-        Some("mcp-serve") => broker::serve(&broker::socket_path()).await.map(|()| ExitCode::SUCCESS),
+        Some("login") => login::login(args.get(1).map(String::as_str))
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some("logout") => login::logout(args.get(1).map(String::as_str))
+            .await
+            .map(|()| ExitCode::SUCCESS),
+        Some("mcp-serve") => broker::serve(&broker::socket_path())
+            .await
+            .map(|()| ExitCode::SUCCESS),
         Some("sessions" | "ask" | "tell") => live::command(&args).await,
         Some("-V" | "--version") => {
             println!("killi {}", env!("CARGO_PKG_VERSION"));
@@ -109,14 +120,26 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
             let last = || newest_available(session::list(&cwd));
             let resume = match (&options.resume, options.continue_last) {
                 (Some(Some(path)), _) => Some(path.clone()),
-                (_, true) => Some(last().ok_or_else(|| anyhow::anyhow!("no earlier session in this folder to continue"))?),
+                (_, true) => Some(last().ok_or_else(|| {
+                    anyhow::anyhow!("no earlier session in this folder to continue")
+                })?),
                 _ => None,
             };
             match options.prompt {
-                Some(prompt) => run_once(config, &options.model, resume, prompt, options.json).await,
+                Some(prompt) => {
+                    run_once(config, &options.model, resume, prompt, options.json).await
+                }
                 None => {
                     let pick_session = matches!(options.resume, Some(None));
-                    tui::run(config, tui::Start { model: options.model, resume, pick_session }).await
+                    tui::run(
+                        config,
+                        tui::Start {
+                            model: options.model,
+                            resume,
+                            pick_session,
+                        },
+                    )
+                    .await
                 }
             }
         }
@@ -187,7 +210,11 @@ fn quit_on_hangup_or_terminate() {
         if n != 1 {
             return;
         }
-        let code = if byte[0] == libc::SIGHUP as u8 { 129 } else { 143 };
+        let code = if byte[0] == libc::SIGHUP as u8 {
+            129
+        } else {
+            143
+        };
         tools::kill_all();
         live::leave();
         tui::restore_terminal();
@@ -200,12 +227,20 @@ fn parse(args: Vec<String>) -> Result<Options> {
     let mut args = args.into_iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "-p" | "--print" => options.prompt = Some(args.next().filter(|p| !p.trim().is_empty()).ok_or_else(|| anyhow::anyhow!("-p needs a prompt"))?),
+            "-p" | "--print" => {
+                options.prompt = Some(
+                    args.next()
+                        .filter(|p| !p.trim().is_empty())
+                        .ok_or_else(|| anyhow::anyhow!("-p needs a prompt"))?,
+                )
+            }
             "-m" | "--model" => options.model = args.next(),
             "--json" => options.json = true,
             "-c" | "--continue" => options.continue_last = true,
             "-r" | "--resume" => {
-                let path = args.next_if(|next| !next.starts_with('-')).map(PathBuf::from);
+                let path = args
+                    .next_if(|next| !next.starts_with('-'))
+                    .map(PathBuf::from);
                 options.resume = Some(path);
             }
             other => bail!("unknown argument `{other}`\n\n{USAGE}"),
@@ -217,10 +252,19 @@ fn parse(args: Vec<String>) -> Result<Options> {
 /// The newest log no live session holds: `-c` continues it, skipping the ones that are
 /// still running. A log nobody holds may still belong to a session that ended.
 fn newest_available(sessions: Vec<session::Listed>) -> Option<PathBuf> {
-    sessions.into_iter().find(|s| !session::is_locked(&s.path)).map(|s| s.path)
+    sessions
+        .into_iter()
+        .find(|s| !session::is_locked(&s.path))
+        .map(|s| s.path)
 }
 
-async fn run_once(config: config::Config, model: &Option<String>, resume: Option<PathBuf>, prompt: String, json_mode: bool) -> Result<ExitCode> {
+async fn run_once(
+    config: config::Config,
+    model: &Option<String>,
+    resume: Option<PathBuf>,
+    prompt: String,
+    json_mode: bool,
+) -> Result<ExitCode> {
     // A panic under `-p` has no TUI to install the crash hook: install it here.
     tui::install_crash_hook();
     let cwd = std::env::current_dir()?;
@@ -236,7 +280,13 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
     controls.swarm.set(setup.config().agent.swarm_on());
     // A headless run is listed, so sessions in its tree leave its work alone, but takes no
     // questions or messages: nothing would read them while it runs.
-    let mut live = setup.config().agent.peers_on().then(|| live::join(&cwd, false)).flatten().map(|(registration, _)| registration);
+    let mut live = setup
+        .config()
+        .agent
+        .peers_on()
+        .then(|| live::join(&cwd, false))
+        .flatten()
+        .map(|(registration, _)| registration);
     controls.here = live.as_ref().map(|l| Rc::new(l.here()));
     let mut agent = match &resume {
         Some(log) => setup.resume(log, controls, sink)?,
@@ -247,14 +297,25 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
             e.model = agent.model_alias().to_string();
             e.log = agent.session.log_path.clone();
             e.working = true;
-            e.prompt = crate::llm::truncate(prompt.lines().next().unwrap_or_default(), 200).to_string();
+            e.prompt =
+                crate::llm::truncate(prompt.lines().next().unwrap_or_default(), 200).to_string();
         });
     }
     if !json_mode {
         let p = printer.borrow();
         let info = setup.describe();
-        let info = if info.is_empty() { String::new() } else { format!(" · {info}") };
-        eprintln!("{}killi {} · {}{info}{}\n", p.dim, env!("CARGO_PKG_VERSION"), agent.model_alias(), p.reset);
+        let info = if info.is_empty() {
+            String::new()
+        } else {
+            format!(" · {info}")
+        };
+        eprintln!(
+            "{}killi {} · {}{info}{}\n",
+            p.dim,
+            env!("CARGO_PKG_VERSION"),
+            agent.model_alias(),
+            p.reset
+        );
     }
 
     let started = Instant::now();
@@ -317,7 +378,11 @@ async fn run_once(config: config::Config, model: &Option<String>, resume: Option
             p.reset
         );
     }
-    Ok(if stop == Some(Stop::Completed) { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    Ok(if stop == Some(Stop::Completed) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 #[derive(PartialEq)]
@@ -369,7 +434,11 @@ impl Printer {
     fn event(&mut self, event: Event) {
         match event {
             Event::Text(text) => {
-                let text = if self.last == Last::Text { text.as_str() } else { text.trim_start() };
+                let text = if self.last == Last::Text {
+                    text.as_str()
+                } else {
+                    text.trim_start()
+                };
                 let body = text.trim_end_matches('\n');
                 if body.is_empty() {
                     if self.last == Last::Text {
@@ -386,14 +455,27 @@ impl Printer {
                 self.line_open = true;
                 self.last = Last::Text;
             }
-            Event::Retry { attempt, wait, reason } => {
+            Event::Retry {
+                attempt,
+                wait,
+                reason,
+            } => {
                 let dropped = self.line_open || self.held_newlines > 0 || !self.attempt.is_empty();
                 self.attempt.clear();
                 self.line_open = false;
                 self.held_newlines = 0;
-                eprintln!("{}retry {attempt} in {:.1}s: {}{}", self.dim, wait.as_secs_f32(), llm::truncate(&reason, 300), self.reset);
+                eprintln!(
+                    "{}retry {attempt} in {:.1}s: {}{}",
+                    self.dim,
+                    wait.as_secs_f32(),
+                    llm::truncate(&reason, 300),
+                    self.reset
+                );
                 if dropped {
-                    eprintln!("{}the partial reply above was discarded; retrying …{}", self.dim, self.reset);
+                    eprintln!(
+                        "{}the partial reply above was discarded; retrying …{}",
+                        self.dim, self.reset
+                    );
                 }
             }
             Event::ToolStart { summary, .. } => {
@@ -401,13 +483,19 @@ impl Printer {
                     self.end_text();
                     println!();
                 }
-                let summary = summary.replace(&format!("{}/", self.cwd), "").replace(&self.cwd, ".");
+                let summary = summary
+                    .replace(&format!("{}/", self.cwd), "")
+                    .replace(&self.cwd, ".");
                 eprint!("{}●{} {summary}", self.accent, self.reset);
                 self.tool_open = true;
                 self.last = Last::Tool;
             }
             Event::ToolEnd { is_error, .. } => {
-                let mark = if is_error { format!(" {}✗{}", self.red, self.reset) } else { String::new() };
+                let mark = if is_error {
+                    format!(" {}✗{}", self.red, self.reset)
+                } else {
+                    String::new()
+                };
                 if std::mem::take(&mut self.tool_open) || !mark.is_empty() {
                     eprintln!("{mark}");
                 }
@@ -417,17 +505,40 @@ impl Printer {
                 eprintln!("{}{text}{}", self.dim, self.reset);
             }
             Event::Sub { label, event, .. } => {
-                if matches!(*event, Event::ToolStart { .. } | Event::ToolEnd { is_error: true, .. } | Event::Finished { .. }) && std::mem::take(&mut self.tool_open) {
+                if matches!(
+                    *event,
+                    Event::ToolStart { .. }
+                        | Event::ToolEnd { is_error: true, .. }
+                        | Event::Finished { .. }
+                ) && std::mem::take(&mut self.tool_open)
+                {
                     eprintln!();
                 }
                 match *event {
-                    Event::ToolStart { summary, .. } => eprintln!("  {}↳ {label}: {summary}{}", self.dim, self.reset),
-                    Event::ToolEnd { is_error: true, brief, .. } => eprintln!("  {}↳ {label}: ✗ {brief}{}", self.red, self.reset),
-                    Event::Finished { is_error } => eprintln!("  {}↳ {label}: {}{}", self.dim, if is_error { "failed" } else { "done" }, self.reset),
+                    Event::ToolStart { summary, .. } => {
+                        eprintln!("  {}↳ {label}: {summary}{}", self.dim, self.reset)
+                    }
+                    Event::ToolEnd {
+                        is_error: true,
+                        brief,
+                        ..
+                    } => eprintln!("  {}↳ {label}: ✗ {brief}{}", self.red, self.reset),
+                    Event::Finished { is_error } => eprintln!(
+                        "  {}↳ {label}: {}{}",
+                        self.dim,
+                        if is_error { "failed" } else { "done" },
+                        self.reset
+                    ),
                     _ => {}
                 }
             }
-            Event::Reasoning(_) | Event::Usage(_) | Event::Todos(_) | Event::Ask(_) | Event::Swarm { .. } | Event::Started | Event::Finished { .. } => {}
+            Event::Reasoning(_)
+            | Event::Usage(_)
+            | Event::Todos(_)
+            | Event::Ask(_)
+            | Event::Swarm { .. }
+            | Event::Started
+            | Event::Finished { .. } => {}
         }
     }
 

@@ -9,7 +9,10 @@ pub(super) const MAX_SWARM_AGENTS_PER_TURN: usize = swarm::MAX_ITEMS;
 impl Agent {
     /// Runs a group of `agent` calls in parallel and returns each one's result as a tool output.
     /// Hooks see each call like any other: a blocked call reports why instead of starting.
-    pub(super) async fn run_subagents(&mut self, group: &[(String, ToolCall)]) -> Vec<tools::Output> {
+    pub(super) async fn run_subagents(
+        &mut self,
+        group: &[(String, ToolCall)],
+    ) -> Vec<tools::Output> {
         let mut jobs = Vec::new();
         let mut hooked: Vec<Option<Value>> = Vec::new();
         for (id, call) in group {
@@ -23,11 +26,22 @@ impl Agent {
                     continue;
                 }
             };
-            let label = args["description"].as_str().unwrap_or("subagent").to_string();
+            let label = args["description"]
+                .as_str()
+                .unwrap_or("subagent")
+                .to_string();
             self.tool_start(id, &tools::summary("agent", &args, &self.ctx.cwd));
-            let before = self.hook("PreToolUse", Some("agent"), tool_payload("agent", &args, None)).await;
+            let before = self
+                .hook(
+                    "PreToolUse",
+                    Some("agent"),
+                    tool_payload("agent", &args, None),
+                )
+                .await;
             if let Some(reason) = before.block {
-                jobs.push(Err(tools::Output::error(format!("A hook blocked this call: {reason}"))));
+                jobs.push(Err(tools::Output::error(format!(
+                    "A hook blocked this call: {reason}"
+                ))));
                 hooked.push(None);
                 continue;
             }
@@ -37,7 +51,12 @@ impl Agent {
                 hooked.push(None);
             } else {
                 hooked.push(Some(args.clone()));
-                jobs.push(self.child(&label, None, args["fork"].as_bool().unwrap_or(false), prompt));
+                jobs.push(self.child(
+                    &label,
+                    None,
+                    args["fork"].as_bool().unwrap_or(false),
+                    prompt,
+                ));
             }
         }
         let mut outputs = self.run_children(jobs, MAX_PARALLEL_AGENTS).await;
@@ -60,7 +79,13 @@ impl Agent {
             }
         };
         self.tool_start(id, &tools::summary("agent_swarm", &args, &self.ctx.cwd));
-        let before = self.hook("PreToolUse", Some("agent_swarm"), tool_payload("agent_swarm", &args, None)).await;
+        let before = self
+            .hook(
+                "PreToolUse",
+                Some("agent_swarm"),
+                tool_payload("agent_swarm", &args, None),
+            )
+            .await;
         if let Some(reason) = before.block {
             return tools::Output::error(format!("A hook blocked this call: {reason}"));
         }
@@ -72,14 +97,34 @@ impl Agent {
             return tools::Output::error(why);
         }
         self.swarm_used += prompts.len();
-        let description = args["description"].as_str().map(str::trim).filter(|d| !d.is_empty()).unwrap_or("swarm");
+        let description = args["description"]
+            .as_str()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .unwrap_or("swarm");
         let items: Vec<String> = prompts.iter().map(|(item, _)| item.clone()).collect();
-        self.partial_swarm = Some(PartialSwarm { id: id.into(), items: items.clone(), results: vec![None; items.len()] });
-        (self.sink)(Event::Swarm { id: id.into(), description: description.into(), items: items.clone() });
+        self.partial_swarm = Some(PartialSwarm {
+            id: id.into(),
+            items: items.clone(),
+            results: vec![None; items.len()],
+        });
+        (self.sink)(Event::Swarm {
+            id: id.into(),
+            description: description.into(),
+            items: items.clone(),
+        });
         let mut jobs = Vec::new();
         for (n, (_, prompt)) in prompts.into_iter().enumerate() {
-            let slot = Slot { swarm: id.into(), index: n };
-            jobs.push(self.child(&format!("{description} #{}", n + 1), Some(slot), false, prompt));
+            let slot = Slot {
+                swarm: id.into(),
+                index: n,
+            };
+            jobs.push(self.child(
+                &format!("{description} #{}", n + 1),
+                Some(slot),
+                false,
+                prompt,
+            ));
         }
         let outputs = self.run_children(jobs, self.settings.swarm_parallel).await;
         let mut report = swarm::report(&self.ctx, &items, &outputs, MAX_RESULT_BYTES);
@@ -115,7 +160,10 @@ impl Agent {
                     if output.is_error {
                         output
                     } else {
-                        output.brief(format!("{} requests, {} tool calls", stats.requests, stats.tool_calls))
+                        output.brief(format!(
+                            "{} requests, {} tool calls",
+                            stats.requests, stats.tool_calls
+                        ))
                     }
                 }
                 None => output,
@@ -127,7 +175,10 @@ impl Agent {
             }
             outputs[index] = Some(output);
         }
-        outputs.into_iter().map(|output| output.expect("every child finished")).collect()
+        outputs
+            .into_iter()
+            .map(|output| output.expect("every child finished"))
+            .collect()
     }
 
     async fn run_child(index: usize, job: Job) -> (usize, tools::Output, Option<Stats>) {
@@ -137,11 +188,17 @@ impl Agent {
         };
         (agent.sink)(Event::Started);
         let output = match agent.run(&prompt, &[]).await {
-            Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => tools::Output::ok(text),
-            Ok((_, stop)) => tools::Output::error(format!("The subagent stopped without a final report ({stop:?}).")),
+            Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => {
+                tools::Output::ok(text)
+            }
+            Ok((_, stop)) => tools::Output::error(format!(
+                "The subagent stopped without a final report ({stop:?})."
+            )),
             Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
         };
-        (agent.sink)(Event::Finished { is_error: output.is_error });
+        (agent.sink)(Event::Finished {
+            is_error: output.is_error,
+        });
         // Only its counts outlive it: its conversation and log file are freed here, not
         // when the slowest sibling of a swarm finishes.
         (index, output, Some(std::mem::take(&mut agent.stats)))
@@ -157,19 +214,37 @@ impl Agent {
     /// A subagent with the same model, system prompt and tools, so its requests hit the same
     /// cached prefix. A fork also starts with this conversation so far, already accounted as
     /// billed, so its size isn't estimated a second time on top of the parent's billing.
-    pub(super) fn subagent(&mut self, label: &str, slot: Option<Slot>, fork: bool) -> Result<Agent> {
+    pub(super) fn subagent(
+        &mut self,
+        label: &str,
+        slot: Option<Slot>,
+        fork: bool,
+    ) -> Result<Agent> {
         self.children += 1;
         let (mut session, used) = self.session.child(self.children)?;
         self.children = used;
-        let history: Vec<Value> =
-            if fork { self.messages[..self.current_reply].to_vec() } else { vec![self.messages[0].clone()] };
+        let history: Vec<Value> = if fork {
+            self.messages[..self.current_reply].to_vec()
+        } else {
+            vec![self.messages[0].clone()]
+        };
         let messages = Rc::new(history);
-        let (inherited_context, inherited_len) = if fork { (self.stats.context, messages.len()) } else { (0, 0) };
+        let (inherited_context, inherited_len) = if fork {
+            (self.stats.context, messages.len())
+        } else {
+            (0, 0)
+        };
         session.record(&json!({"type": "session", "id": session.id, "version": env!("CARGO_PKG_VERSION"), "model": self.client.model.alias, "context_window": self.client.model.context_window, "tools": *self.tools}))?;
         session.record(&json!({"type": "compaction", "messages": *messages}))?;
         let parent = self.sink.clone();
         let label = label.to_string();
-        let sink: Sink = Rc::new(move |event| parent(Event::Sub { label: label.clone(), slot: slot.clone(), event: Box::new(event) }));
+        let sink: Sink = Rc::new(move |event| {
+            parent(Event::Sub {
+                label: label.clone(),
+                slot: slot.clone(),
+                event: Box::new(event),
+            })
+        });
         let announce_plan = !fork && self.controls.plan.get();
         let mut agent = Agent {
             client: self.client.clone(),
@@ -181,7 +256,10 @@ impl Agent {
             messages,
             ctx: self.ctx.clone(),
             session,
-            stats: Stats { context: inherited_context, ..Stats::default() },
+            stats: Stats {
+                context: inherited_context,
+                ..Stats::default()
+            },
             controls: Controls {
                 steer: Rc::default(),
                 plan: self.controls.plan.clone(),

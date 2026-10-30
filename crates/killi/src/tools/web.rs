@@ -13,8 +13,8 @@ use regex::Regex;
 use serde_json::Value;
 use tokio::process::Command;
 
-use super::{Context, MAX_BYTES, Output, SearchSettings, files, spill, uint};
 use super::bash::{OwnSession, Tracked, track};
+use super::{Context, MAX_BYTES, Output, SearchSettings, files, spill, uint};
 use crate::llm::truncate;
 
 pub use fetch::fetch_url;

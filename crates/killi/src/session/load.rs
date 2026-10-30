@@ -45,7 +45,13 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
     // Splitting bytes on `\n` is safe: it never appears inside a multibyte UTF-8 sequence.
     let bytes = fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
     let mut skipped = 0;
-    let mut loaded = Loaded { messages: Vec::new(), tools: HashMap::new(), context: 0, choice: Choice::default(), goal: None };
+    let mut loaded = Loaded {
+        messages: Vec::new(),
+        tools: HashMap::new(),
+        context: 0,
+        choice: Choice::default(),
+        goal: None,
+    };
     for chunk in bytes.split(|b| *b == b'\n') {
         if chunk.is_empty() {
             continue;
@@ -69,7 +75,9 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
                 loaded.goal = entry["goal"].as_str().map(String::from);
             }
             Some("message") => {
-                if let (Some(id), Some(tool)) = (entry["message"]["tool_call_id"].as_str(), entry.get("tool")) {
+                if let (Some(id), Some(tool)) =
+                    (entry["message"]["tool_call_id"].as_str(), entry.get("tool"))
+                {
                     let end = ToolEnd {
                         is_error: tool["is_error"].as_bool().unwrap_or(false),
                         brief: tool["brief"].as_str().unwrap_or_default().to_string(),
@@ -87,14 +95,26 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
         }
     }
     let repaired = repair_dangling_calls(&mut loaded.messages);
-    if loaded.messages.first().is_none_or(|m| m["role"] != "system") {
-        bail!("{} has no system prompt; it isn't a killi session", path.display());
+    if loaded
+        .messages
+        .first()
+        .is_none_or(|m| m["role"] != "system")
+    {
+        bail!(
+            "{} has no system prompt; it isn't a killi session",
+            path.display()
+        );
     }
-    Ok(LoadReport { loaded, skipped, repaired })
+    Ok(LoadReport {
+        loaded,
+        skipped,
+        repaired,
+    })
 }
 
 /// A placeholder tool result, so a resumed session sends a history the provider accepts.
-const DANGLING_TOOL_RESULT: &str = "(no result: the session stopped before this tool call returned)";
+const DANGLING_TOOL_RESULT: &str =
+    "(no result: the session stopped before this tool call returned)";
 
 /// Gives every mid-history assistant tool call the log never answered a placeholder result
 /// right after its calls, and returns how many were inserted. A call at the very end is left
@@ -118,7 +138,9 @@ fn repair_dangling_calls(messages: &mut Vec<Value>) -> usize {
                 && !answered.contains(id)
             {
                 answered.insert(id);
-                placeholders.push(json!({"role": "tool", "tool_call_id": id, "content": DANGLING_TOOL_RESULT}));
+                placeholders.push(
+                    json!({"role": "tool", "tool_call_id": id, "content": DANGLING_TOOL_RESULT}),
+                );
             }
         }
         if !placeholders.is_empty() {

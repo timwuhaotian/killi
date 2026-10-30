@@ -31,7 +31,11 @@ pub fn build(cwd: &Path, skills: &Skills, guidance: &str) -> SystemPrompt {
     let files = instruction_files(cwd);
     let mut instructions = String::new();
     for (path, content) in &files {
-        instructions.push_str(&format!("\n<file path=\"{}\">\n{}\n</file>\n", path.display(), content.trim()));
+        instructions.push_str(&format!(
+            "\n<file path=\"{}\">\n{}\n</file>\n",
+            path.display(),
+            content.trim()
+        ));
     }
     if !files.is_empty() {
         text.push_str(
@@ -59,7 +63,11 @@ fn top_level(cwd: &Path) -> String {
         .filter(|e| e.depth() == 1)
         .map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            if e.file_type().is_some_and(|t| t.is_dir()) { format!("{name}/") } else { name }
+            if e.file_type().is_some_and(|t| t.is_dir()) {
+                format!("{name}/")
+            } else {
+                name
+            }
         })
         .collect();
     names.sort();
@@ -77,23 +85,44 @@ fn top_level(cwd: &Path) -> String {
 fn instruction_files(cwd: &Path) -> Vec<(PathBuf, String)> {
     let mut found = Vec::new();
     if let Some(global) = first_existing(&home().join(".agents"), &["AGENTS.md", "agents.md"]) {
-        push_nonempty(&mut found, global.clone(), fs::read_to_string(&global).unwrap_or_default());
+        push_nonempty(
+            &mut found,
+            global.clone(),
+            fs::read_to_string(&global).unwrap_or_default(),
+        );
     }
-    let root = cwd.ancestors().find(|dir| dir.join(".git").exists()).unwrap_or(cwd);
-    let mut chain: Vec<&Path> = cwd.ancestors().take_while(|dir| dir.starts_with(root)).collect();
+    let root = cwd
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(cwd);
+    let mut chain: Vec<&Path> = cwd
+        .ancestors()
+        .take_while(|dir| dir.starts_with(root))
+        .collect();
     chain.reverse();
     for dir in chain {
         if let Some(agents) = first_existing(dir, &["AGENTS.md", "agents.md"]) {
-            push_nonempty(&mut found, agents.clone(), fs::read_to_string(&agents).unwrap_or_default());
+            push_nonempty(
+                &mut found,
+                agents.clone(),
+                fs::read_to_string(&agents).unwrap_or_default(),
+            );
         } else if let Some(claude) = first_existing(dir, &["CLAUDE.md"]) {
-            push_nonempty(&mut found, claude.clone(), expand_imports(dir, &fs::read_to_string(&claude).unwrap_or_default()));
+            push_nonempty(
+                &mut found,
+                claude.clone(),
+                expand_imports(dir, &fs::read_to_string(&claude).unwrap_or_default()),
+            );
         }
     }
     found
 }
 
 fn first_existing(dir: &Path, names: &[&str]) -> Option<PathBuf> {
-    names.iter().map(|name| dir.join(name)).find(|path| path.is_file())
+    names
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
 }
 
 fn push_nonempty(found: &mut Vec<(PathBuf, String)>, path: PathBuf, content: String) {
@@ -128,7 +157,12 @@ fn today() -> String {
         libc::localtime_r(&now, &mut tm);
         tm
     };
-    format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday)
+    format!(
+        "{:04}-{:02}-{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday
+    )
 }
 
 #[cfg(test)]
@@ -169,7 +203,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("killi-prompt-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("RULES.md"), "be terse").unwrap();
-        assert_eq!(expand_imports(&dir, "intro\n@RULES.md\n@missing.md"), "intro\nbe terse\n@missing.md");
+        assert_eq!(
+            expand_imports(&dir, "intro\n@RULES.md\n@missing.md"),
+            "intro\nbe terse\n@missing.md"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }
@@ -187,7 +224,11 @@ pub struct Instructions {
 
 impl Instructions {
     pub fn new(cwd: &Path, loaded: &[PathBuf]) -> Self {
-        let root = cwd.ancestors().find(|dir| dir.join(".git").exists()).unwrap_or(cwd).to_path_buf();
+        let root = cwd
+            .ancestors()
+            .find(|dir| dir.join(".git").exists())
+            .unwrap_or(cwd)
+            .to_path_buf();
         Self {
             root,
             known: loaded.iter().cloned().collect(),
@@ -198,11 +239,15 @@ impl Instructions {
 
     /// Notes any AGENTS.md between the project root and `path` that the model hasn't seen.
     pub fn touched(&mut self, path: &Path) {
-        let Ok(relative) = path.strip_prefix(&self.root) else { return };
+        let Ok(relative) = path.strip_prefix(&self.root) else {
+            return;
+        };
         let mut dir = self.root.clone();
         for part in relative.parent().into_iter().flat_map(Path::components) {
             dir.push(part);
-            let Some(file) = first_existing(&dir, &["AGENTS.md", "agents.md", "CLAUDE.md"]) else { continue };
+            let Some(file) = first_existing(&dir, &["AGENTS.md", "agents.md", "CLAUDE.md"]) else {
+                continue;
+            };
             let file = fs::canonicalize(&file).unwrap_or(file);
             if self.known.insert(file.clone()) && path != file {
                 self.found.push(file.display().to_string());

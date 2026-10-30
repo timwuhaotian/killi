@@ -13,12 +13,12 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 pub use command::command_guide_if_first;
+pub(crate) use command::{confirm, read_line, read_secret};
 pub use edit::{remove_provider_key, set_backup_model, set_model_effort, set_search};
 pub use guide::{guide_model, init, set_up_if_missing};
-pub use import::{import_kimi, import_opencode, import_omp, import_pi};
+pub use import::{import_kimi, import_omp, import_opencode, import_pi};
 pub use models::{Added, Additions, NewModel, add_models};
 pub use muse::{add as add_muse, ours as muse_ours};
-pub(crate) use command::{confirm, read_line, read_secret};
 
 use edit::{set_default_model, set_provider_key};
 use guide::prompt_section;
@@ -30,7 +30,7 @@ use command::{agree, create_command_link, valid_command_name};
 #[cfg(test)]
 use guide::TEMPLATE;
 #[cfg(test)]
-use import::{import_opencode_from, import_omp_from, import_pi_from};
+use import::{import_omp_from, import_opencode_from, import_pi_from};
 #[cfg(test)]
 use models::with_models;
 
@@ -86,7 +86,11 @@ impl SearchConfig {
             api_key: self
                 .api_key
                 .clone()
-                .or_else(|| self.api_key_env.as_deref().and_then(|name| std::env::var(name).ok()))
+                .or_else(|| {
+                    self.api_key_env
+                        .as_deref()
+                        .and_then(|name| std::env::var(name).ok())
+                })
                 .filter(|key| !key.is_empty()),
         }
     }
@@ -175,7 +179,7 @@ pub struct Provider {
     pub custom_headers: BTreeMap<String, String>,
     /// Tool names the API refuses, as `killi's name = "the name sent and read back"`. Meta's
     /// API, for one, serves a Muse Code subscription only without another client's tool names,
-    /// so the Responses API carries the mapped names both ways.
+    /// so requests carry the mapped names and replies are read back under killi's.
     #[serde(default)]
     pub tool_names: BTreeMap<String, String>,
     /// A header that carries the conversation's ID on every request, for a gateway that routes
@@ -310,7 +314,9 @@ fn no_key_yet(alias: &str, provider: &Provider) -> String {
 /// What to do about a model that has no key, as `resolve` and a declined guide end on.
 fn no_key(alias: &str, name: &str, provider: &Provider) -> String {
     let advice = match provider.api_key_env {
-        Some(_) => format!("export it, or set api_key under [providers.{name}] in ~/.killi/config.toml, or start with -m <provider/model>"),
+        Some(_) => format!(
+            "export it, or set api_key under [providers.{name}] in ~/.killi/config.toml, or start with -m <provider/model>"
+        ),
         None => format!("set api_key under [providers.{name}] in ~/.killi/config.toml"),
     };
     format!("{}: {advice}", no_key_yet(alias, provider))
@@ -330,7 +336,9 @@ pub fn killi_home() -> PathBuf {
 }
 
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 #[cfg(test)]

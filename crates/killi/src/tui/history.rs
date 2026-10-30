@@ -5,8 +5,8 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use super::text::{hanging_indent, wrap, wrap_words};
 use super::fit;
+use super::text::{hanging_indent, wrap, wrap_words};
 
 /// Entries kept; the oldest are dropped past this, a few at a time.
 const KEPT: usize = 20_000;
@@ -33,10 +33,16 @@ impl Entry {
     /// The screen rows of this entry in a window `width` columns wide.
     pub fn render(&self, width: usize) -> Vec<String> {
         match self {
-            Entry::Row(line) => clean(line).split('\n').flat_map(|part| wrap_words(part, width, hanging_indent(part))).collect(),
+            Entry::Row(line) => clean(line)
+                .split('\n')
+                .flat_map(|part| wrap_words(part, width, hanging_indent(part)))
+                .collect(),
             Entry::Words(line, indent) => wrap_words(&clean(line), width, *indent),
             Entry::Fit(line) => vec![fit(&clean(line), width)],
-            Entry::Block(render) => render(width).iter().flat_map(|row| wrap(&clean(row), width)).collect(),
+            Entry::Block(render) => render(width)
+                .iter()
+                .flat_map(|row| wrap(&clean(row), width))
+                .collect(),
         }
     }
 }
@@ -45,7 +51,10 @@ impl Entry {
 /// other control characters (not a line break or an escape sequence) go. Left in a row painted
 /// at a fixed place, they would run it over its neighbours.
 fn clean(text: &str) -> Cow<'_, str> {
-    if !text.chars().any(|c| c.is_control() && c != '\n' && c != '\x1b') {
+    if !text
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\x1b')
+    {
         return Cow::Borrowed(text);
     }
     let mut clean = String::with_capacity(text.len());
@@ -77,7 +86,10 @@ pub struct History {
 
 impl History {
     pub fn new(width: usize) -> Self {
-        Self { width, ..Self::default() }
+        Self {
+            width,
+            ..Self::default()
+        }
     }
 
     /// Adds an entry. A view scrolled back stays on what it shows.
@@ -89,7 +101,9 @@ impl History {
         }
         if self.entries.len() >= KEPT + DROPPED_AT_ONCE {
             self.entries.drain(..DROPPED_AT_ONCE);
-            self.banner = self.banner.and_then(|(start, len)| start.checked_sub(DROPPED_AT_ONCE).map(|start| (start, len)));
+            self.banner = self.banner.and_then(|(start, len)| {
+                start.checked_sub(DROPPED_AT_ONCE).map(|start| (start, len))
+            });
             self.layout();
         }
     }
@@ -230,7 +244,9 @@ mod tests {
     fn the_view_shows_the_newest_rows_or_all_of_a_short_conversation() {
         let mut history = history(80, rows(0, 3));
         assert_eq!(history.view(5), ["row 0", "row 1", "row 2"]);
-        rows(3, 10).into_iter().for_each(|entry| history.push(entry));
+        rows(3, 10)
+            .into_iter()
+            .for_each(|entry| history.push(entry));
         assert_eq!(history.view(4), ["row 6", "row 7", "row 8", "row 9"]);
     }
 
@@ -240,7 +256,9 @@ mod tests {
         history.scroll_up(3, 4);
         assert_eq!(history.view(4), ["row 3", "row 4", "row 5", "row 6"]);
         assert_eq!(history.below(4), 3);
-        rows(10, 12).into_iter().for_each(|entry| history.push(entry));
+        rows(10, 12)
+            .into_iter()
+            .for_each(|entry| history.push(entry));
         assert_eq!(history.view(4), ["row 3", "row 4", "row 5", "row 6"]);
         history.scroll_up(100, 4);
         assert_eq!(history.view(4), ["row 0", "row 1", "row 2", "row 3"]);
@@ -261,25 +279,61 @@ mod tests {
     #[test]
     fn never_two_blank_rows_in_a_row() {
         let blank = || Entry::Row(String::new());
-        let history = history(80, vec![Entry::Row("a".into()), blank(), blank(), Entry::Block(Rc::new(|_| vec![String::new(), "b".into()]))]);
+        let history = history(
+            80,
+            vec![
+                Entry::Row("a".into()),
+                blank(),
+                blank(),
+                Entry::Block(Rc::new(|_| vec![String::new(), "b".into()])),
+            ],
+        );
         assert_eq!(history.rows(), ["a", "", "b"]);
     }
 
     #[test]
     fn a_wider_window_lays_entries_out_again_and_a_narrower_one_too() {
         let line = "one two three four five six".to_string();
-        let mut history = history(80, vec![Entry::Words(line.clone(), 2), Entry::Fit(line.clone()), Entry::Row(line)]);
+        let mut history = history(
+            80,
+            vec![
+                Entry::Words(line.clone(), 2),
+                Entry::Fit(line.clone()),
+                Entry::Row(line),
+            ],
+        );
         assert_eq!(history.rows(), ["one two three four five six"; 3]);
         history.set_width(12);
-        let plain: Vec<String> = history.rows().iter().map(|row| row.replace("\x1b[0m", "")).collect();
-        assert_eq!(plain, ["one two", "  three four", "  five six", "one two thr…", "one two", "three four", "five six"]);
+        let plain: Vec<String> = history
+            .rows()
+            .iter()
+            .map(|row| row.replace("\x1b[0m", ""))
+            .collect();
+        assert_eq!(
+            plain,
+            [
+                "one two",
+                "  three four",
+                "  five six",
+                "one two thr…",
+                "one two",
+                "three four",
+                "five six"
+            ]
+        );
         history.set_width(80);
         assert_eq!(history.rows(), ["one two three four five six"; 3]);
     }
 
     #[test]
     fn tabs_and_carriage_returns_cannot_move_the_cursor() {
-        let history = history(80, vec![Entry::Row("a\tb\rc\x07d".into()), Entry::Fit("\x1b[1mx\ty".into())]);
+        let history = history(
+            80,
+            vec![
+                Entry::Row("a\tb\rc\x07d".into()),
+                Entry::Fit("\x1b[1mx\ty".into()),
+            ],
+        );
         assert_eq!(history.rows(), ["a    bcd", "\x1b[1mx    y"]);
     }
 
@@ -320,7 +374,9 @@ mod tests {
         history.banner_starts();
         rows(0, 2).into_iter().for_each(|entry| history.push(entry));
         history.banner_ends();
-        rows(2, KEPT + DROPPED_AT_ONCE).into_iter().for_each(|entry| history.push(entry));
+        rows(2, KEPT + DROPPED_AT_ONCE)
+            .into_iter()
+            .for_each(|entry| history.push(entry));
         assert!(history.cut_banner().is_none());
     }
 
@@ -331,7 +387,12 @@ mod tests {
         assert_eq!(history.row(6), Some("row 6"));
         history.scroll_up(3, 4);
         let (first, end) = history.span(4);
-        assert_eq!(history.view(4), (first..end).map(|i| history.row(i).unwrap()).collect::<Vec<_>>());
+        assert_eq!(
+            history.view(4),
+            (first..end)
+                .map(|i| history.row(i).unwrap())
+                .collect::<Vec<_>>()
+        );
         assert_eq!(history.row(10), None);
     }
 
@@ -346,9 +407,16 @@ mod tests {
         assert_ne!(history.epoch(), laid_out);
         let relaid = history.epoch();
         history.set_width(40);
-        assert_eq!(history.epoch(), relaid, "the same width lays nothing out again");
+        assert_eq!(
+            history.epoch(),
+            relaid,
+            "the same width lays nothing out again"
+        );
         history.clear();
-        assert!(history.epoch() > relaid, "a cleared conversation is not the one before");
+        assert!(
+            history.epoch() > relaid,
+            "a cleared conversation is not the one before"
+        );
     }
 
     #[test]

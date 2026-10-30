@@ -31,7 +31,9 @@ pub fn url() -> String {
 
 /// Where killi keeps the settings it mounts into the container.
 pub fn settings_path() -> PathBuf {
-    crate::config::killi_home().join("searxng").join("settings.yml")
+    crate::config::killi_home()
+        .join("searxng")
+        .join("settings.yml")
 }
 
 /// The settings the instance runs with: the image's defaults, the json format `web_search`
@@ -46,7 +48,9 @@ pub fn settings_yaml(secret: &str) -> String {
 /// A fresh 32-hex-character session secret.
 fn secret() -> Result<String, String> {
     let mut bytes = [0u8; 16];
-    ring::rand::SystemRandom::new().fill(&mut bytes).map_err(|_| "the system's random source failed".to_string())?;
+    ring::rand::SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| "the system's random source failed".to_string())?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -54,9 +58,16 @@ fn secret() -> Result<String, String> {
 /// only, with killi's settings mounted read-only.
 pub fn run_args(settings: &Path) -> Vec<String> {
     [
-        "run", "-d", "--name", CONTAINER, "--restart", "unless-stopped",
-        "-p", &format!("127.0.0.1:{PORT}:8080"),
-        "-v", &format!("{}:/etc/searxng/settings.yml:ro", settings.display()),
+        "run",
+        "-d",
+        "--name",
+        CONTAINER,
+        "--restart",
+        "unless-stopped",
+        "-p",
+        &format!("127.0.0.1:{PORT}:8080"),
+        "-v",
+        &format!("{}:/etc/searxng/settings.yml:ro", settings.display()),
         IMAGE,
     ]
     .into_iter()
@@ -77,9 +88,14 @@ async fn docker(args: &[&str]) -> Result<String, String> {
         .output()
         .await;
     match run {
-        Ok(out) if out.status.success() => Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()),
+        Ok(out) if out.status.success() => {
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        }
         Ok(out) => {
-            let said = String::from_utf8_lossy(&out.stderr).split_whitespace().collect::<Vec<_>>().join(" ");
+            let said = String::from_utf8_lossy(&out.stderr)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             let said = crate::llm::truncate(&said, 300);
             if said.contains("Cannot connect") {
                 Err("Docker isn't running; start it and pick SearXNG again.".to_string())
@@ -87,9 +103,9 @@ async fn docker(args: &[&str]) -> Result<String, String> {
                 Err(format!("`docker {}` failed: {said}", args.join(" ")))
             }
         }
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            Err("Docker isn't installed; get it from docker.com, or use an instance you run.".into())
-        }
+        Err(e) if e.kind() == ErrorKind::NotFound => Err(
+            "Docker isn't installed; get it from docker.com, or use an instance you run.".into(),
+        ),
         Err(e) => Err(format!("could not run docker: {e}")),
     }
 }
@@ -100,19 +116,27 @@ async fn docker(args: &[&str]) -> Result<String, String> {
 pub async fn start_searxng() -> Result<String, String> {
     let everything = async {
         let base = url();
-        if wait_ready(&base, PROBE_EVERY, Duration::from_secs(2)).await.is_ok() {
+        if wait_ready(&base, PROBE_EVERY, Duration::from_secs(2))
+            .await
+            .is_ok()
+        {
             return Ok(base);
         }
         docker(&["version", "--format", "{{.Server.Version}}"]).await?;
         let path = settings_path();
         let yaml = settings_yaml(&secret()?);
-        crate::fs_atomic::write(&path, yaml.as_bytes(), None).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        crate::fs_atomic::write(&path, yaml.as_bytes(), None)
+            .map_err(|e| format!("could not write {}: {e}", path.display()))?;
         if docker(&["container", "inspect", CONTAINER]).await.is_ok() {
-            docker(&["restart", CONTAINER]).await.map_err(|e| format!("could not restart the container: {e}"))?;
+            docker(&["restart", CONTAINER])
+                .await
+                .map_err(|e| format!("could not restart the container: {e}"))?;
         } else {
             let args = run_args(&path);
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            docker(&refs).await.map_err(|e| format!("could not start the container: {e}"))?;
+            docker(&refs)
+                .await
+                .map_err(|e| format!("could not start the container: {e}"))?;
         }
         let base = url();
         wait_ready(&base, PROBE_EVERY, START_TIMEOUT).await?;
@@ -133,7 +157,11 @@ pub(super) async fn wait_ready(base: &str, per: Duration, budget: Duration) -> R
         .map_err(|e| format!("could not create an HTTP client: {e}"))?;
     let deadline = Instant::now() + budget;
     loop {
-        let probe = client.get(format!("{}/search", base.trim_end_matches('/'))).query(&[("q", "searxng"), ("format", "json")]).send().await;
+        let probe = client
+            .get(format!("{}/search", base.trim_end_matches('/')))
+            .query(&[("q", "searxng"), ("format", "json")])
+            .send()
+            .await;
         if let Ok(reply) = probe
             && reply.status().is_success()
             && let Ok(body) = reply.text().await

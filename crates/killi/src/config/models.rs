@@ -53,10 +53,19 @@ impl Added {
         if self.aliases.is_empty() {
             return format!("Its models are already in {}.", self.path.display());
         }
-        let mut out = format!("Added to {}: {}.", self.path.display(), self.aliases.join(", "));
+        let mut out = format!(
+            "Added to {}: {}.",
+            self.path.display(),
+            self.aliases.join(", ")
+        );
         match &self.starts_on {
-            Some(default) if self.aliases.contains(default) => out.push_str(&format!("\nkilli starts on `{default}`; /model picks another.")),
-            _ => out.push_str(&format!("\nStart on one with `killi -m {}`, or pick it with /model.", self.aliases[0])),
+            Some(default) if self.aliases.contains(default) => out.push_str(&format!(
+                "\nkilli starts on `{default}`; /model picks another."
+            )),
+            _ => out.push_str(&format!(
+                "\nStart on one with `killi -m {}`, or pick it with /model.",
+                self.aliases[0]
+            )),
         }
         out
     }
@@ -75,10 +84,18 @@ pub fn add_models(additions: &Additions) -> Result<Added> {
     let (out, name, existed, added) = with_models(text.as_deref().unwrap_or_default(), additions)?;
     match &text {
         Some(text) if *text == out => {}
-        Some(_) => crate::fs_atomic::write(&path, out.as_bytes(), None).with_context(|| format!("could not write {}", path.display()))?,
+        Some(_) => crate::fs_atomic::write(&path, out.as_bytes(), None)
+            .with_context(|| format!("could not write {}", path.display()))?,
         None => {
-            fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
-            let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&dir)?;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)?;
             file.write_all(out.as_bytes())?;
             file.write_all(prompt_section().as_bytes())?;
         }
@@ -91,19 +108,38 @@ pub fn add_models(additions: &Additions) -> Result<Added> {
         Some(default) if added.iter().any(|alias| alias == default) => Some(default.to_string()),
         _ => None,
     };
-    Ok(Added { path, aliases: added, starts_on })
+    Ok(Added {
+        path,
+        aliases: added,
+        starts_on,
+    })
 }
 
 /// The config text with the additions at the end and the rest left as it is, the provider's
 /// name, whether the config had it already, and the aliases added.
-pub(super) fn with_models(text: &str, additions: &Additions) -> Result<(String, String, bool, Vec<String>)> {
+pub(super) fn with_models(
+    text: &str,
+    additions: &Additions,
+) -> Result<(String, String, bool, Vec<String>)> {
     let config: Config = toml::from_str(text).context("invalid config")?;
-    let existing = config.find_provider(additions.ours).map(|(name, _)| name.to_string());
+    let existing = config
+        .find_provider(additions.ours)
+        .map(|(name, _)| name.to_string());
     let name = existing.clone().unwrap_or_else(|| {
         let taken = |name: &String| config.providers.contains_key(name);
-        std::iter::once(additions.name.to_string()).chain((2..).map(|n| format!("{}-{n}", additions.name))).find(|name| !taken(name)).unwrap_or_default()
+        std::iter::once(additions.name.to_string())
+            .chain((2..).map(|n| format!("{}-{n}", additions.name)))
+            .find(|name| !taken(name))
+            .unwrap_or_default()
     });
-    let strings = |items: Vec<&str>| toml::Value::Array(items.into_iter().map(|item| toml::Value::String(item.to_string())).collect());
+    let strings = |items: Vec<&str>| {
+        toml::Value::Array(
+            items
+                .into_iter()
+                .map(|item| toml::Value::String(item.to_string()))
+                .collect(),
+        )
+    };
     let mut entries = toml::Table::new();
     let mut added = Vec::new();
     for model in &additions.models {
@@ -126,7 +162,11 @@ pub(super) fn with_models(text: &str, additions: &Additions) -> Result<(String, 
         if let Some(output) = model.output {
             entry.insert("max_output_size".into(), toml_int(output));
         }
-        let capabilities = [(model.images, "image_in"), (model.thinking, "thinking"), (model.tools, "tool_use")];
+        let capabilities = [
+            (model.images, "image_in"),
+            (model.thinking, "thinking"),
+            (model.tools, "tool_use"),
+        ];
         let capabilities: Vec<&str> = capabilities
             .into_iter()
             .filter(|(has, _)| *has)
@@ -141,7 +181,10 @@ pub(super) fn with_models(text: &str, additions: &Additions) -> Result<(String, 
             entry.insert("default_effort".into(), effort.clone().into());
         }
         if !model.efforts.is_empty() {
-            entry.insert("support_efforts".into(), strings(model.efforts.iter().map(String::as_str).collect()));
+            entry.insert(
+                "support_efforts".into(),
+                strings(model.efforts.iter().map(String::as_str).collect()),
+            );
         }
         entries.insert(alias.clone(), entry.into());
         added.push(alias);
@@ -151,7 +194,10 @@ pub(super) fn with_models(text: &str, additions: &Additions) -> Result<(String, 
     }
     let mut out = String::new();
     if config.default_model.is_none() && !added.is_empty() {
-        out.push_str(&format!("default_model = {}\n", toml::Value::String(added[0].clone())));
+        out.push_str(&format!(
+            "default_model = {}\n",
+            toml::Value::String(added[0].clone())
+        ));
     }
     out.push_str(text);
     if !out.is_empty() && !out.ends_with('\n') {
@@ -159,12 +205,21 @@ pub(super) fn with_models(text: &str, additions: &Additions) -> Result<(String, 
     }
     out.push_str(&format!("\n# {}\n", additions.comment));
     if existing.is_none() {
-        let providers = toml::Table::from_iter([(name.clone(), toml::Value::Table(additions.provider.clone()))]);
-        out.push_str(&toml::to_string(&toml::Table::from_iter([("providers".to_string(), toml::Value::Table(providers))]))?);
+        let providers = toml::Table::from_iter([(
+            name.clone(),
+            toml::Value::Table(additions.provider.clone()),
+        )]);
+        out.push_str(&toml::to_string(&toml::Table::from_iter([(
+            "providers".to_string(),
+            toml::Value::Table(providers),
+        )]))?);
     }
     if !entries.is_empty() {
         out.push('\n');
-        out.push_str(&toml::to_string(&toml::Table::from_iter([("models".to_string(), toml::Value::Table(entries))]))?);
+        out.push_str(&toml::to_string(&toml::Table::from_iter([(
+            "models".to_string(),
+            toml::Value::Table(entries),
+        )]))?);
     }
     toml::from_str::<Config>(&out).context("adding the models would break the config")?;
     Ok((out, name, existing.is_some(), added))

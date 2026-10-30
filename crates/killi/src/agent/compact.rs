@@ -29,13 +29,14 @@ const REDUCED_RECENT_MESSAGES: usize = 8;
 
 impl Agent {
     pub(super) fn compaction_due(&self) -> bool {
-        self.compaction_pressure().is_some_and(|(context, suffix, limit, reserve)| {
-            let size = context.saturating_add(suffix);
-            // Compacting again is worth it only once the conversation has grown by a fifth of
-            // the limit since the last compaction: a summary that left the history at that
-            // size would otherwise compact before every step, each time to the same result.
-            size > limit - reserve && size >= self.compact_floor + limit / 5
-        })
+        self.compaction_pressure()
+            .is_some_and(|(context, suffix, limit, reserve)| {
+                let size = context.saturating_add(suffix);
+                // Compacting again is worth it only once the conversation has grown by a fifth of
+                // the limit since the last compaction: a summary that left the history at that
+                // size would otherwise compact before every step, each time to the same result.
+                size > limit - reserve && size >= self.compact_floor + limit / 5
+            })
     }
 
     /// Why compaction is or isn't due: billed context and estimated suffix against the limit
@@ -56,8 +57,14 @@ impl Agent {
         if limit == 0 {
             return None;
         }
-        let suffix = estimate_tokens(&self.messages[self.accounted_messages.min(self.messages.len())..]);
-        let reserve = self.client.model.max_output.unwrap_or(DEFAULT_OUTPUT_RESERVE).min(limit / 4);
+        let suffix =
+            estimate_tokens(&self.messages[self.accounted_messages.min(self.messages.len())..]);
+        let reserve = self
+            .client
+            .model
+            .max_output
+            .unwrap_or(DEFAULT_OUTPUT_RESERVE)
+            .min(limit / 4);
         Some((self.stats.context, suffix, limit, reserve))
     }
 
@@ -67,7 +74,11 @@ impl Agent {
         self.compact_with(focus, CompactMode::Full).await
     }
 
-    pub(super) async fn compact_with(&mut self, focus: Option<&str>, mode: CompactMode) -> Result<()> {
+    pub(super) async fn compact_with(
+        &mut self,
+        focus: Option<&str>,
+        mode: CompactMode,
+    ) -> Result<()> {
         (self.sink)(Event::Notice("Compacting the conversation…".into()));
         // Taken before the summary request accounts its own usage over these numbers.
         let (context, suffix, limit, reserve) = self.compaction_pressure().unwrap_or_default();
@@ -77,32 +88,55 @@ impl Agent {
         };
         let mut instruction = COMPACT_INSTRUCTION.to_string();
         if let Some(focus) = focus.filter(|f| !f.trim().is_empty()) {
-            instruction.push_str(&format!("\nThe user asked the summary to focus on: {focus}"));
+            instruction.push_str(&format!(
+                "\nThe user asked the summary to focus on: {focus}"
+            ));
         }
         let instruction = json!({"role": "user", "content": instruction});
         request.push(instruction.clone());
-        let reply = match self.client.complete(&request, &self.tools, &self.session.id, &mut |_| {}).await {
+        let reply = match self
+            .client
+            .complete(&request, &self.tools, &self.session.id, &mut |_| {})
+            .await
+        {
             // Too long to be read even to summarize it: summarize it with its bulk cut.
             Err(error) if mode == CompactMode::Full && is_overflow(&error) => {
                 request = reduced(&self.messages);
                 request.push(instruction);
-                self.client.complete(&request, &self.tools, &self.session.id, &mut |_| {}).await?
+                self.client
+                    .complete(&request, &self.tools, &self.session.id, &mut |_| {})
+                    .await?
             }
             reply => reply?,
         };
         self.stats.requests += 1;
-        self.account(&reply.usage, None, None, reply.reasoning_kept(), reasoning_evidence(&reply))?;
+        self.account(
+            &reply.usage,
+            None,
+            None,
+            reply.reasoning_kept(),
+            reasoning_evidence(&reply),
+        )?;
         if reply.text.trim().is_empty() {
             let instead = if reply.tool_calls.is_empty() {
                 match reply.reasoning.is_empty() {
                     true => "returned an empty summary".to_string(),
-                    false => format!("only reasoned, {} characters, and wrote no summary", reply.reasoning.chars().count()),
+                    false => format!(
+                        "only reasoned, {} characters, and wrote no summary",
+                        reply.reasoning.chars().count()
+                    ),
                 }
             } else {
-                let names: Vec<&str> = reply.tool_calls.iter().map(|call| call.name.as_str()).collect();
+                let names: Vec<&str> = reply
+                    .tool_calls
+                    .iter()
+                    .map(|call| call.name.as_str())
+                    .collect();
                 format!("called {} instead of writing a summary", names.join(", "))
             };
-            self.session.record(&json!({"type": "warn", "message": format!("Compaction: the model {instead}.")}))?;
+            self.session.record(
+                &json!({"type": "warn", "message": format!("Compaction: the model {instead}.")}),
+            )?;
             bail!("the model {instead}, so the conversation was left as it was");
         }
         let mut kept = Vec::new();
@@ -115,13 +149,19 @@ impl Agent {
             kept.push(prompt);
         }
         kept.reverse();
-        let requests: String = kept.iter().map(|p| format!("<request>\n{}\n</request>\n", kept_prompt(p))).collect();
+        let requests: String = kept
+            .iter()
+            .map(|p| format!("<request>\n{}\n</request>\n", kept_prompt(p)))
+            .collect();
         let summary = format!(
             "{mark} to save space. Below are the user's requests so far, word for word, and a summary of the work. Continue from where it left off; don't redo finished work.</system-reminder>\n\n<user-requests>\n{requests}</user-requests>\n\n<summary>\n{}\n</summary>",
             reply.text.trim(),
             mark = crate::session::COMPACTED_MARK,
         );
-        self.messages = Rc::new(vec![self.messages[0].clone(), json!({"role": "user", "content": summary})]);
+        self.messages = Rc::new(vec![
+            self.messages[0].clone(),
+            json!({"role": "user", "content": summary}),
+        ]);
         // The reminders for plan mode, swarm mode and the other sessions went with the old
         // messages: the next step tells the model again what is still on.
         self.plan_announced = false;
@@ -171,14 +211,20 @@ impl Agent {
                             None => tools::Output::error("Interrupted by the user before this subagent finished, so it has no result."),
                         })
                         .collect();
-                    neutralize_reminder_tags(&swarm::report(&self.ctx, &partial.items, &outputs, MAX_RESULT_BYTES).text).into_owned()
+                    neutralize_reminder_tags(
+                        &swarm::report(&self.ctx, &partial.items, &outputs, MAX_RESULT_BYTES).text,
+                    )
+                    .into_owned()
                 }
                 _ => "Interrupted by the user before this finished.".to_string(),
             };
             self.push(json!({"role": "tool", "tool_call_id": id, "content": content}))?;
         }
         if !missing.is_empty()
-            || self.messages.last().is_some_and(|m| m["role"] == "user" || m["role"] == "tool")
+            || self
+                .messages
+                .last()
+                .is_some_and(|m| m["role"] == "user" || m["role"] == "tool")
         {
             self.interrupted = true;
         }
@@ -213,16 +259,32 @@ impl Agent {
             tail_start += 1;
         }
         let saved = match tools::spill(&self.ctx, "result", text) {
-            Some(path) => format!("The full result is saved at {}; read it with offset and limit.", path.display()),
+            Some(path) => format!(
+                "The full result is saved at {}; read it with offset and limit.",
+                path.display()
+            ),
             None => "The full result could not be saved.".into(),
         };
-        format!("{head}\n\n[… {} characters omitted. {saved}]\n\n{}", tail_start - head.len(), &text[tail_start..])
+        format!(
+            "{head}\n\n[… {} characters omitted. {saved}]\n\n{}",
+            tail_start - head.len(),
+            &text[tail_start..]
+        )
     }
 
     /// Tool-call IDs limited to `[A-Za-z0-9_-]` and 64 characters, unique in the session.
     pub(super) fn unique_id(&mut self, raw: &str) -> String {
-        let mut id: String =
-            raw.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).take(64).collect();
+        let mut id: String = raw
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(64)
+            .collect();
         if id.is_empty() {
             id = format!("call_{}", self.ids.len() + 1);
         }
@@ -258,7 +320,11 @@ pub(super) fn kept_prompt(prompt: &str) -> String {
     if chars <= KEPT_PROMPT_CHARS {
         return prompt.to_string();
     }
-    format!("{}\n[… {} characters cut]", truncate(prompt, KEPT_PROMPT_CHARS), chars - KEPT_PROMPT_CHARS)
+    format!(
+        "{}\n[… {} characters cut]",
+        truncate(prompt, KEPT_PROMPT_CHARS),
+        chars - KEPT_PROMPT_CHARS
+    )
 }
 
 /// A conservative character-based estimate for history appended since the last usage report.
@@ -267,17 +333,28 @@ pub(super) fn kept_prompt(prompt: &str) -> String {
 /// about 1.5k tokens, and counted as text it compacted conversations of 8k tokens.
 pub(super) fn estimate_tokens(messages: &[Value]) -> u64 {
     messages.iter().fold(0_u64, |total, message| {
-        total.saturating_add(estimate_chars(message).div_ceil(2)).saturating_add(4)
+        total
+            .saturating_add(estimate_chars(message).div_ceil(2))
+            .saturating_add(4)
     })
 }
 
 /// Characters of `value` serialized, with each inline image's data replaced by its reserve.
 fn estimate_chars(value: &Value) -> u64 {
     match value {
-        Value::String(text) if text.starts_with("data:") && text.contains(";base64,") => IMAGE_TOKEN_RESERVE * 2,
-        Value::Array(values) => values.iter().fold(2, |total, value| total.saturating_add(estimate_chars(value)).saturating_add(1)),
+        Value::String(text) if text.starts_with("data:") && text.contains(";base64,") => {
+            IMAGE_TOKEN_RESERVE * 2
+        }
+        Value::Array(values) => values.iter().fold(2, |total, value| {
+            total
+                .saturating_add(estimate_chars(value))
+                .saturating_add(1)
+        }),
         Value::Object(values) => values.iter().fold(2, |total, (key, value)| {
-            total.saturating_add(key.chars().count() as u64).saturating_add(4).saturating_add(estimate_chars(value))
+            total
+                .saturating_add(key.chars().count() as u64)
+                .saturating_add(4)
+                .saturating_add(estimate_chars(value))
         }),
         other => other.to_string().chars().count() as u64,
     }
@@ -298,8 +375,15 @@ pub(super) fn reduced(messages: &[Value]) -> Vec<Value> {
                 return message;
             }
             if role == "tool" {
-                if let Some(text) = message["content"].as_str().filter(|t| t.len() > REDUCED_RESULT_CHARS) {
-                    message["content"] = format!("{}\n[… cut to fit the context window]", truncate(text, REDUCED_RESULT_CHARS)).into();
+                if let Some(text) = message["content"]
+                    .as_str()
+                    .filter(|t| t.len() > REDUCED_RESULT_CHARS)
+                {
+                    message["content"] = format!(
+                        "{}\n[… cut to fit the context window]",
+                        truncate(text, REDUCED_RESULT_CHARS)
+                    )
+                    .into();
                 }
                 return message;
             }
@@ -311,7 +395,8 @@ pub(super) fn reduced(messages: &[Value]) -> Vec<Value> {
             }
             let protected_user = role == "user"
                 && message["content"].as_str().is_some_and(|text| {
-                    text.starts_with(crate::session::COMPACTED_MARK) || text.contains("<system-reminder>")
+                    text.starts_with(crate::session::COMPACTED_MARK)
+                        || text.contains("<system-reminder>")
                 });
             if matches!(role.as_str(), "assistant" | "user") && !protected_user {
                 match message.get_mut("content") {
@@ -334,7 +419,9 @@ pub(super) fn reduced(messages: &[Value]) -> Vec<Value> {
                     .iter()
                     .map(|key| message.get(*key).map_or(0, |value| value.to_string().len()))
                     .sum::<usize>()
-                    + message.get("reasoning_items").map_or(0, |value| value.to_string().len());
+                    + message
+                        .get("reasoning_items")
+                        .map_or(0, |value| value.to_string().len());
                 if reasoning_size > REDUCED_REASONING_CHARS {
                     let object = message.as_object_mut().expect("a message is an object");
                     for key in crate::llm::REASONING_KEYS {

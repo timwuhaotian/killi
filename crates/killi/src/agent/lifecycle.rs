@@ -62,7 +62,11 @@ impl Agent {
         controls: Controls,
         sink: Sink,
     ) -> Result<Self> {
-        let crate::session::LoadReport { loaded, skipped, repaired } = report;
+        let crate::session::LoadReport {
+            loaded,
+            skipped,
+            repaired,
+        } = report;
         let session = Session::open(log)?;
         // A resumed session keeps its goal, re-announced on its first step even when the
         // log still holds the reminder: compaction may have summarized it away.
@@ -208,7 +212,9 @@ impl Agent {
 
     /// The backup model this session falls back to, as configured.
     pub fn backup_alias(&self) -> Option<&str> {
-        self.backup.as_ref().map(|client| client.model.alias.as_str())
+        self.backup
+            .as_ref()
+            .map(|client| client.model.alias.as_str())
     }
 
     /// The session goal set with `/goal`, if any.
@@ -252,7 +258,9 @@ impl Agent {
 
     fn record_model(&mut self) -> Result<()> {
         let model = &self.client.model;
-        self.session.record(&json!({"type": "model", "model": model.alias, "effort": model.thinking.label()}))
+        self.session.record(
+            &json!({"type": "model", "model": model.alias, "effort": model.thinking.label()}),
+        )
     }
 
     /// The model and effort this session runs on now, for a fresh session to start on.
@@ -276,13 +284,15 @@ impl Agent {
     /// Replaces the system prompt and settings on purpose, for /reload; the next request is
     /// uncached.
     pub fn reload_system(&mut self, system: &str, settings: Settings) -> Result<()> {
-        self.instructions = crate::prompt::Instructions::new(&self.ctx.cwd, &settings.instruction_files);
+        self.instructions =
+            crate::prompt::Instructions::new(&self.ctx.cwd, &settings.instruction_files);
         let search = settings.search.clone();
         self.settings = Rc::new(settings);
         *self.ctx.search.borrow_mut() = search;
         Rc::make_mut(&mut self.messages)[0] = json!({"role": "system", "content": system});
         self.share();
-        self.session.record(&json!({"type": "compaction", "messages": *self.messages}))
+        self.session
+            .record(&json!({"type": "compaction", "messages": *self.messages}))
     }
 
     pub fn model_alias(&self) -> &str {
@@ -292,7 +302,9 @@ impl Agent {
     /// Whether a provider failure was the primary rate-limiting its requests — not a spent
     /// quota or anything else — which is the only failure that switches a session to its backup.
     pub(super) fn is_rate_limited(error: &anyhow::Error) -> bool {
-        error.downcast_ref::<ProviderError>().is_some_and(|provider| provider.kind == ErrorKind::RateLimited)
+        error
+            .downcast_ref::<ProviderError>()
+            .is_some_and(|provider| provider.kind == ErrorKind::RateLimited)
     }
 
     /// Whether the model takes images (`image_in` in its capabilities).
