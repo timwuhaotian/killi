@@ -79,7 +79,11 @@ fn parse_edits(args: &Value) -> Result<Vec<Edit>, String> {
     };
     let list = match list {
         Value::String(s) => {
-            serde_json::from_str(s).map_err(|e| format!("`edits` is not valid JSON: {e}"))?
+            serde_json::from_str(s).map_err(|e| {
+                format!(
+                    "`edits` is not valid JSON ({e}). Send `edits` as a list of {{old_string, new_string}} objects, not as a string."
+                )
+            })?
         }
         other => other.clone(),
     };
@@ -157,8 +161,9 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
     ranges.sort_unstable();
     for pair in ranges.windows(2) {
         if pair[1].0 < pair[0].1 {
+            let line = text[..pair[1].0].matches('\n').count() + 1;
             return Err(format!(
-                "edits[{}] and edits[{}] overlap in {path}. Merge them into one edit.",
+                "edits[{}] and edits[{}] overlap in {path} at line {line}. Merge them into one edit.",
                 pair[0].2, pair[1].2
             ));
         }
@@ -549,6 +554,29 @@ mod tests {
             ]}),
         );
         assert!(err.unwrap_err().contains("overlap"));
+    }
+
+    #[test]
+    fn overlap_error_names_the_line() {
+        let err = run(
+            "one\ntwo\nthree\n",
+            json!({"edits": [
+                {"old_string": "two\nthree", "new_string": "1"},
+                {"old_string": "three", "new_string": "2"}
+            ]}),
+        );
+        assert!(err.unwrap_err().contains("at line 3"));
+    }
+
+    #[test]
+    fn a_malformed_edits_string_says_to_send_a_list() {
+        let err = run("abc", json!({"edits": "[{\"old_string\">abc"}));
+        let err = err.unwrap_err();
+        assert!(err.contains("not valid JSON"), "{err}");
+        assert!(
+            err.contains("list of {old_string, new_string} objects"),
+            "{err}"
+        );
     }
 
     #[test]

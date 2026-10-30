@@ -15,6 +15,7 @@ and scripts/eval.py leave behind are left out unless --all is given.
 import argparse
 import collections
 import json
+import os
 import re
 import statistics
 from datetime import datetime
@@ -31,6 +32,8 @@ IDLE_GAP = 300_000  # ms without a log line that end a stretch of activity
 TREE_MOVING = re.compile(r"\bgit\s+(checkout|switch|stash(?!\s+(list|show)\b)|reset\s+--hard|clean|restore)\b")
 # The refusal the peer guard (0.6.8) answers a tree-moving command with.
 PEER_REFUSAL = "Not run: another killi session"
+# A directory a command points at: `cd <dir>`, `git -C <dir>`, `--work-tree[=]<dir>`; the last one wins.
+TARGET_DIR = re.compile(r"""(?:\bcd\s+|\s-C\s*|--work-tree[=\s]\s*)(["']?)([^\s"';&|]+)\1""")
 MISS_STREAK = 3  # consecutive uncached requests on a growing prompt before it is reported
 # The notes killi appends when the other sessions in a repository change (live.rs, tree_note).
 PEERS_ON = ("<system-reminder>Another killi session works", "<system-reminder>Other killi sessions work")
@@ -51,6 +54,16 @@ def looks_failed(output):
     return last[0].startswith("[Command ") or output.startswith(("Interrupted by the user", "Could not "))
 
 
+def elsewhere(command, base, cwd):
+    """Whether `command` acts on a directory outside the session's folder, as a command run in a
+    linked worktree does: the guard (peer_guard.rs) leaves another tree alone, so it isn't a miss."""
+    targets = TARGET_DIR.findall(command)
+    if not (targets and cwd):
+        return False
+    target = os.path.normpath(os.path.join(base or cwd, os.path.expanduser(targets[-1][1])))
+    return os.path.commonpath([target, cwd]) != cwd
+
+
 def parse_args(arguments):
     try:
         args = json.loads(arguments)
@@ -66,6 +79,7 @@ def analyze(path):
          "tool_ms": [], "slept": [0, 0], "compactions": [], "per_model": collections.defaultdict(lambda: collections.Counter()),
          "active": [], "peer_git": [], "peer_refusals": 0, "miss_streak": []}
     model, awaiting, calls, answered, sleeping, peers = None, None, {}, set(), set(), False
+    cwd, moving = None, {}
     streak, grew_from = 0, None
     for entry in read(path):
         kind = entry.get("type")
@@ -77,6 +91,7 @@ def analyze(path):
         message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
         if kind in ("session", "model"):
             model = entry.get("model") or model
+            cwd = entry.get("cwd") or cwd
             s["version"] = entry.get("version") or s["version"]
             streak, grew_from = 0, None
             if model and model not in s["models"]:
@@ -101,7 +116,9 @@ def analyze(path):
                         if isinstance(command, str) and (wait := FIXED_SLEEP.match(command)) and float(wait[1]) >= 30:
                             sleeping.add(call["id"])
                         if peers and isinstance(command, str) and TREE_MOVING.search(command):
-                            s["peer_git"].append(command[:120])
+                            base = parse_args(call["function"]["arguments"]).get("cwd")
+                            if not elsewhere(command, base if isinstance(base, str) else None, cwd):
+                                moving[call["id"]] = command[:120]
                     s["tools"][name] += 1
                     if name != "task_output":  # asking again is how a wait on a task works
                         s["repeats"][(name, call["function"]["arguments"])] += 1
@@ -112,6 +129,8 @@ def analyze(path):
                 s["tool_errors"] += bool(failed)
                 if (message.get("content") or "").startswith(PEER_REFUSAL):
                     s["peer_refusals"] += 1
+                elif message.get("tool_call_id") in moving:
+                    s["peer_git"].append(moving[message["tool_call_id"]])
                 if meta and meta.get("ms") is not None:
                     s["tool_ms"].append((meta["ms"], meta.get("name") or calls.get(message.get("tool_call_id"), "?")))
                     if message.get("tool_call_id") in sleeping and not failed:
@@ -235,8 +254,8 @@ def findings(sessions, models, versions_of):
         for warn in sorted(set(s["warns"])):
             found.append(f"{who}`{name}` logged a warning: {warn}")
         for command in s["peer_git"]:
-            found.append(f"{who}`{name}` ran `{command}` after being told another session works in its repository; "
-                         "versions since 0.6.8 refuse these while a peer shares the tree.")
+            found.append(f"{who}`{name}` ran `{command}` after being told another session works in its repository, in the session's own folder, "
+                         "and it was not refused; versions since 0.6.8 refuse these while a peer shares the tree.")
     return found
 
 
