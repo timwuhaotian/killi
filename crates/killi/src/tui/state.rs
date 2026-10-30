@@ -53,8 +53,8 @@ pub(super) enum Input {
     Command(String, String, Vec<Image>),
     Resume(PathBuf),
     Model(String),
-    /// The backup model this session falls back to on a rate limit: `/backup-model <alias>`,
-    /// or `none` to drop it.
+    /// The model every session falls back to on a rate limit: `/backup-model <alias>`, or
+    /// `none` to drop it. Saved in the config, so every session starts on it.
     BackupModel(String),
     Effort(String),
     /// Turns an MCP server on or off; true when picked from the /mcp list, which then reopens.
@@ -99,7 +99,7 @@ pub(super) struct PastAsk {
 #[derive(Default)]
 pub(super) struct Status {
     pub(super) model: String,
-    /// The backup model this session falls back to on a rate limit, if one is set.
+    /// The model this session falls back to on a rate limit, if one is set.
     pub(super) backup: Option<String>,
     /// The thinking effort, as `Thinking::label` names it.
     pub(super) thinking: String,

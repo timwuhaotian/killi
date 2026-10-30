@@ -15,8 +15,6 @@ pub struct Loaded {
     pub context: u64,
     /// The model and effort the session last ran on.
     pub choice: Choice,
-    /// The backup model this session last set with `/backup-model`, if any.
-    pub backup: Option<String>,
     /// The session goal `/goal` last set, if any.
     pub goal: Option<String>,
 }
@@ -47,7 +45,7 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
     // Splitting bytes on `\n` is safe: it never appears inside a multibyte UTF-8 sequence.
     let bytes = fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
     let mut skipped = 0;
-    let mut loaded = Loaded { messages: Vec::new(), tools: HashMap::new(), context: 0, choice: Choice::default(), backup: None, goal: None };
+    let mut loaded = Loaded { messages: Vec::new(), tools: HashMap::new(), context: 0, choice: Choice::default(), goal: None };
     for chunk in bytes.split(|b| *b == b'\n') {
         if chunk.is_empty() {
             continue;
@@ -66,9 +64,6 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
                     model: entry["model"].as_str().map(String::from),
                     effort: entry["effort"].as_str().map(String::from),
                 };
-            }
-            Some("backup") => {
-                loaded.backup = entry["model"].as_str().map(String::from);
             }
             Some("goal") => {
                 loaded.goal = entry["goal"].as_str().map(String::from);

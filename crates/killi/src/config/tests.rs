@@ -256,6 +256,32 @@ fn choosing_a_model_rewrites_the_default_model_line() {
 }
 
 #[test]
+fn setting_a_backup_model_rewrites_the_line_and_none_removes_it() {
+    let root = std::env::temp_dir().join(format!("killi-backup-model-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    std::fs::write(&path, "# my config\ndefault_model = \"test/first\"\n\n[models.\"test/first\"]\nprovider = \"test\"\nmodel = \"first\"\n").unwrap();
+
+    super::set_backup_model(&path, Some("test/second")).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("# my config"), "{text}");
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.backup_model.as_deref(), Some("test/second"), "the line is added where the file had none");
+
+    super::set_backup_model(&path, Some("test/first")).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text.matches("backup_model").count(), 1, "a second pick replaces the line, it doesn't add one: {text}");
+    assert_eq!(toml::from_str::<super::Config>(&text).unwrap().backup_model.as_deref(), Some("test/first"));
+
+    super::set_backup_model(&path, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("backup_model"), "none takes the line out: {text}");
+    assert_eq!(toml::from_str::<super::Config>(&text).unwrap().backup_model, None);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn picking_an_effort_rewrites_the_models_default_effort_line() {
     let root = std::env::temp_dir().join(format!("killi-effort-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

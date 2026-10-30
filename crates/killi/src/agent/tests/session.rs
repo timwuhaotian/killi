@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn a_new_agent_starts_without_a_backup() {
     let agent = idle_agent("backup-none", Controls::default(), Rc::new(|_| {}));
-    assert_eq!(agent.backup_alias(), None, "a backup is never inherited by a new session");
+    assert_eq!(agent.backup_alias(), None, "an agent starts without one; Setup gives the config's");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -14,7 +14,7 @@ async fn a_rate_limited_primary_switches_to_the_backup() {
     agent.push(json!({"role": "system", "content": "sys"})).unwrap();
     agent.push(json!({"role": "user", "content": "hi"})).unwrap();
     agent.client = Rc::new(test_client_at("primary", &primary));
-    agent.set_backup(test_client_at("backup", &backup)).unwrap();
+    agent.set_backup(test_client_at("backup", &backup));
 
     let reply = agent.request().await.unwrap();
     assert_eq!(reply.text, "from backup");
@@ -31,7 +31,7 @@ async fn a_non_rate_limit_error_keeps_the_backup() {
     agent.push(json!({"role": "system", "content": "sys"})).unwrap();
     agent.push(json!({"role": "user", "content": "hi"})).unwrap();
     agent.client = Rc::new(test_client_at("primary", &primary));
-    agent.set_backup(test_client_at("backup", &backup)).unwrap();
+    agent.set_backup(test_client_at("backup", &backup));
 
     let error = agent.request().await.unwrap_err();
     assert_eq!(error.downcast_ref::<ProviderError>().map(|p| p.kind), Some(ErrorKind::Auth));
@@ -50,6 +50,28 @@ async fn a_rate_limited_primary_without_a_backup_fails_as_before() {
     let error = agent.request().await.unwrap_err();
     assert_eq!(error.downcast_ref::<ProviderError>().map(|p| p.kind), Some(ErrorKind::RateLimited));
     assert_eq!(agent.model_alias(), "primary");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_rate_limited_swarm_member_finishes_its_work_on_the_backup() {
+    let primary = rate_limited_stub(30).await;
+    let backup = answering_stub_times("from backup", 4).await;
+    let mut agent = idle_agent("swarm-backup", Controls::default(), Rc::new(|_| {}));
+    agent.push(json!({"role": "system", "content": "sys"})).unwrap();
+    agent.client = Rc::new(test_client_at("primary", &primary));
+    agent.set_backup(test_client_at("backup", &backup));
+
+    let call = ToolCall {
+        id: "s1".into(),
+        name: "agent_swarm".into(),
+        arguments: json!({"prompt_template": "Do {{item}}.", "items": ["a", "b"]}).to_string(),
+    };
+    let output = agent.run_swarm("s1", &call).await;
+    assert!(!output.is_error, "{}", output.text);
+    assert!(output.text.contains("<summary>completed: 2</summary>"), "{}", output.text);
+    assert_eq!(output.text.matches("from backup").count(), 2, "every member kept its work: {}", output.text);
+    assert_eq!(agent.model_alias(), "primary", "the session stays on its own model");
+    assert_eq!(agent.backup_alias(), Some("backup"), "the session keeps its backup for the next rate limit");
 }
 
 #[test]

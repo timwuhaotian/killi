@@ -30,6 +30,9 @@ first few characters. `~` is `$HOME`; nothing else moves these paths.
 A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_model`.
 
 - `default_model = "alias"` names an entry under `[models]`. Without it, `-m` is required.
+- `backup_model = "alias"`: the model every session switches to when its own exhausts its
+  retries on a 429 rate limit. `/backup-model` sets and applies it at once, in this session
+  and every new one (`/backup-model none` drops it); a hand edit takes the next killi start.
 - `[providers.<name>]`: `type` ("openai" for Chat Completions and compatible APIs,
   "anthropic" for Messages, "openai_responses" for Responses, "chatgpt" for the user's
   ChatGPT plan: no key, `killi login chatgpt` signs in and adds the plan's models), `base_url`
@@ -131,7 +134,7 @@ Edit the file with the edit tool, keep other keys as they are, and say how the c
 effect:
 
 - `[prompt]`, `[skills]`, `AGENTS.md` files, skill folders: `/reload` in the running session.
-- `[providers]`, `[models]`, `[thinking]`: `/reload`, then `/model` or `/effort` picks them
+- `[providers]`, `[models]`, `[thinking]`, `backup_model`: `/reload`, then `/model` or `/effort` picks them
   up; sessions started afterwards too.
 - `[search]`: `/web-search-config` sets and applies it at once, in this session and new ones;
   a hand edit takes the next killi start (`/exit`, then `killi -c` continues this session).

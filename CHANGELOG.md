@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.23 — 2026-10-30
+
+- A rate limit inside a swarm no longer loses the swarm's work: a subagent the provider
+  rate-limits falls back to the session's backup model and finishes its item, so the
+  swarm's report still holds every item's report and the model that takes over doesn't
+  run the swarm again. The session keeps its own model; only that subagent moves.
+- `/backup-model` is a global setting now: the pick is written to `backup_model` in
+  `~/.killi/config.toml`, and every session — new, `/new`, or resumed — starts with it as
+  the model a 429 rate limit (that outlasts the primary's retries) switches to.
+  `/backup-model none` takes the key out for every session too. The pick is no longer kept
+  in the session's log; `backup` records from older logs are ignored on resume.
+
 ## 0.6.22 — 2026-10-30
 
 - The snapshot spinner no longer types out a Chinese line one character at a time: while

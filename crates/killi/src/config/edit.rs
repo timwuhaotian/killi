@@ -190,6 +190,39 @@ pub(super) fn set_default_model(path: &Path, alias: &str) -> Result<()> {
     crate::fs_atomic::write(path, new.as_bytes(), None).with_context(|| format!("could not write {}", path.display()))
 }
 
+/// Writes or removes the config's `backup_model` — the fallback every session starts with —
+/// the way `set_default_model` writes its line: replaced where the file has one before its
+/// first table, and added at the top where it has none. `None` takes the line out, so no
+/// session starts on a backup. The rest of the file, comments included, is left as it is.
+pub fn set_backup_model(path: &Path, alias: Option<&str>) -> Result<()> {
+    let text = fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let line = alias.map(|alias| format!("backup_model = {}", toml::Value::String(alias.to_string())));
+    let spans = table_spans(&text);
+    let mut out: Vec<String> = Vec::new();
+    let mut written = false;
+    for (n, text_line) in text.lines().enumerate() {
+        let before_tables = spans.first().is_none_or(|(_, span)| n < span.start);
+        if before_tables && text_line.trim().starts_with("backup_model") {
+            if !written
+                && let Some(line) = &line
+            {
+                out.push(line.clone());
+                written = true;
+            }
+            continue;
+        }
+        out.push(text_line.to_string());
+    }
+    if !written
+        && let Some(line) = line
+    {
+        out.insert(0, line);
+    }
+    let new = format!("{}\n", out.join("\n"));
+    toml::from_str::<Config>(&new).context("setting the backup model would break the config")?;
+    crate::fs_atomic::write(path, new.as_bytes(), None).with_context(|| format!("could not write {}", path.display()))
+}
+
 /// Stores `effort` as `alias`'s `default_effort` in the config file, in place of the
 /// `default_effort` line in its `[models]` table, or right under the table's header, so the
 /// next session on the model starts on it. The rest of the file, comments included, is left

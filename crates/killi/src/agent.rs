@@ -74,8 +74,8 @@ pub(crate) fn crash_log() -> Option<PathBuf> {
 pub struct Agent {
     client: Rc<Client>,
     /// This session's fallback provider: what takes over when the primary exhausts its retries
-    /// on a rate limit. Set with `/backup-model`; a new session starts without one, so a later
-    /// session never inherits it.
+    /// on a rate limit. `/backup-model` sets it in the config's `backup_model`, so every
+    /// session — new or resumed — starts with it.
     backup: Option<Rc<Client>>,
     tools: Rc<Vec<Value>>,
     messages: Rc<Vec<Value>>,

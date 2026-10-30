@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 pub use command::command_guide_if_first;
-pub use edit::{remove_provider_key, set_model_effort, set_search};
+pub use edit::{remove_provider_key, set_backup_model, set_model_effort, set_search};
 pub use guide::{guide_model, init, set_up_if_missing};
 pub use import::{import_kimi, import_opencode, import_omp, import_pi};
 pub use models::{Additions, NewModel, add_models};
@@ -35,6 +35,9 @@ use models::with_models;
 #[derive(Debug, Default, Deserialize)]
 pub struct Config {
     pub default_model: Option<String>,
+    /// The model every session falls back to when its own exhausts its retries on a rate
+    /// limit; `/backup-model` sets it.
+    pub backup_model: Option<String>,
     #[serde(default)]
     pub providers: BTreeMap<String, Provider>,
     #[serde(default)]

@@ -30,7 +30,7 @@ use super::*;
 use serde_json::json;
 
 fn loaded(messages: Vec<Value>) -> Loaded {
-    Loaded { messages, tools: HashMap::new(), context: 0, choice: Choice::default(), backup: None, goal: None }
+    Loaded { messages, tools: HashMap::new(), context: 0, choice: Choice::default(), goal: None }
 }
 
 #[test]
@@ -329,26 +329,21 @@ fn a_switch_in_the_log_is_what_a_resume_runs_on() {
 }
 
 #[test]
-fn a_backup_entry_is_what_a_resume_runs_on() {
+fn old_backup_records_still_load() {
+    // Logs from before the backup moved to the config carry `backup` records; a resume
+    // reads the config's `backup_model` instead, and the records must not fail the load.
     let dir = std::env::temp_dir().join(format!("killi-backup-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("1-1.jsonl");
     let lines = [
         json!({"type": "session", "model": "m/x"}),
         json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
-        json!({"type": "backup", "model": "m/y"}),
         json!({"type": "backup", "model": "m/z"}),
     ];
     fs::write(&path, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
-    assert_eq!(load(&path).unwrap().backup.as_deref(), Some("m/z"), "the last set backup wins");
-    let cleared = [
-        json!({"type": "session", "model": "m/x"}),
-        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
-        json!({"type": "backup", "model": "m/z"}),
-        json!({"type": "backup"}),
-    ];
-    fs::write(&path, cleared.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
-    assert_eq!(load(&path).unwrap().backup, None, "clearing the backup wins");
+    let report = load_reported(&path).unwrap();
+    assert_eq!(report.loaded.choice.model.as_deref(), Some("m/x"), "the records around it still load");
+    assert_eq!(report.skipped, 0);
     fs::remove_dir_all(dir).unwrap();
 }
 

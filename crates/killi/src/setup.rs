@@ -103,7 +103,11 @@ impl Setup {
 
     /// A new session on `client`, as /new keeps the model and effort in use.
     pub fn start_on(&self, client: Client, controls: Controls, sink: Sink) -> Result<Agent> {
-        Agent::new(client, &self.cwd, &self.prompt.text, self.tools.clone(), self.settings.clone(), controls, sink)
+        let mut agent = Agent::new(client, &self.cwd, &self.prompt.text, self.tools.clone(), self.settings.clone(), controls, sink)?;
+        if let Some(backup) = self.backup_client() {
+            agent.set_backup(backup);
+        }
+        Ok(agent)
     }
 
     /// Continues a logged session, on the model and effort it last used unless -m chose one.
@@ -117,14 +121,13 @@ impl Setup {
     /// replay the conversation from `report.loaded` first, then move the report here.
     pub fn resume_loaded(&self, report: session::LoadReport, log: &Path, controls: Controls, sink: Sink) -> Result<Agent> {
         let client = self.client(&report.loaded.choice)?;
-        // The backup is this session's own: a new session never starts on one, and a resumed
-        // one reads it back from its log. A backup the config no longer knows is dropped.
-        let backup = report
-            .loaded
-            .backup
-            .as_deref()
-            .and_then(|alias| self.config.resolve(Some(alias)).and_then(Client::new).ok());
-        Agent::resume_reported(client, backup, &self.cwd, log, report, self.tools.clone(), self.settings.clone(), controls, sink)
+        Agent::resume_reported(client, self.backup_client(), &self.cwd, log, report, self.tools.clone(), self.settings.clone(), controls, sink)
+    }
+
+    /// The backup client the config's `backup_model` names, if it resolves: every session —
+    /// new or resumed — starts on it. A backup the config no longer knows is dropped.
+    fn backup_client(&self) -> Option<Client> {
+        self.config.backup_model.as_deref().and_then(|alias| self.config.resolve(Some(alias)).and_then(Client::new).ok())
     }
 
     /// The -m model at its default effort, else `choice` when the config still has that model,
@@ -172,6 +175,12 @@ impl Setup {
     pub fn set_search(&mut self, search: crate::config::SearchConfig) {
         self.settings.search = search.settings();
         self.config.search = search;
+    }
+
+    /// Applies a `/backup-model` pick: sessions started later in this run of killi begin on
+    /// it too, as every later run of killi does from the config file.
+    pub fn set_backup_model(&mut self, alias: Option<&str>) {
+        self.config.backup_model = alias.map(String::from);
     }
 
     /// Gives `agent` the reloaded system prompt and skills.

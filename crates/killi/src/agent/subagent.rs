@@ -173,7 +173,10 @@ impl Agent {
         let announce_plan = !fork && self.controls.plan.get();
         let mut agent = Agent {
             client: self.client.clone(),
-            backup: None,
+            // A subagent inherits the session's backup, so one the provider rate-limits
+            // finishes its work on the backup instead of losing it: the swarm's report
+            // still holds every item, and the model that takes over doesn't run it again.
+            backup: self.backup.clone(),
             tools: self.tools.clone(),
             messages,
             ctx: self.ctx.clone(),

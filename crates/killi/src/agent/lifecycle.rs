@@ -195,21 +195,15 @@ impl Agent {
     }
 
     /// Sets this session's fallback provider: what it asks once the primary gives up on a rate
-    /// limit. A new session starts without one, so it is never saved for later sessions.
-    pub fn set_backup(&mut self, client: Client) -> Result<()> {
+    /// limit. The config's `backup_model` — what `/backup-model` picks — names it for every
+    /// session, so no log record is needed to keep it.
+    pub fn set_backup(&mut self, client: Client) {
         self.backup = Some(Rc::new(client));
-        self.record_backup()
     }
 
     /// Drops this session's fallback provider.
-    pub fn clear_backup(&mut self) -> Result<()> {
+    pub fn clear_backup(&mut self) {
         self.backup = None;
-        self.record_backup()
-    }
-
-    /// Records the backup the way the log records a model switch, so a resume keeps it.
-    fn record_backup(&mut self) -> Result<()> {
-        self.session.record(&json!({"type": "backup", "model": self.backup.as_ref().map(|c| c.model.alias.as_str())}))
     }
 
     /// The backup model this session falls back to, as configured.

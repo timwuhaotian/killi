@@ -123,7 +123,7 @@ fn resume_runs_on_the_logs_model_with_its_conversation() {
 }
 
 #[test]
-fn resume_keeps_the_session_backup_model() {
+fn every_session_gets_the_configured_backup_model() {
     let root = std::env::temp_dir().join(format!("killi-setup-backup-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -131,11 +131,12 @@ fn resume_keeps_the_session_backup_model() {
     let lines = [
         serde_json::json!({"type": "session", "model": "test/model"}),
         serde_json::json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
-        serde_json::json!({"type": "backup", "model": "test/backup"}),
+        // A record from before the backup moved to the config: the config wins.
+        serde_json::json!({"type": "backup", "model": "test/other"}),
     ];
     std::fs::write(&log, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
     let mut config: Config = toml::from_str(
-        "default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n\n[models.\"test/backup\"]\nprovider = \"test\"\nmodel = \"backup\"\n",
+        "default_model = \"test/model\"\nbackup_model = \"test/backup\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n\n[models.\"test/backup\"]\nprovider = \"test\"\nmodel = \"backup\"\n",
     )
     .unwrap();
     config.skills.dirs = vec!["/nonexistent".to_string()];
@@ -145,7 +146,14 @@ fn resume_keeps_the_session_backup_model() {
     let setup = Setup { config, cwd: root.clone(), model: None, last: Choice::default(), prompt, tools: Vec::new(), settings, skills, notes: Vec::new() };
     let agent = setup.resume(&log, Controls::default(), Rc::new(|_| {})).unwrap();
     assert_eq!(agent.model_alias(), "test/model");
-    assert_eq!(agent.backup_alias(), Some("test/backup"), "the backup is this session's own, and a resume reads it back");
+    assert_eq!(agent.backup_alias(), Some("test/backup"), "the config's backup_model is what every session starts with");
+    drop(agent);
+
+    // A backup the config no longer knows is dropped, not fatal.
+    let mut setup = setup;
+    setup.set_backup_model(Some("test/gone"));
+    let agent = setup.resume(&log, Controls::default(), Rc::new(|_| {})).unwrap();
+    assert_eq!(agent.backup_alias(), None, "an unknown backup alias starts without one");
     drop(agent);
     std::fs::remove_dir_all(root).unwrap();
 }

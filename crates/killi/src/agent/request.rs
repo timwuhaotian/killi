@@ -24,10 +24,14 @@ impl Agent {
                 Some(backup) => {
                     let from = self.client.model.alias.clone();
                     self.switch_client((*backup).clone())?;
-                    (self.sink)(Event::Notice(format!(
-                        "{from} is rate-limited, so this session switched to its backup {}.",
-                        self.client.model.alias
-                    )));
+                    // A subagent that falls back keeps the session on its own model, so it
+                    // says what it did itself.
+                    let note = if self.depth == 0 {
+                        format!("{from} is rate-limited, so this session switched to its backup {}.", self.client.model.alias)
+                    } else {
+                        format!("{from} is rate-limited, so this subagent switched to the backup {}.", self.client.model.alias)
+                    };
+                    (self.sink)(Event::Notice(note));
                     match self.client.complete(&self.messages, &self.tools, &self.session.id, &mut on_delta).await {
                         Ok(reply) => reply,
                         Err(error) => {

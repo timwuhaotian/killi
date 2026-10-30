@@ -385,7 +385,7 @@ pub(super) fn handoff(
         "The log is JSON lines, one record per `type`: `session` (cwd, model, effort, tools), every `message` exactly as sent \
          (user, assistant with tool_calls, tool results; a tool result's `tool` has is_error, brief and ms), `usage` after each \
          request (prompt, cached, completion and reasoning tokens, finish_reason, ms), `model` when the model or effort \
-         changed, `backup` when this session's backup model was set or cleared, and `compaction`. Every record has a `ts` in ms. \
+         changed, and `compaction`. Every record has a `ts` in ms. \
          `scripts/sessions.py` in the killi repo summarizes logs and flags what to fix."
             .to_string(),
     );

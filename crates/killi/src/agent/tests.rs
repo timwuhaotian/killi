@@ -132,9 +132,14 @@ async fn rate_limited_stub(attempts: usize) -> String {
 
 /// A stub that answers one request with a finished SSE reply.
 async fn answering_stub(text: &str) -> String {
+    answering_stub_times(text, 1).await
+}
+
+/// A stub that answers `times` requests with a finished SSE reply.
+async fn answering_stub_times(text: &str, times: usize) -> String {
     let good = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{}",
         sse(text, "stop")
     );
-    serve_raw(vec![good]).await
+    serve_raw(vec![good; times]).await
 }

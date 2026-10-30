@@ -276,7 +276,7 @@ impl App {
             })
             .collect();
         let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) | PickerChoice::BackupModel(a) if *a == chosen)).unwrap_or(0);
-        let title = if backup { format!("Backup model for {}", self.status.model) } else { "Switch model".to_string() };
+        let title = if backup { "Backup model, for every session" } else { "Switch model" }.to_string();
         self.picker = Some(Picker::new(title, options, selected));
     }
 

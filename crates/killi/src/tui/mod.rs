@@ -241,25 +241,33 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             },
             Input::BackupModel(alias) => {
                 let alias = alias.trim().to_string();
-                if alias.is_empty() || matches!(alias.as_str(), "none" | "off" | "clear") {
-                    if let Err(e) = agent.clear_backup() {
-                        app.error_report(&e);
-                    }
-                    app.show_model(&agent, session.config());
-                    app.redraw_banner(&agent, &session, &snapshots);
-                    app.notice(&format!("This session has no backup model; it stays on {}.", agent.model_alias()));
-                } else {
-                    match session.config().resolve(Some(&alias)).and_then(Client::new) {
-                        Ok(client) => {
-                            if let Err(e) = agent.set_backup(client) {
-                                app.error_report(&e);
-                            }
+                let cleared = alias.is_empty() || matches!(alias.as_str(), "none" | "off" | "clear");
+                // The pick is validated before it is saved, so the config never names a model
+                // it can't run on.
+                let client = if cleared { Ok(None) } else { session.config().resolve(Some(&alias)).and_then(Client::new).map(Some) };
+                let path = crate::config::killi_home().join("config.toml");
+                match client {
+                    Ok(Some(client)) => match crate::config::set_backup_model(&path, Some(&alias)) {
+                        Ok(()) => {
+                            agent.set_backup(client);
+                            session.set_backup_model(Some(&alias));
                             app.show_model(&agent, session.config());
                             app.redraw_banner(&agent, &session, &snapshots);
-                            app.notice(&format!("Backup model for this session: {alias}. A rate limit on {} switches to it; new sessions start without one.", agent.model_alias()));
+                            app.notice(&format!("Backup model {alias}, here and in every new session. A rate limit on {} switches to it.", agent.model_alias()));
                         }
-                        Err(e) => app.error_report(&e),
-                    }
+                        Err(e) => app.error_from("/backup-model", &e),
+                    },
+                    Ok(None) => match crate::config::set_backup_model(&path, None) {
+                        Ok(()) => {
+                            agent.clear_backup();
+                            session.set_backup_model(None);
+                            app.show_model(&agent, session.config());
+                            app.redraw_banner(&agent, &session, &snapshots);
+                            app.notice(&format!("No backup model, here or in new sessions; this one stays on {}.", agent.model_alias()));
+                        }
+                        Err(e) => app.error_from("/backup-model", &e),
+                    },
+                    Err(e) => app.error_report(&e),
                 }
             }
             Input::Search(provider, url, key) => {
