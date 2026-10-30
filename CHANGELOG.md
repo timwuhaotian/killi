@@ -5,6 +5,22 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.22 — 2026-10-30
+
+- The snapshot spinner no longer types out a Chinese line one character at a time: while
+  the turn's opening snapshot runs, the working row holds one whole Renaissance word —
+  `chiaroscuro`, `contrapposto`, `illuminating`, `perspective` — with the logo's gradient
+  flowing through it, moving to the next word each turn (every ten seconds only if a
+  snapshot ever runs that long).
+- `/goal [<text>|done|clear]` sets one session goal the session can't end until it is
+  done or cleared. The model hears it as an appended reminder (like plan/swarm mode,
+  so the prompt and tool list stay fixed), breaks it into `todo_write` items, and
+  doesn't claim it done until every part is verified. `/exit`, `/new`, `/resume` and
+  the Ctrl+C/Ctrl+D exits refuse while it stands, naming the goal; `/goal done`
+  confirms it is 100% done, `/goal clear [reason]` drops it when it is truly
+  impossible or no longer wanted. The goal is kept in the session log, so `killi -r`
+  and in-process `/resume` restore it.
+
 ## 0.6.21 — 2026-10-29
 
 - Thinking effort is per model now, not one global pick. The `[thinking] effort` key — which

@@ -66,6 +66,9 @@ pub struct Controls {
     pub plan: Rc<Cell<bool>>,
     /// Swarm mode: the agent is told to split its work across `agent_swarm` subagents.
     pub swarm: Rc<Cell<bool>>,
+    /// The session goal set with `/goal`, if any: the model is reminded of it, and
+    /// ending the session waits until it is done or cleared.
+    pub goal: Rc<RefCell<Option<String>>>,
     /// Whether someone can answer questions; headless runs and subagents can't.
     pub interactive: bool,
     /// The conversation as it stands, for /btw while the agent works.

@@ -156,6 +156,16 @@ impl Agent {
             self.swarm_announced = swarming;
             self.push(json!({"role": "user", "content": if swarming { swarm::ON } else { swarm::OFF }}))?;
         }
+        let goal = self.controls.goal.borrow().clone();
+        if goal != self.goal_announced && self.depth == 0 {
+            let note = match goal.clone() {
+                Some(text) => goal::set_note(&text),
+                // Only reached from Some: the guard above rules out None == None.
+                None => goal::end_note(self.goal_announced.as_deref().unwrap_or_default()),
+            };
+            self.goal_announced = goal;
+            self.push(json!({"role": "user", "content": note}))?;
+        }
         self.push_peer_notes()?;
         if let Some(note) = self.peers_note() {
             self.push(json!({"role": "user", "content": note}))?;

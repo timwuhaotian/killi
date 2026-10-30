@@ -209,7 +209,9 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 </p>
 
 Commands: `/model [alias]`, `/effort [level]` (thinking effort), `/new` (or `/clear`),
-`/resume`, `/compact [focus]`, `/recap`, `/undo`, `/plan`, `/swarm [task|on|off]`, `/usage`, `/session`
+`/resume`, `/compact [focus]`, `/recap`, `/undo`, `/plan`, `/swarm [task|on|off]`,
+`/goal [<text>|done|clear]` (a session goal: `/exit`, `/new` and `/resume` wait until it is
+`/goal done`, or `/goal clear` when it is truly impossible or no longer wanted), `/usage`, `/session`
 (copies the session's id, log path and summary for another agent to read), `/sessions` (the
 other killi sessions running on this machine), `/prune [keep]`
 (deletes every session on the machine but the newest few), `/reload`,

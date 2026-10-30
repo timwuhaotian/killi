@@ -82,6 +82,7 @@ pub(super) const COMMANDS: &[Command] = &[
     Command { name: "undo", aliases: &[], args: "", about: "Put files back as they were before the last turn" },
     Command { name: "plan", aliases: &[], args: "", about: "Toggle plan mode (also Shift+Tab)" },
     Command { name: "swarm", aliases: &[], args: "[task|on|off]", about: "Swarm mode: split work across many subagents" },
+    Command { name: "goal", aliases: &[], args: "[<text>|done|clear]", about: "Session goal: the session can't end until it is done or cleared" },
     Command { name: "usage", aliases: &["cost"], args: "", about: "Tokens and requests this session" },
     Command { name: "session", aliases: &["share"], args: "", about: "Copy this session's id, log path and summary, to paste into another agent" },
     Command { name: "sessions", aliases: &[], args: "", about: "The other killi sessions running on this machine, and what each is doing" },

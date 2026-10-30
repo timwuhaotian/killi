@@ -105,7 +105,13 @@ pub(super) async fn handle_command(
         return Ok(true);
     }
     match command {
-        "exit" | "quit" | "q" => return Ok(false),
+        "exit" | "quit" | "q" => {
+            if let Some(note) = crate::goal::blocks("Quitting", agent.goal()) {
+                app.notice(&note);
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         "btw" if agent.user_prompts().is_empty() => app.notice("Nothing to ask about yet."),
         "btw" => {
             app.aside_asked = Some(arg.to_string());
@@ -132,6 +138,7 @@ pub(super) async fn handle_command(
                 _ => {}
             }
         }
+        "goal" => goal_command(app, agent, arg),
         "swarm" => {
             let was_on = app.controls.swarm.replace(true);
             let result = prompt_turn(app, agent, snapshots, keys, rx, &format!("/swarm {arg}"), &mention::expand(cwd, arg), images).await;
@@ -185,7 +192,12 @@ pub(super) async fn handle_command(
                 _ => {}
             }
         }
-        "clear" | "new" => match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
+        "clear" | "new" => {
+            if let Some(note) = crate::goal::blocks("Starting a new session", agent.goal()) {
+                app.notice(&note);
+                return Ok(true);
+            }
+            match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
             Ok(fresh) => {
                 app.reset_conversation(snapshots, cwd);
                 let saved = !agent.user_prompts().is_empty();
@@ -201,8 +213,15 @@ pub(super) async fn handle_command(
                 }
             }
             Err(e) => app.error_report(&e),
-        },
-        "resume" => app.open_session_picker(cwd),
+            }
+        }
+        "resume" => {
+            if let Some(note) = crate::goal::blocks("Resuming another session", agent.goal()) {
+                app.notice(&note);
+                return Ok(true);
+            }
+            app.open_session_picker(cwd)
+        }
         "prune" if arg.is_empty() => app.open_prune_picker(&agent.session.log_path),
         "prune" => match arg.parse::<usize>() {
             Ok(keep) => app.next_input = Some(Input::Prune(keep)),
@@ -256,6 +275,53 @@ pub(super) async fn handle_command(
     Ok(true)
 }
 
+/// `/goal [<text>|done|clear]`: shows the session goal, sets one the model hears on its
+/// next step, or ends it. The session can't end while a goal stands.
+fn goal_command(app: &mut App, agent: &mut Agent, arg: &str) {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        match agent.goal() {
+            Some(goal) => app.notice(&format!("Session goal: {goal}")),
+            None => app.notice(crate::goal::EMPTY),
+        }
+        return;
+    }
+    let (verb, rest) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+    match verb {
+        "done" if rest.trim().is_empty() => match agent.goal() {
+            Some(goal) => match agent.clear_goal() {
+                Ok(()) => app.notice(&format!("Goal done: {goal}")),
+                Err(e) => app.error_report(&e),
+            },
+            None => app.notice("No session goal to finish."),
+        },
+        "clear" => match agent.goal() {
+            Some(goal) => match agent.clear_goal() {
+                Ok(()) => {
+                    let reason = rest.trim();
+                    app.notice(&if reason.is_empty() {
+                        format!("Goal cleared: {goal}")
+                    } else {
+                        format!("Goal cleared: {goal} ({reason})")
+                    });
+                }
+                Err(e) => app.error_report(&e),
+            },
+            None => app.notice("No session goal to clear."),
+        },
+        _ => match agent.goal() {
+            Some(current) => match agent.set_goal(arg) {
+                Ok(()) => app.notice(&format!("Goal replaced: {current} → {arg}")),
+                Err(e) => app.error_report(&e),
+            },
+            None => match agent.set_goal(arg) {
+                Ok(()) => app.notice(&format!("Session goal: {arg}")),
+                Err(e) => app.error_report(&e),
+            },
+        },
+    }
+}
+
 /// Runs one turn started by a command: `shown` goes in the transcript, `prompt` to the agent,
 /// with the images pasted beside the command.
 #[allow(clippy::too_many_arguments)]
@@ -280,6 +346,7 @@ pub(super) async fn prompt_turn(
     // tree still predates every change the turn makes.
     let ended = if let Some(work) = snapshots.start_take() {
         app.snapshotting = true;
+        app.snapshot_seq += 1;
         let (snap_tx, snap_rx) = oneshot::channel();
         agent.set_snapshot_wait(snap_rx);
         let turn = run_turn(app, keys, rx, agent.run(prompt, images));

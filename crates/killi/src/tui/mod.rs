@@ -81,7 +81,7 @@ use format::{ago, changed_rows, clip, clock, dot, error_hint, fit, gauge, gist, 
 use input::newline_key;
 use notify::{copy_to_clipboard, first_line, notify};
 use picker::{Picker, SearchFlow};
-use rows::{ask_rows, aside_rows, choice_rows, diff_rows, first_sentence, handoff, help_rows, hidden_row, hint_row, is_bookkeeping, key_hints, label, overview_rows, placeholder, prompt_rows, queued_row, question_rows, recap_rows, rule, shorten_path, snapshot_word, tilde, title_rule, tool_summary, tool_text, working_rows, wrap_items};
+use rows::{ask_rows, aside_rows, choice_rows, diff_rows, first_sentence, handoff, help_rows, hidden_row, hint_row, is_bookkeeping, key_hints, label, overview_rows, placeholder, prompt_rows, queued_row, question_rows, recap_rows, rule, shorten_path, snapshot_rows, tilde, title_rule, tool_summary, tool_text, working_rows, wrap_items};
 use run::{handle_command, next_incoming, peer_label, prompt_turn};
 use select::Selection;
 use start::{CURSOR_ROW, ENHANCED, RESUMED, TerminalGuard, leave_fullscreen, query_ground, resume_command, resumed, terminal_gone, wants_fullscreen};
@@ -178,7 +178,15 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
 
     let mut keys = EventStream::new();
     loop {
-        let Some(input) = app.read_input(&mut keys).await? else { break };
+        let Some(input) = app.read_input(&mut keys).await? else {
+            // Ctrl+C twice or Ctrl+D on an empty prompt: leaving still waits for the goal.
+            if let Some(note) = crate::goal::blocks("Quitting", agent.goal()) {
+                app.notice(&note);
+                app.draw()?;
+                continue;
+            }
+            break;
+        };
         match input {
             Input::Prompt(prompt, images) => {
                 let sent = mention::expand(&cwd, &prompt);
@@ -188,6 +196,10 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 if !handle_command(&mut app, &mut agent, &mut session, &mut snapshots, &mut keys, &mut rx, &cwd, &command, &arg, &images).await? {
                     break;
                 }
+            }
+            Input::Resume(_) if agent.goal().is_some() => {
+                let note = crate::goal::blocks("Resuming another session", agent.goal()).expect("a goal stands");
+                app.notice(&note);
             }
             Input::Resume(path) if crate::session::is_locked(&path) => {
                 app.notice("that session is still running; continue it there, or start /new");

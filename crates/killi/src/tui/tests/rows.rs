@@ -1,7 +1,7 @@
 use super::*;
 use super::super::draw::screen_rows;
 use super::super::layout::status_layout;
-use super::super::rows::diff_row;
+use super::super::rows::{diff_row, snapshot_word};
 
 #[test]
 fn a_long_folder_is_cut_at_a_folder_boundary() {
@@ -246,14 +246,24 @@ fn a_long_line_takes_the_rows_it_wraps_to() {
     }
 
     #[test]
-    fn the_snapshot_phrase_types_out_one_character_at_a_time() {
-        assert_eq!(snapshot_word(0), "给");
-        assert_eq!(snapshot_word(3), "给", "a character pops every four frames");
-        assert_eq!(snapshot_word(4), "给这");
-        assert_eq!(snapshot_word(32), "给这一刻留个影..");
-        assert_eq!(snapshot_word(36), "给这一刻留个影...", "the dots come last");
-        assert_eq!(snapshot_word(200), "给这一刻留个影...", "it stays whole");
-        assert!((0..40).all(|frame| !snapshot_word(frame).is_ascii()), "no internal word shows");
+    fn the_snapshot_word_advances_one_per_turn() {
+        assert_eq!(snapshot_word(0, 0), "chiaroscuro");
+        assert_eq!(snapshot_word(1, 0), "contrapposto", "each snapshot starts on the next word");
+        assert_eq!(snapshot_word(2, 50), "illuminating");
+        assert_eq!(snapshot_word(4, 0), "chiaroscuro", "the words cycle");
+        assert_eq!(snapshot_word(0, 99), "chiaroscuro", "a word holds for a hundred frames");
+        assert_eq!(snapshot_word(0, 100), "contrapposto", "only a very long snapshot advances on time");
+        assert!((0..4).map(|seq| snapshot_word(seq, 0)).all(|word| word.len() >= 11), "long spellings only");
+    }
+
+    #[test]
+    fn the_snapshot_rows_show_the_whole_word_at_once() {
+        let secs = Duration::from_secs;
+        let rows: Vec<String> = snapshot_rows(1, 8, secs(3)).iter().map(|row| unstyled(row)).collect();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].ends_with("contrapposto"), "{}", rows[0]);
+        assert!(!rows[0].contains('·'), "no letter-by-letter placeholders: {}", rows[0]);
+        assert_eq!(rows[1], "3s · Esc to interrupt", "{}", rows[1]);
     }
 
     #[test]

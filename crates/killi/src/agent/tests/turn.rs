@@ -147,6 +147,23 @@ async fn a_task_list_unchanged_for_many_calls_is_pointed_out_once() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn the_model_hears_the_session_goal_until_it_ends() {
+    let mut agent = idle_agent("goal", Controls::default(), Rc::new(|_| {}));
+    agent.set_goal("ship v2").unwrap();
+    assert_eq!(agent.goal().as_deref(), Some("ship v2"));
+    agent.before_request().await.unwrap();
+    let said = agent.messages.last().unwrap()["content"].as_str().unwrap().to_string();
+    assert!(said.contains("Session goal: ship v2") && said.contains("/goal done"), "{said}");
+    agent.before_request().await.unwrap();
+    assert_eq!(agent.messages.last().unwrap()["content"].as_str().unwrap(), said, "announced once");
+    agent.clear_goal().unwrap();
+    assert_eq!(agent.goal(), None);
+    agent.before_request().await.unwrap();
+    let over = agent.messages.last().unwrap()["content"].as_str().unwrap().to_string();
+    assert!(over.contains("no longer stands") && over.contains("ship v2"), "{over}");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_subagent_leaves_finished_tasks_for_its_parent_to_report() {
     let mut agent = idle_agent("child-tasks", Controls::default(), Rc::new(|_| {}));
     agent.push(json!({"role": "system", "content": "sys"})).unwrap();

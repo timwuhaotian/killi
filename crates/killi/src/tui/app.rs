@@ -58,6 +58,7 @@ impl App {
             spinner: 0,
             retry: None,
             snapshotting: false,
+            snapshot_seq: 0,
             exit_armed: None,
             queued: Vec::new(),
             send_now: false,

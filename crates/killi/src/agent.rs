@@ -32,7 +32,7 @@ use crate::llm::{Client, Delta, ErrorKind, IMAGE_OMITTED, IMAGE_TOKEN_RESERVE, P
 use crate::session::Session;
 use crate::hooks::{HooksConfig, tool_payload};
 use crate::skills::Skills;
-use crate::{live, plan, swarm, tools};
+use crate::{goal, live, plan, swarm, tools};
 
 pub use types::{Aside, Controls, Event, Image, Question, Settings, Sink, Slot, Stats, Steered, Stop, Todo};
 
@@ -106,6 +106,9 @@ pub struct Agent {
     calls_since_todo: usize,
     plan_announced: bool,
     swarm_announced: bool,
+    /// What the model was last told about the session goal: its text, or None when told
+    /// the goal is over. Announced as an appended reminder, like plan and swarm mode.
+    goal_announced: Option<String>,
     /// The other sessions in this tree the model was last told about, by pid.
     peers_announced: Vec<u32>,
     interrupted: bool,

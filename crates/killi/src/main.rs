@@ -2,6 +2,7 @@ mod agent;
 mod broker;
 mod config;
 mod fs_atomic;
+mod goal;
 mod hooks;
 mod later;
 mod live;

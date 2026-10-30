@@ -17,6 +17,8 @@ pub struct Loaded {
     pub choice: Choice,
     /// The backup model this session last set with `/backup-model`, if any.
     pub backup: Option<String>,
+    /// The session goal `/goal` last set, if any.
+    pub goal: Option<String>,
 }
 
 /// A model alias and thinking effort, as `Thinking::label` names it. The effort is what a
@@ -45,7 +47,7 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
     // Splitting bytes on `\n` is safe: it never appears inside a multibyte UTF-8 sequence.
     let bytes = fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
     let mut skipped = 0;
-    let mut loaded = Loaded { messages: Vec::new(), tools: HashMap::new(), context: 0, choice: Choice::default(), backup: None };
+    let mut loaded = Loaded { messages: Vec::new(), tools: HashMap::new(), context: 0, choice: Choice::default(), backup: None, goal: None };
     for chunk in bytes.split(|b| *b == b'\n') {
         if chunk.is_empty() {
             continue;
@@ -67,6 +69,9 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
             }
             Some("backup") => {
                 loaded.backup = entry["model"].as_str().map(String::from);
+            }
+            Some("goal") => {
+                loaded.goal = entry["goal"].as_str().map(String::from);
             }
             Some("message") => {
                 if let (Some(id), Some(tool)) = (entry["message"]["tool_call_id"].as_str(), entry.get("tool")) {

@@ -71,6 +71,29 @@ fn cell(left: usize, right: usize) -> char {
     char::from_u32(0x2800 + bits).expect("braille patterns are characters")
 }
 
+/// The logo's gradient at `across` (0 to 1 along its piece, `shift`ed half way round for
+/// words so the two never match) with the spinner's drift at `frame`, dimmed by `fade`.
+fn flow(frame: usize, across: f32, shift: f32, fade: f32) -> String {
+    let drift = frame as f32 * 0.035;
+    let t = (across + shift + drift) % 2.0;
+    let (r, g, b) = gradient(if t > 1.0 { 2.0 - t } else { t });
+    color(r * fade, g * fade, b * fade, truecolor())
+}
+
+/// The wave and the space after it, rising from a flat line at first.
+fn wave_head(frame: usize) -> String {
+    let dots = wave(frame);
+    let rise = (frame as f32 / RISE).min(1.0);
+    let mut out = String::new();
+    for i in 0..WAVE {
+        out.push_str(&flow(frame, i as f32 / (WAVE - 1) as f32, 0.0, 0.5 + 0.5 * rise));
+        out.push(cell(dots[2 * i], dots[2 * i + 1]));
+    }
+    out.push_str(RESET);
+    out.push(' ');
+    out
+}
+
 /// The spinner, `frame` tenths of a second after work began: a braille ribbon that rises from
 /// a flat line and rolls on, then the `killi` wordmark fading in letter by letter, each with
 /// the logo's gradient flowing through it. Always as wide as the wave, a space and the word.
@@ -82,24 +105,7 @@ pub fn working(frame: usize) -> String {
 /// wave is unchanged, and the word fades in letter by letter with the logo's gradient
 /// flowing through it, like the wordmark does. As wide as the wave, a space and the word.
 pub fn action(frame: usize, word: &str) -> String {
-    let truecolor = truecolor();
-    let drift = frame as f32 * 0.035;
-    // `across` is how far along its own piece a cell is, from 0 to 1; the word's gradient starts
-    // half way round so the two never match.
-    let paint = |across: f32, shift: f32, fade: f32| {
-        let t = (across + shift + drift) % 2.0;
-        let (r, g, b) = gradient(if t > 1.0 { 2.0 - t } else { t });
-        color(r * fade, g * fade, b * fade, truecolor)
-    };
-    let dots = wave(frame);
-    let rise = (frame as f32 / RISE).min(1.0);
-    let mut out = String::new();
-    for i in 0..WAVE {
-        out.push_str(&paint(i as f32 / (WAVE - 1) as f32, 0.0, 0.5 + 0.5 * rise));
-        out.push(cell(dots[2 * i], dots[2 * i + 1]));
-    }
-    out.push_str(RESET);
-    out.push(' ');
+    let mut out = wave_head(frame);
     let chars: Vec<char> = word.chars().collect();
     for (i, c) in chars.iter().enumerate() {
         let appeared = (frame as f32 - 2.0 * i as f32 + 1.0) / 3.0;
@@ -107,7 +113,20 @@ pub fn action(frame: usize, word: &str) -> String {
             out.push_str(&format!("{DIM}·{RESET}"));
             continue;
         }
-        out.push_str(&paint(i as f32 / (chars.len() - 1).max(1) as f32, 0.5, appeared.clamp(0.0, 1.0) * 0.75 + 0.25));
+        out.push_str(&flow(frame, i as f32 / (chars.len() - 1).max(1) as f32, 0.5, appeared.clamp(0.0, 1.0) * 0.75 + 0.25));
+        out.push(*c);
+        out.push_str(RESET);
+    }
+    out
+}
+
+/// The spinner with a word shown whole at once: the wave is unchanged, and the word keeps the
+/// logo's gradient flowing through it, without the letter-by-letter fade of [`action`].
+pub fn steady(frame: usize, word: &str) -> String {
+    let mut out = wave_head(frame);
+    let chars: Vec<char> = word.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        out.push_str(&flow(frame, i as f32 / (chars.len() - 1).max(1) as f32, 0.5, 1.0));
         out.push(*c);
         out.push_str(RESET);
     }
@@ -213,6 +232,14 @@ mod tests {
         assert!(!working(20).contains('·'));
         assert!(action(0, "writing").contains('·'));
         assert!(!action(20, "writing").contains('·'));
+    }
+
+    #[test]
+    fn the_steady_word_shows_whole_at_once_and_keeps_its_width() {
+        for frame in 0..60 {
+            assert_eq!(width(&steady(frame, "chiaroscuro")), WAVE + 1 + "chiaroscuro".len(), "frame {frame}");
+        }
+        assert!(!steady(0, "chiaroscuro").contains('·'), "the whole word shows at once");
     }
 
     #[test]

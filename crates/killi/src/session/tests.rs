@@ -30,7 +30,7 @@ use super::*;
 use serde_json::json;
 
 fn loaded(messages: Vec<Value>) -> Loaded {
-    Loaded { messages, tools: HashMap::new(), context: 0, choice: Choice::default(), backup: None }
+    Loaded { messages, tools: HashMap::new(), context: 0, choice: Choice::default(), backup: None, goal: None }
 }
 
 #[test]
@@ -349,6 +349,30 @@ fn a_backup_entry_is_what_a_resume_runs_on() {
     ];
     fs::write(&path, cleared.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
     assert_eq!(load(&path).unwrap().backup, None, "clearing the backup wins");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_goal_entry_is_what_a_resume_keeps() {
+    let dir = std::env::temp_dir().join(format!("killi-goal-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("1-1.jsonl");
+    let lines = [
+        json!({"type": "session", "model": "m/x"}),
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "goal", "goal": "first"}),
+        json!({"type": "goal", "goal": "second"}),
+    ];
+    fs::write(&path, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+    assert_eq!(load(&path).unwrap().goal.as_deref(), Some("second"), "the last set goal wins");
+    let cleared = [
+        json!({"type": "session", "model": "m/x"}),
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "goal", "goal": "second"}),
+        json!({"type": "goal"}),
+    ];
+    fs::write(&path, cleared.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+    assert_eq!(load(&path).unwrap().goal, None, "clearing the goal wins");
     fs::remove_dir_all(dir).unwrap();
 }
 

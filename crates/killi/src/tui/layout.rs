@@ -142,18 +142,20 @@ impl App {
                 // elapsed time and the interrupt hint sit on their own row under it.
                 space(&mut rows);
                 let retry = self.retry.map(|(attempt, until)| (attempt, until.saturating_duration_since(Instant::now())));
-                let (action, detail) = if let Some((attempt, left)) = retry.filter(|(_, left)| !left.is_zero()) {
-                    ("retrying".to_string(), format!("in {} · attempt {attempt}", clock(left)))
-                } else if self.snapshotting {
-                    (snapshot_word(self.spinner), String::new())
-                } else if let Some((_, text)) = &self.thinking {
-                    ("thinking".to_string(), first_sentence(text))
-                } else if !self.partial.trim().is_empty() {
-                    ("writing".to_string(), String::new())
+                if self.snapshotting && retry.is_none_or(|(_, left)| left.is_zero()) {
+                    rows.extend(snapshot_rows(self.snapshot_seq, self.spinner, started.elapsed()).into_iter().map(|row| fit(&row, width)));
                 } else {
-                    ("working".to_string(), String::new())
-                };
-                rows.extend(working_rows(self.spinner, started.elapsed(), &action, &detail).into_iter().map(|row| fit(&row, width)));
+                    let (action, detail) = if let Some((attempt, left)) = retry.filter(|(_, left)| !left.is_zero()) {
+                        ("retrying".to_string(), format!("in {} · attempt {attempt}", clock(left)))
+                    } else if let Some((_, text)) = &self.thinking {
+                        ("thinking".to_string(), first_sentence(text))
+                    } else if !self.partial.trim().is_empty() {
+                        ("writing".to_string(), String::new())
+                    } else {
+                        ("working".to_string(), String::new())
+                    };
+                    rows.extend(working_rows(self.spinner, started.elapsed(), &action, &detail).into_iter().map(|row| fit(&row, width)));
+                }
             }
             let queue = rows.len();
             for queued in &self.queued {

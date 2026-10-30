@@ -64,6 +64,11 @@ impl Agent {
     ) -> Result<Self> {
         let crate::session::LoadReport { loaded, skipped, repaired } = report;
         let session = Session::open(log)?;
+        // A resumed session keeps its goal, re-announced on its first step even when the
+        // log still holds the reminder: compaction may have summarized it away.
+        if let Some(goal) = &loaded.goal {
+            controls.goal.borrow_mut().replace(goal.clone());
+        }
         // A resumed session doesn't pick up messages typed during another session's turn.
         controls.steer.borrow_mut().clear();
         let mut agent = Self::assemble(client, cwd, tools, settings, controls, sink, session);
@@ -146,6 +151,7 @@ impl Agent {
             calls_since_todo: 0,
             plan_announced: false,
             swarm_announced: false,
+            goal_announced: None,
             peers_announced: Vec::new(),
             interrupted: false,
             next_notes: Vec::new(),
@@ -209,6 +215,25 @@ impl Agent {
     /// The backup model this session falls back to, as configured.
     pub fn backup_alias(&self) -> Option<&str> {
         self.backup.as_ref().map(|client| client.model.alias.as_str())
+    }
+
+    /// The session goal set with `/goal`, if any.
+    pub fn goal(&self) -> Option<String> {
+        self.controls.goal.borrow().clone()
+    }
+
+    /// Sets the session goal; the model hears it on its next step. Recorded in the log so
+    /// a resume keeps it.
+    pub fn set_goal(&mut self, goal: &str) -> Result<()> {
+        let goal = goal.split_whitespace().collect::<Vec<_>>().join(" ");
+        self.controls.goal.borrow_mut().replace(goal.clone());
+        self.session.record(&json!({"type": "goal", "goal": goal}))
+    }
+
+    /// Ends the session goal; the model hears it is over on its next step.
+    pub fn clear_goal(&mut self) -> Result<()> {
+        self.controls.goal.borrow_mut().take();
+        self.session.record(&json!({"type": "goal"}))
     }
 
     /// Reasons at another effort from the next request on, on the same model.

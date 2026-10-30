@@ -187,6 +187,8 @@ pub(super) struct App {
     pub(super) retry: Option<(u32, Instant)>,
     /// A snapshot started with the turn still runs on a blocking thread, for the working row.
     pub(super) snapshotting: bool,
+    /// How many snapshots have started: the snapshot word advances one per turn.
+    pub(super) snapshot_seq: usize,
     /// The latest tool outputs and thoughts, for Ctrl+O.
     pub(super) details: Vec<(String, String)>,
     /// How far back Ctrl+O has gone from the newest.
