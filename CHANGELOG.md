@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.27 — 2026-10-30
+
 - A malformed `edits` argument now tells the model to send a list of
   `{old_string, new_string}` objects, and an overlap error says at which line.
 - `scripts/sessions.py` no longer flags tree-moving git commands the peer guard
