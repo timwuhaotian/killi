@@ -38,9 +38,13 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   ChatGPT plan: no key, `killi login chatgpt` signs in and adds the plan's models), `base_url`
   (default `https://api.openai.com/v1`, or `https://api.anthropic.com` for anthropic), one of
   `api_key` or `api_key_env` (the name of an environment variable, which wins when both are
-  set), `custom_headers = { "X-Name" = "value" }`, and `session_header` (a header that carries
+  set), `custom_headers = { "X-Name" = "value" }`, `tool_names = { bash = "run_command" }`
+  (the Responses API sends and reads the mapped names, for an API that refuses another
+  client's tool names), and `session_header` (a header that carries
   the conversation's ID on every request, such as OpenCode Go's `x-opencode-session`).
-  `killi login opencode-go` writes an OpenCode Go provider and its models from the key.
+  `killi login opencode-go` writes an OpenCode Go provider and its models from the key; from
+  the TUI, `/provider` does the same for OpenCode Go and Meta's Muse Code, whose tool-name
+  mapping it writes with it.
 - `[models."<provider>/<model>"]`: `provider` (a `[providers]` name), `model` (the API's
   model id), `protocol` (overrides the provider's `type` for this model), `base_url` (overrides
   the provider's, for a gateway with a URL per API), `cache_control = true`

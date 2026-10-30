@@ -54,6 +54,7 @@ impl Config {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             headers: provider.custom_headers.clone(),
+            tool_names: provider.tool_names.clone(),
             session_header: provider.session_header.clone(),
             max_output: model.max_output_size,
             context_window: model.max_context_size,

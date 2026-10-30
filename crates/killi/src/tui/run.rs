@@ -22,7 +22,7 @@ fn worked_since(tree: &Path, since: Option<u64>) -> Vec<live::Entry> {
 }
 
 /// Runs one future that drives the agent, showing its events and handling keys meanwhile.
-async fn run_turn<F>(
+pub(super) async fn run_turn<F>(
     app: &mut App,
     keys: &mut EventStream,
     rx: &mut mpsc::UnboundedReceiver<Event>,
@@ -241,6 +241,8 @@ pub(super) async fn handle_command(
         }
         "model" if arg.is_empty() => app.open_model_picker(session.config(), false),
         "model" => app.next_input = Some(Input::Model(arg.to_string())),
+        "provider" if arg.is_empty() => app.open_provider_picker(session.config()),
+        "provider" => app.provider_pick(arg),
         "backup-model" if arg.is_empty() => app.open_model_picker(session.config(), true),
         "backup-model" => app.next_input = Some(Input::BackupModel(arg.to_string())),
         "effort" | "thinking" if arg.is_empty() => app.open_effort_picker(session.config()),
@@ -273,6 +275,53 @@ pub(super) async fn handle_command(
         },
     }
     Ok(true)
+}
+
+/// Applies a /provider pick: writes the preset's provider and models with the key, then
+/// re-reads the config so /model lists them at once. The write itself runs inside a turn,
+/// so keys stay live while OpenCode Go's model list is fetched.
+pub(super) async fn provider_add(
+    app: &mut App,
+    session: &mut Setup,
+    keys: &mut EventStream,
+    rx: &mut mpsc::UnboundedReceiver<Event>,
+    preset: &str,
+    key: &str,
+) -> Result<()> {
+    let outcome = Rc::new(RefCell::new(None));
+    let slot = outcome.clone();
+    let (preset, key) = (preset.to_string(), key.to_string());
+    app.begin_busy();
+    run_turn(app, keys, rx, async move {
+        *slot.borrow_mut() = Some(match preset.as_str() {
+            "opencode-go" => crate::login::opencode_go_add(Some(&key)).await.map(|go| (go.added, go.notes)),
+            _ => crate::config::add_muse(&key).map(|added| (added, Vec::new())),
+        });
+        Ok((String::new(), Stop::Completed))
+    })
+    .await?;
+    app.end_busy();
+    let Some(outcome) = outcome.take() else { return Ok(()) };
+    match outcome {
+        Err(e) => app.error_from("/provider", &e),
+        Ok((added, notes)) => {
+            if added.aliases.is_empty() {
+                app.notice("Its models are already in the config; /model picks one.");
+            } else {
+                app.notice(&format!("Added {} — /model picks one.", added.aliases.join(", ")));
+                if let Some(default) = &added.starts_on {
+                    app.notice(&format!("killi starts on `{default}`; /model picks another."));
+                }
+            }
+            for note in &notes {
+                app.notice(note);
+            }
+            if let Err(e) = session.reload() {
+                app.error_from("/reload", &e);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `/goal [<text>|done|clear]`: shows the session goal, sets one the model hears on its

@@ -219,6 +219,7 @@ impl App {
                 let asking = self.asking.take().expect("a question is open");
                 if asking.internal {
                     self.search = None;
+                    self.provider = None;
                 }
                 // A correction with no answer to ride on goes on its own, or it is lost.
                 let note = std::mem::take(&mut self.ask_corrections);
@@ -289,6 +290,9 @@ impl App {
         let asking = self.asking.take().expect("a question is open");
         let answer = typed.unwrap_or_else(|| asking.question.options.get(asking.selected).cloned().unwrap_or_default());
         if asking.internal {
+            if let Some(flow) = self.provider.take() {
+                return self.provider_answer(flow, &answer);
+            }
             return self.search_answer(&answer, asking.secret);
         }
         if !asking.question.plan {

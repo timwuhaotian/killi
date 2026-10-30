@@ -5,6 +5,8 @@
 pub mod chatgpt;
 mod opencode_go;
 
+pub(crate) use opencode_go::{add as opencode_go_add, signed_in as opencode_go_signed_in};
+
 use std::io::IsTerminal;
 use std::time::Duration;
 

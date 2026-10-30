@@ -37,6 +37,12 @@ pub(super) struct SearchFlow {
     pub(super) url: Option<String>,
     pub(super) current: crate::config::SearchConfig,
 }
+
+/// A /provider flow between its questions: the preset being added. Only its key is asked,
+/// so the preset's name is all it holds.
+pub(super) struct ProviderFlow {
+    pub(super) preset: String,
+}
 impl Picker {
     pub(super) fn new(title: String, options: Vec<(String, String, PickerChoice)>, selected: usize) -> Picker {
         let shown = (0..options.len()).collect();
@@ -65,11 +71,35 @@ pub(super) enum PickerChoice {
     Mcp(String),
     Prune(usize),
     Search(String),
+    Provider(String),
 }
 
 /// The counts `/prune` offers to keep, from fewest to most, each removing something.
 pub(super) fn prune_choices(others: usize) -> Vec<usize> {
     [5, 10, 20, 50, 100, 200].into_iter().filter(|&keep| keep < others).collect()
+}
+
+/// A /provider preset's question for its key; empty when killi knows no such preset.
+fn provider_question(preset: &str) -> &'static str {
+    match preset {
+        "muse-code" => "Muse Code API key:",
+        "opencode-go" => "OpenCode Go API key:",
+        _ => "",
+    }
+}
+
+/// A /provider preset's explanation, and the question its key answers.
+fn provider_setup(preset: &str) -> (&'static str, &'static str) {
+    match preset {
+        "opencode-go" => (
+            "Writes an `opencode-go` provider with the key, and the models Go serves. Usage: https://opencode.ai/console",
+            "OpenCode Go API key:",
+        ),
+        _ => (
+            "Writes a `meta` provider on the Responses API with the key, and maps the tool names Meta's client check refuses: bash → run_command, web_search → search_web. The key is the muse CLI's, `LLM|…`; a wrong one shows as HTTP 401 on the first request.",
+            "Muse Code API key:",
+        ),
+    }
 }
 
 impl App {
@@ -107,6 +137,10 @@ impl App {
                         PickerChoice::Prune(keep) => Idle::Input(Input::Prune(keep)),
                         PickerChoice::Search(provider) => {
                             self.search_pick(&provider);
+                            Idle::Continue
+                        }
+                        PickerChoice::Provider(preset) => {
+                            self.provider_pick(&preset);
                             Idle::Continue
                         }
                     };
@@ -342,6 +376,51 @@ impl App {
             format!("{DIM}killi asks {{url}}/search?q=…&format=json. With Docker it starts an instance on localhost:8888 with the json format on; without it, run one yourself and add json to search.formats in its settings.yml.{RESET}"),
             2,
         ));
+    }
+
+    /// The /provider list: the presets killi knows how to add, marked when already in.
+    pub(super) fn open_provider_picker(&mut self, config: &crate::config::Config) {
+        let mark = |on: bool| if on { " · signed in" } else { "" };
+        let muse = config.find_provider(crate::config::muse_ours).is_some_and(|(_, key)| key);
+        let options = vec![
+            (
+                "muse-code".to_string(),
+                format!("Meta's Muse Code subscription, with the key from the muse CLI{}", mark(muse)),
+                PickerChoice::Provider("muse-code".into()),
+            ),
+            (
+                "opencode-go".to_string(),
+                format!("OpenCode Go, with the API key from its console{}", mark(crate::login::opencode_go_signed_in())),
+                PickerChoice::Provider("opencode-go".into()),
+            ),
+        ];
+        self.picker = Some(Picker::new("Provider to add".into(), options, 0));
+    }
+
+    /// `/provider <name>`: the preset's one question — its API key, pasted unseen. What the
+    /// preset writes is said first, so the key's owner knows where it goes.
+    pub(super) fn provider_pick(&mut self, preset: &str) {
+        if provider_question(preset).is_empty() {
+            return self.error("Pick one of the presets: /provider muse-code or /provider opencode-go.");
+        }
+        let (note, question) = provider_setup(preset);
+        self.provider = Some(ProviderFlow { preset: preset.to_string() });
+        self.begin(Kind::Note);
+        self.emit(Line::Words(format!("{DIM}{note}{RESET}"), 2));
+        self.search_ask(question, None, true);
+    }
+
+    /// The preset's key: it goes to the config as the next input applies it.
+    pub(super) fn provider_answer(&mut self, flow: ProviderFlow, answer: &str) {
+        let answer = answer.trim();
+        if answer.is_empty() {
+            let preset = flow.preset.clone();
+            self.provider = Some(flow);
+            self.error("Paste the key; nothing was changed.");
+            return self.search_ask(provider_question(&preset), None, true);
+        }
+        self.commit(format!("  {FIN}↳{RESET} (set)"));
+        self.next_input = Some(Input::Provider(flow.preset, answer.to_string()));
     }
 
     /// One question of the flow, shown as the ask tool's questions are, with the answer typed

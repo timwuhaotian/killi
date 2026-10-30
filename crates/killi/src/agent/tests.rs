@@ -22,6 +22,7 @@ fn test_client_at(alias: &str, base_url: &str) -> Client {
         base_url: base_url.into(),
         api_key: String::new(),
         headers: Default::default(),
+        tool_names: Default::default(),
         session_header: None,
         max_output: None,
         context_window: None,

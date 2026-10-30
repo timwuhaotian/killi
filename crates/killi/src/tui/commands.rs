@@ -69,6 +69,7 @@ pub(super) fn effort_named(model: &str, efforts: &[&str], arg: &str) -> Result<S
 
 /// The built-in commands, in the order the menu lists them.
 pub(super) const COMMANDS: &[Command] = &[
+    Command { name: "provider", aliases: &[], args: "[name]", about: "Add a provider and its models: muse-code or opencode-go" },
     Command { name: "model", aliases: &[], args: "[alias]", about: "Switch model" },
     Command { name: "backup-model", aliases: &[], args: "[alias]", about: "Set the model every session falls back to on a rate limit" },
     Command { name: "mcp", aliases: &[], args: "[server]", about: "Turn MCP servers on or off" },

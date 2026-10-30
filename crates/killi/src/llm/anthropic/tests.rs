@@ -147,6 +147,7 @@ fn max_tokens_is_capped_by_remaining_context() {
         base_url: String::new(),
         api_key: String::new(),
         headers: Default::default(),
+            tool_names: Default::default(),
         session_header: None,
         max_output: Some(4_000),
         context_window: Some(2_000),

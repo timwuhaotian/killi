@@ -63,6 +63,8 @@ pub(super) enum Input {
     Prune(usize),
     /// Applies a /web-search-config pick: the provider, the SearXNG instance and the key.
     Search(String, Option<String>, Option<String>),
+    /// Applies a /provider pick: the preset's name and its pasted API key.
+    Provider(String, String),
 }
 
 pub(super) enum LastEnd {
@@ -155,6 +157,8 @@ pub(super) struct App {
     pub(super) picker: Option<Picker>,
     /// A /web-search-config flow between its questions.
     pub(super) search: Option<SearchFlow>,
+    /// A /provider flow between its questions: the preset being added.
+    pub(super) provider: Option<ProviderFlow>,
     /// The SearXNG instance Docker is starting for that flow, when one is.
     pub(super) searxng: Option<PendingSearxng>,
     /// Input to act on before reading keys again, such as `/model <alias>`.

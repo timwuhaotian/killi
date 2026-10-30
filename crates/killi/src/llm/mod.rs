@@ -348,7 +348,7 @@ impl Client {
         let mut parser: Box<dyn StreamParser> = match self.model.protocol {
             Protocol::OpenAi => Box::<openai::Parser>::default(),
             Protocol::Anthropic => Box::<anthropic::Parser>::default(),
-            Protocol::Responses => Box::<responses::Parser>::default(),
+            Protocol::Responses => Box::new(responses::Parser::new(&self.model.tool_names)),
         };
         let mut reply = Reply::default();
         let mut stream = response.bytes_stream();

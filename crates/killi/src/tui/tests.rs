@@ -68,6 +68,7 @@ mod rows;
             ask_corrections: Vec::new(),
             picker: None,
             search: None,
+            provider: None,
             searxng: None,
             next_input: None,
             effort_later: None,

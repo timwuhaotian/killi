@@ -18,6 +18,10 @@ pub struct NewModel {
     pub images: bool,
     pub thinking: bool,
     pub tools: bool,
+    /// Capabilities beyond those three flags, such as a subscription's `always_thinking`.
+    pub more_capabilities: Vec<&'static str>,
+    /// The short name the model list shows, when the id isn't what users say.
+    pub display: Option<&'static str>,
     pub default_effort: Option<String>,
     pub efforts: Vec<String>,
 }
@@ -34,10 +38,34 @@ pub struct Additions {
     pub comment: &'static str,
 }
 
-/// Adds a sign-in's provider and the models the config doesn't have yet, and says what it
-/// added. A provider already there keeps its table, except for a new `api_key`. A new config,
-/// or one without `default_model`, starts on the first model added.
-pub fn add_models(additions: &Additions) -> Result<()> {
+/// What adding a sign-in's provider and models changed: the config's path, the model aliases
+/// it added (empty when they were all in already), and the alias a config without
+/// `default_model` now starts on.
+pub struct Added {
+    pub path: PathBuf,
+    pub aliases: Vec<String>,
+    pub starts_on: Option<String>,
+}
+
+impl Added {
+    /// The report `killi login` prints.
+    pub fn report(&self) -> String {
+        if self.aliases.is_empty() {
+            return format!("Its models are already in {}.", self.path.display());
+        }
+        let mut out = format!("Added to {}: {}.", self.path.display(), self.aliases.join(", "));
+        match &self.starts_on {
+            Some(default) if self.aliases.contains(default) => out.push_str(&format!("\nkilli starts on `{default}`; /model picks another.")),
+            _ => out.push_str(&format!("\nStart on one with `killi -m {}`, or pick it with /model.", self.aliases[0])),
+        }
+        out
+    }
+}
+
+/// Adds a sign-in's provider and the models the config doesn't have yet. A provider already
+/// there keeps its table, except for a new `api_key`. A new config, or one without
+/// `default_model`, starts on the first model added.
+pub fn add_models(additions: &Additions) -> Result<Added> {
     let dir = killi_home();
     let path = dir.join("config.toml");
     let text = match fs::read_to_string(&path) {
@@ -58,17 +86,12 @@ pub fn add_models(additions: &Additions) -> Result<()> {
     if existed && let Some(toml::Value::String(key)) = additions.provider.get("api_key") {
         set_provider_key(&path, &name, key)?;
     }
-    if added.is_empty() {
-        println!("Its models are already in {}.", path.display());
-        return Ok(());
-    }
-    println!("Added to {}: {}.", path.display(), added.join(", "));
     let config: Config = toml::from_str(&out)?;
-    match config.default_model.as_deref() {
-        Some(default) if added.iter().any(|alias| alias == default) => println!("killi starts on `{default}`; /model picks another."),
-        _ => println!("Start on one with `killi -m {}`, or pick it with /model.", added[0]),
-    }
-    Ok(())
+    let starts_on = match config.default_model.as_deref() {
+        Some(default) if added.iter().any(|alias| alias == default) => Some(default.to_string()),
+        _ => None,
+    };
+    Ok(Added { path, aliases: added, starts_on })
 }
 
 /// The config text with the additions at the end and the rest left as it is, the provider's
@@ -104,7 +127,16 @@ pub(super) fn with_models(text: &str, additions: &Additions) -> Result<(String, 
             entry.insert("max_output_size".into(), toml_int(output));
         }
         let capabilities = [(model.images, "image_in"), (model.thinking, "thinking"), (model.tools, "tool_use")];
-        entry.insert("capabilities".into(), strings(capabilities.into_iter().filter(|(has, _)| *has).map(|(_, name)| name).collect()));
+        let capabilities: Vec<&str> = capabilities
+            .into_iter()
+            .filter(|(has, _)| *has)
+            .map(|(_, name)| name)
+            .chain(model.more_capabilities.iter().copied())
+            .collect();
+        entry.insert("capabilities".into(), strings(capabilities));
+        if let Some(display) = model.display {
+            entry.insert("display_name".into(), display.into());
+        }
         if let Some(effort) = &model.default_effort {
             entry.insert("default_effort".into(), effort.clone().into());
         }

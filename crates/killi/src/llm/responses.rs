@@ -1,6 +1,6 @@
 //! OpenAI Responses, stateless: `store: false`, with encrypted reasoning replayed each turn.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 use serde_json::{Map, Value, json};
@@ -10,6 +10,10 @@ use crate::config::{ResolvedModel, Thinking};
 
 pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value], cache_key: &str) -> Result<Prepared> {
     let (system, history) = system_text(messages);
+    let wire = |name: &Value| {
+        let name = name.as_str().unwrap_or_default();
+        Value::String(model.tool_names.get(name).cloned().unwrap_or_else(|| name.to_string()))
+    };
     let mut body = Map::new();
     body.insert("model".into(), model.model.clone().into());
     body.insert("stream".into(), true.into());
@@ -17,12 +21,12 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
     if !system.is_empty() {
         body.insert("instructions".into(), system.into());
     }
-    body.insert("input".into(), convert_input(history, model.images).into());
+    body.insert("input".into(), convert_input(history, model.images, &model.tool_names).into());
     let tools: Vec<Value> = tools
         .iter()
         .map(|tool| {
             let f = &tool["function"];
-            json!({"type": "function", "name": f["name"], "description": f["description"], "parameters": f["parameters"], "strict": false})
+            json!({"type": "function", "name": wire(&f["name"]), "description": f["description"], "parameters": f["parameters"], "strict": false})
         })
         .collect();
     body.insert("prompt_cache_key".into(), cache_key.into());
@@ -51,7 +55,11 @@ pub(super) fn prepare(model: &ResolvedModel, messages: &[Value], tools: &[Value]
     Ok(Prepared { url: format!("{}/responses", model.base_url), body: serde_json::to_vec(&body)?, headers })
 }
 
-fn convert_input(history: &[Value], images: bool) -> Vec<Value> {
+fn convert_input(history: &[Value], images: bool, tool_names: &BTreeMap<String, String>) -> Vec<Value> {
+    let wire = |name: &Value| {
+        let name = name.as_str().unwrap_or_default();
+        Value::String(tool_names.get(name).cloned().unwrap_or_else(|| name.to_string()))
+    };
     let mut input = Vec::new();
     for message in history {
         match message["role"].as_str() {
@@ -68,7 +76,7 @@ fn convert_input(history: &[Value], images: bool) -> Vec<Value> {
                     input.push(json!({
                         "type": "function_call",
                         "call_id": call["id"],
-                        "name": call["function"]["name"],
+                        "name": wire(&call["function"]["name"]),
                         "arguments": call["function"]["arguments"],
                     }));
                 }
@@ -112,7 +120,15 @@ fn replayable_reasoning(item: &Value) -> bool {
 pub(super) struct Parser {
     /// Output index of each function call, to route argument deltas.
     calls: HashMap<u64, usize>,
+    /// The provider's `tool_names` inverted: the name the API sends back to the session's name.
+    names: HashMap<String, String>,
     terminal: bool,
+}
+
+impl Parser {
+    pub(super) fn new(tool_names: &BTreeMap<String, String>) -> Self {
+        Self { names: tool_names.iter().map(|(ours, wire)| (wire.clone(), ours.clone())).collect(), ..Parser::default() }
+    }
 }
 
 impl StreamParser for Parser {
@@ -136,9 +152,11 @@ impl StreamParser for Parser {
             }
             Some("response.output_item.added") if event["item"]["type"] == "function_call" => {
                 let item = &event["item"];
+                let name = item["name"].as_str().unwrap_or_default();
+                let ours = self.names.get(name).cloned().unwrap_or_else(|| name.to_string());
                 reply.tool_calls.push(ToolCall {
                     id: item["call_id"].as_str().unwrap_or_default().to_string(),
-                    name: item["name"].as_str().unwrap_or_default().to_string(),
+                    name: ours,
                     arguments: String::new(),
                 });
                 self.calls.insert(index, reply.tool_calls.len() - 1);
@@ -239,7 +257,7 @@ mod tests {
                    "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]}),
             json!({"role": "tool", "tool_call_id": "c1", "content": "data"}),
         ];
-        let input = convert_input(&history, true);
+        let input = convert_input(&history, true, &Default::default());
         assert_eq!(input[0], json!({"role": "user", "content": "hi"}));
         assert_eq!(input[1]["encrypted_content"], "e");
         assert_eq!(input[2], json!({"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"}));
@@ -252,7 +270,7 @@ mod tests {
             {"type": "text", "text": "look"},
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
         ]})];
-        let input = convert_input(&history, false);
+        let input = convert_input(&history, false, &Default::default());
         let content = input[0]["content"].clone();
         assert!(content.as_array().unwrap().iter().all(|part| part["type"] != "input_image"), "{content}");
         assert!(content.as_array().unwrap().iter().any(|part| part["text"] == super::IMAGE_OMITTED), "{content}");
@@ -307,6 +325,7 @@ mod tests {
             base_url: "http://localhost".into(),
             api_key: String::new(),
             headers: Default::default(),
+            tool_names: Default::default(),
             session_header: None,
             max_output: None,
             context_window: None,
@@ -341,6 +360,7 @@ mod tests {
             base_url: "http://localhost".into(),
             api_key: String::new(),
             headers: Default::default(),
+            tool_names: Default::default(),
             session_header: None,
             max_output: Some(4_000),
             context_window: Some(2_000),
@@ -365,6 +385,7 @@ mod tests {
             base_url: "https://api.openai.com/v1".into(),
             api_key: String::new(),
             headers: Default::default(),
+            tool_names: Default::default(),
             session_header: None,
             max_output: Some(4_000),
             context_window: Some(272_000),
@@ -379,6 +400,50 @@ mod tests {
         assert_eq!((body["store"].clone(), body["stream"].clone(), body["instructions"].clone()), (json!(false), json!(true), json!("sys")));
         assert!(body["input"].as_array().unwrap().iter().all(|item| item["role"] != "system"), "the plan rejects system items");
         assert!(prepared.headers.iter().all(|(name, _)| name != "authorization"), "the token is added per attempt");
+    }
+
+    #[test]
+    fn mapped_tool_names_go_out_and_come_back() {
+        let model = ResolvedModel {
+            alias: "m".into(),
+            model: "muse".into(),
+            protocol: crate::config::Protocol::Responses,
+            base_url: "https://api.meta.ai/v1".into(),
+            api_key: String::new(),
+            headers: Default::default(),
+            tool_names: BTreeMap::from([
+                ("bash".to_string(), "run_command".to_string()),
+                ("web_search".to_string(), "search_web".to_string()),
+            ]),
+            session_header: None,
+            max_output: None,
+            context_window: None,
+            images: false,
+            thinking: Thinking::Off,
+            cache_control: false,
+            chatgpt: false,
+        };
+        let messages = vec![
+            json!({"role": "user", "content": "list"}),
+            json!({"role": "assistant", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "bash", "arguments": "{\"command\":\"ls\"}"}}]}),
+            json!({"role": "tool", "tool_call_id": "c1", "content": "files"}),
+        ];
+        let tools = vec![
+            json!({"function": {"name": "bash", "description": "Run", "parameters": {}}}),
+            json!({"function": {"name": "web_search", "description": "Search", "parameters": {}}}),
+        ];
+        let prepared = prepare(&model, &messages, &tools, "k").unwrap();
+        let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+        let names: Vec<&str> = body["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["run_command", "search_web"], "the names the API refuses are mapped");
+        assert_eq!(body["input"][1]["name"], "run_command", "a replayed call keeps the wire name");
+
+        let mut parser = Parser::new(&model.tool_names);
+        let mut reply = Reply::default();
+        let mut sink = |_: Delta| {};
+        let added = json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "call_id": "c2", "name": "search_web"}});
+        parser.event(&added, &mut reply, &mut sink).unwrap();
+        assert_eq!(reply.tool_calls[0].name, "web_search", "the call comes back under killi's name");
     }
 
     #[test]

@@ -3,6 +3,7 @@ mod edit;
 mod guide;
 mod import;
 mod models;
+mod muse;
 mod resolve;
 mod yaml;
 
@@ -15,7 +16,8 @@ pub use command::command_guide_if_first;
 pub use edit::{remove_provider_key, set_backup_model, set_model_effort, set_search};
 pub use guide::{guide_model, init, set_up_if_missing};
 pub use import::{import_kimi, import_opencode, import_omp, import_pi};
-pub use models::{Additions, NewModel, add_models};
+pub use models::{Added, Additions, NewModel, add_models};
+pub use muse::{add as add_muse, ours as muse_ours};
 pub(crate) use command::{confirm, read_line, read_secret};
 
 use edit::{set_default_model, set_provider_key};
@@ -171,6 +173,11 @@ pub struct Provider {
     pub api_key_env: Option<String>,
     #[serde(default)]
     pub custom_headers: BTreeMap<String, String>,
+    /// Tool names the API refuses, as `killi's name = "the name sent and read back"`. Meta's
+    /// API, for one, serves a Muse Code subscription only without another client's tool names,
+    /// so the Responses API carries the mapped names both ways.
+    #[serde(default)]
+    pub tool_names: BTreeMap<String, String>,
     /// A header that carries the conversation's ID on every request, for a gateway that routes
     /// and caches by it (OpenCode Go reads `x-opencode-session`).
     pub session_header: Option<String>,
@@ -225,6 +232,9 @@ pub struct ResolvedModel {
     pub base_url: String,
     pub api_key: String,
     pub headers: BTreeMap<String, String>,
+    /// The provider's `tool_names`, inverted as each reply is read: the name the API sent
+    /// back to the killi name the session and its history keep.
+    pub tool_names: BTreeMap<String, String>,
     /// The provider's `session_header`, sent with the session's ID.
     pub session_header: Option<String>,
     pub max_output: Option<u64>,
@@ -253,6 +263,7 @@ impl std::fmt::Debug for ResolvedModel {
             .field("base_url", &self.base_url)
             .field("api_key", &key)
             .field("headers", &self.headers)
+            .field("tool_names", &self.tool_names)
             .field("session_header", &self.session_header)
             .field("max_output", &self.max_output)
             .field("context_window", &self.context_window)

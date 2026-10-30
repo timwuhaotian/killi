@@ -31,8 +31,54 @@ fn ours(provider: &Provider) -> bool {
 }
 
 /// Whether the config has OpenCode Go with a key.
-pub(super) fn signed_in() -> bool {
+pub(crate) fn signed_in() -> bool {
     Config::load().is_ok_and(|config| config.find_provider(ours).is_some_and(|(_, key)| key))
+}
+
+/// What adding OpenCode Go wrote: the models now in the config, and what the user should
+/// know besides them, such as the models left out.
+pub(crate) struct Outcome {
+    pub added: crate::config::Added,
+    pub notes: Vec<String>,
+}
+
+/// Adds OpenCode Go's provider and models: the models Go serves, each on the API models.dev
+/// names for it. `key` is the pasted key; `None` reads `$OPENCODE_API_KEY` at request time
+/// (`api_key_env` in the config).
+pub(crate) async fn add(key: Option<&str>) -> Result<Outcome> {
+    let http = super::http_client()?;
+    let mut notes = Vec::new();
+    let served = match served(&http).await {
+        Ok(served) => Some(served),
+        Err(error) => {
+            notes.push(format!("could not list the models Go serves ({error:#}); taking models.dev's list"));
+            None
+        }
+    };
+    let catalog = catalog(&http).await.context("could not read OpenCode Go's models from models.dev")?;
+    let (models, skipped, dropped) = go_models(&catalog, served.as_deref());
+    if !skipped.is_empty() {
+        notes.push(format!("Left out, as they take Gemini's API, which killi doesn't speak: {}.", skipped.join(", ")));
+    }
+    if !dropped.is_empty() {
+        notes.push(format!("Left out, as their URLs are outside OpenCode Go: {}.", dropped.join(", ")));
+    }
+    let mut provider = toml::Table::new();
+    provider.insert("type".into(), "openai".into());
+    provider.insert("base_url".into(), OPENAI_URL.into());
+    provider.insert("session_header".into(), SESSION_HEADER.into());
+    match key {
+        Some(key) => provider.insert("api_key".into(), key.into()),
+        None => provider.insert("api_key_env".into(), KEY_ENV.into()),
+    };
+    let added = crate::config::add_models(&Additions {
+        name: "opencode-go",
+        ours,
+        provider,
+        models,
+        comment: "OpenCode Go, signed in with `killi login opencode-go`.",
+    })?;
+    Ok(Outcome { added, notes })
 }
 
 /// `killi login opencode-go`: takes the key, pasted or from `$OPENCODE_API_KEY`, and adds
@@ -40,7 +86,7 @@ pub(super) fn signed_in() -> bool {
 pub(super) async fn login() -> Result<()> {
     eprintln!("OpenCode Go uses the API key from {CONSOLE}, where you subscribe.");
     let from_env = std::env::var(KEY_ENV).is_ok_and(|key| !key.is_empty()) && crate::config::confirm(&format!("Use the key in ${KEY_ENV}?"))?;
-    let key = match from_env {
+    let pasted = match from_env {
         true => None,
         false => {
             let key = crate::config::read_secret("Paste your OpenCode Go API key: ")?;
@@ -50,37 +96,11 @@ pub(super) async fn login() -> Result<()> {
             Some(key)
         }
     };
-    let http = super::http_client()?;
-    let served = match served(&http).await {
-        Ok(served) => Some(served),
-        Err(error) => {
-            eprintln!("killi: could not list the models Go serves ({error:#}); taking models.dev's list");
-            None
-        }
-    };
-    let catalog = catalog(&http).await.context("could not read OpenCode Go's models from models.dev")?;
-    let (models, skipped, dropped) = go_models(&catalog, served.as_deref());
-    let mut provider = toml::Table::new();
-    provider.insert("type".into(), "openai".into());
-    provider.insert("base_url".into(), OPENAI_URL.into());
-    provider.insert("session_header".into(), SESSION_HEADER.into());
-    match key {
-        Some(key) => provider.insert("api_key".into(), key.into()),
-        None => provider.insert("api_key_env".into(), KEY_ENV.into()),
-    };
-    crate::config::add_models(&Additions {
-        name: "opencode-go",
-        ours,
-        provider,
-        models,
-        comment: "OpenCode Go, signed in with `killi login opencode-go`.",
-    })?;
-    if !skipped.is_empty() {
-        println!("Left out, as they take Gemini's API, which killi doesn't speak: {}.", skipped.join(", "));
+    let outcome = add(pasted.as_deref()).await?;
+    for note in &outcome.notes {
+        println!("killi: {note}");
     }
-    if !dropped.is_empty() {
-        println!("Left out, as their URLs are outside OpenCode Go: {}.", dropped.join(", "));
-    }
+    println!("{}", outcome.added.report());
     println!("The key isn't checked here; a wrong one shows as HTTP 401 on the first request. Usage: {CONSOLE}");
     Ok(())
 }
@@ -166,6 +186,8 @@ fn go_models(catalog: &BTreeMap<String, Value>, served: Option<&[String]>) -> (V
             default_effort: None,
             // killi's own "off" stands for "none".
             efforts: efforts.filter(|effort| *effort != "none").map(String::from).collect(),
+            more_capabilities: Vec::new(),
+            display: None,
         });
     }
     (models, skipped, dropped)

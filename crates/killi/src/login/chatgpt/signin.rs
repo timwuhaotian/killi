@@ -82,13 +82,13 @@ pub async fn login() -> Result<()> {
     eprintln!("Signed in to ChatGPT as {}.", saved.email);
     eprintln!("You're using your ChatGPT plan: requests in killi count toward its usage. Manage usage: {USAGE_URL}");
     match plan_models(&http, &saved.access_token).await {
-        Ok(models) if !models.is_empty() => crate::config::add_models(&Additions {
+        Ok(models) if !models.is_empty() => println!("{}", crate::config::add_models(&Additions {
             name: "chatgpt",
             ours: |provider| provider.kind == "chatgpt",
             provider: toml::Table::from_iter([("type".to_string(), toml::Value::from("chatgpt"))]),
             models,
             comment: "Your ChatGPT plan, signed in with `killi login chatgpt`.",
-        })?,
+        })?.report()),
         Ok(_) => eprintln!("killi: your plan listed no models; add them to ~/.killi/config.toml under a `type = \"chatgpt\"` provider"),
         Err(error) => eprintln!("killi: could not list your plan's models: {error:#}"),
     }
