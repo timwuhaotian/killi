@@ -29,7 +29,9 @@ impl Agent {
             // this session switches to the backup it was given and asks it once. The switch is
             // the switch `switch_model` makes, so the backup becomes the model the session runs
             // on and the log notes it.
-            Err(error) => match Self::fallback_reason(&error).zip(self.backup.take()) {
+            Err(error) => match Self::fallback_reason(&error)
+                .and_then(|reason| Some((reason, self.backup.take()?)))
+            {
                 Some((reason, backup)) => {
                     let from = self.client.model.alias.clone();
                     self.switch_client((*backup).clone())?;
