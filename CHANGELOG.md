@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.29 — 2026-10-31
+
 - The key pasted into `/provider` takes effect when you press Enter. Since 0.6.24 it waited
   for the next message: the screen showed `(set)` and nothing was written until something
   else was sent. A typed last answer to `/web-search-config` (a Tavily key, a SearXNG key)
