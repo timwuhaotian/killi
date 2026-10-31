@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.32 — 2026-11-01
+
+- Plan mode no longer refuses a read-only pipeline for opening with `cd <dir> &&`, and its
+  refusal names the segment it stopped at. `agent_swarm` sent `items` as a string now hears
+  that, instead of being told it sent too few items.
+
 ## 0.6.31 — 2026-10-31
 
 - Skill and MCP installers can find killi. `install.sh` now creates `~/.killi`, the folder

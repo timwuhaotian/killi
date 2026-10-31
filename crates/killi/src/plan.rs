@@ -2,7 +2,10 @@
 //! refused, and bash runs only commands known to be read-only.
 
 /// Commands whose every form only reads. Matched as the start of each pipeline segment.
+/// `cd` is here because a segment only moves the shell the other segments run in; each of
+/// them is still checked on its own.
 const READ_ONLY: &[&str] = &[
+    "cd",
     "ls",
     "cat",
     "head",
@@ -78,24 +81,27 @@ const READ_ONLY: &[&str] = &[
     "killi ask",
 ];
 
-/// Whether `command` may run in plan mode, given extra allowed prefixes from config.
-pub fn bash_allowed(command: &str, extra: &[String]) -> bool {
+/// The first segment of `command` plan mode refuses, if any, so the refusal can name it.
+/// `extra` holds additional allowed prefixes from config.
+/// The segment comes from the cleaned command, so a let-through redirect (`2>&1`,
+/// `>/dev/null`) is missing from its text.
+pub fn bash_refused(command: &str, extra: &[String]) -> Option<String> {
     let cleaned = command
         .replace("2>&1", "")
         .replace(">/dev/null", "")
         .replace("> /dev/null", "");
-    if cleaned.contains('>')
-        || cleaned.contains("$(")
-        || cleaned.contains('`')
-        || cleaned.contains("<(")
-    {
-        return false;
-    }
     cleaned
         .split(['|', ';', '&', '\n'])
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
-        .all(|segment| segment_allowed(segment, extra))
+        .find(|segment| {
+            segment.contains('>')
+                || segment.contains("$(")
+                || segment.contains('`')
+                || segment.contains("<(")
+                || !segment_allowed(segment, extra)
+        })
+        .map(str::to_string)
 }
 
 fn segment_allowed(segment: &str, extra: &[String]) -> bool {
@@ -363,12 +369,18 @@ pub const OFF: &str =
 
 #[cfg(test)]
 mod tests {
-    use super::bash_allowed;
+    use super::bash_refused;
+
+    fn bash_allowed(command: &str, extra: &[String]) -> bool {
+        bash_refused(command, extra).is_none()
+    }
 
     #[test]
     fn read_only_commands_pass() {
         for command in [
             "ls -la",
+            "cd sub && rg slugify src | head -20",
+            "cd /tmp; cat notes.txt | wc -l",
             "rg slugify src | head -20",
             "git log --oneline -5 && git status",
             "cargo check 2>&1 | tail -30",
@@ -397,6 +409,23 @@ mod tests {
         ] {
             assert!(!bash_allowed(command, &[]), "{command}");
         }
+    }
+
+    #[test]
+    fn the_refusal_names_the_segment() {
+        assert_eq!(
+            bash_refused("cd sub && rm x | head -1", &[]),
+            Some("rm x".to_string())
+        );
+        assert_eq!(
+            bash_refused("ls | tee out", &[]),
+            Some("tee out".to_string())
+        );
+        assert_eq!(
+            bash_refused("echo hi > notes.txt", &[]).as_deref(),
+            Some("echo hi > notes.txt")
+        );
+        assert_eq!(bash_refused("cd sub && ls 2>&1 | head -1", &[]), None);
     }
 
     #[test]

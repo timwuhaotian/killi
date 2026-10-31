@@ -464,6 +464,39 @@ async fn plan_mode_blocks_mcp_tool_calls_but_lists_tools() {
     assert!(!listed.text.contains("Plan mode"), "{}", listed.text);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn plan_mode_lets_a_cd_before_read_only_commands_and_names_what_it_refuses() {
+    let mut agent = idle_agent("plan-bash", Controls::default(), Rc::new(|_| {}));
+    agent.controls.plan.set(true);
+    let bash = |id: &str, command: &str| ToolCall {
+        id: id.into(),
+        name: "bash".into(),
+        arguments: json!({"command": command}).to_string(),
+    };
+    let ran = agent
+        .dispatch(
+            &bash("a", "cd . && echo planned"),
+            &json!({"command": "cd . && echo planned"}),
+        )
+        .await;
+    assert!(
+        !ran.is_error && ran.text.contains("planned"),
+        "{}",
+        ran.text
+    );
+    let blocked = agent
+        .dispatch(
+            &bash("b", "cd . && rm x"),
+            &json!({"command": "cd . && rm x"}),
+        )
+        .await;
+    assert!(
+        blocked.is_error && blocked.text.contains("`rm x` isn't one"),
+        "{}",
+        blocked.text
+    );
+}
+
 #[test]
 fn a_subagent_in_plan_mode_hears_it_first() {
     let mut agent = idle_agent("plan-child", Controls::default(), Rc::new(|_| {}));
@@ -839,7 +872,10 @@ fn a_session_with_only_reminders_left_is_unused() {
         .push(json!({"role": "user", "content": plan::ON}))
         .unwrap();
     agent.discard_if_unused();
-    assert!(!agent.session.log_path.exists(), "a taken-back prompt leaves nothing");
+    assert!(
+        !agent.session.log_path.exists(),
+        "a taken-back prompt leaves nothing"
+    );
 
     let mut agent = idle_agent("discard-said", Controls::default(), Rc::new(|_| {}));
     agent

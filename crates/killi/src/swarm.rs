@@ -22,13 +22,30 @@ pub fn prompts(args: &Value) -> Result<Vec<(String, String)>, String> {
     if !template.contains(ITEM) {
         return Err(format!("prompt_template must contain {ITEM}."));
     }
-    let items: Vec<String> = args["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.as_str().map(|s| s.trim().to_string()))
-        .filter(|item| !item.is_empty())
-        .collect();
+    let raw_items = match args.get("items") {
+        Some(Value::Array(items)) => items,
+        Some(other) => {
+            let kind = match other {
+                Value::String(_) => "a string",
+                Value::Object(_) => "an object",
+                Value::Number(_) => "a number",
+                Value::Bool(_) => "a boolean",
+                _ => "null",
+            };
+            return Err(format!("Send `items` as a list of strings, not as {kind}."));
+        }
+        None => return Err("agent_swarm needs at least 2 items; for one task, use agent.".into()),
+    };
+    let mut items: Vec<String> = Vec::new();
+    for (n, item) in raw_items.iter().enumerate() {
+        let Some(item) = item.as_str() else {
+            return Err(format!("items[{}] must be a string.", n + 1));
+        };
+        let item = item.trim();
+        if !item.is_empty() {
+            items.push(item.to_string());
+        }
+    }
     if items.len() < 2 {
         return Err("agent_swarm needs at least 2 items; for one task, use agent.".into());
     }
@@ -151,6 +168,15 @@ mod tests {
             prompts(&json!({"prompt_template": "{{item}}", "items": ["a"]}))
                 .unwrap_err()
                 .contains("at least 2")
+        );
+        assert_eq!(
+            prompts(&json!({"prompt_template": "{{item}}", "items": "[a, b]"})).unwrap_err(),
+            "Send `items` as a list of strings, not as a string."
+        );
+        assert!(
+            prompts(&json!({"prompt_template": "{{item}}", "items": ["a", 2]}))
+                .unwrap_err()
+                .contains("items[2] must be a string")
         );
         assert!(
             prompts(&json!({"prompt_template": "{{item}}", "items": ["a", "a"]}))

@@ -261,14 +261,15 @@ impl Agent {
             )));
         }
         if call.name == "bash"
-            && !plan::bash_allowed(
+            && let Some(segment) = plan::bash_refused(
                 args["command"].as_str().unwrap_or_default(),
                 &self.settings.plan_allow,
             )
         {
-            return Some(tools::Output::error(
-                "Plan mode is on: bash runs only read-only commands (ls, rg, git log, cargo check, …), without redirects. Finish the plan and call exit_plan_mode.",
-            ));
+            let segment: String = segment.chars().take(120).collect();
+            return Some(tools::Output::error(format!(
+                "Plan mode is on: bash runs only read-only commands (ls, rg, git log, cargo check, …), without redirects; `{segment}` isn't one. Finish the plan and call exit_plan_mode."
+            )));
         }
         None
     }
