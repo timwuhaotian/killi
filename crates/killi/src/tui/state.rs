@@ -62,7 +62,7 @@ pub(super) enum Input {
     Command(String, String, Vec<Image>),
     Resume(PathBuf),
     Model(String),
-    /// The model every session falls back to on a rate limit: `/backup-model <alias>`, or
+    /// The model every session falls back to when the primary keeps failing: `/backup-model <alias>`, or
     /// `none` to drop it. Saved in the config, so every session starts on it.
     BackupModel(String),
     Effort(String),
@@ -110,7 +110,7 @@ pub(super) struct PastAsk {
 #[derive(Default)]
 pub(super) struct Status {
     pub(super) model: String,
-    /// The model this session falls back to on a rate limit, if one is set.
+    /// The model this session falls back to when the primary keeps failing, if one is set.
     pub(super) backup: Option<String>,
     /// The thinking effort, as `Thinking::label` names it.
     pub(super) thinking: String,

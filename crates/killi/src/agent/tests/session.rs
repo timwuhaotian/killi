@@ -38,12 +38,18 @@ async fn a_rate_limited_primary_switches_to_the_backup() {
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn a_non_rate_limit_error_keeps_the_backup() {
-    let auth = "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"bad key\"}}".to_string();
-    let primary = serve_raw(vec![auth]).await;
+/// Runs one request against a primary that answers with `primary_replies` (or nothing at all
+/// when it is `None`: a refused connection) and returns the agent and the request's result.
+async fn request_with_backup(name: &str, primary: Option<Vec<String>>) -> (Agent, Result<Reply>) {
+    let primary = match primary {
+        Some(replies) => serve_raw(replies).await,
+        None => {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            format!("http://{}", listener.local_addr().unwrap())
+        }
+    };
     let backup = answering_stub("from backup").await;
-    let mut agent = idle_agent("backup-keep", Controls::default(), Rc::new(|_| {}));
+    let mut agent = idle_agent(name, Controls::default(), Rc::new(|_| {}));
     agent
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
@@ -52,22 +58,69 @@ async fn a_non_rate_limit_error_keeps_the_backup() {
         .unwrap();
     agent.client = Rc::new(test_client_at("primary", &primary));
     agent.set_backup(test_client_at("backup", &backup));
+    let result = agent.request().await;
+    (agent, result)
+}
 
-    let error = agent.request().await.unwrap_err();
-    assert_eq!(
-        error.downcast_ref::<ProviderError>().map(|p| p.kind),
-        Some(ErrorKind::Auth)
+fn failing(status: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\nretry-after: 0\r\nconnection: close\r\n\r\n{body}"
+    )
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_server_error_primary_switches_to_the_backup() {
+    let down = failing(
+        "503 Service Unavailable",
+        "{\"error\":{\"message\":\"overloaded\"}}",
     );
-    assert_eq!(
-        agent.model_alias(),
-        "primary",
-        "an auth error leaves the running model alone"
+    let (agent, reply) = request_with_backup("backup-5xx", Some(vec![down; 10])).await;
+    assert_eq!(reply.unwrap().text, "from backup");
+    assert_eq!(agent.model_alias(), "backup");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_spent_quota_switches_to_the_backup() {
+    let spent = failing(
+        "429 Too Many Requests",
+        "{\"error\":{\"message\":\"usage limit reached\"}}",
     );
-    assert_eq!(
-        agent.backup_alias(),
-        Some("backup"),
-        "the backup is kept for a later rate limit"
+    let (agent, reply) = request_with_backup("backup-quota", Some(vec![spent])).await;
+    assert_eq!(reply.unwrap().text, "from backup");
+    assert_eq!(agent.model_alias(), "backup");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unreachable_primary_switches_to_the_backup() {
+    let (agent, reply) = request_with_backup("backup-refused", None).await;
+    assert_eq!(reply.unwrap().text, "from backup");
+    assert_eq!(agent.model_alias(), "backup");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_rejected_key_or_request_switches_to_the_backup() {
+    for (name, status) in [
+        ("backup-401", "401 Unauthorized"),
+        ("backup-400", "400 Bad Request"),
+        ("backup-404", "404 Not Found"),
+    ] {
+        let rejected = failing(status, "{\"error\":{\"message\":\"nope\"}}");
+        let (agent, reply) = request_with_backup(name, Some(vec![rejected])).await;
+        assert_eq!(reply.unwrap().text, "from backup", "{status}");
+        assert_eq!(agent.model_alias(), "backup", "{status}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_overflow_keeps_the_primary_and_the_backup() {
+    let long = failing(
+        "400 Bad Request",
+        "{\"error\":{\"message\":\"maximum context length exceeded\"}}",
     );
+    let (agent, reply) = request_with_backup("backup-overflow", Some(vec![long])).await;
+    assert!(reply.is_err());
+    assert_eq!(agent.model_alias(), "primary");
+    assert_eq!(agent.backup_alias(), Some("backup"));
 }
 
 #[tokio::test(flavor = "current_thread")]

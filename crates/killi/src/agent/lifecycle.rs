@@ -199,8 +199,8 @@ impl Agent {
         self.record_model()
     }
 
-    /// Sets this session's fallback provider: what it asks once the primary gives up on a rate
-    /// limit. The config's `backup_model` — what `/backup-model` picks — names it for every
+    /// Sets this session's fallback provider: what it asks once the primary gives up after its
+    /// retries on a 4xx, 5xx or network failure. The config's `backup_model` — what `/backup-model` picks — names it for every
     /// session, so no log record is needed to keep it.
     pub fn set_backup(&mut self, client: Client) {
         self.backup = Some(Rc::new(client));
@@ -300,12 +300,22 @@ impl Agent {
         &self.client.model.alias
     }
 
-    /// Whether a provider failure was the primary rate-limiting its requests — not a spent
-    /// quota or anything else — which is the only failure that switches a session to its backup.
-    pub(super) fn is_rate_limited(error: &anyhow::Error) -> bool {
-        error
-            .downcast_ref::<ProviderError>()
-            .is_some_and(|provider| provider.kind == ErrorKind::RateLimited)
+    /// Why the primary can't be asked right now, when the backup should take over: after the
+    /// retries it still rate-limits, has spent its quota, rejects the key or the request (any
+    /// 4xx), fails on its side (5xx), can't be reached or answers with garbage. Only overflow
+    /// and rejected media don't switch: compaction and stripping the images fix those on the
+    /// same model, and the turn loop does it.
+    pub(super) fn fallback_reason(error: &anyhow::Error) -> Option<&'static str> {
+        let provider = error.downcast_ref::<ProviderError>()?;
+        match provider.kind {
+            ErrorKind::Overflow | ErrorKind::Media => None,
+            ErrorKind::RateLimited => Some("is rate-limited"),
+            ErrorKind::Quota => Some("has spent its quota"),
+            ErrorKind::Auth => Some("rejected its credentials"),
+            ErrorKind::Transport => Some("can't be reached"),
+            ErrorKind::BadResponse => Some("sent an unusable response"),
+            ErrorKind::Other => Some("keeps failing"),
+        }
     }
 
     /// Whether the model takes images (`image_in` in its capabilities).

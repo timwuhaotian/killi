@@ -111,7 +111,7 @@ pub(super) const COMMANDS: &[Command] = &[
         name: "backup-model",
         aliases: &[],
         args: "[alias]",
-        about: "Set the model every session falls back to on a rate limit",
+        about: "Set the model every session falls back to when the primary keeps failing",
     },
     Command {
         name: "mcp",

@@ -331,7 +331,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                                 session.set_backup_model(Some(&alias));
                                 app.show_model(&agent, session.config());
                                 app.redraw_banner(&agent, &session, &snapshots);
-                                app.notice(&format!("Backup model {alias}, here and in every new session. A rate limit on {} switches to it.", agent.model_alias()));
+                                app.notice(&format!("Backup model {alias}, here and in every new session. If {} keeps failing (4xx, 5xx or network errors after retries), the session switches to it.", agent.model_alias()));
                             }
                             Err(e) => app.error_from("/backup-model", &e),
                         }

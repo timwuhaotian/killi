@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.30 — 2026-10-31
+
+- The backup model (`/backup-model`) now takes over whenever the primary keeps failing, not
+  only on a 429 rate limit: after the retries, any 4xx or 5xx (a spent quota, a rejected key
+  or request, a server error), an unreachable provider or an unusable response switches the
+  session — or the subagent — to it and the turn carries on. A full context and rejected
+  images still don't: compaction and stripping the images fix those on the same model.
+
 ## 0.6.29 — 2026-10-31
 
 - The key pasted into `/provider` takes effect when you press Enter. Since 0.6.24 it waited

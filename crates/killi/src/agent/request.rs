@@ -25,27 +25,26 @@ impl Agent {
             .await
         {
             Ok(reply) => reply,
-            Err(error) if !Self::is_rate_limited(&error) => {
-                self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
-                return Err(error);
-            }
-            // The primary spent its retries on a rate limit: this session switches to the
-            // backup it was given and asks it once. The switch is the switch `switch_model`
-            // makes, so the backup becomes the model the session runs on and the log notes it.
-            Err(error) => match self.backup.take() {
-                Some(backup) => {
+            // The primary spent its retries on a failure that is about it, not the request:
+            // this session switches to the backup it was given and asks it once. The switch is
+            // the switch `switch_model` makes, so the backup becomes the model the session runs
+            // on and the log notes it.
+            Err(error) => match Self::fallback_reason(&error)
+                .and_then(|reason| self.backup.take().map(|backup| (reason, backup)))
+            {
+                Some((reason, backup)) => {
                     let from = self.client.model.alias.clone();
                     self.switch_client((*backup).clone())?;
                     // A subagent that falls back keeps the session on its own model, so it
                     // says what it did itself.
                     let note = if self.depth == 0 {
                         format!(
-                            "{from} is rate-limited, so this session switched to its backup {}.",
+                            "{from} {reason}, so this session switched to its backup {}.",
                             self.client.model.alias
                         )
                     } else {
                         format!(
-                            "{from} is rate-limited, so this subagent switched to the backup {}.",
+                            "{from} {reason}, so this subagent switched to the backup {}.",
                             self.client.model.alias
                         )
                     };
