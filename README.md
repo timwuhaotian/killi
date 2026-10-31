@@ -271,6 +271,9 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
   when it applies, and `/<name>` runs one directly. Other folders: `[skills] dirs = [...]`.
   One is built in: `/update-config` tells the agent every file and key of this version's
   configuration, so it can say where things are, what a setting does, or make a change.
+  Project installs from `npx skills add` (any agent that uses `.agents/skills`) land there, and
+  so do global installs with `-g -a pi` (or `codex`, `cline`), so killi sees them. Installers
+  look for killi by the `~/.killi` folder, which `install.sh` creates.
 - **MCP:** servers from `~/.killi/mcp.json` and the project's `.mcp.json`, in the usual
   `{"mcpServers": {...}}` format (stdio or HTTP). The agent reaches them through one `mcp` tool,
   and a server starts, and its tools load, the first time it's used. To give a project's
@@ -279,7 +282,8 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
   killi session on the machine uses the same server instead of starting its own; it exits 15
   minutes after the last session lets go. User servers start in your home folder, project
   servers in the project root. `/mcp` lists the servers and turns one on or off, for this
-  session and the next ones.
+  session and the next ones. The project `.mcp.json` is the file `add-mcp` writes for Claude
+  Code, so servers added there reach killi too.
 - **Hooks** use Claude Code's protocol (JSON on stdin; exit code 2 blocks and tells the model
   why):
 

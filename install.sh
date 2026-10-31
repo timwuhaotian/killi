@@ -16,6 +16,8 @@ actual=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
 [ -n "$expected" ] && [ "$expected" = "$actual" ] || { echo "checksum mismatch; not installing" >&2; exit 1; }
 
 mkdir -p "$dest"
+# Skill and MCP installers (npx skills, add-mcp) detect killi by this folder.
+mkdir -p "$HOME/.killi"
 chmod 755 "$tmp"
 mv "$tmp" "$dest/killi"
 trap - EXIT

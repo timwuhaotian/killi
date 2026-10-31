@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.31 — 2026-10-31
+
+- Skill and MCP installers can find killi. `install.sh` now creates `~/.killi`, the folder
+  `npx skills` and `add-mcp` look for, and the README says which shared folders killi reads
+  (`.agents/skills`, `.mcp.json`, `~/.killi/mcp.json`), so installs for other agents that use
+  them reach killi. Global skill installs: `npx skills add <repo> -g -a pi`.
+
 ## 0.6.30 — 2026-10-31
 
 - The backup model (`/backup-model`) now takes over whenever the primary keeps failing, not
