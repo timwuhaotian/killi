@@ -78,6 +78,10 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => return true,
+            KeyCode::Char('c') if ctrl && self.editor.selection().is_some() => {
+                self.copy_selection();
+                self.editor.deselect();
+            }
             KeyCode::Char('c') if ctrl && !self.editor.is_empty() => self.editor.clear(),
             KeyCode::Char('c') if ctrl => return true,
             KeyCode::Enter if !newline_key(&key) => self.send_busy(),
@@ -205,8 +209,9 @@ impl App {
         }
     }
 
-    pub(super) fn begin_turn(&mut self, prompt: &str) {
-        self.commit_prompt(prompt);
+    /// Starts a turn on `prompt`, held in the live area until something of the turn is printed.
+    pub(super) fn begin_turn(&mut self, prompt: &str, images: &[Image]) {
+        self.held_prompt = Some((prompt.to_string(), images.to_vec()));
         self.ask_past.clear();
         self.ask_view = None;
         self.ask_corrections.clear();
@@ -214,7 +219,7 @@ impl App {
     }
 
     /// Prints what the user typed as their message block.
-    fn commit_prompt(&mut self, prompt: &str) {
+    pub(super) fn commit_prompt(&mut self, prompt: &str) {
         self.commit(String::new());
         let prompt = prompt.to_string();
         self.emit(Line::block(move |width| prompt_rows(&prompt, width)));
@@ -292,6 +297,7 @@ impl App {
         after: Totals,
     ) {
         let elapsed = self.busy.map(|t| t.elapsed()).unwrap_or_default();
+        self.release_prompt();
         self.end_busy();
         if let Some(asking) = self.asking.take() {
             let _ = asking.question.reply.send(String::new());

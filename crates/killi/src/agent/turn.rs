@@ -15,6 +15,7 @@ impl Agent {
         // The breaker is for a loop inside one turn; a call the user asks for again is not one.
         self.repeats.clear();
         self.swarm_used = 0;
+        self.pending_prompt = None;
         // A blocked prompt leaves no trace: the notes below are taken only once this passes,
         // so nothing already consumed is lost to a prompt the model never sees.
         let submitted = self
@@ -43,9 +44,12 @@ impl Agent {
                     .context,
             );
         }
+        // The notes so far are one-shot; the hook's context comes again with a prompt sent again.
+        let carried = notes.clone();
         notes.extend(submitted.context);
         // Messages left while the session was idle come before the prompt, so it stays last.
         self.push_peer_notes()?;
+        let at = self.messages.len();
         let content = if notes.is_empty() {
             user.to_string()
         } else {
@@ -56,6 +60,11 @@ impl Agent {
         };
         self.push(json!({"role": "user", "content": content}))?;
         self.push_images(images)?;
+        self.pending_prompt = Some(PendingPrompt {
+            at,
+            count: self.messages.len() - at,
+            notes: carried,
+        });
         let mut continuations = 0;
         // Every part of a reply cut off at the output token limit: only their whole text
         // answers the turn, whether shown, reported by a subagent or printed by `--json`.
@@ -226,6 +235,33 @@ impl Agent {
             self.push(json!({"role": "user", "content": format!("<system-reminder>These AGENTS.md files apply to paths you just used but aren't in your instructions. Read them before changing anything in those folders:{list}</system-reminder>")}))?;
         }
         Ok(())
+    }
+
+    /// Takes back the turn's prompt when the model has answered none of it, as if it was never
+    /// sent: the prompt and its images leave the history, the notes it carried wait for the next
+    /// prompt, and the log records the shorter history. The reminders appended after it stay,
+    /// and so does everything before it, so the cached prefix still hits. False once a reply or
+    /// a rewrite has come after it. For the terminal, which owns that call.
+    pub fn retract(&mut self) -> Result<bool> {
+        let Some(prompt) = self.pending_prompt.take() else {
+            return Ok(false);
+        };
+        let end = prompt.at + prompt.count;
+        if self.messages.len() < end || self.messages[prompt.at]["role"] != "user" {
+            return Ok(false);
+        }
+        Rc::make_mut(&mut self.messages).drain(prompt.at..end);
+        self.accounted_messages = self.accounted_messages.min(prompt.at);
+        let mut notes = prompt.notes;
+        notes.append(&mut self.next_notes);
+        self.next_notes = notes;
+        self.share();
+        self.session.record(&json!({
+            "type": "compaction",
+            "cause": {"retracted": prompt.at},
+            "messages": *self.messages,
+        }))?;
+        Ok(true)
     }
 
     /// Appends the messages other sessions left since the last step.

@@ -197,6 +197,16 @@ impl Snapshots {
         &self.work_tree
     }
 
+    /// How many turns have a snapshot, for `forget_after`.
+    pub fn taken(&self) -> usize {
+        self.trees.len()
+    }
+
+    /// Forgets every snapshot after the first `count`, for a turn taken back before it ran.
+    pub fn forget_after(&mut self, count: usize) {
+        self.trees.truncate(count);
+    }
+
     /// When the snapshot the next undo goes back to was taken, in ms since the epoch.
     pub fn last_taken(&self) -> Option<u64> {
         self.trees.last().map(|(_, at)| *at)

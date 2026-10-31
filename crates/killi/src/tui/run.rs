@@ -455,12 +455,13 @@ pub(super) async fn prompt_turn(
     prompt: &str,
     images: &[Image],
 ) -> Result<()> {
-    app.begin_turn(shown);
+    app.begin_turn(shown, images);
     app.draw()?;
     app.undo_warned = false;
     app.peer_tells = 0;
     app.live_turn(Some(shown));
     let before = Totals::of(agent);
+    let taken = snapshots.taken();
     // The snapshot's git commands run on a blocking thread while the turn's first request
     // is already in flight; the agent waits for the tree before its first tool call, so the
     // tree still predates every change the turn makes.
@@ -484,6 +485,12 @@ pub(super) async fn prompt_turn(
     } else {
         run_turn(app, keys, rx, agent.run(prompt, images)).await?
     };
+    if matches!(ended, Ended::Interrupted) && app.take_back(agent)? {
+        // Nothing ran, so /undo still goes back to the turn before this one.
+        snapshots.forget_after(taken);
+        app.live_turn(None);
+        return Ok(());
+    }
     if let Some(why) = &snapshots.skipped {
         app.notice(why);
     }

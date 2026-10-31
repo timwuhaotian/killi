@@ -756,3 +756,20 @@ fn the_busy_menu_offers_skills_and_skills_queue_their_prompt() {
     }
     assert!(app.editor.is_empty(), "the prompt was taken");
 }
+
+#[test]
+fn a_held_prompt_is_printed_before_anything_its_turn_prints() {
+    let mut app = test_app();
+    app.begin_turn("fix the slug", &[]);
+    let shows = |rows: &[String]| rows.iter().any(|r| unstyled(r).contains("fix the slug"));
+    assert!(!shows(&app.pending), "held, not printed yet");
+    assert!(shows(&app.live().0), "the live area draws it meanwhile");
+
+    app.notice("Compacted.");
+    let printed: Vec<String> = app.pending.iter().map(|l| unstyled(l)).collect();
+    let prompt = printed.iter().position(|l| l.contains("fix the slug"));
+    let notice = printed.iter().position(|l| l.contains("Compacted."));
+    assert!(prompt.is_some() && prompt < notice, "{printed:?}");
+    assert!(app.held_prompt.is_none());
+    assert!(!shows(&app.live().0), "drawn once, in the scrollback");
+}

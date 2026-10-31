@@ -245,7 +245,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "send; while the agent works, sends your message at its next step",
     ),
     ("Shift+Enter", "new line; also Ctrl+J, or \\ then Enter"),
-    ("Esc", "interrupt the agent"),
+    (
+        "Esc",
+        "interrupt the agent; before its reply begins, your message comes back to the prompt",
+    ),
     (
         "Ctrl+S",
         "while the agent works, interrupt it and send your message now",
@@ -255,12 +258,16 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("Ctrl+V", "paste an image (Cmd+V too in Kil)"),
     ("↑ ↓", "history"),
     (
+        "Shift+arrows",
+        "select in the prompt, by words with Alt; typing replaces it (a drag in fullscreen mode)",
+    ),
+    (
         "PageUp PageDown",
         "scroll the conversation (fullscreen mode, with the wheel)",
     ),
     (
         "Ctrl+C",
-        "clear the prompt; on an empty one, interrupt the agent, or twice to quit",
+        "copy the prompt's selection, or clear the prompt; on an empty one, interrupt the agent, or twice to quit",
     ),
 ];
 

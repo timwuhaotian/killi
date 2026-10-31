@@ -181,8 +181,9 @@ def analyze(path):
         elif kind == "compaction":
             streak, grew_from = 0, None
             # A subagent's log opens with its starting history as a cause-free compaction;
-            # only a real one (from compact_with) carries `cause`.
-            if entry.get("cause"):
+            # only a real one (from compact_with) carries `cause`. A prompt taken back with Esc
+            # is recorded the same way and is no compaction.
+            if entry.get("cause") and "retracted" not in entry["cause"]:
                 s["compactions"].append(entry["cause"])
         elif kind == "error":
             s["errors"].append(str(entry.get("message"))[:160])

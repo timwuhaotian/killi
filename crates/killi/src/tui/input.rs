@@ -138,6 +138,10 @@ impl App {
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
+            KeyCode::Char('c') if ctrl && self.editor.selection().is_some() => {
+                self.copy_selection();
+                self.editor.deselect();
+            }
             KeyCode::Char('c') if ctrl => {
                 if !self.editor.is_empty() {
                     self.editor.clear();
@@ -385,8 +389,18 @@ impl App {
     pub(super) fn edit_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        // Cmd, which only terminals that pass it on report.
+        let cmd = key.modifiers.contains(KeyModifiers::SUPER);
         let e = &mut self.editor;
         match key.code {
+            KeyCode::Char('a') if cmd => e.select_all(),
+            KeyCode::Char('c') if cmd => self.copy_selection(),
+            KeyCode::Char('x') if cmd => {
+                if let Some(cut) = e.cut() {
+                    copy_to_clipboard(&cut);
+                }
+            }
             KeyCode::Enter => e.insert("\n"),
             KeyCode::Char('j') if ctrl => e.insert("\n"),
             KeyCode::Char('a') if ctrl => e.home(),
@@ -409,10 +423,18 @@ impl App {
                 self.since_banner = None;
                 self.content_rows = 0;
             }
-            KeyCode::Char(c) if !ctrl => e.insert(c.encode_utf8(&mut [0; 4])),
+            KeyCode::Char(c) if !ctrl && !cmd => e.insert(c.encode_utf8(&mut [0; 4])),
             KeyCode::Backspace if alt => e.delete_word(),
             KeyCode::Backspace => e.backspace(),
             KeyCode::Delete => e.delete(),
+            KeyCode::Left if shift && (alt || ctrl) => e.select(Editor::word_left),
+            KeyCode::Right if shift && (alt || ctrl) => e.select(Editor::word_right),
+            KeyCode::Left if shift => e.select(Editor::left),
+            KeyCode::Right if shift => e.select(Editor::right),
+            KeyCode::Home if shift => e.select(Editor::home),
+            KeyCode::End if shift => e.select(Editor::end),
+            KeyCode::Up if shift => e.select(Editor::up_within),
+            KeyCode::Down if shift => e.select(Editor::down_within),
             KeyCode::Left if alt || ctrl => e.word_left(),
             KeyCode::Right if alt || ctrl => e.word_right(),
             KeyCode::Left => e.left(),
@@ -424,6 +446,13 @@ impl App {
             KeyCode::BackTab => self.toggle_plan(),
             KeyCode::Tab => self.complete_command(),
             _ => {}
+        }
+    }
+
+    /// Copies the prompt's selected text, if any, to the clipboard.
+    pub(super) fn copy_selection(&self) {
+        if let Some(text) = self.editor.selected_text() {
+            copy_to_clipboard(text);
         }
     }
 

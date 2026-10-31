@@ -1,14 +1,20 @@
 //! The prompt editor: multi-line text with a cursor, readline-style keys and history.
 
-use super::text::{LAGOON, RESET};
+use super::text::{self, LAGOON, RESET, REVERSE};
 use crate::agent::Image;
 use unicode_width::UnicodeWidthChar;
+
+mod render;
+mod selection;
 
 #[derive(Default)]
 pub struct Editor {
     text: String,
     /// Byte offset of the cursor in `text`.
     cursor: usize,
+    /// The selection's other end, the cursor being one; none, or the cursor itself, when
+    /// nothing is selected.
+    anchor: Option<usize>,
     history: Vec<String>,
     /// Position while browsing history, and the unsent text to come back to.
     browsing: Option<(usize, String)>,
@@ -44,6 +50,7 @@ impl Editor {
     pub fn replace_before(&mut self, start: usize, with: &str) {
         self.text.replace_range(start..self.cursor, with);
         self.cursor = start + with.len();
+        self.anchor = None;
         self.browsing = None;
     }
 
@@ -52,7 +59,9 @@ impl Editor {
         self.browsing.is_some()
     }
 
+    /// Inserts `s` at the cursor, in place of the selection when there is one.
     pub fn insert(&mut self, s: &str) {
+        self.delete_selection();
         let s = s.replace("\r\n", "\n").replace('\r', "\n");
         self.text.insert_str(self.cursor, &s);
         self.cursor += s.len();
@@ -80,8 +89,16 @@ impl Editor {
 
     /// Takes the text out like `take`, with the images whose placeholders are still in it.
     pub fn take_with_images(&mut self) -> (String, Vec<Image>) {
+        let (text, images) = self.take_draft();
+        self.remember(&text);
+        (text, images)
+    }
+
+    /// Takes the text out with its images like `take_with_images`, without adding it to
+    /// history: a draft set aside to be put back.
+    pub fn take_draft(&mut self) -> (String, Vec<Image>) {
         let images = std::mem::take(&mut self.images);
-        let text = self.take();
+        let text = self.take_quiet();
         let images = images
             .into_iter()
             .filter(|image| text.contains(&image.label))
@@ -92,16 +109,21 @@ impl Editor {
     /// Takes the text out, adding it to history; pasted images are dropped.
     pub fn take(&mut self) -> String {
         let text = self.take_quiet();
-        if !text.trim().is_empty() && self.history.last() != Some(&text) {
-            self.history.push(text.clone());
-        }
+        self.remember(&text);
         text
+    }
+
+    fn remember(&mut self, text: &str) {
+        if !text.trim().is_empty() && self.history.last().map(String::as_str) != Some(text) {
+            self.history.push(text.to_string());
+        }
     }
 
     /// Takes the text out without adding it to history, for answers that must not be recalled.
     pub fn take_quiet(&mut self) -> String {
         let text = std::mem::take(&mut self.text);
         self.cursor = 0;
+        self.anchor = None;
         self.browsing = None;
         self.images.clear();
         text
@@ -110,11 +132,15 @@ impl Editor {
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
+        self.anchor = None;
         self.browsing = None;
         self.images.clear();
     }
 
     pub fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if let Some(prev) = self.prev_boundary(self.cursor) {
             self.text.replace_range(prev..self.cursor, "");
             self.cursor = prev;
@@ -122,34 +148,50 @@ impl Editor {
     }
 
     pub fn delete(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if let Some(next) = self.next_boundary(self.cursor) {
             self.text.replace_range(self.cursor..next, "");
         }
     }
 
+    /// Moves left a character, or to the selection's start, ending it.
     pub fn left(&mut self) {
+        if let Some((start, _)) = self.take_selection() {
+            self.cursor = start;
+            return;
+        }
         if let Some(prev) = self.prev_boundary(self.cursor) {
             self.cursor = prev;
         }
     }
 
+    /// Moves right a character, or to the selection's end, ending it.
     pub fn right(&mut self) {
+        if let Some((_, end)) = self.take_selection() {
+            self.cursor = end;
+            return;
+        }
         if let Some(next) = self.next_boundary(self.cursor) {
             self.cursor = next;
         }
     }
 
     pub fn home(&mut self) {
+        self.anchor = None;
         self.cursor = self.line_start(self.cursor);
     }
 
     pub fn end(&mut self) {
+        self.anchor = None;
         self.cursor = self.text[self.cursor..]
             .find('\n')
             .map_or(self.text.len(), |i| self.cursor + i);
     }
 
     pub fn word_left(&mut self) {
+        self.anchor = None;
         let before = &self.text[..self.cursor];
         let trimmed = before.trim_end_matches(|c: char| !c.is_alphanumeric());
         self.cursor = trimmed
@@ -160,6 +202,7 @@ impl Editor {
     }
 
     pub fn word_right(&mut self) {
+        self.anchor = None;
         let after = &self.text[self.cursor..];
         let skip = after
             .find(|c: char| c.is_alphanumeric())
@@ -170,13 +213,18 @@ impl Editor {
         self.cursor += end;
     }
 
+    /// Deletes the word before the cursor, or the selection when there is one.
     pub fn delete_word(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         let end = self.cursor;
         self.word_left();
         self.text.replace_range(self.cursor..end, "");
     }
 
     pub fn kill_to_start(&mut self) {
+        self.anchor = None;
         let start = self.line_start(self.cursor);
         let start = if start == self.cursor && start > 0 {
             self.line_start(start - 1)
@@ -188,6 +236,7 @@ impl Editor {
     }
 
     pub fn kill_to_end(&mut self) {
+        self.anchor = None;
         let end = self.text[self.cursor..]
             .find('\n')
             .map_or(self.text.len(), |i| self.cursor + i);
@@ -199,28 +248,35 @@ impl Editor {
         self.text.replace_range(self.cursor..end, "");
     }
 
-    /// Moves up a visual row, or to the previous history entry from the first row. Before
-    /// any render the room is unbounded, so this is the old logical-line movement.
+    /// Moves up a visual row, or to the previous history entry from the first row.
     pub fn up(&mut self) {
+        self.anchor = None;
+        if !self.row_up() {
+            self.recall_previous();
+        }
+    }
+
+    /// Moves up a visual row; false on the first row, where it stays. Before any render the
+    /// room is unbounded, so this is the old logical-line movement.
+    fn row_up(&mut self) -> bool {
         if self.room.get() != 0 {
             let rows = self.visual_rows();
             if let Some((row, column)) = self.visual_cursor(&rows) {
-                if row > 0 {
-                    self.cursor = Self::byte_at_column(&rows[row - 1], column);
-                    return;
+                if row == 0 {
+                    return false;
                 }
-                self.recall_previous();
-                return;
+                self.cursor = Self::byte_at_column(&rows[row - 1], column);
+                return true;
             }
         }
         let start = self.line_start(self.cursor);
-        if start > 0 {
-            let column = self.text[start..self.cursor].chars().count();
-            let prev_start = self.line_start(start - 1);
-            self.cursor = self.at_column(prev_start, column);
-            return;
+        if start == 0 {
+            return false;
         }
-        self.recall_previous();
+        let column = self.text[start..self.cursor].chars().count();
+        let prev_start = self.line_start(start - 1);
+        self.cursor = self.at_column(prev_start, column);
+        true
     }
 
     fn recall_previous(&mut self) {
@@ -239,28 +295,35 @@ impl Editor {
         }
     }
 
-    /// Moves down a visual row, or to the next history entry from the last row. Before
-    /// any render the room is unbounded, so this is the old logical-line movement.
+    /// Moves down a visual row, or to the next history entry from the last row.
     pub fn down(&mut self) {
+        self.anchor = None;
+        if !self.row_down() {
+            self.recall_next();
+        }
+    }
+
+    /// Moves down a visual row; false on the last row, where it stays. Before any render the
+    /// room is unbounded, so this is the old logical-line movement.
+    fn row_down(&mut self) -> bool {
         if self.room.get() != 0 {
             let rows = self.visual_rows();
             if let Some((row, column)) = self.visual_cursor(&rows) {
-                if row + 1 < rows.len() {
-                    self.cursor = Self::byte_at_column(&rows[row + 1], column);
-                    return;
+                if row + 1 == rows.len() {
+                    return false;
                 }
-                self.recall_next();
-                return;
+                self.cursor = Self::byte_at_column(&rows[row + 1], column);
+                return true;
             }
         }
-        if let Some(i) = self.text[self.cursor..].find('\n') {
-            let column = self.text[self.line_start(self.cursor)..self.cursor]
-                .chars()
-                .count();
-            self.cursor = self.at_column(self.cursor + i + 1, column);
-            return;
-        }
-        self.recall_next();
+        let Some(i) = self.text[self.cursor..].find('\n') else {
+            return false;
+        };
+        let column = self.text[self.line_start(self.cursor)..self.cursor]
+            .chars()
+            .count();
+        self.cursor = self.at_column(self.cursor + i + 1, column);
+        true
     }
 
     fn recall_next(&mut self) {
@@ -389,127 +452,6 @@ impl Editor {
 
     fn next_boundary(&self, at: usize) -> Option<usize> {
         self.text[at..].chars().next().map(|c| at + c.len_utf8())
-    }
-
-    /// Byte ranges of the words `/name` where `known` accepts `name`.
-    fn marked(&self, known: &dyn Fn(&str) -> bool) -> Vec<(usize, usize)> {
-        let mut ranges = Vec::new();
-        let mut start = None;
-        for (i, c) in self.text.char_indices().chain([(self.text.len(), ' ')]) {
-            match (start, c.is_whitespace()) {
-                (None, false) => start = Some(i),
-                (Some(s), true) => {
-                    if self.text[s..i].strip_prefix('/').is_some_and(known) {
-                        ranges.push((s, i));
-                    }
-                    start = None;
-                }
-                _ => {}
-            }
-        }
-        ranges
-    }
-
-    /// The text as rows no wider than `width` after `prompt`, and the cursor's row and column.
-    /// Rows break after a space where they can, so words stay whole. Words `/name` that `known`
-    /// accepts are drawn in lagoon, like other commands. A tab stays in the text but is laid
-    /// out as the spaces to the next 4-column stop, counted from its line's first column, so
-    /// the row widths and the cursor agree with what the screen shows.
-    pub fn render(
-        &self,
-        prompt: &str,
-        width: usize,
-        known: &dyn Fn(&str) -> bool,
-    ) -> (Vec<String>, usize, usize) {
-        let prompt_width = super::text::width(prompt);
-        let room = width.saturating_sub(prompt_width).max(1);
-        self.room.set(room);
-        let marked = self.marked(known);
-        let mut rows = Vec::new();
-        let mut cursor = (0, prompt_width);
-        let mut offset = 0;
-        for (n, line) in self.text.split('\n').enumerate() {
-            let lead = if n == 0 {
-                prompt.to_string()
-            } else {
-                " ".repeat(prompt_width)
-            };
-            let mut chars: Vec<(usize, char, usize)> = Vec::new();
-            let mut column = 0;
-            for (i, c) in line.char_indices() {
-                if c == '\t' {
-                    for _ in 0..TAB - column % TAB {
-                        chars.push((i, ' ', 1));
-                    }
-                    column += TAB - column % TAB;
-                } else {
-                    let w = c.width().unwrap_or(0);
-                    chars.push((i, c, w));
-                    column += w;
-                }
-            }
-            let bounds: Vec<usize> = std::iter::once(0)
-                .chain(row_starts(&chars, room))
-                .chain([chars.len()])
-                .collect();
-            for (r, span) in bounds.windows(2).enumerate() {
-                let mut row = String::new();
-                let mut row_width = 0;
-                let mut lit = false;
-                let mut placed = usize::MAX;
-                for &(i, c, w) in &chars[span[0]..span[1]] {
-                    // A space that would pass the edge is not drawn: the row ends there.
-                    let hanging = c == ' ' && row_width + w > room;
-                    // The spaces a tab laid out to share its byte offset place the cursor once,
-                    // at the tab's first column, as the cursor on the tab itself.
-                    if offset + i == self.cursor && placed != i {
-                        placed = i;
-                        cursor = if hanging {
-                            (rows.len() + 1, prompt_width)
-                        } else {
-                            (rows.len(), prompt_width + row_width)
-                        };
-                    }
-                    if hanging {
-                        continue;
-                    }
-                    let on = marked.iter().any(|&(s, e)| (s..e).contains(&(offset + i)));
-                    if on != lit {
-                        row.push_str(&if on {
-                            LAGOON.to_string()
-                        } else {
-                            RESET.to_string()
-                        });
-                        lit = on;
-                    }
-                    row.push(c);
-                    row_width += w;
-                }
-                if lit {
-                    row.push_str(RESET);
-                }
-                if span[1] == chars.len() && offset + line.len() == self.cursor {
-                    cursor = if row_width >= room {
-                        (rows.len() + 1, prompt_width)
-                    } else {
-                        (rows.len(), prompt_width + row_width)
-                    };
-                }
-                rows.push(format!(
-                    "{}{row}",
-                    if r == 0 {
-                        lead.clone()
-                    } else {
-                        " ".repeat(prompt_width)
-                    }
-                ));
-            }
-            offset += line.len() + 1;
-        }
-        if cursor.0 >= rows.len() {
-            rows.push(" ".repeat(prompt_width));
-        }
-        (rows, cursor.0, cursor.1)
     }
 }
 

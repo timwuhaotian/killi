@@ -299,6 +299,15 @@ pub enum Stop {
     RepeatBreaker,
 }
 
+/// The prompt the model hasn't answered yet: where its messages start in the history, how
+/// many there are (the prompt and its images), and the one-shot notes it carried, which a
+/// take-back returns to the next prompt.
+pub(super) struct PendingPrompt {
+    pub(super) at: usize,
+    pub(super) count: usize,
+    pub(super) notes: Vec<String>,
+}
+
 /// How often one exact tool call was made, and a hash of what its latest result said.
 #[derive(Default)]
 pub(super) struct Repeat {

@@ -14,7 +14,9 @@ menu), picker, conv (a bug fix with a diff), question, plan, busy (mid-turn), sw
 `agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), peers (the banner
 with another session in the repository), sessions (`/sessions`) and peer (that session's question and
 message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
-selection in reverse video). `--inline` runs killi as it runs outside
+selection in reverse video), select-prompt (Shift+Alt+Left over the prompt's last words), held (a prompt waiting for its first token) and takeback (Esc before that
+token: the prompt back in the editor).
+`--inline` runs killi as it runs outside
 Kil, in the terminal's scrollback; `--colors 256` hides COLORTERM; `--no-osc` never answers the
 color queries, like a terminal that doesn't know them; `--no-color` sets NO_COLOR.
 
@@ -65,6 +67,9 @@ SCENES = {
     "question": dict(keys=["QUESTION please\r"], until="Esc dismisses"),
     "plan": dict(keys=["\x1b[Z", "add a flag"]),
     "busy": dict(keys=[FIX, "WAIT:1.5", "also keep it small"], settle=0.2),
+    "select-prompt": dict(keys=["rename slugify to make_slug in slug.py", "\x1b[1;4D", "\x1b[1;4D", "\x1b[1;4D"]),
+    "held": dict(keys=["SLOW what makes a good slug?\r"], settle=0.5),
+    "takeback": dict(keys=["SLOW what makes a good slug?\r", "WAIT:1", "\x1b"], settle=0.8),
     "drop": dict(keys=["look at", "DROP:slug.py", "DROP:shot.png", "together"]),
     "swarm": dict(keys=["SWARM review the open PRs\r", "WAIT:4.5"], settle=0.2),
     "swarm-big": dict(keys=["SWARMBIG review every service\r", "WAIT:7"], settle=0.2),

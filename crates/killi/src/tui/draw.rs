@@ -31,8 +31,10 @@ impl App {
         }
     }
 
-    /// Prints a line, never two blank lines in a row.
+    /// Prints a line, never two blank lines in a row. A held prompt is printed first, so
+    /// what its turn prints comes under it.
     pub(super) fn commit(&mut self, line: String) {
+        self.release_prompt();
         let blank = line.is_empty();
         if blank && self.last_blank {
             return;
@@ -48,6 +50,7 @@ impl App {
     /// Prints something laid out for the window's width: queued for the scrollback as rows at
     /// the width now, or in fullscreen mode kept to be laid out again at any other.
     pub(super) fn emit(&mut self, entry: Line) {
+        self.release_prompt();
         if self.fullscreen {
             self.last_blank = false;
             self.history.push(entry);
@@ -218,6 +221,7 @@ impl App {
             ));
         }
         self.view_rows = view;
+        self.input_rows = self.input_rows.placed(rows.len(), cut);
         let cursor_row = rows.len() + cursor_row;
         rows.extend(live.iter().map(|row| text::plain(row).into_owned()));
         let whole = self.shown.len() != rows.len();

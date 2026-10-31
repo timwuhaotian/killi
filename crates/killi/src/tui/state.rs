@@ -223,6 +223,9 @@ pub(super) struct App {
     pub(super) aside: Option<(String, Instant)>,
     /// Answered /btw blocks waiting for the model's paragraph to end before they are printed.
     pub(super) held_asides: Vec<Line>,
+    /// The prompt just sent and its images, drawn in the live area until something of its
+    /// turn is printed: until then Esc takes it back into the editor, as if never sent.
+    pub(super) held_prompt: Option<(String, Vec<Image>)>,
     /// Whether a turn that used tools is followed by a recap.
     pub(super) auto_recap: bool,
     pub(super) recap: Option<PendingRecap>,
@@ -246,9 +249,11 @@ pub(super) struct App {
     pub(super) selection: Option<Selection>,
     /// The pointer's (row, column) while the button is held after a press in the conversation.
     pub(super) drag: Option<(usize, usize)>,
-    /// The conversation point of the last left press, when it landed and which press of a run of
-    /// presses on it this is (capped at 3), for double- and triple-clicks.
-    pub(super) pressed: Option<((usize, usize), Instant, usize)>,
+    /// Where the last left press landed, when, and which press of a run of presses on it this is
+    /// (capped at 3), for double- and triple-clicks.
+    pub(super) pressed: Option<(Spot, Instant, usize)>,
+    /// Where the prompt's rows were last drawn, so a press there selects its text.
+    pub(super) input_rows: InputRows,
     /// Whether the banner says it is a resumed session, for drawing it again.
     pub(super) banner_resumed: bool,
     /// When the branch was last read, so two git spawns don't run after every input.

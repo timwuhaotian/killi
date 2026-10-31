@@ -777,3 +777,77 @@ async fn a_reply_ending_on_a_colon_is_asked_to_go_on_once() {
         1
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_prompt_taken_back_before_any_reply_leaves_no_trace() {
+    // A provider that takes the request and never answers: the turn is cut off before a token.
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", silent.local_addr().unwrap());
+    let mut agent = idle_agent("retract", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent.note_for_next_prompt("files were restored".into());
+    let image = Image {
+        label: "[Image #1]".into(),
+        url: "data:image/png;base64,AAAA".into(),
+    };
+    tokio::select! {
+        _ = agent.run("look at [Image #1]", std::slice::from_ref(&image)) => panic!("the stub never answers"),
+        () = tokio::time::sleep(Duration::from_millis(200)) => {}
+    }
+    assert_eq!(
+        agent.messages.len(),
+        3,
+        "the prompt and its image were sent"
+    );
+
+    assert!(agent.retract().unwrap());
+    assert_eq!(agent.messages.len(), 1);
+    assert!(agent.user_prompts().is_empty());
+    assert_eq!(
+        agent.next_notes,
+        ["files were restored"],
+        "the note it carried waits for the next prompt"
+    );
+    assert!(!agent.retract().unwrap(), "a prompt is taken back once");
+    let loaded = crate::session::load(&agent.session.log_path).unwrap();
+    assert_eq!(
+        loaded.messages, *agent.messages,
+        "a resume replays it taken back"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_answered_prompt_cannot_be_taken_back() {
+    let mut agent = idle_agent("retract-answered", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = answering_stub("hi").await;
+    agent.run("hello", &[]).await.unwrap();
+    let sent = agent.messages.len();
+    assert!(!agent.retract().unwrap());
+    assert_eq!(agent.messages.len(), sent);
+}
+
+#[test]
+fn a_session_with_only_reminders_left_is_unused() {
+    let mut agent = idle_agent("discard-reminders", Controls::default(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent
+        .push(json!({"role": "user", "content": plan::ON}))
+        .unwrap();
+    agent.discard_if_unused();
+    assert!(!agent.session.log_path.exists(), "a taken-back prompt leaves nothing");
+
+    let mut agent = idle_agent("discard-said", Controls::default(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent
+        .push(json!({"role": "user", "content": "hello"}))
+        .unwrap();
+    agent.discard_if_unused();
+    assert!(agent.session.log_path.exists());
+}

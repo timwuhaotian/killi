@@ -181,8 +181,10 @@ impl Agent {
     /// Where a fresh compaction leaves the accounting: the next request starts the count over,
     /// and the size the history can't compact below is remembered, so proactive compaction
     /// waits for real growth instead of running again before every step. When that size alone
-    /// is over `limit` (0: compaction is off), one notice says it can't shrink further.
+    /// is over `limit` (0: compaction is off), one notice says it can't shrink further. The
+    /// turn's prompt is in the summary now, so it can no longer be taken back.
     pub(super) fn after_compaction(&mut self, limit: u64) {
+        self.pending_prompt = None;
         self.stats.context = 0;
         self.accounted_messages = self.messages.len();
         self.compact_floor = estimate_tokens(&self.messages);

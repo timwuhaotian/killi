@@ -12,6 +12,9 @@ pub const BOLD: &str = "\x1b[1m";
 pub const ITALIC: &str = "\x1b[3m";
 pub const UNDERLINE: &str = "\x1b[4m";
 pub const STRIKE: &str = "\x1b[9m";
+/// Reverse video on and off, around selected text.
+pub const REVERSE: &str = "\x1b[7m";
+pub const NOT_REVERSE: &str = "\x1b[27m";
 
 /// The terminal's background: it decides which shade each color takes.
 #[derive(Clone, Copy, PartialEq)]

@@ -159,6 +159,7 @@ impl Agent {
             peers_announced: Vec::new(),
             interrupted: false,
             next_notes: Vec::new(),
+            pending_prompt: None,
             hook_notified: RefCell::default(),
             depth: 0,
             children: 0,
@@ -317,9 +318,16 @@ impl Agent {
     }
 
     /// Deletes this session's log if nothing was ever said in it, so opening killi and leaving
-    /// doesn't leave a file behind.
+    /// doesn't leave a file behind. Reminders alone don't count: a prompt taken back with Esc
+    /// leaves the ones sent after it.
     pub fn discard_if_unused(&self) {
-        if self.messages.len() <= 1 {
+        let said = self.messages.iter().skip(1).any(|m| {
+            m["role"] != "user"
+                || !m["content"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with("<system-reminder>"))
+        });
+        if !said {
             self.session.discard();
         }
     }

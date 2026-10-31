@@ -5,6 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- Esc before the model's reply begins takes the message back: it returns to the prompt with
+  anything queued behind it, the conversation shows no trace of it, and the model never sees
+  it. Until then the sent message waits in the live area. Once anything of the turn is printed
+  (a reply line, a tool call, a retry, a notice), Esc interrupts as before.
+- The prompt has a selection: Shift with the arrows, Home and End selects, with Alt or Ctrl by
+  words; typing or a paste replaces it, Backspace deletes it, and Ctrl+C copies it. In
+  fullscreen mode the mouse selects in the prompt as in the conversation: a drag, a
+  double-click for a word, a triple-click for a row, copied on release. Cmd+A, Cmd+C and Cmd+X
+  work in terminals that pass Cmd keys to the program.
+
 ## 0.6.27 — 2026-10-30
 
 - A malformed `edits` argument now tells the model to send a list of

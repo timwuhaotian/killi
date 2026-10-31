@@ -44,7 +44,7 @@ pub use types::{
 use compact::CompactMode;
 use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
 use request::{is_media, is_overflow, reasoning_evidence};
-use types::{PartialSwarm, Repeat, last_plan_state, unanswered};
+use types::{PartialSwarm, PendingPrompt, Repeat, last_plan_state, unanswered};
 
 #[cfg(test)]
 use ask::question_args;
@@ -127,6 +127,9 @@ pub struct Agent {
     interrupted: bool,
     /// Notes queued for the model's next prompt (`note_for_next_prompt`, e.g. after /undo).
     next_notes: Vec<String>,
+    /// The turn's prompt while no reply or rewrite has come after it, so `retract` can take
+    /// it back.
+    pending_prompt: Option<PendingPrompt>,
     /// Hook commands already reported as failed to run, so each shows one notice.
     hook_notified: RefCell<HashSet<String>>,
     depth: u8,

@@ -28,7 +28,9 @@ behind it are in `docs/decisions.md`.
   tools, or change a tool description, while a session runs; block behavior when a tool runs
   instead (see plan mode in `plan.rs` and `agent.rs`).
 - History is append-only and stored exactly as sent. Notes to the model go at the end as user
-  messages in `<system-reminder>` tags. Only compaction and `/reload` rewrite history.
+  messages in `<system-reminder>` tags. Only compaction, `/reload` and taking back a prompt the
+  model hasn't answered (Esc before the first token, `Agent::retract`) rewrite history; the
+  take-back removes only that prompt, so the prefix before it stays as sent.
 - Provider adapters in `llm/` convert the OpenAI-format history the same way every time.
 
 ## Code

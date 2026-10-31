@@ -48,6 +48,46 @@ pub(super) fn undo_note(first_line: &str, paths: &[String]) -> String {
     )
 }
 
+impl App {
+    /// Prints the held prompt into the conversation, once something of its turn is printed.
+    pub(super) fn release_prompt(&mut self) {
+        if let Some((prompt, _)) = self.held_prompt.take() {
+            self.commit_prompt(&prompt);
+        }
+    }
+
+    /// Esc before anything of the turn was printed and before the reply began: the prompt goes
+    /// back into the editor ahead of what was queued and typed meanwhile, and the agent forgets
+    /// it, as if it was never sent. A thought in progress goes with it. False, changing nothing,
+    /// when something showed or the agent can no longer take the prompt back.
+    pub(super) fn take_back(&mut self, agent: &mut Agent) -> Result<bool> {
+        if self.held_prompt.is_none()
+            || self.send_now
+            || !self.partial.trim().is_empty()
+            || !agent.retract()?
+        {
+            return Ok(false);
+        }
+        let (prompt, images) = self.held_prompt.take().expect("a held prompt");
+        self.thinking = None;
+        let _ = self.reasoning.finish();
+        self.end_busy();
+        let typed = std::mem::take(&mut self.queued);
+        let queued = agent
+            .take_steered()
+            .into_iter()
+            .enumerate()
+            .map(|(i, (expanded, images))| (typed.get(i).cloned().unwrap_or(expanded), images));
+        let draft = self.editor.take_draft();
+        let mut back = vec![(prompt, images)];
+        back.extend(queued);
+        back.extend(Some(draft).filter(|(text, _)| !text.is_empty()));
+        restore_steered(&mut self.editor, back);
+        self.last_end = None;
+        Ok(true)
+    }
+}
+
 /// Puts messages typed during a finished turn back into the prompt, blank-line separated,
 /// with their images where they were pasted.
 pub(super) fn restore_steered(editor: &mut Editor, steered: Vec<Steered>) {

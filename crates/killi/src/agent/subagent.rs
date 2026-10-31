@@ -293,6 +293,7 @@ impl Agent {
             snapshot_wait: None,
             instructions: self.instructions.clone(),
             next_notes: Vec::new(),
+            pending_prompt: None,
             hook_notified: RefCell::default(),
         };
         if announce_plan {

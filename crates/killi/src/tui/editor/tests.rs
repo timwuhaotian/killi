@@ -256,3 +256,99 @@ fn a_tab_lays_out_to_the_next_stop_with_the_cursor_on_it() {
         "a line's stops count from its own first column"
     );
 }
+
+#[test]
+fn shift_moves_select_and_typing_replaces_the_selection() {
+    let mut e = Editor::default();
+    e.insert("hello brave world");
+    e.select(Editor::word_left);
+    assert_eq!(e.selected_text(), Some("world"));
+    e.select(Editor::word_left);
+    assert_eq!(e.selected_text(), Some("brave world"));
+    e.select(Editor::right);
+    assert_eq!(
+        e.selected_text(),
+        Some("rave world"),
+        "the anchor stays put"
+    );
+    e.insert("new");
+    assert_eq!(e.text(), "hello bnew");
+    assert_eq!(e.selection(), None);
+
+    e.select(Editor::home);
+    e.backspace();
+    assert!(e.is_empty(), "Backspace takes the selection out");
+}
+
+#[test]
+fn a_plain_move_ends_the_selection_at_its_edge() {
+    let mut e = Editor::default();
+    e.insert("one two three");
+    e.word_left();
+    e.select(Editor::word_left);
+    e.left();
+    assert_eq!((e.selection(), e.before_cursor()), (None, "one "));
+    e.select(Editor::word_right);
+    e.right();
+    assert_eq!((e.selection(), e.before_cursor()), (None, "one two"));
+}
+
+#[test]
+fn select_all_cuts_whole_and_shift_up_stays_in_the_text() {
+    let mut e = Editor::with_history(vec!["older".into()]);
+    e.insert("line one\nline two");
+    e.select(Editor::up_within);
+    e.select(Editor::up_within);
+    assert_eq!(
+        e.text(),
+        "line one\nline two",
+        "Shift+Up never recalls history"
+    );
+    assert_eq!(e.selected_text(), Some("line one\nline two"));
+    e.end();
+    e.select_all();
+    assert_eq!(e.cut().as_deref(), Some("line one\nline two"));
+    assert!(e.is_empty());
+    assert_eq!(e.cut(), None);
+}
+
+#[test]
+fn the_mouse_presses_drags_and_picks_words_and_rows() {
+    let mut e = Editor::default();
+    e.insert("fix the slug_test now");
+    e.render("❯ ", 12, &|_| false);
+    // Rows at 10 columns: "fix the " and "slug_test " and "now".
+    let at = e.point(1, 2);
+    assert_eq!(&e.text()[at..], "ug_test now");
+    e.press(at);
+    assert_eq!(e.selection(), None, "a press selects nothing");
+    e.drag_to(e.point(2, 1));
+    assert_eq!(e.selected_text(), Some("ug_test n"));
+
+    e.select_word(e.point(1, 4));
+    assert_eq!(e.selected_text(), Some("slug_test"));
+    e.select_word(e.point(0, 3));
+    assert_eq!(e.selection(), None, "blank space is no word");
+    e.select_row(0);
+    assert_eq!(e.selected_text(), Some("fix the "));
+    assert_eq!(
+        e.point(9, 40),
+        e.text().len(),
+        "below the last row is its end"
+    );
+}
+
+#[test]
+fn the_selection_is_drawn_in_reverse_video_across_a_lit_command() {
+    let mut e = Editor::default();
+    e.insert("/help me");
+    e.select(Editor::word_left);
+    e.select(Editor::word_left);
+    let (rows, _, _) = e.render("> ", 40, &|name| name == "help");
+    let lagoon = LAGOON.to_string();
+    assert_eq!(
+        rows[0],
+        format!("> {lagoon}/{RESET}{lagoon}{REVERSE}help{RESET}{REVERSE} me{RESET}"),
+        "the selection starts after the slash and its reverse video outlasts the command's reset"
+    );
+}

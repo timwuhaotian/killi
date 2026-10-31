@@ -103,6 +103,12 @@ impl App {
                 rows.push(String::new());
             }
         };
+        if let Some((prompt, _)) = &self.held_prompt {
+            // As `commit_prompt` prints it, so nothing moves when it is printed.
+            space(&mut rows);
+            rows.extend(prompt_rows(prompt, width));
+            rows.push(String::new());
+        }
         if !self.partial.is_empty() {
             // Preview touches the scrollback without this: `draw` prints pending rows
             // then the live rows with no gap of its own.
@@ -269,15 +275,20 @@ impl App {
                 .iter()
                 .any(|e| e.name == name || e.aliases.iter().any(|a| a == name))
         };
-        let (mut input, cursor_row, cursor_col) =
-            self.editor
-                .render(&format!("{FIN}❯{RESET} "), width, &known);
+        let prompt = format!("{FIN}❯{RESET} ");
+        let (mut input, cursor_row, cursor_col) = self.editor.render(&prompt, width, &known);
         if let Some(hint) = self.placeholder() {
             input[0] = fit(&format!("{FIN}❯{RESET} {FAINT}{hint}{RESET}"), width);
         }
         let first = cursor_row.saturating_sub(MAX_INPUT_ROWS - 1);
         let top = rows.len();
         rows.extend(input.into_iter().skip(first).take(MAX_INPUT_ROWS));
+        let mut input_rows = InputRows {
+            top,
+            first,
+            count: rows.len() - top,
+            indent: text::width(&prompt),
+        };
         let mut cursor = (top + cursor_row - first, cursor_col);
         rows.push(rule(mode.map(|_| ""), width));
         let modal = self.picker.is_some() || self.asking.is_some();
@@ -438,12 +449,15 @@ impl App {
                 rows.remove(i);
             }
             cursor.0 -= gone;
+            // Every row that shrinks away is above the prompt.
+            input_rows.top -= gone;
             excess = rows.len().saturating_sub(self.height - 1);
         }
         if excess > 0 {
             let cut = excess.min(top.saturating_sub(gone));
             rows.drain(..cut);
             cursor.0 -= cut;
+            input_rows.top -= cut;
         }
         let pad = if self.fullscreen {
             0
@@ -455,6 +469,8 @@ impl App {
             )
         };
         rows.splice(0..0, std::iter::repeat_n(String::new(), pad));
+        input_rows.top += pad;
+        self.input_rows = input_rows;
         (rows, cursor.0 + pad, cursor.1)
     }
 

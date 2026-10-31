@@ -85,6 +85,7 @@ impl Agent {
     /// placeholder and retry once, recording the rewrite as a compaction-kind entry so a
     /// resumed session replays the stripped conversation.
     pub(super) fn strip_images(&mut self, error: &anyhow::Error) -> Result<()> {
+        self.pending_prompt = None;
         let messages: &mut Vec<Value> = Rc::make_mut(&mut self.messages);
         let stripped = strip_images_from(messages);
         self.share();
@@ -180,6 +181,7 @@ impl Agent {
 
     /// Appends the assistant message and returns its tool calls under their final IDs.
     pub(super) fn record_reply(&mut self, reply: &Reply) -> Result<Vec<(String, ToolCall)>> {
+        self.pending_prompt = None;
         let calls: Vec<_> = reply
             .tool_calls
             .iter()

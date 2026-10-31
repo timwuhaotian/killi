@@ -196,13 +196,14 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | @ | the file menu: fuzzy-search the workspace, Tab or Enter inserts `@path`; the file's contents go to the model with your message |
 | Enter | send; while the agent works, your message reaches it at its next step |
 | Shift+Enter, Ctrl+J | new line |
-| Esc | interrupt |
+| Esc | interrupt; before the reply begins, your message comes back to the prompt as if never sent |
 | Ctrl+S | while the agent works, interrupt it and send your message now |
 | Shift+Tab | plan mode |
 | Ctrl+V | paste an image from the clipboard as `[Image #1]` (Cmd+V too in [Kil](https://github.com/timwuhaotian/kil)) |
 | drag a file in | an image is attached as `[Image #1]`; any other file is named as `@path` |
 | Ctrl+O | the last tool output or thought in full |
 | ↑ ↓ | history |
+| Shift+arrows, Shift+Home/End | select in the prompt, by words with Alt; typing replaces the selection, Ctrl+C copies it; in fullscreen mode a drag, double- or triple-click selects too |
 
 <p align="center">
   <img src="docs/menu.svg" width="960" alt="The slash menu after typing /re: resume, reload and the refactor skill first, then the other commands and skills whose descriptions match, each with its description">

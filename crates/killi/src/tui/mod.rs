@@ -97,7 +97,7 @@ use rows::{
     tool_summary, tool_text, working_rows, wrap_items,
 };
 use run::{handle_command, next_incoming, peer_label, prompt_turn, provider_add};
-use select::Selection;
+use select::{InputRows, Selection, Spot};
 use start::{
     CURSOR_ROW, ENHANCED, RESUMED, TerminalGuard, leave_fullscreen, query_ground, resume_command,
     resumed, terminal_gone, wants_fullscreen,

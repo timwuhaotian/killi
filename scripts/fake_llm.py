@@ -8,7 +8,8 @@ The prompt picks the scenario: one containing "FIX" or "slugify" is a bug fix (a
 read, a failing run, a thought, an edit with a diff, a passing run and a Markdown answer),
 one containing "QUESTION" is an `ask_user_question`, "SWARM" an `agent_swarm` of five subagents
 ("SWARMBIG": forty) whose prompts say "SWARMCHILD" and that each run a few slow commands,
-a question from another session (`killi ask`) a line about the work, anything else a one-line answer. The
+a question from another session (`killi ask`) a line about the work, "SLOW" a one-line answer
+that starts only after three seconds (time to press Esc first), anything else a one-line answer. The
 step is the number of assistant messages since the last real user message, so the reminders
 killi appends as user messages (`<system-reminder>`) don't restart the script.
 """
@@ -110,6 +111,8 @@ def step_for(messages):
         steps = swarm(MODULES)
     elif "SWARM" in prompt:
         steps = swarm(PRS)
+    elif "SLOW" in prompt:
+        steps = [{"wait": 3, "text": SHORT[0]["text"]}]
     else:
         steps = FIX if "FIX" in prompt or "slugify" in prompt else QUESTION if "QUESTION" in prompt else SHORT
     index = sum(1 for m in messages[start:] if m.get("role") == "assistant")
@@ -131,9 +134,16 @@ class Handler(BaseHTTPRequestHandler):
         self.chunk(b"data: " + body.encode() + b"\n\n")
 
     def do_POST(self):
+        try:
+            self.answer()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # killi dropped the request: Esc before the first token.
+
+    def answer(self):
         request = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
         messages = request.get("messages", [])
         step = step_for(messages)
+        time.sleep(step.get("wait", 0))
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("transfer-encoding", "chunked")

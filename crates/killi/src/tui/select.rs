@@ -3,19 +3,62 @@
 //! it stays on its words as the view scrolls, and it can span more than one screen. Releasing the
 //! button copies it, and a second press on the same point soon after the first selects the word
 //! under it, a third the whole row. The wheel still scrolls, and a drag held at an edge of the
-//! view scrolls it.
+//! view scrolls it. The same presses in the prompt select its text, as the editor's own selection.
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use unicode_width::UnicodeWidthChar;
 
+use super::text::{NOT_REVERSE, REVERSE};
 use super::*;
 
 /// How close together two presses on the same point land to count as a double-click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
-/// Reverse video on and off, around the selected columns.
-const REVERSE: &str = "\x1b[7m";
-const NOT_REVERSE: &str = "\x1b[27m";
+/// Where a press landed: a point of the conversation, or a byte of the prompt's text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Spot {
+    View((usize, usize)),
+    Input(usize),
+}
+
+/// Where the prompt's rows were drawn: the first row shown, which of the editor's visual rows
+/// it is, how many are shown, and the columns the `❯ ` before the text takes. `live` counts
+/// `top` in rows of the live area; `draw_screen` places it on the screen.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct InputRows {
+    pub(super) top: usize,
+    pub(super) first: usize,
+    pub(super) count: usize,
+    pub(super) indent: usize,
+}
+
+impl InputRows {
+    /// The rows as the screen shows them: `above` rows over the live area, whose first `cut`
+    /// rows didn't fit.
+    pub(super) fn placed(self, above: usize, cut: usize) -> Self {
+        let hidden = cut.saturating_sub(self.top).min(self.count);
+        Self {
+            top: above + self.top.saturating_sub(cut),
+            first: self.first + hidden,
+            count: self.count - hidden,
+            ..self
+        }
+    }
+
+    fn contains(self, row: usize) -> bool {
+        (self.top..self.top + self.count).contains(&row)
+    }
+
+    /// The editor's visual row and text column under a screen cell, held to the rows shown, so
+    /// a drag that leaves the prompt stays on its first or last row. None when none is shown.
+    fn at(self, row: usize, col: usize) -> Option<(usize, usize)> {
+        let last = (self.top + self.count).checked_sub(1)?;
+        Some((
+            self.first + row.clamp(self.top, last) - self.top,
+            col.saturating_sub(self.indent),
+        ))
+    }
+}
 
 /// A selection in the conversation, from where the button went down to where the pointer is. A
 /// point is (a row of `History`, a display column of that row). `epoch` is the layout the rows
@@ -221,22 +264,45 @@ impl App {
         self.extend_drag();
     }
 
-    /// A press in the conversation starts a selection there, a second one on the same point soon
-    /// after selects the word under it and a third the whole row; anywhere else a press only ends
-    /// the last selection.
+    /// A press in the conversation or the prompt starts a selection there, a second one on the
+    /// same point soon after selects the word under it and a third the whole row; anywhere else
+    /// a press only ends the last selection.
     fn press(&mut self, (row, col): (usize, usize)) {
-        let point = (row < self.view_rows)
-            .then(|| self.point_at(row, col))
+        let input = (row >= self.view_rows && self.input_rows.contains(row))
+            .then(|| self.input_rows.at(row, col))
             .flatten();
-        let run = point
+        let spot = match input {
+            Some((line, column)) => Some(Spot::Input(self.editor.point(line, column))),
+            None => (row < self.view_rows)
+                .then(|| self.point_at(row, col))
+                .flatten()
+                .map(Spot::View),
+        };
+        let run = spot
             .zip(self.pressed)
-            .and_then(|(point, (last, at, n))| {
-                (last == point && at.elapsed() < DOUBLE_CLICK).then(|| (n + 1).min(3))
+            .and_then(|(spot, (last, at, n))| {
+                (last == spot && at.elapsed() < DOUBLE_CLICK).then(|| (n + 1).min(3))
             })
             .unwrap_or(1);
         self.clear_selection();
-        self.pressed = point.map(|point| (point, Instant::now(), run));
-        let Some(point) = point else { return };
+        self.pressed = spot.map(|spot| (spot, Instant::now(), run));
+        let point = match (spot, input) {
+            (Some(Spot::Input(byte)), Some((line, _))) => {
+                self.drag = Some((row, col));
+                match run {
+                    1 => self.editor.press(byte),
+                    2 => self.editor.select_word(byte),
+                    _ => self.editor.select_row(line),
+                }
+                return;
+            }
+            (Some(Spot::View(point)), _) => point,
+            _ => {
+                self.editor.deselect();
+                return;
+            }
+        };
+        self.editor.deselect();
         self.drag = Some((row, col));
         let span = if run >= 3 {
             Some((0, usize::MAX))
@@ -268,6 +334,13 @@ impl App {
     /// Moves the selection's head to the drag's pointer, as the view shows it now.
     fn extend_drag(&mut self) {
         let Some((row, col)) = self.drag else { return };
+        if self.pressed_input() {
+            if let Some((line, column)) = self.input_rows.at(row, col) {
+                let at = self.editor.point(line, column);
+                self.editor.drag_to(at);
+            }
+            return;
+        }
         if let (Some(head), Some(selection)) = (self.point_at(row, col), self.selection.as_mut()) {
             selection.head = head;
         }
@@ -277,11 +350,19 @@ impl App {
     /// and release without a move select nothing.
     fn release(&mut self) -> Option<String> {
         self.drag.take()?;
+        if self.pressed_input() {
+            return self.editor.selected_text().map(String::from);
+        }
         if self.selection.as_ref()?.is_empty() {
             self.selection = None;
             return None;
         }
         self.selected_text()
+    }
+
+    /// Whether the last press landed in the prompt, so its drag selects there.
+    fn pressed_input(&self) -> bool {
+        matches!(self.pressed, Some((Spot::Input(_), _, _)))
     }
 
     /// The selected text: each row's selected columns, trailing spaces dropped, one row per line.
@@ -382,236 +463,4 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
-    use crossterm::event::KeyModifiers;
-
-    use super::*;
-    use crate::tui::tests::test_app;
-
-    fn mouse(kind: MouseEventKind, row: u16, column: u16) -> MouseEvent {
-        MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::NONE,
-        }
-    }
-
-    fn press(row: u16, column: u16) -> MouseEvent {
-        mouse(MouseEventKind::Down(MouseButton::Left), row, column)
-    }
-
-    fn drag(row: u16, column: u16) -> MouseEvent {
-        mouse(MouseEventKind::Drag(MouseButton::Left), row, column)
-    }
-
-    /// A fullscreen app whose conversation is `rows` rows, `view` of them on screen, following
-    /// the newest.
-    fn app_with_rows(rows: usize, view: usize) -> App {
-        let mut app = test_app();
-        app.fullscreen = true;
-        app.view_rows = view;
-        (0..rows).for_each(|n| app.history.push(Line::Row(format!("row {n}"))));
-        app
-    }
-
-    #[test]
-    fn highlight_reverses_exactly_the_selected_columns() {
-        assert_eq!(highlight("abcdef", 2, 4), "ab\x1b[7mcde\x1b[27mf");
-        assert_eq!(highlight("abc", 0, usize::MAX), "\x1b[7mabc\x1b[27m");
-    }
-
-    #[test]
-    fn highlight_keeps_the_reverse_video_across_a_reset_inside_the_range() {
-        assert_eq!(
-            highlight("\x1b[1mab\x1b[0mcd", 1, 2),
-            "\x1b[1ma\x1b[7mb\x1b[0m\x1b[7mc\x1b[27md"
-        );
-    }
-
-    #[test]
-    fn a_wide_character_is_selected_whole_by_either_of_its_columns() {
-        assert_eq!(highlight("中文ab", 1, 2), "\x1b[7m中文\x1b[27mab");
-        assert_eq!(columns_text("中文ab", 1, 1), "中");
-        assert_eq!(columns_text("中文ab", 3, 4), "文a");
-    }
-
-    #[test]
-    fn columns_text_leaves_out_every_escape_sequence() {
-        assert_eq!(columns_text("\x1b[1mhello\x1b[0m world", 0, 6), "hello w");
-    }
-
-    #[test]
-    fn the_columns_of_a_selection_run_from_its_first_point_to_its_last_either_way() {
-        let forward = Selection {
-            anchor: (1, 2),
-            head: (3, 5),
-            epoch: 0,
-        };
-        let backward = Selection {
-            anchor: (3, 5),
-            head: (1, 2),
-            epoch: 0,
-        };
-        for selection in [forward, backward] {
-            assert_eq!(selection.columns_on(0), None);
-            assert_eq!(selection.columns_on(1), Some((2, usize::MAX)));
-            assert_eq!(selection.columns_on(2), Some((0, usize::MAX)));
-            assert_eq!(selection.columns_on(3), Some((0, 5)));
-            assert_eq!(selection.columns_on(4), None);
-        }
-        assert!(Selection::at((1, 1), 0).is_empty());
-    }
-
-    #[test]
-    fn a_double_click_selects_the_word_under_it_and_release_copies_it() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 1));
-        app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, 1));
-        assert!(app.selection.is_none(), "a single press selects nothing");
-        app.on_mouse(press(2, 1));
-        assert_eq!(app.release().as_deref(), Some("row"));
-        assert!(
-            app.selection.is_some(),
-            "the word stays selected after the copy"
-        );
-    }
-
-    #[test]
-    fn a_second_press_too_late_or_elsewhere_starts_an_empty_selection() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 1));
-        app.pressed.as_mut().unwrap().1 -= DOUBLE_CLICK + Duration::from_millis(1);
-        app.on_mouse(press(2, 1));
-        assert_eq!(app.release(), None);
-
-        app.on_mouse(press(2, 1));
-        app.pressed = Some(((24, 1), Instant::now(), 1));
-        app.on_mouse(press(2, 1));
-        assert_eq!(
-            app.release(),
-            None,
-            "a press on another point is not a double-click"
-        );
-    }
-
-    #[test]
-    fn a_triple_click_selects_the_whole_row() {
-        let mut app = app_with_rows(30, 10);
-        (0..3).for_each(|_| app.on_mouse(press(2, 1)));
-        assert_eq!(app.release().as_deref(), Some("row 22"));
-
-        app.on_mouse(press(2, 1));
-        assert_eq!(
-            app.release().as_deref(),
-            Some("row 22"),
-            "a fourth press keeps the row"
-        );
-        assert!(app.selection.is_some());
-    }
-
-    #[test]
-    fn a_word_is_letters_digits_and_underscores_and_any_other_character_alone() {
-        assert_eq!(word_on("hello world_2!", 1), Some((0, 4)));
-        assert_eq!(word_on("hello world_2!", 8), Some((6, 12)));
-        assert_eq!(word_on("hello world_2!", 13), Some((13, 13)));
-        assert_eq!(word_on("hello world", 5), None);
-        assert_eq!(word_on("hello world", 40), None);
-        assert_eq!(word_on("\x1b[1m中文\x1b[0m ab", 2), Some((0, 3)));
-    }
-
-    #[test]
-    fn a_drag_selects_the_rows_it_passes_and_release_copies_them() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 0));
-        app.on_mouse(drag(4, 3));
-        assert_eq!(app.release().as_deref(), Some("row 22\nrow 23\nrow"));
-        assert!(
-            app.selection.is_some(),
-            "the selection stays on screen after the copy"
-        );
-        assert!(app.drag.is_none());
-    }
-
-    #[test]
-    fn a_press_and_release_without_a_move_select_and_copy_nothing() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 0));
-        assert_eq!(app.release(), None);
-        assert!(app.selection.is_none());
-    }
-
-    #[test]
-    fn a_press_in_the_live_area_only_ends_the_selection() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 0));
-        app.on_mouse(drag(4, 3));
-        app.on_mouse(press(12, 0));
-        assert!(app.selection.is_none() && app.drag.is_none());
-    }
-
-    #[test]
-    fn the_wheel_scrolls_and_the_drag_follows_the_pointer_into_the_rows_it_now_shows() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 0));
-        app.on_mouse(drag(4, 3));
-        app.on_mouse(mouse(MouseEventKind::ScrollUp, 4, 3));
-        assert_eq!(app.history.span(10), (17, 27));
-        assert_eq!(app.selection.as_ref().map(|s| s.head), Some((21, 3)));
-        assert_eq!(
-            app.selection.as_ref().map(|s| s.anchor),
-            Some((22, 0)),
-            "the press stays on its row"
-        );
-    }
-
-    #[test]
-    fn a_drag_held_at_an_edge_scrolls_the_view_on_its_own() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 0));
-        app.on_mouse(drag(0, 5));
-        assert!(app.edge_scrolling());
-        app.edge_scroll();
-        assert_eq!(app.history.span(10), (19, 29));
-        assert_eq!(app.selection.as_ref().map(|s| s.head), Some((19, 5)));
-
-        app.on_mouse(drag(9, 0));
-        assert_eq!(app.edge_rows(), 1, "the last row scrolls down");
-        app.on_mouse(drag(5, 0));
-        assert!(!app.edge_scrolling(), "the middle does not");
-        app.on_mouse(drag(12, 0));
-        assert_eq!(app.edge_rows(), 1, "below the view scrolls down too");
-    }
-
-    #[test]
-    fn a_relayout_drops_the_selection_it_was_made_on() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 0));
-        app.on_mouse(drag(4, 3));
-        app.history.set_width(40);
-        app.on_mouse(drag(5, 3));
-        assert!(app.selection.is_none() && app.drag.is_none());
-    }
-
-    #[test]
-    fn the_selected_rows_are_painted_in_reverse_video() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 1));
-        app.on_mouse(drag(3, 2));
-        let lines = app.view_lines(10);
-        assert_eq!(lines.len(), 10);
-        assert!(!lines[1].contains(REVERSE));
-        assert_eq!(lines[2], "r\x1b[7mow 22\x1b[27m");
-        assert_eq!(lines[3], "\x1b[7mrow\x1b[27m 23");
-        assert!(!lines[4].contains(REVERSE));
-    }
-
-    #[test]
-    fn a_key_press_ends_the_selection() {
-        let mut app = app_with_rows(30, 10);
-        app.on_mouse(press(2, 0));
-        app.on_mouse(drag(4, 3));
-        app.clear_selection();
-        assert!(app.selection.is_none() && app.drag.is_none());
-    }
-}
+mod tests;
