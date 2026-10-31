@@ -1,6 +1,9 @@
 [package]
 name = "killi"
-description = "A minimal personal coding agent for the terminal"
+description = "Fast, tiny AI coding agent for the terminal: one small native binary, OpenAI- and Anthropic-compatible models, MCP, subagents, prompt-cache-friendly"
+homepage = "https://github.com/timwuhaotian/killi"
+keywords = ["ai", "coding-agent", "llm", "cli", "mcp"]
+categories = ["command-line-utilities", "development-tools"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -5,13 +5,16 @@
 <h1 align="center">killi</h1>
 
 [![CI](https://github.com/timwuhaotian/killi/actions/workflows/ci.yml/badge.svg)](https://github.com/timwuhaotian/killi/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/timwuhaotian/killi)](https://github.com/timwuhaotian/killi/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![macOS · Apple silicon](https://img.shields.io/badge/macOS-Apple%20silicon-lightgrey)
 
-A coding agent for the terminal, written in Rust (6 MB). It reads your code, runs commands and
-edits files with OpenAI-compatible, Anthropic-compatible or OpenAI Responses models, and it is
-built around one idea: send the model as little as possible, and send it the same way every
-time, so the provider's prompt cache keeps hitting. It is the sibling of the
+**killi is a fast, tiny AI coding agent for your terminal**, written in Rust (one small native
+binary, no runtime). Like Claude Code, Codex CLI, opencode or Kimi Code, it reads your code, runs
+commands and edits files, but it works with any OpenAI-compatible, Anthropic-compatible or
+OpenAI Responses LLM, and it supports MCP servers, subagents, plan mode, skills, hooks and
+`AGENTS.md`. It is built around one idea: send the model as little as possible, and send it
+the same way every time, so the provider's prompt cache keeps hitting. It is the sibling of the
 [Kil](https://github.com/timwuhaotian/kil) terminal and the
 [Kiled](https://github.com/timwuhaotian/kiled) editor.
 
