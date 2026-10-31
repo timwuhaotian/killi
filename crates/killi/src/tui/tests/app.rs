@@ -217,6 +217,27 @@ fn ctrl_c_arms_an_exit_hint_instead_of_printing_one() {
 }
 
 #[test]
+fn a_provider_key_applies_as_it_is_answered() {
+    let mut app = test_app();
+    app.provider_pick("muse-code");
+    let key = |code| TermEvent::Key(KeyEvent::new(code, KeyModifiers::NONE));
+    for c in "LLM|1|k".chars() {
+        assert!(matches!(
+            app.on_key_idle(key(KeyCode::Char(c))),
+            Idle::Continue
+        ));
+    }
+    assert!(
+        matches!(
+            app.on_key_idle(key(KeyCode::Enter)),
+            Idle::Input(Input::Provider(preset, answer)) if preset == "muse-code" && answer == "LLM|1|k"
+        ),
+        "the key is written now, not with the next message"
+    );
+    assert!(app.next_input.is_none() && app.asking.is_none());
+}
+
+#[test]
 fn bare_effort_while_busy_offers_the_levels() {
     let mut app = test_app();
     let item = |value: &str| Item {

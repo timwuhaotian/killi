@@ -46,8 +46,8 @@ Usage:
   killi -p <prompt> [-m <model>] [-c] [--json] Run one task, print the answer and exit
   killi init                                   Write a starting ~/.killi/config.toml, or add [prompt] to yours
   killi import-kimi [--force]                  Copy providers, models and MCP servers from Kimi Code
-  killi login [chatgpt | opencode-go]          Sign in to a subscription and add its models
-  killi logout [chatgpt | opencode-go]         Sign out of one
+  killi login [<service>]                      Sign in to chatgpt, opencode-go or muse-code, adding its models
+  killi logout [<service>]                     Sign out of one
   killi update                                 Install the latest published version
   killi sessions [<pid>] [--json]              The killi sessions running on this machine, or what one is doing
   killi ask <pid> <question>                   Ask another session about its work; its model answers

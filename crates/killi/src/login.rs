@@ -1,8 +1,9 @@
 //! `killi login` and `killi logout`: the services killi signs in to, named on the command line
 //! or picked from a list. ChatGPT signs in through the browser; OpenCode Go takes the API key
-//! from its console.
+//! from its console, and Muse Code the muse CLI's.
 
 pub mod chatgpt;
+mod muse_code;
 mod opencode_go;
 
 pub(crate) use opencode_go::{add as opencode_go_add, signed_in as opencode_go_signed_in};
@@ -17,15 +18,17 @@ use anyhow::{Result, anyhow, bail};
 enum Service {
     ChatGpt,
     OpencodeGo,
+    MuseCode,
 }
 
 impl Service {
-    const ALL: [Service; 2] = [Service::ChatGpt, Service::OpencodeGo];
+    const ALL: [Service; 3] = [Service::ChatGpt, Service::OpencodeGo, Service::MuseCode];
 
     fn name(self) -> &'static str {
         match self {
             Service::ChatGpt => "chatgpt",
             Service::OpencodeGo => "opencode-go",
+            Service::MuseCode => "muse-code",
         }
     }
 
@@ -36,6 +39,9 @@ impl Service {
             Service::OpencodeGo => {
                 "OpenCode Go: your subscription, with the API key from the OpenCode Console"
             }
+            Service::MuseCode => {
+                "Muse Code: Meta's subscription, with the API key from the muse CLI"
+            }
         }
     }
 
@@ -43,6 +49,7 @@ impl Service {
         match self {
             Service::ChatGpt => chatgpt::signed_in(),
             Service::OpencodeGo => opencode_go::signed_in(),
+            Service::MuseCode => muse_code::signed_in(),
         }
     }
 }
@@ -52,6 +59,7 @@ pub async fn login(name: Option<&str>) -> Result<()> {
     match pick(name, &Service::ALL, "Sign in to")? {
         Service::ChatGpt => chatgpt::login().await,
         Service::OpencodeGo => opencode_go::login().await,
+        Service::MuseCode => muse_code::login(),
     }
 }
 
@@ -69,6 +77,7 @@ pub async fn logout(name: Option<&str>) -> Result<()> {
     match pick(name, &signed, "Sign out of")? {
         Service::ChatGpt => chatgpt::logout().await,
         Service::OpencodeGo => opencode_go::logout(),
+        Service::MuseCode => muse_code::logout(),
     }
 }
 
@@ -129,7 +138,9 @@ mod tests {
             choose(" OpenCode-Go ", &Service::ALL),
             Some(Service::OpencodeGo)
         );
-        assert_eq!(choose("3", &Service::ALL), None);
+        assert_eq!(choose("3", &Service::ALL), Some(Service::MuseCode));
+        assert_eq!(choose("muse-code", &Service::ALL), Some(Service::MuseCode));
+        assert_eq!(choose("4", &Service::ALL), None);
         assert_eq!(choose("0", &Service::ALL), None);
         assert_eq!(choose("zen", &Service::ALL), None);
         let one = [Service::OpencodeGo];
@@ -152,6 +163,6 @@ mod tests {
         let error = pick(Some("zen"), &Service::ALL, "")
             .unwrap_err()
             .to_string();
-        assert!(error.contains("chatgpt, opencode-go"), "{error}");
+        assert!(error.contains("chatgpt, opencode-go, muse-code"), "{error}");
     }
 }

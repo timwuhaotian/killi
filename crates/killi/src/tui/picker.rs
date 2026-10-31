@@ -114,10 +114,7 @@ fn provider_setup(preset: &str) -> (&'static str, &'static str) {
             "Writes an `opencode-go` provider with the key, and the models Go serves. Usage: https://opencode.ai/console",
             "OpenCode Go API key:",
         ),
-        _ => (
-            "Writes a `meta` provider on the Responses API with the key, and maps the tool names Meta's client check refuses: bash → run_command, web_search → search_web. The key is the muse CLI's, `LLM|…`; a wrong one shows as HTTP 401 on the first request.",
-            "Muse Code API key:",
-        ),
+        _ => (crate::config::MUSE_ABOUT, "Muse Code API key:"),
     }
 }
 

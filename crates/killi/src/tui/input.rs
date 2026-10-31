@@ -129,7 +129,9 @@ impl App {
         }
         if self.asking.is_some() {
             self.on_key_asking(key);
-            return Idle::Continue;
+            // An answer to one of killi's own questions (/provider's key, the last step of
+            // /web-search-config) is applied at once, not with the next message.
+            return self.next_input.take().map_or(Idle::Continue, Idle::Input);
         }
         if let Some(menu) = self.suggestions()
             && let Some(idle) = self.on_key_menu(key, &menu)

@@ -339,12 +339,15 @@ pub(super) async fn handle_command(
     Ok(true)
 }
 
-/// Applies a /provider pick: writes the preset's provider and models with the key, then
-/// re-reads the config so /model lists them at once. The write itself runs inside a turn,
-/// so keys stay live while OpenCode Go's model list is fetched.
+/// Applies a /provider pick: writes the preset's provider and models with the key, or
+/// repairs the provider the config has, then re-reads the config so /model lists them at
+/// once and a session already on that provider uses it as written from its next request.
+/// The write itself runs inside a turn, so keys stay live while OpenCode Go's model list is
+/// fetched.
 pub(super) async fn provider_add(
     app: &mut App,
     session: &mut Setup,
+    agent: &mut Agent,
     keys: &mut EventStream,
     rx: &mut mpsc::UnboundedReceiver<Event>,
     preset: &str,
@@ -384,11 +387,30 @@ pub(super) async fn provider_add(
                     ));
                 }
             }
+            if let Some(note) = added.repair_note() {
+                app.notice(&note);
+            }
             for note in &notes {
                 app.notice(note);
             }
             if let Err(e) = session.reload() {
                 app.error_from("/reload", &e);
+                return Ok(());
+            }
+            let alias = agent.model_alias().to_string();
+            let on_it = session
+                .config()
+                .models
+                .get(&alias)
+                .is_some_and(|model| model.provider == added.provider);
+            if on_it {
+                match session.config().resolve(Some(&alias)).and_then(Client::new) {
+                    Ok(client) => match agent.switch_model(client) {
+                        Ok(()) => app.notice("This session takes it from its next request."),
+                        Err(e) => app.error_report(&e),
+                    },
+                    Err(e) => app.error_report(&e),
+                }
             }
         }
     }

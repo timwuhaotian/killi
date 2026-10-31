@@ -18,9 +18,9 @@ pub use edit::{remove_provider_key, set_backup_model, set_model_effort, set_sear
 pub use guide::{guide_model, init, set_up_if_missing};
 pub use import::{import_kimi, import_omp, import_opencode, import_pi};
 pub use models::{Added, Additions, NewModel, add_models};
-pub use muse::{add as add_muse, ours as muse_ours};
+pub use muse::{ABOUT as MUSE_ABOUT, add as add_muse, ours as muse_ours};
 
-use edit::{set_default_model, set_provider_key};
+use edit::{KEY_FIELDS, set_default_model, set_provider_key, with_provider_fields};
 use guide::prompt_section;
 use models::toml_int;
 use yaml::read_yaml;
@@ -32,7 +32,7 @@ use guide::TEMPLATE;
 #[cfg(test)]
 use import::{import_omp_from, import_opencode_from, import_pi_from};
 #[cfg(test)]
-use models::with_models;
+use models::{with_additions, with_models};
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Config {

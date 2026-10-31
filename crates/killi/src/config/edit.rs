@@ -115,40 +115,127 @@ fn table_of(spans: &[(String, Range<usize>)], line: usize) -> Option<&str> {
         .map(|(name, _)| name.as_str())
 }
 
+/// The fields that hold a provider's key. Only one of them is read, so writing either one
+/// replaces both.
+pub(super) const KEY_FIELDS: [&str; 2] = ["api_key", "api_key_env"];
+
 /// Stores `key` as the `api_key` of `provider` in the config file, in place of the
 /// `api_key` or `api_key_env` line in its section, so `resolve` reads the key from the file.
 /// The rest of the file, comments included, is left as it is.
 pub(super) fn set_provider_key(path: &Path, provider: &str, key: &str) -> Result<()> {
     let text =
         fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
-    let table = format!("providers.{provider}");
-    let key_line = format!("api_key = {}", toml::Value::String(key.to_string()));
-    let spans = table_spans(&text);
-    let mut out: Vec<String> = Vec::new();
-    let mut written = false;
-    for (n, line) in text.lines().enumerate() {
-        if table_of(&spans, n) == Some(table.as_str()) && line.trim().starts_with("api_key") {
-            if !written {
-                out.push(key_line.clone());
-                written = true;
-            }
-            continue;
-        }
-        out.push(line.to_string());
-    }
-    if !written {
-        let Some((_, span)) = spans.iter().find(|(name, _)| name == &table) else {
-            bail!(
-                "no [{table}] table in {} to store the key in",
-                path.display()
-            )
-        };
-        out.insert(span.start + 1, key_line);
-    }
-    let new = format!("{}\n", out.join("\n"));
-    toml::from_str::<Config>(&new).context("storing the key would break the config")?;
+    let fields = toml::Table::from_iter([("api_key".to_string(), toml::Value::from(key))]);
+    let (new, _) = with_provider_fields(&text, provider, &fields)
+        .with_context(|| format!("could not store the key in {}", path.display()))?;
     crate::fs_atomic::write(path, new.as_bytes(), Some(0o600))
         .with_context(|| format!("could not write {}", path.display()))
+}
+
+/// The config text with `fields` set in `[providers.<provider>]`, and the names of the fields
+/// that changed. Each changed field goes on one line under the table's header, replacing
+/// the line, dotted keys or `[providers.<provider>.<field>]` sub-table that set it before.
+/// A table field, such as `tool_names`, keeps the entries it had besides the ones given.
+/// When every field already holds its value the text comes back as it was. The rest of the
+/// text, comments included, is left as it is.
+pub(super) fn with_provider_fields(
+    text: &str,
+    provider: &str,
+    fields: &toml::Table,
+) -> Result<(String, Vec<String>)> {
+    let parsed: toml::Table = toml::from_str(text).context("invalid config")?;
+    let current = parsed
+        .get("providers")
+        .and_then(|providers| providers.get(provider))
+        .and_then(toml::Value::as_table);
+    let has = |field: &str| current.is_some_and(|table| table.contains_key(field));
+    let mut changed: Vec<(String, toml::Value)> = Vec::new();
+    for (field, value) in fields {
+        let old = current.and_then(|table| table.get(field));
+        let value = match (value, old) {
+            (toml::Value::Table(given), Some(toml::Value::Table(had))) => {
+                let mut merged = had.clone();
+                merged.extend(given.clone());
+                toml::Value::Table(merged)
+            }
+            _ => value.clone(),
+        };
+        let key_twin = KEY_FIELDS.contains(&field.as_str())
+            && KEY_FIELDS
+                .iter()
+                .any(|other| *other != field.as_str() && has(other));
+        if old != Some(&value) || key_twin {
+            changed.push((field.clone(), value));
+        }
+    }
+    if changed.is_empty() {
+        return Ok((text.to_string(), Vec::new()));
+    }
+    // The changed field a line's key belongs to, as an index into `changed`.
+    let replaced_by = |key: &str| {
+        changed.iter().position(|(name, _)| {
+            name == key || (KEY_FIELDS.contains(&name.as_str()) && KEY_FIELDS.contains(&key))
+        })
+    };
+    let table = format!("providers.{provider}");
+    let spans = table_spans(text);
+    let Some(header) = spans
+        .iter()
+        .find(|(name, _)| *name == table)
+        .map(|(_, span)| span.start)
+    else {
+        bail!("no [{table}] table to write to")
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut written = vec![false; changed.len()];
+    let mut under_header = 0;
+    for (n, line) in text.lines().enumerate() {
+        let in_table = table_of(&spans, n);
+        if in_table == Some(table.as_str()) {
+            if let Some(at) = line_key(line).and_then(replaced_by) {
+                if !written[at] {
+                    let (field, value) = &changed[at];
+                    out.push(format!("{field} = {value}"));
+                    written[at] = true;
+                }
+                continue;
+            }
+        } else if let Some(field) = in_table
+            .and_then(|name| name.strip_prefix(&table))
+            .and_then(|rest| rest.strip_prefix('.'))
+            .and_then(|rest| rest.split('.').next())
+        {
+            let trimmed = line.trim();
+            if replaced_by(field).is_some() && !trimmed.is_empty() && !trimmed.starts_with('#') {
+                continue;
+            }
+        }
+        out.push(line.to_string());
+        if n == header {
+            under_header = out.len();
+        }
+    }
+    let unwritten = changed
+        .iter()
+        .zip(&written)
+        .filter(|(_, written)| !**written)
+        .map(|((field, value), _)| format!("{field} = {value}"));
+    out.splice(under_header..under_header, unwritten);
+    let new = format!("{}\n", out.join("\n"));
+    toml::from_str::<Config>(&new).context("writing the provider would break the config")?;
+    Ok((new, changed.into_iter().map(|(field, _)| field).collect()))
+}
+
+/// The first part of the key a `key = value` line sets, unquoted: `tool_names` for
+/// `tool_names.bash = "run_command"`. `None` for blank lines, comments and headers.
+fn line_key(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+        return None;
+    }
+    let (key, _) = line.split_once('=')?;
+    let first = key.split('.').next()?.trim();
+    Some(first.trim_matches(|c| c == '"' || c == '\''))
 }
 
 /// Takes the `api_key` and `api_key_env` lines out of `provider`'s table, leaving the rest of

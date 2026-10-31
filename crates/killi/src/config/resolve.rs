@@ -8,7 +8,7 @@ impl Config {
         let path = killi_home().join("config.toml");
         let text = match fs::read_to_string(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!(
-                "no config yet at {}; run `killi init` to write one to edit, or `killi import-kimi` to copy Kimi Code's",
+                "no config yet at {}; run `killi init` to write one to edit, `killi import-kimi` to copy Kimi Code's, or `killi login` to start on a subscription",
                 path.display()
             ),
             read => read.with_context(|| format!("could not read {}", path.display()))?,

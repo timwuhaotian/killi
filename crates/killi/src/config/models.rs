@@ -38,27 +38,34 @@ pub struct Additions {
     pub comment: &'static str,
 }
 
-/// What adding a sign-in's provider and models changed: the config's path, the model aliases
-/// it added (empty when they were all in already), and the alias a config without
-/// `default_model` now starts on.
+/// What adding a sign-in's provider and models changed: the config's path, the provider's
+/// name, the model aliases it added (empty when they were all in already), the fields of a
+/// provider the config had that were set to the preset's (`tool_names`, say), and the alias
+/// a config without `default_model` now starts on.
 pub struct Added {
     pub path: PathBuf,
+    pub provider: String,
     pub aliases: Vec<String>,
+    pub repaired: Vec<String>,
     pub starts_on: Option<String>,
 }
 
 impl Added {
     /// The report `killi login` prints.
     pub fn report(&self) -> String {
-        if self.aliases.is_empty() {
-            return format!("Its models are already in {}.", self.path.display());
+        let mut out = match self.aliases.is_empty() {
+            true => format!("Its models are already in {}.", self.path.display()),
+            false => format!(
+                "Added to {}: {}.",
+                self.path.display(),
+                self.aliases.join(", ")
+            ),
+        };
+        if let Some(note) = self.repair_note() {
+            out.push_str(&format!("\n{note}"));
         }
-        let mut out = format!(
-            "Added to {}: {}.",
-            self.path.display(),
-            self.aliases.join(", ")
-        );
         match &self.starts_on {
+            _ if self.aliases.is_empty() => {}
             Some(default) if self.aliases.contains(default) => out.push_str(&format!(
                 "\nkilli starts on `{default}`; /model picks another."
             )),
@@ -69,11 +76,23 @@ impl Added {
         }
         out
     }
+
+    /// What was set in the provider the config already had, when anything was.
+    pub fn repair_note(&self) -> Option<String> {
+        (!self.repaired.is_empty()).then(|| {
+            format!(
+                "Repaired [providers.{}]: set {}.",
+                self.provider,
+                self.repaired.join(", ")
+            )
+        })
+    }
 }
 
 /// Adds a sign-in's provider and the models the config doesn't have yet. A provider already
-/// there keeps its table, except for a new `api_key`. A new config, or one without
-/// `default_model`, starts on the first model added.
+/// there gets the fields the sign-in writes, its key and `tool_names` among them, and keeps
+/// the rest of its table. A new config, or one without `default_model`, starts on the first
+/// model added.
 pub fn add_models(additions: &Additions) -> Result<Added> {
     let dir = killi_home();
     let path = dir.join("config.toml");
@@ -81,10 +100,14 @@ pub fn add_models(additions: &Additions) -> Result<Added> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         read => Some(read.with_context(|| format!("could not read {}", path.display()))?),
     };
-    let (out, name, existed, added) = with_models(text.as_deref().unwrap_or_default(), additions)?;
+    let (out, name, added, repaired) =
+        with_additions(text.as_deref().unwrap_or_default(), additions)?;
+    let keyed = KEY_FIELDS
+        .iter()
+        .any(|field| additions.provider.contains_key(*field));
     match &text {
         Some(text) if *text == out => {}
-        Some(_) => crate::fs_atomic::write(&path, out.as_bytes(), None)
+        Some(_) => crate::fs_atomic::write(&path, out.as_bytes(), keyed.then_some(0o600))
             .with_context(|| format!("could not write {}", path.display()))?,
         None => {
             fs::DirBuilder::new()
@@ -100,9 +123,6 @@ pub fn add_models(additions: &Additions) -> Result<Added> {
             file.write_all(prompt_section().as_bytes())?;
         }
     }
-    if existed && let Some(toml::Value::String(key)) = additions.provider.get("api_key") {
-        set_provider_key(&path, &name, key)?;
-    }
     let config: Config = toml::from_str(&out)?;
     let starts_on = match config.default_model.as_deref() {
         Some(default) if added.iter().any(|alias| alias == default) => Some(default.to_string()),
@@ -110,9 +130,26 @@ pub fn add_models(additions: &Additions) -> Result<Added> {
     };
     Ok(Added {
         path,
+        provider: name,
         aliases: added,
+        repaired,
         starts_on,
     })
+}
+
+/// The config text `add_models` writes, the provider's name, the aliases added, and the
+/// fields besides the key that a provider the config had was given.
+pub(super) fn with_additions(
+    text: &str,
+    additions: &Additions,
+) -> Result<(String, String, Vec<String>, Vec<String>)> {
+    let (out, name, existed, added) = with_models(text, additions)?;
+    if !existed {
+        return Ok((out, name, added, Vec::new()));
+    }
+    let (out, mut repaired) = with_provider_fields(&out, &name, &additions.provider)?;
+    repaired.retain(|field| !KEY_FIELDS.contains(&field.as_str()));
+    Ok((out, name, added, repaired))
 }
 
 /// The config text with the additions at the end and the rest left as it is, the provider's

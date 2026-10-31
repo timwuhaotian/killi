@@ -26,8 +26,8 @@ api_key_env = "OPENAI_API_KEY"  # or: api_key = "..."
 type = "anthropic"              # Anthropic Messages, and compatible APIs
 api_key_env = "ANTHROPIC_API_KEY"
 
-# To use your ChatGPT plan or an OpenCode Go subscription, run `killi login`: it signs in and
-# adds that provider with its models here.
+# To use your ChatGPT plan, or an OpenCode Go or Muse Code subscription, run `killi login`: it
+# signs in and adds that provider with its models here.
 
 [models."openai/gpt-5.5"]
 provider = "openai"

@@ -380,7 +380,16 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 }
             }
             Input::Provider(preset, key) => {
-                provider_add(&mut app, &mut session, &mut keys, &mut rx, &preset, &key).await?;
+                provider_add(
+                    &mut app,
+                    &mut session,
+                    &mut agent,
+                    &mut keys,
+                    &mut rx,
+                    &preset,
+                    &key,
+                )
+                .await?;
             }
             Input::Mcp(name, from_list) => match session.mcp().toggle(&name) {
                 Ok(on) => {

@@ -42,9 +42,11 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   (every protocol sends the mapped names and reads replies back under killi's, for an API
   that refuses another client's tool names), and `session_header` (a header that carries
   the conversation's ID on every request, such as OpenCode Go's `x-opencode-session`).
-  `killi login opencode-go` writes an OpenCode Go provider and its models from the key; from
-  the TUI, `/provider` does the same for OpenCode Go and Meta's Muse Code, whose tool-name
-  mapping it writes with it.
+  `killi login opencode-go` and `killi login muse-code` write the provider and its models
+  from the key, and in the TUI `/provider` does the same. Muse Code's provider carries the
+  tool-name mapping Meta needs. Run again on a provider the config already has, they set the
+  fields the preset owns (`type`, `base_url`, `tool_names`, the key) and keep the rest, so
+  either one repairs a `meta` provider that has no `tool_names`.
 - `[models."<provider>/<model>"]`: `provider` (a `[providers]` name), `model` (the API's
   model id), `protocol` (overrides the provider's `type` for this model), `base_url` (overrides
   the provider's, for a gateway with a URL per API), `cache_control = true`

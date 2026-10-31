@@ -1,4 +1,5 @@
 mod import;
+mod provider;
 
 use super::{Config, import_omp_from, read_yaml};
 

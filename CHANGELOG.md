@@ -5,6 +5,22 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- The key pasted into `/provider` takes effect when you press Enter. Since 0.6.24 it waited
+  for the next message: the screen showed `(set)` and nothing was written until something
+  else was sent. A typed last answer to `/web-search-config` (a Tavily key, a SearXNG key)
+  had the same delay.
+- `/provider muse-code` repairs a `meta` provider the config already has. It used to keep
+  that provider's table as it was and only replace the key, so a provider written by hand,
+  copied from another machine or imported never got `tool_names` and Meta kept answering
+  `client_attestation_denied`. Now the provider gets the preset's `type`, `base_url` and
+  `tool_names`, along with the key, and keeps everything else: its custom headers, comments,
+  and its own tool-name mappings beside the preset's. killi says which fields it set, and a
+  session already on that provider uses the change from its next request. `/provider
+  opencode-go` and `killi login opencode-go` repair OpenCode Go's provider the same way.
+- `killi login muse-code` does what `/provider muse-code` does, so a machine with no model to
+  start on yet can begin on Muse Code. On a machine without a config it writes one that starts
+  on muse wonder. `killi logout muse-code` takes the key out.
+
 ## 0.6.28 — 2026-10-31
 
 - Esc before the model's reply begins takes the message back: it returns to the prompt with
