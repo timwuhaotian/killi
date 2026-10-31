@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.28 — 2026-10-31
+
 - Esc before the model's reply begins takes the message back: it returns to the prompt with
   anything queued behind it, the conversation shows no trace of it, and the model never sees
   it. Until then the sent message waits in the live area. Once anything of the turn is printed
