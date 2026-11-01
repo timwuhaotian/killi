@@ -332,6 +332,18 @@ def run_scene(args, scratch, scene, cols, rows, theme):
             if until in shown() and "Esc to interrupt" not in shown():
                 break
     pump(scene.get("settle", 1.5))
+    # The live area is painted in bursts the pty delivers in small chunks; keep reading
+    # until the terminal falls quiet again, so a screen is captured whole, not mid-paint.
+    quiet = time.monotonic() + 0.05
+    while time.monotonic() < quiet:
+        ready, _, _ = select.select([fd], [], [], 0.05)
+        if not ready:
+            continue
+        data = os.read(fd, 65536)
+        if not data:
+            break
+        stream.feed(data.replace(b"\x1b[2m", b"\x1b[5m"))
+        quiet = time.monotonic() + 0.05
     cells = [[cell(screen.buffer[y][x]) for x in range(cols)] for y in range(rows)]
     try:
         os.write(fd, b"\x1b")
