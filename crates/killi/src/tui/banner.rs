@@ -58,16 +58,27 @@ const WAVE: usize = 6;
 /// Frames (a tenth of a second each) the wave takes to rise from a flat line.
 const RISE: f32 = 8.0;
 
+/// The top dot row of a `dots`-column wave `frame` tenths of a second in, 0 on top. A flat
+/// line at first, it rises into a wave that travels to the right a dot column per frame,
+/// swelling and easing a little.
+fn wave_at(frame: usize, dots: usize) -> Vec<usize> {
+    let t = frame as f32;
+    let height = (t / RISE).min(1.0) * (0.86 + 0.14 * (t * 0.16).sin());
+    (0..dots)
+        .map(|x| {
+            let phase = (x as f32 - t) / dots.max(1) as f32 * std::f32::consts::TAU;
+            (1.0 - height * phase.sin()).round().clamp(0.0, 2.0) as usize
+        })
+        .collect()
+}
+
 /// The top dot row of the wave's two-dot-thick ribbon in each dot column `frame` tenths of a
 /// second in, 0 on top. A flat line at first, it rises into a wave that travels to the right a
 /// dot column per frame, swelling and easing a little.
 fn wave(frame: usize) -> [usize; WAVE * 2] {
-    let t = frame as f32;
-    let height = (t / RISE).min(1.0) * (0.86 + 0.14 * (t * 0.16).sin());
-    std::array::from_fn(|x| {
-        let phase = (x as f32 - t) / (WAVE * 2) as f32 * std::f32::consts::TAU;
-        (1.0 - height * phase.sin()).round().clamp(0.0, 2.0) as usize
-    })
+    wave_at(frame, WAVE * 2)
+        .try_into()
+        .expect("wave_at returns one height per dot column")
 }
 
 /// The braille cell whose left column has the dots at `left` and `left + 1` lit, and whose
@@ -88,6 +99,31 @@ fn flow(frame: usize, across: f32, shift: f32, fade: f32) -> String {
     color(r * fade, g * fade, b * fade, truecolor())
 }
 
+/// The rainbow's RGB at `t` (0 to 1 around the wheel), full saturation at the brightness the
+/// theme takes: vivid on a dark terminal, deeper on a light one.
+fn rainbow(t: f32) -> (f32, f32, f32) {
+    let t = t.rem_euclid(1.0);
+    let x = 1.0 - (t * 6.0 % 2.0 - 1.0).abs();
+    let (r, g, b) = match (t * 6.0) as usize {
+        0 => (1.0, x, 0.0),
+        1 => (x, 1.0, 0.0),
+        2 => (0.0, 1.0, x),
+        3 => (0.0, x, 1.0),
+        4 => (x, 0.0, 1.0),
+        _ => (1.0, 0.0, x),
+    };
+    let shade = if is_light() { 0.55 } else { 0.95 };
+    (r * 255.0 * shade, g * 255.0 * shade, b * 255.0 * shade)
+}
+
+/// A rainbow color at `across` (0 to 1 along a row) `frame` tenths of a second in: the wheel
+/// turns slowly with the frame, dimmed by `fade`.
+fn rainbow_flow(frame: usize, across: f32, fade: f32) -> String {
+    let drift = frame as f32 * 0.02;
+    let (r, g, b) = rainbow(across + drift);
+    color(r * fade, g * fade, b * fade, truecolor())
+}
+
 /// The wave and the space after it, rising from a flat line at first.
 fn wave_head(frame: usize) -> String {
     let dots = wave(frame);
@@ -104,6 +140,23 @@ fn wave_head(frame: usize) -> String {
     }
     out.push_str(RESET);
     out.push(' ');
+    out
+}
+
+/// The full-width working wave: a braille ribbon `columns` wide that rises from a flat line
+/// and rolls on, each cell taking the rainbow gradient as the wheel turns with `frame`.
+pub fn rainbow_wave(frame: usize, columns: usize) -> String {
+    let heights = wave_at(frame, columns * 2);
+    let mut out = String::new();
+    for i in 0..columns {
+        out.push_str(&rainbow_flow(
+            frame,
+            i as f32 / (columns - 1).max(1) as f32,
+            1.0,
+        ));
+        out.push(cell(heights[2 * i], heights[2 * i + 1]));
+    }
+    out.push_str(RESET);
     out
 }
 
@@ -138,16 +191,37 @@ pub fn action(frame: usize, word: &str) -> String {
     out
 }
 
-/// The spinner with a word shown whole at once: the wave is unchanged, and the word keeps the
-/// logo's gradient flowing through it, without the letter-by-letter fade of [`action`].
-pub fn steady(frame: usize, word: &str) -> String {
-    let mut out = wave_head(frame);
+/// `word` fading in letter by letter below the full-width wave, each letter taking the rainbow
+/// gradient as the wheel turns with `frame`; letters not yet there are dim dots.
+pub fn action_word(frame: usize, word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
+    let mut out = String::new();
     for (i, c) in chars.iter().enumerate() {
-        out.push_str(&flow(
+        let appeared = (frame as f32 - 2.0 * i as f32 + 1.0) / 3.0;
+        if appeared <= 0.0 {
+            out.push_str(&format!("{DIM}·{RESET}"));
+            continue;
+        }
+        out.push_str(&rainbow_flow(
             frame,
             i as f32 / (chars.len() - 1).max(1) as f32,
-            0.5,
+            appeared.clamp(0.0, 1.0) * 0.75 + 0.25,
+        ));
+        out.push(*c);
+        out.push_str(RESET);
+    }
+    out
+}
+
+/// `word` shown whole at once below the full-width wave, in the rainbow gradient flowing with
+/// `frame`.
+pub fn steady_word(frame: usize, word: &str) -> String {
+    let chars: Vec<char> = word.chars().collect();
+    let mut out = String::new();
+    for (i, c) in chars.iter().enumerate() {
+        out.push_str(&rainbow_flow(
+            frame,
+            i as f32 / (chars.len() - 1).max(1) as f32,
             1.0,
         ));
         out.push(*c);
@@ -288,16 +362,43 @@ mod tests {
     }
 
     #[test]
-    fn the_steady_word_shows_whole_at_once_and_keeps_its_width() {
+    fn the_rainbow_wave_spans_any_width_and_rolls() {
+        for columns in [0, 1, 2, 59, 60, 118] {
+            for frame in [0, 1, 8, 50] {
+                assert_eq!(
+                    width(&rainbow_wave(frame, columns)),
+                    columns,
+                    "{columns} columns at frame {frame}"
+                );
+            }
+        }
+        let flat = wave_at(0, 20);
+        assert!(flat.iter().all(|&row| row == flat[0]));
+        for frame in 8..60 {
+            let dots = wave_at(frame, 40);
+            assert_ne!(dots, wave_at(frame + 1, 40), "frame {frame} stands still");
+            assert!(
+                dots.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1),
+                "frame {frame} jumps: {dots:?}"
+            );
+            assert!(dots.iter().all(|&row| row <= 2));
+        }
+    }
+
+    #[test]
+    fn the_words_below_the_wave_fade_in_or_show_whole_and_keep_their_width() {
         for frame in 0..60 {
+            assert_eq!(width(&action_word(frame, "thinking")), 8, "frame {frame}");
             assert_eq!(
-                width(&steady(frame, "chiaroscuro")),
-                WAVE + 1 + "chiaroscuro".len(),
+                width(&steady_word(frame, "chiaroscuro")),
+                "chiaroscuro".len(),
                 "frame {frame}"
             );
         }
+        assert!(action_word(0, "thinking").contains('·'));
+        assert!(!action_word(30, "thinking").contains('·'));
         assert!(
-            !steady(0, "chiaroscuro").contains('·'),
+            !steady_word(0, "chiaroscuro").contains('·'),
             "the whole word shows at once"
         );
     }
