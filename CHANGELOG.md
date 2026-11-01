@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.33 — 2026-11-01
+
+- Dragging a selection in a long prompt keeps the viewport stable and scrolls gradually at
+  its edges, preserving the selection across more than one screen.
+
 ## 0.6.32 — 2026-11-01
 
 - Plan mode no longer refuses a read-only pipeline for opening with `cd <dir> &&`, and its
