@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.34 — 2026-11-02
+
+- The working indicator's wave now spans the full terminal width, in a rainbow gradient that
+  turns as it rolls, with the action or snapshot word on its own row beneath it.
+
 ## 0.6.33 — 2026-11-01
 
 - Dragging a selection in a long prompt keeps the viewport stable and scrolls gradually at
