@@ -252,6 +252,8 @@ pub(super) struct App {
     /// Where the last left press landed, when, and which press of a run of presses on it this is
     /// (capped at 3), for double- and triple-clicks.
     pub(super) pressed: Option<(Spot, Instant, usize)>,
+    /// First visual row in the prompt's viewport, independent of its screen placement.
+    pub(super) input_first: usize,
     /// Where the prompt's rows were last drawn, so a press there selects its text.
     pub(super) input_rows: InputRows,
     /// Whether the banner says it is a resumed session, for drawing it again.

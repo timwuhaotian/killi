@@ -41,6 +41,7 @@ fn app_with_prompt(text: &str) -> App {
         first: 0,
         count: 3,
         indent: 2,
+        total: 3,
     };
     app
 }
@@ -66,6 +67,133 @@ fn a_drag_in_the_prompt_selects_its_text_and_release_copies_it() {
         Some("fix the "),
         "a drag out of the prompt stays on its rows"
     );
+}
+
+fn layout_prompt(app: &mut App) -> Vec<String> {
+    let (rows, _, _) = app.live();
+    let cut = rows.len().saturating_sub(app.height);
+    let above = app.height - (rows.len() - cut);
+    app.view_rows = above;
+    app.input_rows = app.input_rows.placed(above, cut);
+    rows
+}
+
+#[test]
+fn dragging_across_a_long_prompt_keeps_the_view_and_pointer_mapping_stable() {
+    let mut app = app_with_rows(30, 10);
+    app.editor.insert(
+        &(0..15)
+            .map(|n| format!("line{n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    layout_prompt(&mut app);
+    assert_eq!(app.input_first, 5);
+    let top = app.input_rows.top as u16;
+    app.on_mouse(press(top + 5, 2));
+    layout_prompt(&mut app);
+    assert_eq!(app.input_first, 5);
+    app.on_mouse(drag(top + 2, 4));
+    layout_prompt(&mut app);
+    assert_eq!(app.input_first, 5);
+    app.on_mouse(drag(top + 7, 4));
+    layout_prompt(&mut app);
+    assert_eq!(app.editor.selected_text(), Some("line10\nline11\nli"));
+    assert_eq!(app.input_rows.top as u16, top);
+    assert_eq!(app.input_first, 5);
+}
+
+#[test]
+fn prompt_drag_scrolls_at_both_edges_and_keeps_its_anchor() {
+    let mut app = app_with_rows(30, 10);
+    app.editor.insert(
+        &(0..25)
+            .map(|n| format!("line{n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    layout_prompt(&mut app);
+    let top = app.input_rows.top as u16;
+    app.on_mouse(press(top + 5, 4));
+    app.on_mouse(drag(top, 4));
+    for _ in 0..15 {
+        assert!(app.edge_scrolling());
+        app.edge_scroll();
+        layout_prompt(&mut app);
+    }
+    assert_eq!(app.input_first, 0);
+    assert!(!app.edge_scrolling());
+    assert_eq!(
+        app.editor.selected_text(),
+        Some(
+            format!(
+                "{}li",
+                &(0..20).map(|n| format!("line{n:02}\n")).collect::<String>()[2..]
+            )
+            .as_str()
+        )
+    );
+    app.on_mouse(drag(top + 9, 4));
+    for _ in 0..15 {
+        assert!(app.edge_scrolling());
+        app.edge_scroll();
+        layout_prompt(&mut app);
+    }
+    assert_eq!(app.input_first, 15);
+    assert!(!app.edge_scrolling());
+    assert_eq!(
+        app.release().as_deref(),
+        Some("ne20\nline21\nline22\nline23\nli")
+    );
+    assert!(!app.edge_scrolling());
+}
+
+#[test]
+fn prompt_edge_scroll_stops_in_the_middle_and_when_no_rows_are_visible() {
+    let mut app = app_with_rows(30, 10);
+    app.editor.insert(&"row\n".repeat(20));
+    layout_prompt(&mut app);
+    let top = app.input_rows.top as u16;
+    app.on_mouse(press(top + 4, 2));
+    app.on_mouse(drag(top, 2));
+    assert!(app.edge_scrolling());
+    app.on_mouse(drag(top + 3, 2));
+    assert!(!app.edge_scrolling());
+    app.input_rows.count = 0;
+    assert_eq!(app.input_rows.at(top as usize, 2), None);
+    assert!(!app.edge_scrolling());
+}
+
+#[test]
+fn prompt_view_follows_the_cursor_only_when_needed_and_clamps_after_edits_and_resize() {
+    let mut app = app_with_rows(30, 10);
+    app.editor.insert(
+        &(0..15)
+            .map(|n| format!("line{n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    layout_prompt(&mut app);
+    app.editor.press(0);
+    layout_prompt(&mut app);
+    assert_eq!(app.input_first, 0);
+    app.editor.press(app.editor.point(10, 0));
+    layout_prompt(&mut app);
+    assert_eq!(app.input_first, 1);
+    app.editor.insert("x");
+    layout_prompt(&mut app);
+    assert_eq!(app.input_first, 1);
+    app.resize(20, 24);
+    layout_prompt(&mut app);
+    assert_eq!(app.input_first, 1);
+    app.editor.press(0);
+    app.editor.insert(&"long ".repeat(20));
+    layout_prompt(&mut app);
+    assert!(app.input_first <= app.editor.render("❯ ", 20, &|_| false).1);
+    app.editor.select_all();
+    app.editor.insert("short");
+    layout_prompt(&mut app);
+    assert_eq!(app.input_first, 0);
 }
 
 #[test]
@@ -100,6 +228,7 @@ fn the_prompt_rows_move_with_the_rows_above_and_the_rows_cut() {
         first: 0,
         count: 4,
         indent: 2,
+        total: 4,
     };
     let placed = rows.placed(10, 0);
     assert_eq!((placed.top, placed.first, placed.count), (13, 0, 4));

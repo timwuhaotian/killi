@@ -117,6 +117,7 @@ pub(super) fn test_app() -> App {
         selection: None,
         drag: None,
         pressed: None,
+        input_first: 0,
         input_rows: InputRows::default(),
         banner_resumed: false,
         branch_at: None,

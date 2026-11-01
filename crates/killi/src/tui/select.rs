@@ -3,7 +3,7 @@
 //! it stays on its words as the view scrolls, and it can span more than one screen. Releasing the
 //! button copies it, and a second press on the same point soon after the first selects the word
 //! under it, a third the whole row. The wheel still scrolls, and a drag held at an edge of the
-//! view scrolls it. The same presses in the prompt select its text, as the editor's own selection.
+//! view scrolls it. The same presses and edge scrolling in the prompt select its text.
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use unicode_width::UnicodeWidthChar;
@@ -22,7 +22,7 @@ pub(super) enum Spot {
 }
 
 /// Where the prompt's rows were drawn: the first row shown, which of the editor's visual rows
-/// it is, how many are shown, and the columns the `❯ ` before the text takes. `live` counts
+/// it is, how many are shown, the total, and the columns the `❯ ` before the text takes. `live` counts
 /// `top` in rows of the live area; `draw_screen` places it on the screen.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct InputRows {
@@ -30,6 +30,7 @@ pub(super) struct InputRows {
     pub(super) first: usize,
     pub(super) count: usize,
     pub(super) indent: usize,
+    pub(super) total: usize,
 }
 
 impl InputRows {
@@ -52,7 +53,7 @@ impl InputRows {
     /// The editor's visual row and text column under a screen cell, held to the rows shown, so
     /// a drag that leaves the prompt stays on its first or last row. None when none is shown.
     fn at(self, row: usize, col: usize) -> Option<(usize, usize)> {
-        let last = (self.top + self.count).checked_sub(1)?;
+        let last = self.top + self.count.checked_sub(1)?;
         Some((
             self.first + row.clamp(self.top, last) - self.top,
             col.saturating_sub(self.indent),
@@ -405,31 +406,56 @@ impl App {
         }
     }
 
-    /// Whether a drag holds the pointer at an edge of the view, so that the view should keep
-    /// scrolling until it lets go or moves away.
+    /// Whether a drag holds the pointer at a scrollable edge.
     pub(super) fn edge_scrolling(&self) -> bool {
         self.edge_rows() != 0
     }
 
-    /// One step of edge scrolling: the view moves, and the selection follows the pointer.
+    /// One step of edge scrolling: the view or prompt moves, and the selection follows.
     pub(super) fn edge_scroll(&mut self) {
         self.forget_stale();
         let rows = self.edge_rows();
-        if rows != 0 {
+        if rows != 0 && self.pressed_input() {
+            let (_, col) = self.drag.expect("edge scrolling needs a drag");
+            let line = if rows < 0 {
+                self.input_first = self.input_first.saturating_sub(1);
+                self.input_rows.first.saturating_sub(1)
+            } else {
+                self.input_first += 1;
+                self.input_rows.first + self.input_rows.count
+            };
+            let at = self
+                .editor
+                .point(line, col.saturating_sub(self.input_rows.indent));
+            self.editor.drag_to(at);
+        } else if rows != 0 {
             self.scroll(rows);
             self.extend_drag();
         }
     }
 
-    /// The rows the view scrolls for a drag at its edge: up on its first row, down on its last row
-    /// or below the view. Zero otherwise.
+    /// The direction to scroll at the dragged area's edge, or zero away from it.
     fn edge_rows(&self) -> isize {
-        let Some((row, _)) = self
-            .drag
-            .filter(|_| self.selection.is_some() && self.view_rows > 0)
-        else {
+        let Some((row, _)) = self.drag else {
             return 0;
         };
+        if self.pressed_input() {
+            let input = self.input_rows;
+            if input.count == 0 {
+                return 0;
+            }
+            if row <= input.top && self.input_first > 0 {
+                return -1;
+            }
+            if row >= input.top + input.count - 1 && self.input_first + MAX_INPUT_ROWS < input.total
+            {
+                return 1;
+            }
+            return 0;
+        }
+        if self.selection.is_none() || self.view_rows == 0 {
+            return 0;
+        }
         if row + 1 >= self.view_rows {
             1
         } else if row == 0 {

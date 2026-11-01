@@ -42,6 +42,7 @@ impl Editor {
         let mut rows = Vec::new();
         let mut cursor = (0, prompt_width);
         let mut offset = 0;
+        let mut end_full = false;
         for (n, line) in self.text.split('\n').enumerate() {
             let lead = if n == 0 {
                 prompt.to_string()
@@ -111,6 +112,9 @@ impl Editor {
                 if style != (false, false) {
                     row.push_str(RESET);
                 }
+                if span[1] == chars.len() {
+                    end_full = row_width >= room;
+                }
                 if span[1] == chars.len() && offset + line.len() == self.cursor {
                     cursor = if row_width >= room {
                         (rows.len() + 1, prompt_width)
@@ -129,7 +133,7 @@ impl Editor {
             }
             offset += line.len() + 1;
         }
-        if cursor.0 >= rows.len() {
+        if end_full || cursor.0 >= rows.len() {
             rows.push(" ".repeat(prompt_width));
         }
         (rows, cursor.0, cursor.1)

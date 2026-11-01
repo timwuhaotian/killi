@@ -32,7 +32,7 @@ impl App {
                     self.draw()?;
                     continue;
                 }
-                // A drag held at the conversation's edge keeps scrolling it, while the pointer stays.
+                // A drag held at an edge keeps scrolling while the pointer stays.
                 _ = edge.tick(), if self.edge_scrolling() => {
                     self.edge_scroll();
                     self.draw()?;

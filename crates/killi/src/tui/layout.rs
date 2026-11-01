@@ -280,14 +280,21 @@ impl App {
         if let Some(hint) = self.placeholder() {
             input[0] = fit(&format!("{FIN}❯{RESET} {FAINT}{hint}{RESET}"), width);
         }
-        let first = cursor_row.saturating_sub(MAX_INPUT_ROWS - 1);
+        let first = self
+            .input_first
+            .min(input.len().saturating_sub(MAX_INPUT_ROWS))
+            .min(cursor_row)
+            .max(cursor_row.saturating_sub(MAX_INPUT_ROWS - 1));
+        self.input_first = first;
         let top = rows.len();
+        let total = input.len();
         rows.extend(input.into_iter().skip(first).take(MAX_INPUT_ROWS));
         let mut input_rows = InputRows {
             top,
             first,
             count: rows.len() - top,
             indent: text::width(&prompt),
+            total,
         };
         let mut cursor = (top + cursor_row - first, cursor_col);
         rows.push(rule(mode.map(|_| ""), width));

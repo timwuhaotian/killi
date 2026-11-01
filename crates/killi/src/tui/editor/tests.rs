@@ -102,6 +102,17 @@ fn up_and_down_still_move_between_lines_after_a_render() {
 }
 
 #[test]
+fn a_full_last_row_keeps_its_extra_cursor_row_when_the_cursor_moves() {
+    let mut e = Editor::with_history(Vec::new());
+    e.insert("abcdefgh");
+    let (at_end, _, _) = e.render("", 4, &|_| false);
+    e.press(0);
+    let (at_start, _, _) = e.render("", 4, &|_| false);
+    assert_eq!(at_end, at_start);
+    assert_eq!(at_start.len(), 3);
+}
+
+#[test]
 fn history_draft_round_trip_after_a_render() {
     let mut e = Editor::with_history(vec!["first".into(), "second".into()]);
     e.insert("draft");
