@@ -93,7 +93,7 @@ fn cell(left: usize, right: usize) -> char {
 /// The logo's gradient at `across` (0 to 1 along its piece, `shift`ed half way round for
 /// words so the two never match) with the spinner's drift at `frame`, dimmed by `fade`.
 fn flow(frame: usize, across: f32, shift: f32, fade: f32) -> String {
-    let drift = frame as f32 * 0.035;
+    let drift = frame as f32 * 0.02;
     let t = (across + shift + drift) % 2.0;
     let (r, g, b) = gradient(if t > 1.0 { 2.0 - t } else { t });
     color(r * fade, g * fade, b * fade, truecolor())
@@ -102,18 +102,33 @@ fn flow(frame: usize, across: f32, shift: f32, fade: f32) -> String {
 /// The snowflake spinner's glyphs, in the order they turn: light to heavy and back again,
 /// the way kimi-code's moon turns through its phases.
 const SNOWFLAKES: [char; 6] = ['❄', '❅', '❆', '❋', '❆', '❅'];
+/// Frames (a tenth of a second each) each snowflake glyph holds before the next turns in,
+/// so the flake rotates slowly instead of flickering.
+const SNOWFLAKE_HOLD: usize = 4;
+/// Frames (a tenth of a second each) for the snowflake's full bright-to-bright cycle.
+const WAX_CYCLE: f32 = 24.0;
+/// The glints around the snowflake, in the order they flow from a dim dot to a bright
+/// sparkle and back.
+const GLINT: [char; 3] = ['·', '✦', '✧'];
+/// Frames each glint state holds.
+const GLINT_HOLD: usize = 4;
 
-/// The spinner `frame` tenths of a second in: one small snowflake whose glyph turns through
-/// the variants while the logo's gradient flows through it and its light waxes and wanes,
-/// so the working line is a single small icon instead of a full-width rainbow wave.
+/// The spinner `frame` tenths of a second in: a snowflake turning through its variants in the
+/// logo's gradient while its light waxes and wanes, with glints flowing around it, so the
+/// working line carries a small detailed icon that changes slowly.
 pub fn snowflake(frame: usize) -> String {
-    let c = SNOWFLAKES[frame % SNOWFLAKES.len()];
-    let t = frame as f32 / SNOWFLAKES.len() as f32;
+    let c = SNOWFLAKES[(frame / SNOWFLAKE_HOLD) % SNOWFLAKES.len()];
+    let t = frame as f32 / WAX_CYCLE;
     let wax = (1.0 - (std::f32::consts::TAU * t).cos()) / 2.0;
     let fade = 0.35 + 0.65 * wax;
-    let across = (0.5 + frame as f32 * 0.035) % 2.0;
+    let step = frame / GLINT_HOLD;
+    let left = GLINT[step % GLINT.len()];
+    let right = GLINT[(step + 1) % GLINT.len()];
+    let across = (0.5 + frame as f32 * 0.012) % 2.0;
     let (r, g, b) = gradient(if across > 1.0 { 2.0 - across } else { across });
-    format!("{}{c}{RESET}", color(r * fade, g * fade, b * fade, truecolor()))
+    let main = color(r * fade, g * fade, b * fade, truecolor());
+    let glint = color(r * fade * 0.8, g * fade * 0.8, b * fade * 0.8, truecolor());
+    format!("{glint}{left}{RESET}{main}{c}{RESET}{glint}{right}{RESET}")
 }
 
 /// The wave and the space after it, rising from a flat line at first.
@@ -172,7 +187,7 @@ pub fn action_word(frame: usize, word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
     let mut out = String::new();
     for (i, c) in chars.iter().enumerate() {
-        let appeared = (frame as f32 - 2.0 * i as f32 + 1.0) / 3.0;
+        let appeared = (frame as f32 - 4.0 * i as f32 + 2.0) / 6.0;
         if appeared <= 0.0 {
             out.push_str(&format!("{DIM}·{RESET}"));
             continue;
@@ -357,18 +372,24 @@ mod tests {
     }
 
     #[test]
-    fn the_snowflake_is_one_column_and_turns() {
+    fn the_snowflake_is_three_columns_and_turns_slowly() {
         for frame in 0..120 {
-            assert_eq!(width(&snowflake(frame)), 1, "frame {frame}");
+            assert_eq!(width(&snowflake(frame)), 3, "frame {frame}");
         }
         assert_ne!(snowflake(0), snowflake(1), "the flake stands still");
         let mut glyphs = std::collections::HashSet::new();
-        for frame in 0..SNOWFLAKES.len() {
+        for frame in (0..SNOWFLAKES.len() * SNOWFLAKE_HOLD).step_by(SNOWFLAKE_HOLD) {
             glyphs.insert(unstyled(&snowflake(frame)));
         }
-        let unique: std::collections::HashSet<char> = SNOWFLAKES.iter().copied().collect();
-        assert_eq!(glyphs.len(), unique.len(), "every glyph shows");
-        assert!(glyphs.contains("❄") && glyphs.contains("❋"), "{glyphs:?}");
+        let shown: String = glyphs.iter().cloned().collect();
+        assert_eq!(
+            glyphs.len(),
+            SNOWFLAKES.len(),
+            "every glyph shows: {glyphs:?}"
+        );
+        for c in SNOWFLAKES {
+            assert!(shown.contains(c), "missing {c}: {glyphs:?}");
+        }
     }
 
     fn unstyled(line: &str) -> String {

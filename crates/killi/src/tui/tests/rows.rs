@@ -397,14 +397,13 @@ fn a_queued_message_says_ctrl_s_sends_it_now() {
 #[test]
 fn the_working_rows_name_the_action_and_put_the_time_with_the_hint_beside_it() {
     let secs = Duration::from_secs;
-    let rows: Vec<String> = working_rows(18, secs(45), "thinking", "The internal § references")
+    let rows: Vec<String> = working_rows(30, secs(45), "thinking", "The internal § references")
         .iter()
         .map(|row| unstyled(row))
         .collect();
     assert_eq!(rows.len(), 1);
     assert_eq!(
-        rows[0],
-        "❄ thinking The internal § references · 45s · Esc to interrupt",
+        rows[0], "✦❅✧ thinking The internal § references · 45s · Esc to interrupt",
         "{}",
         rows[0]
     );
@@ -452,17 +451,13 @@ fn the_snapshot_rows_show_the_whole_word_at_once() {
         "no letter-by-letter placeholders: {}",
         rows[0]
     );
-    assert!(
-        rows[0].ends_with("3s · Esc to interrupt"),
-        "{}",
-        rows[0]
-    );
+    assert!(rows[0].ends_with("3s · Esc to interrupt"), "{}", rows[0]);
 }
 
 #[test]
 fn the_working_rows_leave_out_an_empty_detail() {
     let secs = Duration::from_secs;
-    let rows: Vec<String> = working_rows(20, secs(45), "writing", "")
+    let rows: Vec<String> = working_rows(30, secs(45), "writing", "")
         .iter()
         .map(|row| unstyled(row))
         .collect();
