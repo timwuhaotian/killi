@@ -99,29 +99,21 @@ fn flow(frame: usize, across: f32, shift: f32, fade: f32) -> String {
     color(r * fade, g * fade, b * fade, truecolor())
 }
 
-/// The rainbow's RGB at `t` (0 to 1 around the wheel), full saturation at the brightness the
-/// theme takes: vivid on a dark terminal, deeper on a light one.
-fn rainbow(t: f32) -> (f32, f32, f32) {
-    let t = t.rem_euclid(1.0);
-    let x = 1.0 - (t * 6.0 % 2.0 - 1.0).abs();
-    let (r, g, b) = match (t * 6.0) as usize {
-        0 => (1.0, x, 0.0),
-        1 => (x, 1.0, 0.0),
-        2 => (0.0, 1.0, x),
-        3 => (0.0, x, 1.0),
-        4 => (x, 0.0, 1.0),
-        _ => (1.0, 0.0, x),
-    };
-    let shade = if is_light() { 0.55 } else { 0.95 };
-    (r * 255.0 * shade, g * 255.0 * shade, b * 255.0 * shade)
-}
+/// The snowflake spinner's glyphs, in the order they turn: light to heavy and back again,
+/// the way kimi-code's moon turns through its phases.
+const SNOWFLAKES: [char; 6] = ['❄', '❅', '❆', '❋', '❆', '❅'];
 
-/// A rainbow color at `across` (0 to 1 along a row) `frame` tenths of a second in: the wheel
-/// turns slowly with the frame, dimmed by `fade`.
-fn rainbow_flow(frame: usize, across: f32, fade: f32) -> String {
-    let drift = frame as f32 * 0.02;
-    let (r, g, b) = rainbow(across + drift);
-    color(r * fade, g * fade, b * fade, truecolor())
+/// The spinner `frame` tenths of a second in: one small snowflake whose glyph turns through
+/// the variants while the logo's gradient flows through it and its light waxes and wanes,
+/// so the working line is a single small icon instead of a full-width rainbow wave.
+pub fn snowflake(frame: usize) -> String {
+    let c = SNOWFLAKES[frame % SNOWFLAKES.len()];
+    let t = frame as f32 / SNOWFLAKES.len() as f32;
+    let wax = (1.0 - (std::f32::consts::TAU * t).cos()) / 2.0;
+    let fade = 0.35 + 0.65 * wax;
+    let across = (0.5 + frame as f32 * 0.035) % 2.0;
+    let (r, g, b) = gradient(if across > 1.0 { 2.0 - across } else { across });
+    format!("{}{c}{RESET}", color(r * fade, g * fade, b * fade, truecolor()))
 }
 
 /// The wave and the space after it, rising from a flat line at first.
@@ -140,23 +132,6 @@ fn wave_head(frame: usize) -> String {
     }
     out.push_str(RESET);
     out.push(' ');
-    out
-}
-
-/// The full-width working wave: a braille ribbon `columns` wide that rises from a flat line
-/// and rolls on, each cell taking the rainbow gradient as the wheel turns with `frame`.
-pub fn rainbow_wave(frame: usize, columns: usize) -> String {
-    let heights = wave_at(frame, columns * 2);
-    let mut out = String::new();
-    for i in 0..columns {
-        out.push_str(&rainbow_flow(
-            frame,
-            i as f32 / (columns - 1).max(1) as f32,
-            1.0,
-        ));
-        out.push(cell(heights[2 * i], heights[2 * i + 1]));
-    }
-    out.push_str(RESET);
     out
 }
 
@@ -191,8 +166,8 @@ pub fn action(frame: usize, word: &str) -> String {
     out
 }
 
-/// `word` fading in letter by letter below the full-width wave, each letter taking the rainbow
-/// gradient as the wheel turns with `frame`; letters not yet there are dim dots.
+/// `word` fading in letter by letter beside the snowflake, each letter taking the logo's
+/// gradient as it flows with `frame`; letters not yet there are dim dots.
 pub fn action_word(frame: usize, word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
     let mut out = String::new();
@@ -202,9 +177,10 @@ pub fn action_word(frame: usize, word: &str) -> String {
             out.push_str(&format!("{DIM}·{RESET}"));
             continue;
         }
-        out.push_str(&rainbow_flow(
+        out.push_str(&flow(
             frame,
             i as f32 / (chars.len() - 1).max(1) as f32,
+            0.5,
             appeared.clamp(0.0, 1.0) * 0.75 + 0.25,
         ));
         out.push(*c);
@@ -213,15 +189,16 @@ pub fn action_word(frame: usize, word: &str) -> String {
     out
 }
 
-/// `word` shown whole at once below the full-width wave, in the rainbow gradient flowing with
+/// `word` shown whole at once beside the snowflake, in the logo's gradient flowing with
 /// `frame`.
 pub fn steady_word(frame: usize, word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
     let mut out = String::new();
     for (i, c) in chars.iter().enumerate() {
-        out.push_str(&rainbow_flow(
+        out.push_str(&flow(
             frame,
             i as f32 / (chars.len() - 1).max(1) as f32,
+            0.5,
             1.0,
         ));
         out.push(*c);
@@ -362,31 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rainbow_wave_spans_any_width_and_rolls() {
-        for columns in [0, 1, 2, 59, 60, 118] {
-            for frame in [0, 1, 8, 50] {
-                assert_eq!(
-                    width(&rainbow_wave(frame, columns)),
-                    columns,
-                    "{columns} columns at frame {frame}"
-                );
-            }
-        }
-        let flat = wave_at(0, 20);
-        assert!(flat.iter().all(|&row| row == flat[0]));
-        for frame in 8..60 {
-            let dots = wave_at(frame, 40);
-            assert_ne!(dots, wave_at(frame + 1, 40), "frame {frame} stands still");
-            assert!(
-                dots.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1),
-                "frame {frame} jumps: {dots:?}"
-            );
-            assert!(dots.iter().all(|&row| row <= 2));
-        }
-    }
-
-    #[test]
-    fn the_words_below_the_wave_fade_in_or_show_whole_and_keep_their_width() {
+    fn the_words_fade_in_or_show_whole_and_keep_their_width() {
         for frame in 0..60 {
             assert_eq!(width(&action_word(frame, "thinking")), 8, "frame {frame}");
             assert_eq!(
@@ -401,6 +354,34 @@ mod tests {
             !steady_word(0, "chiaroscuro").contains('·'),
             "the whole word shows at once"
         );
+    }
+
+    #[test]
+    fn the_snowflake_is_one_column_and_turns() {
+        for frame in 0..120 {
+            assert_eq!(width(&snowflake(frame)), 1, "frame {frame}");
+        }
+        assert_ne!(snowflake(0), snowflake(1), "the flake stands still");
+        let mut glyphs = std::collections::HashSet::new();
+        for frame in 0..SNOWFLAKES.len() {
+            glyphs.insert(unstyled(&snowflake(frame)));
+        }
+        let unique: std::collections::HashSet<char> = SNOWFLAKES.iter().copied().collect();
+        assert_eq!(glyphs.len(), unique.len(), "every glyph shows");
+        assert!(glyphs.contains("❄") && glyphs.contains("❋"), "{glyphs:?}");
+    }
+
+    fn unstyled(line: &str) -> String {
+        let mut out = String::new();
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                chars.by_ref().find(char::is_ascii_alphabetic);
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
 
     #[test]

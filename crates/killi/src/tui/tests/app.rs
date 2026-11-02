@@ -414,11 +414,13 @@ fn the_live_area_merges_the_thought_into_the_action_row() {
     assert!(
         shown
             .iter()
-            .any(|row| row.ends_with("thinking The internal § references are relative.")),
+            .any(|row| row.contains("thinking The internal § references are relative.")),
         "{shown:?}"
     );
     assert!(
-        shown.iter().any(|row| row == "0s · Esc to interrupt"),
+        shown
+            .iter()
+            .any(|row| row.ends_with("0s · Esc to interrupt")),
         "{shown:?}"
     );
     assert!(
@@ -437,7 +439,7 @@ fn a_running_snapshot_shows_a_whole_renaissance_word_not_snapshot() {
     let (rows, _, _) = app.live();
     let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
     assert!(
-        shown.iter().any(|row| row.ends_with("chiaroscuro")),
+        shown.iter().any(|row| row.contains("chiaroscuro")),
         "{shown:?}"
     );
     assert!(

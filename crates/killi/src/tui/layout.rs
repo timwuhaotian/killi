@@ -204,7 +204,7 @@ impl App {
                 });
                 if self.snapshotting && retry.is_none_or(|(_, left)| left.is_zero()) {
                     rows.extend(
-                        snapshot_rows(self.snapshot_seq, self.spinner, started.elapsed(), width)
+                        snapshot_rows(self.snapshot_seq, self.spinner, started.elapsed())
                             .into_iter()
                             .map(|row| fit(&row, width)),
                     );
@@ -223,7 +223,7 @@ impl App {
                             ("working".to_string(), String::new())
                         };
                     rows.extend(
-                        working_rows(self.spinner, started.elapsed(), &action, &detail, width)
+                        working_rows(self.spinner, started.elapsed(), &action, &detail)
                             .into_iter()
                             .map(|row| fit(&row, width)),
                     );

@@ -578,7 +578,7 @@ pub(super) fn snapshot_word(seq: usize, frame: usize) -> String {
     SNAPSHOT_WORDS[(seq + frame / WORD_FRAMES) % SNAPSHOT_WORDS.len()].to_string()
 }
 
-/// The elapsed time and the interrupt hint under the full-width wave.
+/// The elapsed time and the interrupt hint, set off after the action on the working line.
 fn interrupt_hint(elapsed: Duration) -> String {
     format!(
         "{BOLD}{}{RESET} {FAINT}·{RESET} {LAGOON}Esc{RESET} {DIM}to interrupt{RESET}",
@@ -586,41 +586,37 @@ fn interrupt_hint(elapsed: Duration) -> String {
     )
 }
 
-/// The working rows while the snapshot runs: a full-width rainbow wave, the whole snapshot
-/// word in the same gradient under it, then the elapsed time and the interrupt hint.
-pub(super) fn snapshot_rows(
-    seq: usize,
-    frame: usize,
-    elapsed: Duration,
-    width: usize,
-) -> Vec<String> {
-    vec![
-        banner::rainbow_wave(frame, width),
+/// The working line while the snapshot runs: the snowflake spinner, the whole snapshot word
+/// beside it in the logo's gradient, then the elapsed time and the interrupt hint.
+pub(super) fn snapshot_rows(seq: usize, frame: usize, elapsed: Duration) -> Vec<String> {
+    vec![format!(
+        "{} {} {FAINT}·{RESET} {}",
+        banner::snowflake(frame),
         banner::steady_word(frame, &snapshot_word(seq, frame)),
-        interrupt_hint(elapsed),
-    ]
+        interrupt_hint(elapsed)
+    )]
 }
 
-/// The working rows: a full-width rainbow wave, the turn's action word (`thinking`, `writing`,
-/// …) with what it is doing after it under it, then the elapsed time and the interrupt hint.
-/// While a failed request waits to be retried the action row counts that wait down instead,
-/// since nothing is working then.
+/// The working line: the snowflake spinner, the turn's action word (`thinking`, `writing`, …)
+/// with what it is doing after it, then the elapsed time and the interrupt hint. While a failed
+/// request waits to be retried the action word counts that wait down instead, since nothing is
+/// working then.
 pub(super) fn working_rows(
     frame: usize,
     elapsed: Duration,
     action: &str,
     detail: &str,
-    width: usize,
 ) -> Vec<String> {
     let action_line = match detail.is_empty() {
         true => banner::action_word(frame, action),
         false => format!("{} {detail}", banner::action_word(frame, action)),
     };
-    vec![
-        banner::rainbow_wave(frame, width),
+    vec![format!(
+        "{} {} {FAINT}·{RESET} {}",
+        banner::snowflake(frame),
         action_line,
-        interrupt_hint(elapsed),
-    ]
+        interrupt_hint(elapsed)
+    )]
 }
 
 /// A message queued while the agent works, saying Ctrl+S can send it now instead of

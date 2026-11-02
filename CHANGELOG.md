@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- The working indicator is now a small snowflake turning through its variants in the logo's
+  gradient, with the action or snapshot word, the elapsed time and the interrupt hint on one
+  line instead of the full-width rainbow wave.
+
 ## 0.6.34 — 2026-11-02
 
 - The working indicator's wave now spans the full terminal width, in a rainbow gradient that
