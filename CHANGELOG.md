@@ -5,7 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
-## 0.6.35 — 2026-11-02
+## 0.6.36 — 2026-11-02
+
+- The snowflake loading icon is now three columns wide and moves more slowly: the flake
+  rotates through its variants at a quarter of the pace, glints flow around it, its light
+  waxes and wanes over a longer cycle, and the action word fades in more gently.
 
 - The working indicator is now a small snowflake turning through its variants in the logo's
   gradient, with the action or snapshot word, the elapsed time and the interrupt hint on one
