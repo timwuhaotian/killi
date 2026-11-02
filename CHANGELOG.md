@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.37 — 2026-11-02
+
 - After a turn ends, the model suggests what to ask next: the empty prompt shows the
   suggestion as its placeholder, and Tab or → puts it in the prompt.
 
