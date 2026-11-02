@@ -781,6 +781,72 @@ fn the_busy_menu_offers_skills_and_skills_queue_their_prompt() {
 }
 
 #[test]
+fn the_suggestion_is_the_empty_prompts_placeholder_and_tab_fills_it() {
+    let mut app = test_app();
+    app.suggestion = Some("给 README 加上安装步骤".into());
+    let (rows, _, _) = app.live();
+    let shown = rows
+        .iter()
+        .map(|row| unstyled(row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(shown.contains("给 README 加上安装步骤"), "{shown}");
+    assert!(shown.contains("Tab or → fills it"), "{shown}");
+    app.edit_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.editor.text(), "给 README 加上安装步骤");
+    let (rows, _, _) = app.live();
+    let shown = rows
+        .iter()
+        .map(|row| unstyled(row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!shown.contains("fills it"), "{shown}");
+}
+
+#[test]
+fn the_right_arrow_fills_the_suggestion_too() {
+    let mut app = test_app();
+    app.suggestion = Some("run the tests".into());
+    app.edit_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(app.editor.text(), "run the tests");
+}
+
+#[test]
+fn a_typed_prompt_hides_the_suggestion_and_the_keys_keep_their_meaning() {
+    let mut app = test_app();
+    app.suggestion = Some("run the tests".into());
+    app.editor.insert("already typing");
+    let (rows, _, _) = app.live();
+    let shown = rows
+        .iter()
+        .map(|row| unstyled(row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!shown.contains("run the tests"), "{shown}");
+    app.edit_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(
+        app.editor.text(),
+        "already typing",
+        "the arrow moves the cursor in a prompt that has text"
+    );
+}
+
+#[test]
+fn a_new_turn_drops_the_suggestion_of_the_turn_before_it() {
+    let mut app = test_app();
+    app.suggestion = Some("run the tests".into());
+    app.begin_turn("fix it", &[]);
+    assert!(app.suggestion.is_none());
+    let (rows, _, _) = app.live();
+    let shown = rows
+        .iter()
+        .map(|row| unstyled(row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!shown.contains("run the tests"), "{shown}");
+}
+
+#[test]
 fn a_held_prompt_is_printed_before_anything_its_turn_prints() {
     let mut app = test_app();
     app.begin_turn("fix the slug", &[]);

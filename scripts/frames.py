@@ -15,7 +15,8 @@ menu), picker, conv (a bug fix with a diff), question, plan, busy (mid-turn), sw
 with another session in the repository), sessions (`/sessions`) and peer (that session's question and
 message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
 selection in reverse video), select-prompt (Shift+Alt+Left over the prompt's last words), held (a prompt waiting for its first token) and takeback (Esc before that
-token: the prompt back in the editor).
+token: the prompt back in the editor), suggest (the next-prompt suggestion the model gave, and
+Tab filling it into the prompt).
 `--inline` runs killi as it runs outside
 Kil, in the terminal's scrollback; `--colors 256` hides COLORTERM; `--no-osc` never answers the
 color queries, like a terminal that doesn't know them; `--no-color` sets NO_COLOR.
@@ -62,7 +63,8 @@ SCENES = {
     "menu": dict(keys=["/"]),
     "files": dict(keys=["fix @sl"]),
     "picker": dict(keys=["/model\r"]),
-    "conv": dict(keys=[FIX], until="ask, or /"),
+    "conv": dict(keys=[FIX], until="fills it"),
+    "suggest": dict(keys=[FIX, "WAITFOR:fills it", "\t"], until="add a test for the e"),
     "select": dict(keys=[FIX, "IDLE", "MOUSE:press:14:0", "MOUSE:drag:9:40", "MOUSE:wheel-up:9:40", "MOUSE:wheel-up:9:40", "MOUSE:up:9:40"]),
     "question": dict(keys=["QUESTION please\r"], until="Esc dismisses"),
     "plan": dict(keys=["\x1b[Z", "add a flag"]),
@@ -299,6 +301,12 @@ def run_scene(args, scratch, scene, cols, rows, theme):
     for key in scene["keys"]:
         if key.startswith("WAIT:"):
             pump(float(key[5:]))
+        elif key.startswith("WAITFOR:"):
+            # Waits for the text to be on screen, then goes on.
+            needle = key[8:]
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline and needle not in shown():
+                pump(0.3)
         elif key.startswith(("ASK:", "TELL:")):
             # Another session's `killi ask` or `killi tell`, sent while this one is drawn.
             verb, text = key.split(":", 1)
@@ -315,7 +323,7 @@ def run_scene(args, scratch, scene, cols, rows, theme):
         elif key == "IDLE":
             # Waits for the turn to end: the prompt is back and nothing says it is working.
             deadline = time.monotonic() + 60
-            while time.monotonic() < deadline and not ("ask, or /" in shown() and "Esc to interrupt" not in shown()):
+            while time.monotonic() < deadline and not ("fills it" in shown() and "Esc to interrupt" not in shown()):
                 pump(0.3)
         elif key.startswith("MOUSE:"):
             # MOUSE:<press|drag|up|wheel-up|wheel-down>:<row>:<column>, 0-based as killi reads them.

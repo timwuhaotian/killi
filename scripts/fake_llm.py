@@ -9,7 +9,8 @@ read, a failing run, a thought, an edit with a diff, a passing run and a Markdow
 one containing "QUESTION" is an `ask_user_question`, "SWARM" an `agent_swarm` of five subagents
 ("SWARMBIG": forty) whose prompts say "SWARMCHILD" and that each run a few slow commands,
 a question from another session (`killi ask`) a line about the work, "SLOW" a one-line answer
-that starts only after three seconds (time to press Esc first), anything else a one-line answer. The
+that starts only after three seconds (time to press Esc first), the next-prompt suggestion
+a short line to offer in the empty prompt, anything else a one-line answer. The
 step is the number of assistant messages since the last real user message, so the reminders
 killi appends as user messages (`<system-reminder>`) don't restart the script.
 """
@@ -100,6 +101,8 @@ def text_of(message):
 
 
 def step_for(messages):
+    if messages and "The user's turn is over" in text_of(messages[-1]):
+        return {"text": "add a test for the empty title"}
     if messages and "A question about your work from" in text_of(messages[-1]):
         return {"text": "Fixing `slugify` in `slug.py`, on master. The tests pass now; nothing is committed yet."}
     real = [i for i, m in enumerate(messages) if m.get("role") == "user" and not text_of(m).lstrip().startswith("<system-reminder>")]

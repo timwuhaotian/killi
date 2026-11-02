@@ -210,6 +210,25 @@ recap = false
     def requests():
         return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
+    # The notes killi's own side requests end with: the next-prompt suggestion, a question from
+    # another session and the recap. Each carries the conversation and a note of its own.
+    SIDE_NOTES = ("The user's turn is over.", "A question about your work from", "wants a recap")
+
+    def turn_request():
+        """The last request that is a turn's own, not one of killi's side requests."""
+        for messages in reversed(requests()):
+            last = text_of(messages[-1]) if messages else ""
+            if not any(note in last for note in SIDE_NOTES):
+                return messages
+        return []
+
+    def side_request(marker):
+        """The last side request that carries the marker in its last message."""
+        for messages in reversed(requests()):
+            if messages and marker in text_of(messages[-1]):
+                return messages
+        return []
+
     def check(name, ok, detail=""):
         print(("PASS " if ok else "FAIL ") + name + ("" if ok else f"\n     {str(detail)[:600]}"))
         if not ok:
@@ -236,13 +255,13 @@ recap = false
 
         a.type("hello there\r", 0.5)
         a.until("Done: hello there")
-        told = [u for u in contents(requests()[-1]) if f"Another killi session works in this repository too: {b.pid}" in u]
-        check("the model hears about the other session", len(told) == 1, contents(requests()[-1]))
+        told = [u for u in contents(turn_request()) if f"Another killi session works in this repository too: {b.pid}" in u]
+        check("the model hears about the other session", len(told) == 1, contents(turn_request()))
         check("the terminal says the agent was told", f"Session {b.pid} also works in this repository" in a.text(), a.text()[-600:])
 
         answer = cli("ask", str(a.pid), "which files are you changing?", pid=b.pid)
         check("ask gets the other model's answer", "fixing slugify" in answer, answer)
-        side = requests()[-1]
+        side = side_request("A question about your work from")
         check("the question is a side request under the peer note", "A question about your work from killi session" in text_of(side[-1]), side[-1])
         a.pump(1)
         check("the asked session shows question and answer", f"session {b.pid} asks" in a.text() and "Answered from this conversation" in a.text(), a.text()[-800:])
@@ -253,23 +272,23 @@ recap = false
         check("the idle session shows the message", f"session {b.pid} says" in a.text(), a.text()[-800:])
         a.type("next please\r", 0.5)
         a.until("Done: next please")
-        users = contents(requests()[-1])
+        users = contents(turn_request())
         check("the message reaches the model before the prompt, marked as not the user's",
               users[-1] == "next please" and any("I pushed the base branch" in u and "It isn't from the user" in u for u in users[:-1]), users[-3:])
-        check("the question wasn't kept", not any("which files are you changing" in json.dumps(m) for m in requests()[-1]))
+        check("the question wasn't kept", not any("which files are you changing" in json.dumps(m) for m in turn_request()))
         check("a session can't ask itself", "is this session" in cli("ask", str(a.pid), "hi", pid=a.pid))
 
         # Plan mode on and announced, then a compaction summarizes every reminder away.
         a.type("\x1b[Z", 0.5)
         a.type("plan it\r", 0.5)
         a.until("Done: plan it")
-        check("plan mode is announced", any(u.startswith("<system-reminder>Plan mode is on.") for u in contents(requests()[-1])))
+        check("plan mode is announced", any(u.startswith("<system-reminder>Plan mode is on.") for u in contents(turn_request())))
         a.type("/compact\r", 0.5)
         a.until("Done:", 10)
         a.pump(1)
         a.type("after compact\r", 0.5)
         a.until("Done: after compact")
-        users = contents(requests()[-1])
+        users = contents(turn_request())
         compacted = next((i for i, u in enumerate(users) if "This conversation was compacted" in u), None)
         after = users[compacted + 1:] if compacted is not None else []
         check("after a compaction the model is told again about the other session",
@@ -282,7 +301,7 @@ recap = false
         a.type("/new\r", 1.0)
         a.type("fresh start\r", 0.5)
         a.until("Done: fresh start")
-        check("/new drops messages meant for the conversation left", not any("stale news" in u for u in contents(requests()[-1])), contents(requests()[-1]))
+        check("/new drops messages meant for the conversation left", not any("stale news" in u for u in contents(turn_request())), contents(turn_request()))
 
         a.type("SLEEP now\r", 1.0)
         time.sleep(1)
@@ -291,7 +310,7 @@ recap = false
         busy = cli("sessions", str(a.pid))
         check("a status shows the running call", "Waiting on:" in busy and "sleep 6" in busy, busy)
         a.until("Done: SLEEP now", 20)
-        after = requests()[-1]
+        after = turn_request()
         check("the message comes at the next step, after the tool result", after[-1]["role"] == "user" and "base is green" in text_of(after[-1]), after[-3:])
 
         b.type("hello from b\r", 0.5)
@@ -326,7 +345,7 @@ recap = false
         check("a session that exits leaves the list", str(a.pid) not in cli("sessions"))
         b.type("one more\r", 0.5)
         b.until("Done: one more")
-        check("the model hears the other session left", any("No other killi session works in this repository now" in u for u in contents(requests()[-1])))
+        check("the model hears the other session left", any("No other killi session works in this repository now" in u for u in contents(turn_request())))
 
         config = home / ".killi" / "config.toml"
         config.write_text(config.read_text().replace("notify_after = 9999", "notify_after = 9999\npeers = false"))

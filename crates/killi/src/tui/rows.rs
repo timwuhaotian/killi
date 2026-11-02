@@ -233,17 +233,14 @@ pub(super) fn recap_rows(text: &str, note: &str, width: usize) -> Vec<String> {
     )
 }
 
-/// What the empty prompt says it takes, in fg-faint: nothing once something is typed or while
-/// a picker or a question `waits`, since those say it themselves.
-pub(super) fn placeholder(empty: bool, busy: bool, waits: bool) -> Option<&'static str> {
-    if !empty || waits {
-        return None;
-    }
-    Some(if busy {
+/// What the empty prompt says it takes, in fg-faint: the hint while the agent works, and the
+/// usual one when it doesn't.
+pub(super) fn placeholder(busy: bool) -> &'static str {
+    if busy {
         "a message for the next step · Ctrl+S sends it now · /btw asks on the side"
     } else {
         "ask, / for commands and skills, @ for files"
-    })
+    }
 }
 
 /// A full-width line around the prompt, in lagoon with `label` on it in plan mode.

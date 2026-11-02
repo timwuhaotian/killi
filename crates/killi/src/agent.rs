@@ -67,7 +67,10 @@ use turn::{
     STALE_TASKS_AFTER, ends_with_colon, ends_with_question, open_tasks_note, stale_tasks_note,
 };
 #[cfg(test)]
-use types::{BTW_NOTE, RECAP_CHARS, RECAP_MAX, RECAP_NOTE, fit_recap, side_request};
+use types::{
+    BTW_NOTE, RECAP_CHARS, RECAP_MAX, RECAP_NOTE, SUGGEST_MAX, SUGGEST_NOTE, fit_recap,
+    fit_suggestion, side_request,
+};
 
 /// A backstop in bytes above the tools' own output budget (`tools::MAX_BYTES`): a result a tool
 /// already bounded reaches history whole, and only longer text — MCP, hooks, a swarm of

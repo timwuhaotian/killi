@@ -5,6 +5,9 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- After a turn ends, the model suggests what to ask next: the empty prompt shows the
+  suggestion as its placeholder, and Tab or → puts it in the prompt.
+
 ## 0.6.36 — 2026-11-02
 
 - The snowflake loading icon is now three columns wide and moves more slowly: the flake

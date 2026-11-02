@@ -327,6 +327,27 @@ fn a_recap_is_one_line_within_the_limit() {
 }
 
 #[test]
+fn a_suggestion_is_one_short_line() {
+    assert_eq!(
+        fit_suggestion("  \"给 README 加上安装步骤\"\n"),
+        "给 README 加上安装步骤"
+    );
+    assert_eq!(fit_suggestion("run the tests"), "run the tests");
+    assert_eq!(fit_suggestion("a  b   c"), "a b c");
+    assert_eq!(fit_suggestion(""), "");
+    assert_eq!(
+        fit_suggestion("add a test for the empty title"),
+        "add a test for the",
+        "a word is never left half-spelled"
+    );
+    assert_eq!(
+        fit_suggestion(&"字".repeat(40)).chars().count(),
+        SUGGEST_MAX
+    );
+    assert!(SUGGEST_NOTE.contains("20 characters"));
+}
+
+#[test]
 fn a_recap_request_ends_with_its_note_alone() {
     let history = vec![
         json!({"role": "user", "content": "fix it"}),

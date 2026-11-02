@@ -517,6 +517,9 @@ pub(super) async fn prompt_turn(
         app.notice(why);
     }
     let completed = matches!(ended, Ended::Done(Ok((_, Stop::Completed))));
+    // A turn that ended with the model's answer leaves the prompt empty, so it can offer
+    // what to ask next.
+    let answered = matches!(ended, Ended::Done(Ok(_)));
     let after = Totals::of(agent);
     app.finish_turn(agent, ended, before, after);
     app.live_turn(None);
@@ -532,6 +535,9 @@ pub(super) async fn prompt_turn(
         Totals::of(agent).tool_calls - before.tool_calls,
     ) {
         app.recap = Some(Box::pin(app.controls.aside.borrow().recap()));
+    }
+    if answered {
+        app.ask_suggestion();
     }
     Ok(())
 }

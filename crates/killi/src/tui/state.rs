@@ -10,6 +10,10 @@ pub(super) type PendingAside = (
 /// user sends anything else.
 pub(super) type PendingRecap = Pin<Box<dyn Future<Output = Result<(String, Usage)>>>>;
 
+/// A next-prompt suggestion on its way from the model; dropped, which stops the request, when
+/// the user sends anything else.
+pub(super) type PendingSuggestion = Pin<Box<dyn Future<Output = Result<String>>>>;
+
 /// The local SearXNG start `/web-search-config` began with Docker, ending in the instance's
 /// URL or the reason it failed.
 pub(super) type PendingSearxng = Pin<Box<dyn Future<Output = std::result::Result<String, String>>>>;
@@ -229,6 +233,10 @@ pub(super) struct App {
     /// Whether a turn that used tools is followed by a recap.
     pub(super) auto_recap: bool,
     pub(super) recap: Option<PendingRecap>,
+    /// The next-prompt suggestion on its way from the model.
+    pub(super) suggesting: Option<PendingSuggestion>,
+    /// The next-prompt suggestion the model gave, shown in the empty prompt.
+    pub(super) suggestion: Option<String>,
     pub(super) last_end: Option<LastEnd>,
     pub(super) cwd: PathBuf,
     pub(super) notify_after: Duration,

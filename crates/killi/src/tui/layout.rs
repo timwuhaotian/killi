@@ -278,7 +278,7 @@ impl App {
         let prompt = format!("{FIN}❯{RESET} ");
         let (mut input, cursor_row, cursor_col) = self.editor.render(&prompt, width, &known);
         if let Some(hint) = self.placeholder() {
-            input[0] = fit(&format!("{FIN}❯{RESET} {FAINT}{hint}{RESET}"), width);
+            input[0] = fit(&format!("{FIN}❯{RESET} {hint}"), width);
         }
         let first = self
             .input_first
@@ -481,12 +481,22 @@ impl App {
         (rows, cursor.0 + pad, cursor.1)
     }
 
-    fn placeholder(&self) -> Option<&'static str> {
-        placeholder(
-            self.editor.is_empty(),
-            self.busy.is_some(),
-            self.picker.is_some() || self.asking.is_some(),
-        )
+    /// What the empty prompt shows: the suggestion the model gave, or what the prompt takes.
+    /// Nothing once something is typed or while a picker or a question waits, since those say
+    /// it themselves.
+    fn placeholder(&self) -> Option<String> {
+        if !self.editor.is_empty() || self.picker.is_some() || self.asking.is_some() {
+            return None;
+        }
+        if let Some(suggestion) = &self.suggestion {
+            return Some(format!(
+                "{FAINT}{suggestion}{RESET}{DIM} · Tab or → fills it{RESET}"
+            ));
+        }
+        Some(format!(
+            "{FAINT}{}{RESET}",
+            placeholder(self.busy.is_some())
+        ))
     }
 
     /// The slash or `@` menu, `visible` items at a time around the selection, and a line of keys.

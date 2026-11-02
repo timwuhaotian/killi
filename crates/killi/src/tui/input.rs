@@ -62,6 +62,14 @@ impl App {
                     self.draw()?;
                     continue;
                 }
+                suggestion = async { self.suggesting.as_mut().expect("a suggestion is pending").as_mut().await }, if self.suggesting.is_some() => {
+                    self.suggesting = None;
+                    if let Ok(text) = suggestion {
+                        self.suggestion = Some(text);
+                    }
+                    self.draw()?;
+                    continue;
+                }
                 // The SearXNG Docker start of a /web-search-config flow: the keys stay alive
                 // while it runs, and its answer applies the pick.
                 started = async { self.searxng.as_mut().expect("searxng is starting").as_mut().await }, if self.searxng.is_some() => {
@@ -394,6 +402,9 @@ impl App {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         // Cmd, which only terminals that pass it on report.
         let cmd = key.modifiers.contains(KeyModifiers::SUPER);
+        if self.fill_suggestion(&key) {
+            return;
+        }
         let e = &mut self.editor;
         match key.code {
             KeyCode::Char('a') if cmd => e.select_all(),
@@ -449,6 +460,25 @@ impl App {
             KeyCode::Tab => self.complete_command(),
             _ => {}
         }
+    }
+
+    /// Tab or → puts the suggestion the model gave into the empty prompt; true when it did.
+    /// Nothing else fills the prompt: the suggestion belongs to an empty one, and the keys
+    /// keep their other meanings while the agent works or a question waits.
+    fn fill_suggestion(&mut self, key: &KeyEvent) -> bool {
+        if !matches!(key.code, KeyCode::Tab | KeyCode::Right)
+            || !key.modifiers.is_empty()
+            || !self.editor.is_empty()
+            || self.busy.is_some()
+            || self.asking.is_some()
+        {
+            return false;
+        }
+        let Some(suggestion) = self.suggestion.clone() else {
+            return false;
+        };
+        self.editor.insert(&suggestion);
+        true
     }
 
     /// Copies the prompt's selected text, if any, to the clipboard.

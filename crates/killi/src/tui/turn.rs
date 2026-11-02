@@ -215,7 +215,15 @@ impl App {
         self.ask_past.clear();
         self.ask_view = None;
         self.ask_corrections.clear();
+        // The suggestion belongs to the turn that just ended.
+        self.suggestion = None;
+        self.suggesting = None;
         self.begin_busy();
+    }
+
+    /// Asks the model what the user might ask next; the empty prompt offers its answer.
+    pub(super) fn ask_suggestion(&mut self) {
+        self.suggesting = Some(Box::pin(self.controls.aside.borrow().suggest()));
     }
 
     /// Prints what the user typed as their message block.
@@ -414,6 +422,9 @@ impl App {
         self.detail_back = 0;
         self.controls.peer_notes.borrow_mut().clear();
         self.peer_tells = 0;
+        // The suggestion belongs to the conversation that was left.
+        self.suggestion = None;
+        self.suggesting = None;
         *snapshots = Snapshots::new(cwd);
     }
 

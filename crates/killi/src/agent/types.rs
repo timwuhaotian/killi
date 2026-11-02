@@ -156,6 +156,20 @@ impl Aside {
         }
     }
 
+    /// A next-prompt suggestion: what the user might ask next, in one short line. Asked the
+    /// same way as a side question, so it adds nothing to the conversation.
+    pub fn suggest(&self) -> impl Future<Output = Result<String>> + 'static {
+        let answer = self.side(SUGGEST_NOTE, "", None);
+        async move {
+            let (text, _) = answer.await?;
+            let text = fit_suggestion(&text);
+            if text.is_empty() {
+                bail!("the model sent no suggestion");
+            }
+            Ok(text)
+        }
+    }
+
     /// What the calls in flight are waiting on, as `/btw` is told it.
     pub fn waiting(&self) -> Option<String> {
         self.ctx
@@ -209,6 +223,24 @@ pub(super) fn fit_recap(text: &str) -> String {
     }
     let cut: String = chars[..RECAP_MAX - 1].iter().collect();
     format!("{}…", cut.trim_end())
+}
+
+/// A suggestion as one line of at most `SUGGEST_MAX` characters: the model's first line,
+/// without the quotes it may put around it, cut where the limit falls — at a word's end, so
+/// no word is left half-spelled.
+pub(super) fn fit_suggestion(text: &str) -> String {
+    let line = text.lines().next().unwrap_or("").trim();
+    let line = line.trim_matches(['"', '\'', '“', '”', '‘', '’', '「', '」']);
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let chars: Vec<char> = line.chars().collect();
+    if chars.len() <= SUGGEST_MAX {
+        return line;
+    }
+    let cut: String = chars[..SUGGEST_MAX].iter().collect();
+    match cut.rfind(char::is_whitespace) {
+        Some(word) if word > 0 => cut[..word].trim().to_string(),
+        _ => cut,
+    }
 }
 
 /// The history with a side question at the end. Tool calls still running get a placeholder
@@ -353,5 +385,10 @@ pub(super) const RECAP_CHARS: usize = 100;
 pub(super) const RECAP_MAX: usize = 160;
 
 pub(super) const RECAP_NOTE: &str = "<system-reminder>The user is back at this session and wants a recap. Reply with the recap only: what they are after, what was done, and the latest result or what is left. Use their language, at most 100 characters, one or two plain sentences, no markdown. Don't call tools. This request and your reply won't be kept in the conversation.</system-reminder>";
+
+/// Longest suggestion shown, in characters; see `fit_suggestion`.
+pub(super) const SUGGEST_MAX: usize = 20;
+
+pub(super) const SUGGEST_NOTE: &str = "<system-reminder>The user's turn is over. Suggest what they would ask next, written as the prompt they would type. Reply with that prompt only, in the user's language, at most 20 characters, one line, no quotes and no explanation. Don't call tools. This request and your reply won't be kept in the conversation.</system-reminder>";
 
 pub(super) const BTW_NOTE: &str = "<system-reminder>A side question from the user. Answer it briefly from what this conversation already shows. Don't call tools. The question and your answer won't be kept in the conversation.</system-reminder>";

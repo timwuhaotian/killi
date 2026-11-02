@@ -212,6 +212,7 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | drag a file in | an image is attached as `[Image #1]`; any other file is named as `@path` |
 | Ctrl+O | the last tool output or thought in full |
 | ↑ ↓ | history |
+| Tab, → | in an empty prompt, put the suggested next prompt there |
 | Shift+arrows, Shift+Home/End | select in the prompt, by words with Alt; typing replaces the selection, Ctrl+C copies it; in fullscreen mode a drag, double- or triple-click selects too |
 
 <p align="center">
@@ -233,6 +234,10 @@ After a turn that used tools, killi prints a recap of the session in 100 charact
 under the turn's totals; `/recap` asks for one at any time, and `[ui] recap = false` turns the
 automatic one off. A recap is a side request like `/btw`: it is never kept in the conversation
 and the cached prefix still hits.
+
+After a turn ends, the model suggests what to ask next: the empty prompt shows the suggestion
+as its placeholder, and Tab or → puts it in the prompt. It is a side request like `/btw`, so it
+is never kept in the conversation and the cached prefix still hits.
 
 killi runs commands and edits files without asking; `/undo` is the safety net.
 

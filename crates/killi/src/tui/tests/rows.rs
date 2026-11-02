@@ -375,15 +375,13 @@ fn bash_rows_lead_with_a_faint_dollar_instead_of_the_word() {
 }
 
 #[test]
-fn the_empty_prompt_hints_at_commands_and_steering_unless_something_else_waits() {
+fn the_empty_prompt_hints_at_commands_and_at_steering_while_the_agent_works() {
     assert_eq!(
-        placeholder(true, false, false),
-        Some("ask, / for commands and skills, @ for files")
+        placeholder(false),
+        "ask, / for commands and skills, @ for files"
     );
-    assert!(placeholder(true, true, false).unwrap().contains("/btw"));
-    assert!(placeholder(true, true, false).unwrap().contains("Ctrl+S"));
-    assert_eq!(placeholder(false, false, false), None);
-    assert_eq!(placeholder(true, false, true), None);
+    assert!(placeholder(true).contains("/btw"));
+    assert!(placeholder(true).contains("Ctrl+S"));
 }
 
 #[test]
