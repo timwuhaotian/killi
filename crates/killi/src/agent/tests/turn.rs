@@ -812,6 +812,45 @@ async fn a_reply_ending_on_a_colon_is_asked_to_go_on_once() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_reply_announcing_a_next_step_is_asked_to_go_on_once() {
+    use crate::agent::turn::{ANNOUNCED, UNFINISHED};
+    let notices = Rc::new(RefCell::new(Vec::new()));
+    let seen = notices.clone();
+    let sink: Sink = Rc::new(move |event| {
+        if let Event::Notice(text) = event {
+            seen.borrow_mut().push(text);
+        }
+    });
+    let url = stub_replies(vec![
+        sse("Got it. Let me ground those numbers.", "stop"),
+        sse("Search uses 101 MB.", "stop"),
+    ])
+    .await;
+    let mut agent = idle_agent("announced-reply", Controls::default(), sink);
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, stop) = agent.run("numbers?", &[]).await.unwrap();
+    assert_eq!(
+        (text.as_str(), stop),
+        ("Search uses 101 MB.", Stop::Completed)
+    );
+    assert_eq!(agent.messages[2]["content"], ANNOUNCED);
+    assert_eq!(notices.borrow().len(), 1);
+
+    // One reminder per turn, whichever ending earned it.
+    let url = stub_replies(vec![sse("Checking it.", "stop"), sse("Digging:", "stop")]).await;
+    let mut agent = idle_agent("announced-then-colon", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, _) = agent.run("why?", &[]).await.unwrap();
+    assert_eq!(text, "Digging:");
+    let reminded = agent
+        .messages
+        .iter()
+        .filter(|m| m["content"] == ANNOUNCED || m["content"] == UNFINISHED)
+        .count();
+    assert_eq!(reminded, 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_prompt_taken_back_before_any_reply_leaves_no_trace() {
     // A provider that takes the request and never answers: the turn is cut off before a token.
     let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- A short reply that ends by saying what comes next ("Let me ground those numbers.",
+  "Checking web-core #1601.") with no tool call after it no longer ends the turn and leaves
+  you to type `continue`. killi reminds the model once to do what it announced or answer in a
+  sentence, the way it already does for a reply that ends on a colon. "Let me know…" and
+  longer answers are left alone.
+
 ## 0.6.38 — 2026-11-03
 
 - `fetch_url` renders pages that need JavaScript and takes screenshots with Moli when it is

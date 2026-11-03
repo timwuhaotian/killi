@@ -702,6 +702,40 @@ fn a_reply_ending_on_a_colon_announces_what_never_came() {
 }
 
 #[test]
+fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
+    // The stops the logs showed: each ended the turn with no tool call.
+    for stop in [
+        "Got it — no installs, public data for the competitor side. Let me ground those numbers.",
+        "No new defects to raise — one open thread still blocks approval. I'll file the review as a comment.",
+        "Checking state after outage, then continuing.",
+        "Someone already raised it — checking if it clears.",
+        "Checking web-core #1601.",
+        "Phase A posted. Phase B now: refetching threads post-review, checking stack.",
+        "好的。我先查一下日志。",
+    ] {
+        assert!(ends_with_intent(stop), "{stop}");
+    }
+    for answer in [
+        "Done.",
+        "",
+        "Fixed the overlap. Let me know if you want a darker theme.",
+        "Should I check the logs?",
+        "Nothing else to change.",
+        "Checks pass.",
+        "The letter is ready.",
+        "Rebuilt the card.",
+        "Checkingly odd.",
+    ] {
+        assert!(!ends_with_intent(answer), "{answer}");
+    }
+    let summary = format!(
+        "{}\n\nI'll keep the old flag for now.",
+        "Changed the parser. ".repeat(12)
+    );
+    assert!(!ends_with_intent(&summary));
+}
+
+#[test]
 fn compaction_says_skills_must_be_reloaded() {
     assert!(COMPACT_INSTRUCTION.contains("/name") && COMPACT_INSTRUCTION.contains("`skill` tool"));
 }

@@ -64,7 +64,8 @@ use request::hides_reasoning;
 use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm};
 #[cfg(test)]
 use turn::{
-    STALE_TASKS_AFTER, ends_with_colon, ends_with_question, open_tasks_note, stale_tasks_note,
+    STALE_TASKS_AFTER, ends_with_colon, ends_with_intent, ends_with_question, open_tasks_note,
+    stale_tasks_note,
 };
 #[cfg(test)]
 use types::{
