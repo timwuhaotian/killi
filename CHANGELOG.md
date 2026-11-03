@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.39 — 2026-11-03
+
 - A short reply that ends by saying what comes next ("Let me ground those numbers.",
   "Checking web-core #1601.") with no tool call after it no longer ends the turn and leaves
   you to type `continue`. killi reminds the model once to do what it announced or answer in a
