@@ -337,7 +337,8 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
   ```
 
   `fetch_url` also renders pages that need JavaScript, takes screenshots of them (`screenshot`,
-  for checking a local dev server's UI) and fetches raw bodies (`raw`), all through the Chrome,
+  for checking a local dev server's UI) and fetches raw bodies (`raw`), all through Moli when
+  it is installed (`KILLI_MOLI`, `~/.local/bin/moli`, or `moli` on `PATH`), else the Chrome,
   Chromium, Edge or Brave in `/Applications` (or `KILLI_CHROME`) run headless with a throwaway
   profile. A page whose static HTML has no readable text is rendered automatically.
 

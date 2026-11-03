@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.38 — 2026-11-03
+
+- `fetch_url` renders pages that need JavaScript and takes screenshots with Moli when it is
+  installed (`KILLI_MOLI`, `~/.local/bin/moli`, or `moli` on `PATH`), falling back to headless
+  Chrome, Chromium, Edge or Brave as before. killi bundles no browser either way.
+
 ## 0.6.37 — 2026-11-02
 
 - After a turn ends, the model suggests what to ask next: the empty prompt shows the

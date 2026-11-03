@@ -117,7 +117,7 @@ async fn dropping_a_browser_kills_its_group_and_removes_its_profile() {
         .args(["-c", "sleep 30 & sleep 30"])
         .process_group(0)
         .kill_on_drop(true);
-    let browser = super::Running::start(&mut command, profile.clone()).unwrap();
+    let browser = super::Running::start(&mut command, Some(profile.clone())).unwrap();
     let pgid = browser.child.id().unwrap() as libc::pid_t;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     // SAFETY: signal 0 only checks that the group exists.
