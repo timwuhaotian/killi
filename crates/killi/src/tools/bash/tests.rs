@@ -86,6 +86,7 @@ async fn timeout_and_ids_arrive_as_strings_too() {
         "{}",
         out.text
     );
+    assert!(!out.is_error);
     ctx.tasks.borrow_mut().stop_all();
 }
 
@@ -104,7 +105,22 @@ async fn a_slow_command_moves_to_the_background() {
     );
     let out = task_output(&ctx, &json!({"id": 1, "wait": 10}), &never).await;
     assert_eq!(out.text, "Task 1 exited with code 0.\ndone");
+    assert!(!out.is_error);
     assert!(ctx.tasks.borrow_mut().newly_finished().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn task_output_marks_failed_exits_as_errors() {
+    let ctx = ctx();
+    bash(
+        &ctx,
+        &json!({"command": "exit 4", "run_in_background": true}),
+        &never,
+    )
+    .await;
+    let out = task_output(&ctx, &json!({"id": 1, "wait": 5}), &never).await;
+    assert_eq!(out.text, "Task 1 exited with code 4.\n(no new output)");
+    assert!(out.is_error);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -225,6 +241,7 @@ async fn task_stop_kills_the_process_group() {
     .await;
     assert_eq!(task_stop(&ctx, &json!({"id": 1})).text, "Stopped task 1.");
     let out = task_output(&ctx, &json!({"id": 1, "wait": 5}), &never).await;
+    assert!(out.is_error);
     assert!(
         out.text.starts_with("Task 1 was killed by a signal."),
         "{}",

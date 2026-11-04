@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.40 — 2026-11-04
+
+- `task_output` now marks a background command's nonzero exit or signal as a failure in the
+  terminal and session log, matching foreground `bash`.
+
 ## 0.6.39 — 2026-11-03
 
 - A short reply that ends by saying what comes next ("Let me ground those numbers.",

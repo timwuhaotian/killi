@@ -237,14 +237,12 @@ pub async fn task_output(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output 
     }
     let mut tasks = ctx.tasks.borrow_mut();
     let task = tasks.list.get_mut(&id).expect("task exists");
-    let failed = task
-        .process
-        .exit()
-        .is_some_and(|exit| !matches!(exit, Exit::Code(0)));
+    let exit = task.process.exit();
+    let failed = exit.is_some_and(|exit| !matches!(exit, Exit::Code(0)));
     let (text, read_to) = take_output(ctx, &task.process, task.read_to, failed);
     task.read_to = read_to;
     task.release();
-    let status = match task.process.exit() {
+    let status = match exit {
         Some(exit) => {
             task.reported = true;
             let left = if task.process.running() {
@@ -267,10 +265,16 @@ pub async fn task_output(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output 
     } else {
         text
     };
-    if interrupted && task.process.exit().is_none() {
+    if interrupted && exit.is_none() {
         body.push_str("\n[Stopped waiting: a message from the user is waiting. Read it first; task_output with `wait` picks the wait up again.]");
     }
-    Output::ok(format!("{status}\n{body}")).brief(status)
+    let text = format!("{status}\n{body}");
+    if failed {
+        Output::error(text)
+    } else {
+        Output::ok(text)
+    }
+    .brief(status)
 }
 
 pub fn task_stop(ctx: &Context, args: &Value) -> Output {
