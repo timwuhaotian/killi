@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.41 — 2026-11-04
+
 - A skill's declared sub-commands are skills in their own right. Impeccable's `polish`,
   `distill`, `clarify` and the rest of its Commands table (and `command-metadata.json`) now
   appear in the prompt's skill names and the slash menu, answer the `skill` tool by name
