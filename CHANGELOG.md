@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- A skill's declared sub-commands are skills in their own right. Impeccable's `polish`,
+  `distill`, `clarify` and the rest of its Commands table (and `command-metadata.json`) now
+  appear in the prompt's skill names and the slash menu, answer the `skill` tool by name
+  (also as `impeccable/polish`), and load the parent `SKILL.md` with the command's playbook
+  appended — no need to pin each one into a standalone folder first. A standalone skill of
+  the same name still wins.
+
 ## 0.6.40 — 2026-11-04
 
 - `task_output` now marks a background command's nonzero exit or signal as a failure in the

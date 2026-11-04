@@ -2,6 +2,11 @@
 //! tokens each; the `skill` tool loads one by name, or searches the descriptions locally
 //! without spending model tokens. One skill is built in: `update-config`, which describes
 //! this version's configuration files and keys.
+//!
+//! A skill can also declare sub-commands — playbooks in its own folder that other harnesses
+//! expose as standalone skills, like impeccable's `polish` or `distill` (its Commands table
+//! and `command-metadata.json`, see `commands`). Those are skills too, named by the command;
+//! loading one loads the parent SKILL.md with the playbook appended.
 
 use std::collections::HashSet;
 use std::fs;
@@ -12,6 +17,8 @@ use serde_json::{Value, json};
 
 use crate::config::home;
 use crate::tools::Output;
+
+mod commands;
 
 /// The built-in skill for killi's own configuration; a test keeps it naming every key.
 const UPDATE_CONFIG: &str = include_str!("skills/update-config.md");
@@ -28,6 +35,15 @@ pub struct Skill {
     pub path: PathBuf,
     /// The text of a built-in skill, which has no file.
     builtin: Option<&'static str>,
+    /// For a sub-command: the skill that declared it, whose SKILL.md loads before this
+    /// skill's own file (a playbook under the parent's folder).
+    parent: Option<Parent>,
+}
+
+#[derive(Clone, Debug)]
+struct Parent {
+    name: String,
+    path: PathBuf,
 }
 
 impl Skills {
@@ -62,6 +78,15 @@ impl Skills {
                 if seen.insert(skill.name.clone()) {
                     list.push(skill);
                 }
+            }
+        }
+        // Sub-commands come after every folder skill, so a standalone skill of the same
+        // name always wins over another skill's playbook; among sub-commands the first
+        // parent in discovery order wins.
+        let declared: Vec<Skill> = list.iter().flat_map(commands::declared).collect();
+        for skill in declared {
+            if seen.insert(skill.name.clone()) {
+                list.push(skill);
             }
         }
         if let Some(skill) =
@@ -102,7 +127,20 @@ impl Skills {
     }
 
     fn find(&self, name: &str) -> Option<&Skill> {
-        self.list.iter().find(|s| s.name.eq_ignore_ascii_case(name))
+        let name = name.trim().trim_start_matches(['$', '/']);
+        if let Some(skill) = self.list.iter().find(|s| s.name.eq_ignore_ascii_case(name)) {
+            return Some(skill);
+        }
+        // A sub-command can also be named through its parent: `impeccable/polish`,
+        // `impeccable:polish` or `impeccable polish`, as the parent's own text writes it.
+        let at = name.find(['/', ':', ' '])?;
+        let (parent, sub) = (&name[..at], name[at + 1..].trim());
+        self.list.iter().find(|s| {
+            s.name.eq_ignore_ascii_case(sub)
+                && s.parent
+                    .as_ref()
+                    .is_some_and(|p| p.name.eq_ignore_ascii_case(parent))
+        })
     }
 
     fn content(skill: &Skill) -> Option<String> {
@@ -114,6 +152,20 @@ impl Skills {
             ));
         }
         let text = fs::read_to_string(&skill.path).ok()?;
+        if let Some(parent) = &skill.parent {
+            let parent_text = fs::read_to_string(&parent.path).ok()?;
+            let folder = parent.path.parent().unwrap_or(Path::new("."));
+            let playbook = skill.path.strip_prefix(folder).unwrap_or(&skill.path);
+            return Some(format!(
+                "<skill name=\"{}\" folder=\"{}\">\n{}\n\n# {} — the `{}` playbook, loaded with the skill\n\n{}\n</skill>",
+                skill.name,
+                folder.display(),
+                parent_text.trim(),
+                playbook.display(),
+                skill.name,
+                text.trim()
+            ));
+        }
         let folder = skill.path.parent().unwrap_or(Path::new("."));
         Some(format!(
             "<skill name=\"{}\" folder=\"{}\">\n{}\n</skill>",
@@ -331,6 +383,7 @@ fn parse_text(text: &str, path: &Path) -> Option<Skill> {
         description: description.trim().to_string(),
         path: path.to_path_buf(),
         builtin: None,
+        parent: None,
     })
 }
 
@@ -423,6 +476,93 @@ mod tests {
             Some("/pdf")
         );
         assert_eq!(typed("Use the pdf skill for this.\n\nmerge them"), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sub_commands_are_skills_that_load_parent_and_playbook() {
+        let root = std::env::temp_dir().join(format!("killi-skills-sub-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let design = root.join(".agents/skills/design");
+        fs::create_dir_all(design.join("reference")).unwrap();
+        fs::create_dir_all(design.join("scripts")).unwrap();
+        fs::write(
+            design.join("SKILL.md"),
+            "---\nname: design\ndescription: Improve interfaces\n---\nParent body.\n\n\
+             ## Commands\n\n\
+             | Command | Category | Description | Reference |\n|---|---|---|---|\n\
+             | `polish [target]` | Refine | Final quality pass | [reference/polish.md](reference/polish.md) |\n\
+             | `distill [target]` | Refine | Strip to essence | [reference/distill.md](reference/distill.md) |\n\
+             | `gone [target]` | Refine | Missing playbook | [reference/gone.md](reference/gone.md) |",
+        )
+        .unwrap();
+        fs::write(
+            design.join("scripts/command-metadata.json"),
+            r#"{"polish": {"description": "Performs a final quality pass before shipping."}, "clarify": {"description": "Improve unclear UX copy and labels."}, "bogus": {"description": "No playbook."}}"#,
+        )
+        .unwrap();
+        for (file, body) in [
+            ("polish.md", "Polish playbook."),
+            ("distill.md", "Distill playbook."),
+            ("clarify.md", "Clarify playbook."),
+            ("notes.md", "Undeclared reference."),
+        ] {
+            fs::write(design.join("reference").join(file), body).unwrap();
+        }
+        // A standalone skill of a sub-command's name wins over the playbook.
+        let distill = root.join(".agents/skills/distill");
+        fs::create_dir_all(&distill).unwrap();
+        fs::write(
+            distill.join("SKILL.md"),
+            "---\nname: distill\ndescription: Standalone\n---\nStandalone body.",
+        )
+        .unwrap();
+
+        let skills = Skills::discover(&root, &["/nonexistent".to_string()]);
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["design", "distill", "polish", "clarify", "update-config"]
+        );
+        assert_eq!(
+            skills.find("polish").unwrap().description,
+            "Performs a final quality pass before shipping."
+        );
+        let loaded = skills.run(&json!({"name": "polish"})).text;
+        assert!(
+            loaded.starts_with("<skill name=\"polish\" folder=\""),
+            "{loaded}"
+        );
+        assert!(loaded.contains("Parent body."), "{loaded}");
+        assert!(loaded.contains("Polish playbook."), "{loaded}");
+        for name in ["design/polish", "design:polish", "design polish", "$polish"] {
+            assert!(
+                skills
+                    .run(&json!({"name": name}))
+                    .text
+                    .contains("Polish playbook."),
+                "{name}"
+            );
+        }
+        assert!(
+            skills
+                .run(&json!({"name": "distill"}))
+                .text
+                .contains("Standalone body.")
+        );
+        let found = skills.run(&json!({"query": "unclear copy labels"}));
+        assert!(found.text.starts_with("- clarify:"), "{}", found.text);
+        assert_eq!(
+            typed(&skills.invocation("polish", "src/app").unwrap()).as_deref(),
+            Some("/polish src/app")
+        );
+        assert!(
+            skills
+                .run(&json!({"name": "notes"}))
+                .text
+                .contains("No skill named")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

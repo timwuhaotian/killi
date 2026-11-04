@@ -273,7 +273,10 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
   followed). When the agent works in a subfolder with its own `AGENTS.md`, it is pointed to it.
 - **Skills:** folders with a `SKILL.md` in `~/.agents/skills` and the project's
   `.agents/skills` or `.claude/skills`. Only their names go in the prompt; the agent loads one
-  when it applies, and `/<name>` runs one directly. Other folders: `[skills] dirs = [...]`.
+  when it applies, and `/<name>` runs one directly. A skill's declared sub-commands (its
+  Commands table or `command-metadata.json`, like impeccable's `polish`) are names too:
+  `/polish` loads the parent skill with that playbook appended. Other folders:
+  `[skills] dirs = [...]`.
   One is built in: `/update-config` tells the agent every file and key of this version's
   configuration, so it can say where things are, what a setting does, or make a change.
   Project installs from `npx skills add` (any agent that uses `.agents/skills`) land there, and
