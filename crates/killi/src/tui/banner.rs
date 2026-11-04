@@ -376,7 +376,12 @@ mod tests {
         for frame in 0..120 {
             assert_eq!(width(&snowflake(frame)), 3, "frame {frame}");
         }
-        assert_ne!(snowflake(0), snowflake(1), "the flake stands still");
+        let glyph = |frame| unstyled(&snowflake(frame));
+        assert!(
+            (1..SNOWFLAKE_HOLD).all(|frame| glyph(frame) == glyph(0)),
+            "the flake flickers"
+        );
+        assert_ne!(glyph(0), glyph(SNOWFLAKE_HOLD), "the flake stands still");
         let mut glyphs = std::collections::HashSet::new();
         for frame in (0..SNOWFLAKES.len() * SNOWFLAKE_HOLD).step_by(SNOWFLAKE_HOLD) {
             glyphs.insert(unstyled(&snowflake(frame)));
