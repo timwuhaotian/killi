@@ -95,6 +95,36 @@ fn ctrl_s_sends_the_typed_text_once_with_its_images() {
 }
 
 #[test]
+fn ctrl_s_during_a_swarm_queues_first_and_interrupts_on_the_second_press() {
+    let mut app = test_app();
+    app.busy = Some(Instant::now());
+    app.swarm = Some(swarm::Swarm::new(
+        "call_1".into(),
+        "Review".into(),
+        vec!["a".into(), "b".into()],
+    ));
+    app.editor.insert("hello");
+    let send = || TermEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(!app.on_key_busy(send()), "the swarm keeps running");
+    assert!(!app.send_now && app.swarm_send_armed);
+    assert_eq!(app.queued, ["hello".to_string()]);
+    assert_eq!(app.controls.steer.borrow().len(), 1);
+    assert!(
+        app.pending.iter().any(|row| unstyled(row).contains("Swarm running")),
+        "{:?}",
+        app.pending
+    );
+    assert!(app.on_key_busy(send()), "the second press sends now");
+    assert!(app.send_now);
+
+    let mut idle = test_app();
+    idle.busy = Some(Instant::now());
+    idle.editor.insert("hello");
+    assert!(idle.on_key_busy(send()), "no swarm: still interrupts at once");
+    assert!(idle.send_now);
+}
+
+#[test]
 fn a_new_or_resumed_session_starts_with_a_clean_slate() {
     let mut app = test_app();
     app.controls
@@ -103,6 +133,7 @@ fn a_new_or_resumed_session_starts_with_a_clean_slate() {
         .push_back(("queued".into(), Vec::new()));
     app.queued.push("queued".into());
     app.send_now = true;
+    app.swarm_send_armed = true;
     app.todos.push(Todo {
         content: "old".into(),
         status: "pending".into(),
@@ -119,7 +150,7 @@ fn a_new_or_resumed_session_starts_with_a_clean_slate() {
     let mut snapshots = Snapshots::new(&root);
     app.reset_conversation(&mut snapshots, &root);
     assert!(app.controls.steer.borrow().is_empty());
-    assert!(app.queued.is_empty() && !app.send_now);
+    assert!(app.queued.is_empty() && !app.send_now && !app.swarm_send_armed);
     assert!(app.todos.is_empty());
     assert_eq!((app.status.prompt, app.status.context), (0, 0));
     assert!(app.details.is_empty() && app.detail_back == 0);

@@ -68,6 +68,7 @@ impl App {
             exit_armed: None,
             queued: Vec::new(),
             send_now: false,
+            swarm_send_armed: false,
             aside_asked: None,
             later_noted: false,
             aside: None,

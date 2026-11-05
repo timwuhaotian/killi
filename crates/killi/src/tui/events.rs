@@ -92,6 +92,7 @@ impl App {
             } => {
                 if self.swarm.as_ref().is_some_and(|s| s.id == id) {
                     self.swarm = None;
+                    self.swarm_send_armed = false;
                 }
                 let running = self.take_running(&id);
                 let elapsed = running.as_ref().map(|r| r.started.elapsed());
@@ -178,6 +179,7 @@ impl App {
                     .map(|item| text::sanitize_row(item).into_owned())
                     .collect();
                 self.swarm = Some(swarm::Swarm::new(id, description, items));
+                self.swarm_send_armed = false;
             }
             Event::Started | Event::Finished { .. } => {}
             Event::Sub { label, slot, event } => self.on_sub(label, slot, *event),

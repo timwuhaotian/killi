@@ -87,6 +87,14 @@ impl App {
             KeyCode::Enter if !newline_key(&key) => self.send_busy(),
             KeyCode::Char('s') if ctrl => {
                 self.send_busy();
+                if self.swarm.is_some()
+                    && !self.controls.steer.borrow().is_empty()
+                    && !self.swarm_send_armed
+                {
+                    self.swarm_send_armed = true;
+                    self.notice("Swarm running: queued for the next step. Ctrl+S again sends now and stops the swarm.");
+                    return false;
+                }
                 self.send_now = !self.controls.steer.borrow().is_empty();
                 return self.send_now;
             }
@@ -296,6 +304,7 @@ impl App {
         self.end_thinking();
         self.running.clear();
         self.swarm = None;
+        self.swarm_send_armed = false;
         self.aside = None;
         self.retry = None;
         self.busy = None;
@@ -420,6 +429,7 @@ impl App {
         self.controls.steer.borrow_mut().clear();
         self.queued.clear();
         self.send_now = false;
+        self.swarm_send_armed = false;
         self.todos.clear();
         self.reset_usage();
         self.details.clear();

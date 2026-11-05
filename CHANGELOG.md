@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.45 — 2026-11-05
+
+- Ctrl+S during a swarm no longer kills the subagents at once: the first press queues
+  the message for the next step while the swarm keeps running, and a second press
+  interrupts it to send now.
+
 ## 0.6.44 — 2026-11-05
 
 - Typing `!` changes the prompt to a shell indicator and shows whether Enter opens an

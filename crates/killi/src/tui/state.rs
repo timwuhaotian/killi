@@ -221,6 +221,8 @@ pub(super) struct App {
     pub(super) queued: Vec<String>,
     /// Ctrl+S ended the running turn to send the queued messages at once.
     pub(super) send_now: bool,
+    /// A Ctrl+S during a swarm already queued once; the next one interrupts it to send now.
+    pub(super) swarm_send_armed: bool,
     /// A /btw question for the running turn to send.
     pub(super) aside_asked: Option<String>,
     /// The running turn called `later`, so a reply that leaves something for later noted it.
