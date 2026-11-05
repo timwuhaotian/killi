@@ -95,9 +95,13 @@ impl App {
         false
     }
 
-    /// Enter while the agent works: a /btw question or a command runs now, a skill queues
-    /// its expanded prompt, anything else is queued for the agent's next step.
+    /// Enter while the agent works: a /btw question or a command runs now, a `!` shell
+    /// command runs now, a skill queues its expanded prompt, anything else is queued for
+    /// the agent's next step.
     pub(super) fn send_busy(&mut self) {
+        if self.shell_while_busy() {
+            return;
+        }
         if let Some(question) = aside_question(self.editor.text()) {
             self.aside_asked = Some(question);
             self.editor.take();

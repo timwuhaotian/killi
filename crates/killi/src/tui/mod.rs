@@ -28,6 +28,7 @@ mod picker;
 mod rows;
 mod run;
 mod select;
+mod shell;
 mod start;
 mod state;
 mod swarm;
@@ -256,6 +257,10 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     break;
                 }
             }
+            Input::Shell(cmd) if cmd.trim().is_empty() => {
+                shell::run_interactive_shell(&mut app)?;
+            }
+            Input::Shell(cmd) => shell::run_shell_once(&mut app, &cmd),
             Input::Resume(_) if agent.goal().is_some() => {
                 let note = crate::goal::blocks("Resuming another session", agent.goal())
                     .expect("a goal stands");

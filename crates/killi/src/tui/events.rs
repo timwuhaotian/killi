@@ -257,7 +257,7 @@ impl App {
         Some(self.running.remove(index))
     }
 
-    fn tool_line(
+    pub(super) fn tool_line(
         &mut self,
         label: Option<&str>,
         summary: &str,
@@ -301,7 +301,7 @@ impl App {
     }
 
     /// The first lines of a bash command's output under its line, or the last when it failed.
-    fn output_preview(&mut self, output: &str, is_error: bool) {
+    pub(super) fn output_preview(&mut self, output: &str, is_error: bool) {
         let lines: Vec<String> = output
             .lines()
             .filter(|l| !l.trim().is_empty() && !l.starts_with("[Command "))

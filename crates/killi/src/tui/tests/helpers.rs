@@ -219,6 +219,61 @@ fn a_skill_keeps_the_images_pasted_beside_it() {
 }
 
 #[test]
+fn bang_runs_a_shell_command_and_bang_alone_opens_one() {
+    let shell = |text: &str| match submission(text.into(), Vec::new()) {
+        Some(Input::Shell(cmd)) => cmd,
+        other => panic!("{text:?} is a shell command, got {}", other.is_some()),
+    };
+    assert_eq!(shell("!echo hi"), "echo hi");
+    assert_eq!(shell("! echo hi"), "echo hi");
+    assert_eq!(shell("!"), "");
+    assert_eq!(shell("  !  "), "");
+    assert!(
+        matches!(submission("wow! hi".into(), Vec::new()), Some(Input::Prompt(..)))
+    );
+    assert!(
+        matches!(submission("/help".into(), Vec::new()), Some(Input::Command(..)))
+    );
+}
+
+#[test]
+fn bang_help_row_fits_narrow_windows() {
+    /// SGR escapes out of a styled row, so wrapped help text reads as plain words.
+    fn stripped(row: &str) -> String {
+        let mut out = String::with_capacity(row.len());
+        let mut chars = row.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' && chars.next() == Some('[') {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+    for width in [80, 60] {
+        let rows = super::super::rows::help_rows(width, false);
+        let all: Vec<String> = rows.iter().map(|r| stripped(r)).collect();
+        // Continuation rows indent; collapse whitespace so a wrapped phrase reads whole.
+        let all = all.join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            all.contains("opens a shell"),
+            "help at {width} names the ! shell"
+        );
+        for row in &rows {
+            assert!(
+                super::super::text::width(row) <= width,
+                "help row fits {width}: {row:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_command_that_needs_an_argument_waits_for_it() {
     let menu = Suggestions {
         items: vec![Item {

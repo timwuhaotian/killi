@@ -183,7 +183,7 @@ impl TerminalGuard {
 /// button, wheel and drag reports (1002, which reports the pointer only while a button is held)
 /// in the SGR form (1006); crossterm's own `EnableMouseCapture` also asks for 1003, a report of
 /// every pointer move.
-fn take_terminal(fullscreen: bool, enhanced: bool) -> Result<()> {
+pub(super) fn take_terminal(fullscreen: bool, enhanced: bool) -> Result<()> {
     terminal::enable_raw_mode()?;
     let mut out = stdout();
     execute!(out, EnableBracketedPaste)?;

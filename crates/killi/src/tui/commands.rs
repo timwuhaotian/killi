@@ -31,12 +31,17 @@ pub(super) struct Command {
     pub(super) about: &'static str,
 }
 
-/// What a submitted prompt is: a command when it starts with `/`, else a message to the model.
-/// The images pasted into it go along either way, since a skill's request can hold one.
+/// What a submitted prompt is: a shell command when it starts with `!`, a command when
+/// it starts with `/`, else a message to the model.
+/// The images pasted into it go along either way, since a skill's request can hold one;
+/// a shell command drops them, as a shell takes no images.
 pub(super) fn submission(text: String, images: Vec<Image>) -> Option<Input> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
+    }
+    if let Some(cmd) = super::shell::shell_arg(&text) {
+        return Some(Input::Shell(cmd));
     }
     if let Some(command) = trimmed.strip_prefix('/') {
         let (name, arg) = command
@@ -245,6 +250,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "send; while the agent works, sends your message at its next step",
     ),
     ("Shift+Enter", "new line; also Ctrl+J, or \\ then Enter"),
+    ("!", "run a shell command; ! alone opens a shell"),
     (
         "Esc",
         "interrupt the agent; before its reply begins, your message comes back to the prompt",

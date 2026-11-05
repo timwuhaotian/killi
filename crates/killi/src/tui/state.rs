@@ -64,6 +64,8 @@ pub(super) enum Input {
     Prompt(String, Vec<Image>),
     /// A command with its argument and the images pasted into it.
     Command(String, String, Vec<Image>),
+    /// A shell command after `!`; empty opens an interactive shell.
+    Shell(String),
     Resume(PathBuf),
     Model(String),
     /// The model every session falls back to when the primary keeps failing: `/backup-model <alias>`, or
