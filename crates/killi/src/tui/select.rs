@@ -8,7 +8,7 @@
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use unicode_width::UnicodeWidthChar;
 
-use super::text::{NOT_REVERSE, REVERSE};
+use super::text::{NOT_REVERSE, REVERSE, escape_len};
 use super::*;
 
 /// How close together two presses on the same point land to count as a double-click.
@@ -139,19 +139,7 @@ fn pieces(line: &str) -> Vec<Piece<'_>> {
     out
 }
 
-/// The length of the escape sequence `text` starts with: a CSI runs to its final byte, anything
-/// else is the escape and the character after it.
-fn escape_len(text: &str) -> usize {
-    let bytes = text.as_bytes();
-    if bytes.get(1) == Some(&b'[') {
-        bytes[2..]
-            .iter()
-            .position(|b| (0x40..=0x7e).contains(b))
-            .map_or(bytes.len(), |end| end + 3)
-    } else {
-        1 + text[1..].chars().next().map_or(0, char::len_utf8)
-    }
-}
+
 
 /// Whether a character `width` columns wide at `col` lies within the columns `from` to `to`,
 /// both included. A wide character is taken whole when either of its columns is.

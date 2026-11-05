@@ -236,14 +236,40 @@ fn markdown_links_show_their_address() {
     assert_eq!(
         md.line("see [docs](https://a.b/c)"),
         [format!(
-            "see {LAGOON}{UNDERLINE}docs{RESET} {DIM}(https://a.b/c){RESET}"
+            "see {} {DIM}({}){RESET}",
+            hyperlink("https://a.b/c", &format!("{LAGOON}{UNDERLINE}docs{RESET}")),
+            hyperlink("https://a.b/c", "https://a.b/c")
         )]
     );
     assert_eq!(
         md.line("[https://a.b](https://a.b)"),
-        [format!("{LAGOON}{UNDERLINE}https://a.b{RESET}")]
+        [hyperlink(
+            "https://a.b",
+            &format!("{LAGOON}{UNDERLINE}https://a.b{RESET}")
+        )]
     );
     assert_eq!(md.line("[not a link] (x)"), ["[not a link] (x)"]);
+}
+
+#[test]
+fn markdown_links_are_hyperlinks_with_no_columns_of_their_own() {
+    let mut md = Markdown::default();
+    let row = &md.line("see [docs](https://a.b/c)")[0];
+    assert!(row.contains("\x1b]8;;https://a.b/c\x1b\\"), "{row:?}");
+    assert!(row.contains(LINK_CLOSE), "{row:?}");
+    assert_eq!(width(row), "see docs (https://a.b/c)".len());
+    assert_eq!(
+        width(&md.line("[https://a.b](https://a.b)")[0]),
+        "https://a.b".len()
+    );
+    let row = md.line("see [docs](https://a.b/c) and more words here")[0].clone();
+    let rows = wrap_words(&row, 20, hanging_indent(&row));
+    assert!(rows.len() > 1, "a long link line wraps: {rows:?}");
+    assert!(rows.iter().all(|row| width(row) <= 20), "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row.contains(LINK_CLOSE)),
+        "a wrapped link stays a link: {rows:?}"
+    );
 }
 
 #[test]

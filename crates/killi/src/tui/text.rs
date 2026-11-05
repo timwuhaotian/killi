@@ -265,6 +265,94 @@ const STRING: Sgr = Sgr::fixed("\x1b[32m", "\x1b[38;5;28m", "\x1b[32m", "\x1b[38
 const NUMBER: Sgr = Sgr::fixed("\x1b[33m", "\x1b[38;5;130m", "\x1b[33m", "\x1b[38;5;130m");
 const KEYWORD: Sgr = Sgr::fixed("\x1b[35m", "\x1b[38;5;90m", "\x1b[35m", "\x1b[38;5;90m");
 
+/// Closes an OSC 8 hyperlink.
+pub const LINK_CLOSE: &str = "\x1b]8;;\x1b\\";
+
+/// Opens an OSC 8 hyperlink to `url`: the label that follows is clickable in terminals
+/// that take hyperlinks (Terminal, iTerm2, Ghostty, WezTerm, VS Code), plain underlined
+/// text where they don't.
+pub fn link_open(url: &str) -> String {
+    format!("\x1b]8;;{url}\x1b\\")
+}
+
+/// Whether `url` may become a hyperlink: a web address without controls or spaces, so the
+/// terminal never acts on anything but a plain link killi itself printed.
+fn safe_link(url: &str) -> bool {
+    (url.starts_with("http://") || url.starts_with("https://"))
+        && !url.bytes().any(|b| b <= 0x20 || b == 0x7f || b == 0x1b || b == 0x07)
+}
+
+/// `styled` as a clickable link to `url`; unchanged when `url` isn't a safe web address.
+pub fn hyperlink(url: &str, styled: &str) -> String {
+    if safe_link(url) {
+        format!("{}{styled}{LINK_CLOSE}", link_open(url))
+    } else {
+        styled.to_string()
+    }
+}
+
+/// Whether `seq` opens an OSC 8 hyperlink.
+pub(crate) fn is_link_open(seq: &str) -> bool {
+    seq.starts_with("\x1b]8;;") && seq != LINK_CLOSE
+}
+
+/// Whether `seq` closes one.
+pub(crate) fn is_link_close(seq: &str) -> bool {
+    seq == LINK_CLOSE
+}
+
+/// The bytes the escape sequence at the start of `text` takes: CSI through its final byte,
+/// an OSC string through BEL or ST, anything else the escape and the character after it.
+/// A sequence the text ends in the middle of runs to the text's end, so it still takes no
+/// columns. Assumes `text` starts with ESC.
+pub(crate) fn escape_len(text: &str) -> usize {
+    debug_assert!(text.starts_with('\x1b'));
+    let after = &text[1..];
+    let Some(second) = after.chars().next() else {
+        return 1;
+    };
+    match second {
+        '[' => {
+            let mut len = 1 + second.len_utf8();
+            let mut rest = &after[second.len_utf8()..];
+            loop {
+                let Some(c) = rest.chars().next() else {
+                    return text.len();
+                };
+                if ('\x30'..='\x3f').contains(&c) || ('\x20'..='\x2f').contains(&c) {
+                    len += c.len_utf8();
+                    rest = &rest[c.len_utf8()..];
+                } else if ('\x40'..='\x7e').contains(&c) {
+                    return len + c.len_utf8();
+                } else {
+                    return len;
+                }
+            }
+        }
+        ']' | 'P' | 'X' | '^' | '_' => {
+            let mut len = 1 + second.len_utf8();
+            let mut rest = &after[second.len_utf8()..];
+            loop {
+                let Some(c) = rest.chars().next() else {
+                    return text.len();
+                };
+                if c == '\x07' {
+                    return len + 1;
+                }
+                if c == '\x1b' && rest[1..].starts_with('\\') {
+                    return len + 2;
+                }
+                if c.is_control() {
+                    return len;
+                }
+                len += c.len_utf8();
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+        _ => 1 + second.len_utf8(),
+    }
+}
+
 /// Whether `NO_COLOR` asks for no colors.
 pub fn no_color() -> bool {
     static NO_COLOR: OnceLock<bool> = OnceLock::new();

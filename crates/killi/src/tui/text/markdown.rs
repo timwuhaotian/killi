@@ -212,11 +212,17 @@ pub(super) fn inline(text: &str) -> String {
             && let Some((label, url, used)) = link(rest)
         {
             if url.is_empty() || label == url {
-                out.push_str(&format!("{LAGOON}{UNDERLINE}{label}{RESET}"));
-            } else {
-                out.push_str(&format!(
-                    "{LAGOON}{UNDERLINE}{label}{RESET} {DIM}({url}){RESET}"
+                let shown = if url.is_empty() { label } else { url };
+                out.push_str(&hyperlink(
+                    url,
+                    &format!("{LAGOON}{UNDERLINE}{shown}{RESET}"),
                 ));
+            } else {
+                out.push_str(&hyperlink(
+                    url,
+                    &format!("{LAGOON}{UNDERLINE}{label}{RESET}"),
+                ));
+                out.push_str(&format!(" {DIM}({}){RESET}", hyperlink(url, url)));
             }
             rest = &rest[used..];
             continue;

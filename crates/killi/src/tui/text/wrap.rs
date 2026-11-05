@@ -2,20 +2,18 @@ use super::*;
 
 use unicode_width::UnicodeWidthChar;
 
-/// The columns `text` takes on screen, skipping escape sequences.
+/// The columns `text` takes on screen, skipping escape sequences (SGR and OSC 8 hyperlinks
+/// take none).
 pub fn width(text: &str) -> usize {
     let mut columns = 0;
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
         if c == '\x1b' {
-            for c in chars.by_ref() {
-                if c.is_ascii_alphabetic() {
-                    break;
-                }
-            }
+            rest = &rest[escape_len(rest)..];
             continue;
         }
         columns += c.width().unwrap_or(0);
+        rest = &rest[c.len_utf8()..];
     }
     columns
 }
@@ -148,7 +146,8 @@ impl Sanitizer {
 }
 
 /// Splits a styled line into rows of at most `max` columns. Each row ends with a reset and
-/// the next one starts with the styles that were open, so colors carry across the break.
+/// the next one starts with the styles that were open, so colors carry across the break. An
+/// open hyperlink closes at the break and opens again on the next row.
 pub fn wrap(line: &str, max: usize) -> Vec<String> {
     let max = max.max(1);
     if width(line) <= max {
@@ -158,32 +157,40 @@ pub fn wrap(line: &str, max: usize) -> Vec<String> {
     let mut row = String::new();
     let mut row_width = 0;
     let mut active = String::new();
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
+    let mut link: Option<String> = None;
+    let mut rest = line;
+    while let Some(c) = rest.chars().next() {
         if c == '\x1b' {
-            let mut seq = String::from(c);
-            for c in chars.by_ref() {
-                seq.push(c);
-                if c.is_ascii_alphabetic() {
-                    break;
-                }
-            }
+            let len = escape_len(rest);
+            let (seq, tail) = rest.split_at(len);
             if seq == RESET {
                 active.clear();
+            } else if is_link_close(seq) {
+                link = None;
+            } else if is_link_open(seq) {
+                link = Some(seq.to_string());
             } else {
-                active.push_str(&seq);
+                active.push_str(seq);
             }
-            row.push_str(&seq);
+            row.push_str(seq);
+            rest = tail;
             continue;
         }
         let w = c.width().unwrap_or(0);
         if row_width + w > max {
+            if link.is_some() {
+                row.push_str(LINK_CLOSE);
+            }
             row.push_str(RESET);
             rows.push(std::mem::take(&mut row));
             row.push_str(&active);
+            if let Some(open) = &link {
+                row.push_str(open);
+            }
             row_width = 0;
         }
         row.push(c);
+        rest = &rest[c.len_utf8()..];
         row_width += w;
     }
     rows.push(row);
@@ -202,31 +209,30 @@ pub fn wrap_words(line: &str, max: usize, indent: usize) -> Vec<String> {
         row: String::new(),
         width: 0,
         active: String::new(),
+        link: None,
         indent: indent.min(max / 2),
         max,
     };
     let mut word: Vec<(String, usize)> = Vec::new();
     let mut spaces = 0;
     let mut placed = false;
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
+    let mut rest = line;
+    while let Some(c) = rest.chars().next() {
         if c == '\x1b' {
-            let mut seq = String::from(c);
-            for c in chars.by_ref() {
-                seq.push(c);
-                if c.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-            word.push((seq, 0));
+            let len = escape_len(rest);
+            let (seq, tail) = rest.split_at(len);
+            word.push((seq.to_string(), 0));
+            rest = tail;
         } else if c == ' ' {
             if rows.place(&std::mem::take(&mut word), spaces, placed) {
                 spaces = 0;
                 placed = true;
             }
             spaces += 1;
+            rest = &rest[1..];
         } else {
             word.push((c.to_string(), c.width().unwrap_or(0)));
+            rest = &rest[c.len_utf8()..];
         }
     }
     rows.place(&word, spaces, placed);
@@ -240,6 +246,8 @@ struct Rows {
     width: usize,
     /// Styles open at the end of `row`.
     active: String,
+    /// The hyperlink open at the end of `row`, as its opening sequence.
+    link: Option<String>,
     indent: usize,
     max: usize,
 }
@@ -272,6 +280,10 @@ impl Rows {
         if s.starts_with('\x1b') {
             if s == RESET {
                 self.active.clear();
+            } else if is_link_close(s) {
+                self.link = None;
+            } else if is_link_open(s) {
+                self.link = Some(s.to_string());
             } else {
                 self.active.push_str(s);
             }
@@ -281,11 +293,17 @@ impl Rows {
     }
 
     fn break_row(&mut self) {
+        if self.link.is_some() {
+            self.row.push_str(LINK_CLOSE);
+        }
         if !self.active.is_empty() {
             self.row.push_str(RESET);
         }
         self.rows.push(std::mem::take(&mut self.row));
         self.row = format!("{}{}", " ".repeat(self.indent), self.active);
+        if let Some(open) = &self.link {
+            self.row.push_str(open);
+        }
         self.width = self.indent;
     }
 
@@ -315,12 +333,13 @@ pub fn wrap_code(line: &str, max: usize) -> Vec<String> {
 /// under its text.
 pub fn hanging_indent(line: &str) -> usize {
     let mut plain = String::new();
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
+    let mut rest = line;
+    while let Some(c) = rest.chars().next() {
         if c == '\x1b' {
-            chars.by_ref().find(char::is_ascii_alphabetic);
+            rest = &rest[escape_len(rest)..];
         } else {
             plain.push(c);
+            rest = &rest[c.len_utf8()..];
         }
     }
     let text = plain.trim_start_matches(' ');
@@ -348,18 +367,23 @@ pub fn ellipsize(text: &str, max: usize) -> String {
     let mut out = String::new();
     let mut used = 0;
     let mut styled = false;
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
+    let mut linked = false;
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
         if c == '\x1b' {
-            let mut seq = String::from(c);
-            for c in chars.by_ref() {
-                seq.push(c);
-                if c.is_ascii_alphabetic() {
-                    break;
-                }
+            let len = escape_len(rest);
+            let (seq, tail) = rest.split_at(len);
+            if seq == RESET {
+                styled = false;
+            } else if is_link_close(seq) {
+                linked = false;
+            } else if is_link_open(seq) {
+                linked = true;
+            } else {
+                styled = true;
             }
-            styled = seq != RESET;
-            out.push_str(&seq);
+            out.push_str(seq);
+            rest = tail;
             continue;
         }
         let w = c.width().unwrap_or(0);
@@ -367,9 +391,13 @@ pub fn ellipsize(text: &str, max: usize) -> String {
             break;
         }
         out.push(c);
+        rest = &rest[c.len_utf8()..];
         used += w;
     }
     out.push('…');
+    if linked {
+        out.push_str(LINK_CLOSE);
+    }
     if styled {
         out.push_str(RESET);
     }

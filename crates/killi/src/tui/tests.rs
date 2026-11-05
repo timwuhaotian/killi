@@ -7,23 +7,45 @@ mod rows;
 /// `line` without escape codes, whatever colors the theme picked.
 fn unstyled(line: &str) -> String {
     let mut out = String::new();
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
+    let mut rest = line;
+    while let Some(c) = rest.chars().next() {
         if c == '\x1b' {
-            chars.by_ref().find(char::is_ascii_alphabetic);
+            rest = &rest[text::escape_len(rest)..];
         } else {
             out.push(c);
+            rest = &rest[c.len_utf8()..];
         }
     }
     out
 }
 
-/// `row` without killi's own SGR (`ESC [ digits m`), so any other escape stays in plain sight.
+/// `row` without killi's own SGR (`ESC [ digits m`) and its own hyperlinks, so any other
+/// escape stays in plain sight.
 fn without_own_sgr(row: &str) -> String {
     let mut out = String::new();
     let mut rest = row;
     while let Some(at) = rest.find('\x1b') {
         out.push_str(&rest[..at]);
+        let seq = &rest[at..];
+        // Killi's own hyperlinks are OSC 8 to a web address, closed the same way.
+        if let Some(stripped) = seq.strip_prefix(text::LINK_CLOSE) {
+            rest = stripped;
+            continue;
+        }
+        if seq.starts_with("\x1b]8;;") {
+            let len = text::escape_len(seq);
+            let mut inner = seq["\x1b]8;;".len()..len.min(seq.len())].to_string();
+            for suffix in ["\x1b\\", "\x07"] {
+                if let Some(stripped) = inner.strip_suffix(suffix) {
+                    inner = stripped.to_string();
+                    break;
+                }
+            }
+            if inner.starts_with("http://") || inner.starts_with("https://") {
+                rest = &seq[len..];
+                continue;
+            }
+        }
         let after = &rest[at + 1..];
         let params = after.strip_prefix('[');
         let end = params.map_or(0, |p| {
