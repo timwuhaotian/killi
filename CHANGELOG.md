@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.42 — 2026-11-05
+
+- Links in the conversation are clickable: a `[label](https://…)` the model prints now
+  carries an OSC 8 hyperlink, so Cmd-click opens it in Terminal, iTerm2, Ghostty, WezTerm
+  and VS Code. The address still shows beside the label, and terminals without hyperlink
+  support look exactly as before.
+
 ## 0.6.41 — 2026-11-04
 
 - A skill's declared sub-commands are skills in their own right. Impeccable's `polish`,
