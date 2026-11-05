@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.43 — 2026-11-05
+
+- `!` runs a shell command without involving the model: `!ls` prints its output under a `$` row like a bash tool call, with the full output behind Ctrl+O, and a bare `!` opens the user's shell in the working directory — `exit` returns to killi. While the agent works, `!cmd` runs at once; a bare `!` waits for the turn to end.
+
 ## 0.6.42 — 2026-11-05
 
 - Links in the conversation are clickable: a `[label](https://…)` the model prints now
