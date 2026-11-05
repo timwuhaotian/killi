@@ -243,7 +243,7 @@ pub(super) fn placeholder(busy: bool) -> &'static str {
     }
 }
 
-/// A full-width line around the prompt, in lagoon with `label` on it in plan mode.
+/// A full-width line around the prompt, in lagoon when a mode has a `label`.
 pub(super) fn rule(label: Option<&str>, width: usize) -> String {
     match label {
         None => format!("{RULE}{}{RESET}", "─".repeat(width)),

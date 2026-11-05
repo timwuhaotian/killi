@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.44 — 2026-11-05
+
+- Typing `!` changes the prompt to a shell indicator and shows whether Enter opens an
+  interactive shell or runs the command locally. The hint also reflects when the agent is busy.
+
 ## 0.6.43 — 2026-11-05
 
 - `!` runs a shell command without involving the model: `!ls` prints its output under a `$` row like a bash tool call, with the full output behind Ctrl+O, and a bare `!` opens the user's shell in the working directory — `exit` returns to killi. While the agent works, `!cmd` runs at once; a bare `!` waits for the turn to end.

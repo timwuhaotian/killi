@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn shell_prompt_shows_when_input_will_run_locally() {
+    for width in [80, 60] {
+        let mut app = test_app();
+        app.width = width;
+        app.editor.insert("  !");
+        let (rows, _, _) = app.live();
+        let shown = rows
+            .iter()
+            .map(|row| unstyled(row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("shell · Enter opens a shell"), "{shown}");
+        assert!(shown.contains("$   !"), "{shown}");
+        app.editor.insert("git status");
+        let (rows, _, _) = app.live();
+        let shown = rows
+            .iter()
+            .map(|row| unstyled(row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("shell · Enter runs locally"), "{shown}");
+        assert!(rows.iter().all(|row| text::width(row) <= width));
+        app.editor.clear();
+        app.editor.insert("!");
+        app.busy = Some(Instant::now());
+        let (rows, _, _) = app.live();
+        let shown = rows
+            .iter()
+            .map(|row| unstyled(row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("shell · !cmd runs locally"), "{shown}");
+        app.busy = None;
+        app.editor.clear();
+        app.editor.insert("hello !world");
+        let (rows, _, _) = app.live();
+        let shown = rows
+            .iter()
+            .map(|row| unstyled(row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!shown.contains("shell ·"), "{shown}");
+        assert!(shown.contains("❯ hello !world"), "{shown}");
+    }
+}
+
+#[test]
 fn replayed_items_print_as_they_ran() {
     let mut app = test_app();
     app.replay_items(vec![

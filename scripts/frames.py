@@ -16,7 +16,7 @@ with another session in the repository), sessions (`/sessions`) and peer (that s
 message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
 selection in reverse video), select-prompt (Shift+Alt+Left over the prompt's last words), held (a prompt waiting for its first token) and takeback (Esc before that
 token: the prompt back in the editor), suggest (the next-prompt suggestion the model gave, and
-Tab filling it into the prompt).
+Tab filling it into the prompt), and shell (a local command being typed).
 `--inline` runs killi as it runs outside
 Kil, in the terminal's scrollback; `--colors 256` hides COLORTERM; `--no-osc` never answers the
 color queries, like a terminal that doesn't know them; `--no-color` sets NO_COLOR.
@@ -61,6 +61,7 @@ FIX = "FIX the slugify test\r"
 SCENES = {
     "start": dict(keys=[]),
     "menu": dict(keys=["/"]),
+    "shell": dict(keys=["!git status"]),
     "files": dict(keys=["fix @sl"]),
     "picker": dict(keys=["/model\r"]),
     "conv": dict(keys=[FIX], until="fills it"),

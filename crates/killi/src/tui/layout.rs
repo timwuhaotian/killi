@@ -263,19 +263,31 @@ impl App {
             }
             shrink_tasks.extend((tasks..rows.len()).rev());
         }
-        let mode = self
-            .controls
-            .plan
-            .get()
-            .then_some("plan mode · Shift+Tab leaves it");
+        let shell = (self.asking.is_none() && self.picker.is_none())
+            .then(|| super::shell::shell_arg(self.editor.text()))
+            .flatten();
+        let mode = match shell.as_deref() {
+            Some("") if self.busy.is_some() => Some("shell · !cmd runs locally"),
+            Some("") => Some("shell · Enter opens a shell"),
+            Some(_) => Some("shell · Enter runs locally"),
+            None => self
+                .controls
+                .plan
+                .get()
+                .then_some("plan mode · Shift+Tab leaves it"),
+        };
         space(&mut rows);
-        rows.push(rule(mode, width));
+        rows.push(fit(&rule(mode, width), width));
         let known = |name: &str| {
             self.entries
                 .iter()
                 .any(|e| e.name == name || e.aliases.iter().any(|a| a == name))
         };
-        let prompt = format!("{FIN}❯{RESET} ");
+        let prompt = if shell.is_some() {
+            format!("{LAGOON}${RESET} ")
+        } else {
+            format!("{FIN}❯{RESET} ")
+        };
         let (mut input, cursor_row, cursor_col) = self.editor.render(&prompt, width, &known);
         if let Some(hint) = self.placeholder() {
             input[0] = fit(&format!("{FIN}❯{RESET} {hint}"), width);
