@@ -29,6 +29,8 @@ pub struct Loaded {
     pub choice: Choice,
     /// The session goal `/goal` last set, if any.
     pub goal: Option<String>,
+    /// The last recap shown, if any: a side request like `/btw`, never in the messages.
+    pub recap: Option<String>,
 }
 
 /// A model alias and thinking effort, as `Thinking::label` names it. The effort is what a
@@ -64,6 +66,7 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
         context: 0,
         choice: Choice::default(),
         goal: None,
+        recap: None,
     };
     for chunk in bytes.split(|b| *b == b'\n') {
         if chunk.is_empty() {
@@ -86,6 +89,9 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
             }
             Some("goal") => {
                 loaded.goal = entry["goal"].as_str().map(String::from);
+            }
+            Some("recap") => {
+                loaded.recap = entry["text"].as_str().map(String::from);
             }
             Some("message") => {
                 if let (Some(id), Some(tool)) =

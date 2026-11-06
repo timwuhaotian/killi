@@ -237,6 +237,8 @@ pub(super) struct App {
     /// Whether a turn that used tools is followed by a recap.
     pub(super) auto_recap: bool,
     pub(super) recap: Option<PendingRecap>,
+    /// A shown recap not yet kept in the log; the main loop saves it once it holds the agent.
+    pub(super) recap_unsaved: Option<String>,
     /// The next-prompt suggestion on its way from the model.
     pub(super) suggesting: Option<PendingSuggestion>,
     /// The next-prompt suggestion the model gave, shown in the empty prompt.

@@ -146,7 +146,10 @@ pub(super) async fn handle_command(
             .await?;
             app.end_busy();
             match (ended, used.take()) {
-                (Ended::Done(Ok((text, _))), Some(usage)) => app.show_recap(&text, &usage),
+                (Ended::Done(Ok((text, _))), Some(usage)) => {
+                    app.show_recap(&text, &usage);
+                    flush_recap(app, agent);
+                }
                 (Ended::Done(Err(e)), _) => app.error_from("/recap", &e),
                 _ => {}
             }
@@ -545,6 +548,16 @@ pub(super) async fn prompt_turn(
 /// Whether a finished turn gets a recap by itself: a turn that only answered is its own recap.
 pub(super) fn wants_recap(on: bool, completed: bool, tool_calls: u32) -> bool {
     on && completed && tool_calls > 0
+}
+
+/// Keeps a shown recap in the session's log, so a resume shows it again. Best effort:
+/// a failed save stays unsaved for the next flush, and never interrupts the session.
+pub(super) fn flush_recap(app: &mut App, agent: &mut Agent) {
+    if let Some(text) = app.recap_unsaved.clone()
+        && agent.record_recap(&text).is_ok()
+    {
+        app.recap_unsaved = None;
+    }
 }
 
 fn agent_sink(agent: &Agent) -> Sink {

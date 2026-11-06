@@ -521,6 +521,17 @@ async fn a_rejected_image_is_stripped_once_and_the_turn_goes_on() {
 }
 
 #[test]
+fn a_recorded_recap_loads_back_for_a_resume() {
+    let mut agent = idle_agent("recap-record", Controls::default(), Rc::new(|_| {}));
+    agent.record_recap("fixed it").unwrap();
+    agent.record_recap("  ").unwrap();
+    let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
+    assert!(log.contains("\"type\":\"recap\""), "{log}");
+    assert!(log.contains("fixed it"), "{log}");
+    assert_eq!(log.lines().count(), 1, "an empty recap keeps nothing: {log}");
+}
+
+#[test]
 fn a_resumed_session_keeps_the_plan_mode_it_ended_in_and_drops_the_queue() {
     let dir = crate::test_temp::TempDir::new("killi-resume-plan");
     let log = dir.join("session.jsonl");

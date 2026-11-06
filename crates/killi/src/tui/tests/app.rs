@@ -146,6 +146,7 @@ fn a_new_or_resumed_session_starts_with_a_clean_slate() {
         .borrow_mut()
         .push_back("note".into());
     app.peer_tells = 2;
+    app.recap_unsaved = Some("old recap".into());
     let root = crate::test_temp::TempDir::new("killi-reset");
     let mut snapshots = Snapshots::new(&root);
     app.reset_conversation(&mut snapshots, &root);
@@ -155,7 +156,34 @@ fn a_new_or_resumed_session_starts_with_a_clean_slate() {
     assert_eq!((app.status.prompt, app.status.context), (0, 0));
     assert!(app.details.is_empty() && app.detail_back == 0);
     assert!(app.controls.peer_notes.borrow().is_empty() && app.peer_tells == 0);
+    assert!(app.recap.is_none() && app.recap_unsaved.is_none());
     assert!(snapshots.last_taken().is_none());
+}
+
+#[test]
+fn a_shown_recap_waits_for_the_log_while_a_saved_one_does_not() {
+    let mut app = test_app();
+    let usage = Usage {
+        prompt: 100,
+        cached: 90,
+        completion: 5,
+        reasoning: 0,
+    };
+    app.show_recap("fixed it", &usage);
+    assert_eq!(app.recap_unsaved.as_deref(), Some("fixed it"));
+    app.recap_unsaved = None;
+    app.show_saved_recap("kept");
+    assert!(
+        app.recap_unsaved.is_none(),
+        "a resume's recap is already in the log"
+    );
+    let rows: Vec<String> = app.pending.iter().map(|row| unstyled(row)).collect();
+    assert!(rows.iter().any(|row| row.contains("fixed it")), "{rows:?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("kept") && row.contains("before resume")),
+        "{rows:?}"
+    );
 }
 
 #[test]

@@ -335,13 +335,24 @@ impl App {
         self.release_asides(false);
     }
 
-    /// A recap, printed as a block of its own with what asking for it cost.
+    /// A recap, printed as a block of its own with what asking for it cost. Kept for
+    /// the log: the main loop saves it once it holds the agent again.
     pub(super) fn show_recap(&mut self, text: &str, usage: &Usage) {
         let cached = usage.cached * 100 / usage.prompt.max(1);
         let note = format!("{} in · {cached}% cached", short(usage.prompt));
         let text = text.to_string();
+        self.recap_unsaved = Some(text.clone());
         self.held_asides
             .push(Line::block(move |width| recap_rows(&text, &note, width)));
+        self.release_asides(true);
+    }
+
+    /// The recap a resume kept, printed without asking again; already in the log.
+    pub(super) fn show_saved_recap(&mut self, text: &str) {
+        let text = text.to_string();
+        self.held_asides.push(Line::block(move |width| {
+            recap_rows(&text, "before resume", width)
+        }));
         self.release_asides(true);
     }
 

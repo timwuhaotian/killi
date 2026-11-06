@@ -97,7 +97,7 @@ use rows::{
     question_rows, queued_row, recap_rows, rule, shorten_path, snapshot_rows, tilde, title_rule,
     tool_summary, tool_text, working_rows, wrap_items,
 };
-use run::{handle_command, next_incoming, peer_label, prompt_turn, provider_add};
+use run::{flush_recap, handle_command, next_incoming, peer_label, prompt_turn, provider_add};
 use select::{InputRows, Selection, Spot};
 use start::{
     CURSOR_ROW, ENHANCED, RESUMED, TerminalGuard, leave_fullscreen, query_ground, resume_command,
@@ -182,10 +182,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     crate::config::command_guide_if_first()?;
     // The log parses once: the items below replay from the same load the resume moves.
     let mut start_replayed = Vec::new();
+    let mut start_recap = None;
     let mut agent = match &start.resume {
         Some(log) => {
             let report = crate::session::load_reported(log)?;
             start_replayed = crate::session::replay(&report.loaded, &cwd, REPLAY_PROMPTS);
+            start_recap = report.loaded.recap.clone();
             session.resume_loaded(report, log, controls.clone(), sink.clone())?
         }
         None => session.start(controls.clone(), sink.clone())?,
@@ -207,6 +209,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     app.banner(&agent, &session, &snapshots, start.resume.is_some());
     if start.resume.is_some() {
         app.replay_items(start_replayed);
+        if let Some(saved) = start_recap.filter(|t| !t.trim().is_empty()) {
+            app.show_saved_recap(&saved);
+        }
     }
     if start.pick_session {
         app.open_session_picker(&cwd);
@@ -222,8 +227,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 app.draw()?;
                 continue;
             }
+            flush_recap(&mut app, &mut agent);
             break;
         };
+        // An auto recap shown while idle belongs to this log, not to the session an
+        // input below may switch to.
+        flush_recap(&mut app, &mut agent);
         match input {
             Input::Prompt(prompt, images) => {
                 let sent = mention::expand(&cwd, &prompt);
@@ -273,6 +282,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 Err(e) => app.error_report(&e),
                 Ok(report) => {
                     let replayed = crate::session::replay(&report.loaded, &cwd, REPLAY_PROMPTS);
+                    let saved = report.loaded.recap.clone();
                     match session.resume_loaded(report, &path, controls.clone(), sink.clone()) {
                         Ok(resumed) => {
                             app.reset_conversation(&mut snapshots, &cwd);
@@ -292,6 +302,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                                 app.notice(&note);
                             }
                             app.replay_items(replayed);
+                            if let Some(saved) = saved.filter(|t| !t.trim().is_empty()) {
+                                app.show_saved_recap(&saved);
+                            }
                             app.editor = Editor::with_history(agent.user_prompts());
                         }
                         Err(e) => app.error_report(&e),

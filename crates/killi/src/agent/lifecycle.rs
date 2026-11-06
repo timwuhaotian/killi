@@ -249,6 +249,15 @@ impl Agent {
         self.session.record(&json!({"type": "goal"}))
     }
 
+    /// Keeps a shown recap in the log, so a resume shows it again. Never in the
+    /// messages, so the cached prefix still hits; the last one wins.
+    pub fn record_recap(&mut self, text: &str) -> Result<()> {
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        self.session.record(&json!({"type": "recap", "text": text}))
+    }
+
     /// Reasons at another effort from the next request on, on the same model.
     pub fn set_thinking(&mut self, thinking: Thinking) -> Result<()> {
         let mut client = (*self.client).clone();

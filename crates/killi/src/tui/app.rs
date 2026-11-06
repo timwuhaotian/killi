@@ -76,6 +76,7 @@ impl App {
             held_prompt: None,
             auto_recap: true,
             recap: None,
+            recap_unsaved: None,
             suggesting: None,
             suggestion: None,
             last_end: None,

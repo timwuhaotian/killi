@@ -64,6 +64,7 @@ fn loaded(messages: Vec<Value>) -> Loaded {
         context: 0,
         choice: Choice::default(),
         goal: None,
+        recap: None,
     }
 }
 
@@ -500,6 +501,31 @@ fn old_backup_records_still_load() {
         "the records around it still load"
     );
     assert_eq!(report.skipped, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_recap_entry_is_what_a_resume_shows_again() {
+    let dir = std::env::temp_dir().join(format!("killi-recap-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("1-1.jsonl");
+    let lines = [
+        json!({"type": "session", "model": "m/x"}),
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "recap", "text": "first"}),
+        json!({"type": "compaction", "messages": [{"role": "system", "content": "sys"}]}),
+        json!({"type": "recap", "text": "second"}),
+    ];
+    fs::write(
+        &path,
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    assert_eq!(
+        load(&path).unwrap().recap.as_deref(),
+        Some("second"),
+        "the last recap wins, across a compaction"
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 

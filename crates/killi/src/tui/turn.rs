@@ -436,9 +436,13 @@ impl App {
         self.detail_back = 0;
         self.controls.peer_notes.borrow_mut().clear();
         self.peer_tells = 0;
-        // The suggestion belongs to the conversation that was left.
+        // The suggestion and any recap belong to the conversation that was left: a pending
+        // recap answers the old history, and an unsaved one is dropped rather than kept
+        // in the wrong log (the switch flushes it first).
         self.suggestion = None;
         self.suggesting = None;
+        self.recap = None;
+        self.recap_unsaved = None;
         *snapshots = Snapshots::new(cwd);
     }
 
