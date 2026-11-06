@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.48 — 2026-11-06
+
+- Resuming a session no longer loses its recap: the last shown recap is kept in the
+  session log and shown again after the replay, without asking the model a second
+  time. Switching sessions with `/new` or `/resume` also drops a recap that was
+  still on its way, so it never lands in the wrong conversation.
+
 ## 0.6.47 — 2026-11-06
 
 - A 429 whose body says the plan's usage cap ran out in Chinese (`用量上限`) now
