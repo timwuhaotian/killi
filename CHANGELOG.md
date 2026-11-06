@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.46 — 2026-11-06
+
+- Interrupting a swarm no longer loses its progress: finished members' reports are kept,
+  and each unfinished item points at its partial log in the session folder, so the retry
+  continues from it instead of starting the whole swarm over. A member a provider error
+  fails keeps the same pointer, the retry note says to rerun only the failed items, and
+  a session resumed after dying mid-swarm rebuilds the same partial report.
+
 ## 0.6.45 — 2026-11-05
 
 - Ctrl+S during a swarm no longer kills the subagents at once: the first press queues

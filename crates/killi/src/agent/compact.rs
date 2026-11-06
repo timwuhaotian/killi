@@ -214,7 +214,14 @@ impl Agent {
                         })
                         .collect();
                     neutralize_reminder_tags(
-                        &swarm::report(&self.ctx, &partial.items, &outputs, MAX_RESULT_BYTES).text,
+                        &swarm::report(
+                            &self.ctx,
+                            &partial.items,
+                            &outputs,
+                            &partial.logs,
+                            MAX_RESULT_BYTES,
+                        )
+                        .text,
                     )
                     .into_owned()
                 }

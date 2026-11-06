@@ -6,11 +6,23 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+/// An `agent_swarm` call's persisted progress: its item labels, each subagent's log file
+/// in the session folder, and each finished member's `(text, is_error)` at its index.
+pub struct SwarmProgress {
+    pub items: Vec<String>,
+    pub logs: Vec<String>,
+    pub results: Vec<Option<(String, bool)>>,
+}
+
 /// What a log holds, replayed.
 pub struct Loaded {
     pub messages: Vec<Value>,
     /// How each tool call ended, by call id, for logs that kept it.
     pub tools: HashMap<String, ToolEnd>,
+    /// In-flight swarms when the log stopped, by call id: unanswered calls still in the
+    /// conversation. Answered ones, calls a compaction left behind, and empty starts are
+    /// dropped, so a resume never grafts stale reports onto another call.
+    pub swarms: HashMap<String, SwarmProgress>,
     /// Input tokens of the last request: how full the context was when the log stopped.
     pub context: u64,
     /// The model and effort the session last ran on.
@@ -48,6 +60,7 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
     let mut loaded = Loaded {
         messages: Vec::new(),
         tools: HashMap::new(),
+        swarms: HashMap::new(),
         context: 0,
         choice: Choice::default(),
         goal: None,
@@ -87,6 +100,39 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
                 loaded.messages.push(entry["message"].clone());
             }
             Some("usage") => loaded.context = entry["prompt"].as_u64().unwrap_or(0),
+            Some("swarm") => {
+                let strings = |key: &str| {
+                    entry[key]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                };
+                if let Some(id) = entry["id"].as_str() {
+                    let items = strings("items");
+                    loaded.swarms.insert(
+                        id.to_string(),
+                        SwarmProgress {
+                            results: vec![None; items.len()],
+                            items,
+                            logs: strings("logs"),
+                        },
+                    );
+                }
+            }
+            Some("swarm_result") => {
+                if let (Some(id), Some(index)) =
+                    (entry["id"].as_str(), entry["index"].as_u64())
+                    && let Some(swarm) = loaded.swarms.get_mut(id)
+                    && let Some(slot) = swarm.results.get_mut(index as usize)
+                {
+                    *slot = Some((
+                        entry["text"].as_str().unwrap_or_default().to_string(),
+                        entry["is_error"].as_bool().unwrap_or(false),
+                    ));
+                }
+            }
             Some("compaction") => {
                 loaded.messages = entry["messages"].as_array().cloned().unwrap_or_default();
                 loaded.context = 0;
@@ -94,6 +140,24 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
             _ => {}
         }
     }
+    let answered: HashSet<&str> = loaded
+        .messages
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .filter_map(|m| m["tool_call_id"].as_str())
+        .collect();
+    let called: HashSet<&str> = loaded
+        .messages
+        .iter()
+        .filter(|m| m["role"] == "assistant")
+        .flat_map(|m| m["tool_calls"].as_array().into_iter().flatten())
+        .filter_map(|call| call["id"].as_str())
+        .collect();
+    loaded.swarms.retain(|id, swarm| {
+        !swarm.items.is_empty()
+            && called.contains(id.as_str())
+            && !answered.contains(id.as_str())
+    });
     let repaired = repair_dangling_calls(&mut loaded.messages);
     if loaded
         .messages

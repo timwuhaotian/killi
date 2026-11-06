@@ -103,16 +103,6 @@ impl Agent {
             .filter(|d| !d.is_empty())
             .unwrap_or("swarm");
         let items: Vec<String> = prompts.iter().map(|(item, _)| item.clone()).collect();
-        self.partial_swarm = Some(PartialSwarm {
-            id: id.into(),
-            items: items.clone(),
-            results: vec![None; items.len()],
-        });
-        (self.sink)(Event::Swarm {
-            id: id.into(),
-            description: description.into(),
-            items: items.clone(),
-        });
         let mut jobs = Vec::new();
         for (n, (_, prompt)) in prompts.into_iter().enumerate() {
             let slot = Slot {
@@ -126,8 +116,36 @@ impl Agent {
                 prompt,
             ));
         }
+        // Persisted as the swarm runs, so an interruption or a resume keeps what finished
+        // instead of running the whole swarm again; a failure here only loses the resume.
+        let logs: Vec<String> = jobs
+            .iter()
+            .map(|job| match job {
+                Ok((agent, _)) => agent
+                    .session
+                    .log_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                Err(_) => String::new(),
+            })
+            .collect();
+        let _ = self.session.record(
+            &json!({"type": "swarm", "id": id, "items": items, "logs": logs}),
+        );
+        self.partial_swarm = Some(PartialSwarm {
+            id: id.into(),
+            items: items.clone(),
+            results: vec![None; items.len()],
+            logs: logs.clone(),
+        });
+        (self.sink)(Event::Swarm {
+            id: id.into(),
+            description: description.into(),
+            items: items.clone(),
+        });
         let outputs = self.run_children(jobs, self.settings.swarm_parallel).await;
-        let mut report = swarm::report(&self.ctx, &items, &outputs, MAX_RESULT_BYTES);
+        let mut report = swarm::report(&self.ctx, &items, &outputs, &logs, MAX_RESULT_BYTES);
         self.post_hook("agent_swarm", &args, &mut report).await;
         report
     }
@@ -172,6 +190,13 @@ impl Agent {
                 && let Some(result) = partial.results.get_mut(index)
             {
                 *result = Some((output.text.clone(), output.is_error));
+                let _ = self.session.record(&json!({
+                    "type": "swarm_result",
+                    "id": partial.id,
+                    "index": index,
+                    "is_error": output.is_error,
+                    "text": output.text,
+                }));
             }
             outputs[index] = Some(output);
         }

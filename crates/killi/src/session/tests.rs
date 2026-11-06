@@ -60,6 +60,7 @@ fn loaded(messages: Vec<Value>) -> Loaded {
     Loaded {
         messages,
         tools: HashMap::new(),
+        swarms: HashMap::new(),
         context: 0,
         choice: Choice::default(),
         goal: None,
@@ -733,4 +734,59 @@ fn new_logs_and_folders_are_private_to_this_user() {
     drop(child);
     drop(session);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn load_keeps_only_the_dangling_swarm_with_its_finished_members() {
+    let dir = std::env::temp_dir().join(format!("killi-swarmload-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("1-1.jsonl");
+    let lines = [
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "message", "message": {"role": "assistant", "tool_calls": [{"id": "done"}]}}),
+        json!({"type": "swarm", "id": "done", "items": ["a"], "logs": [""]}),
+        json!({"type": "swarm_result", "id": "done", "index": 0, "is_error": false, "text": "old"}),
+        json!({"type": "message", "message": {"role": "tool", "tool_call_id": "done", "content": "old"}}),
+        json!({"type": "message", "message": {"role": "assistant", "tool_calls": [{"id": "s1"}]}}),
+        json!({"type": "swarm", "id": "s1", "items": ["a", "b"], "logs": ["agent-1.jsonl", "agent-2.jsonl"]}),
+        json!({"type": "swarm_result", "id": "s1", "index": 1, "is_error": true, "text": "broke"}),
+        json!({"type": "swarm_result", "id": "s1", "index": 9, "is_error": false, "text": "out of range"}),
+    ];
+    fs::write(
+        &path,
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let report = load_reported(&path).unwrap();
+    assert!(!report.loaded.swarms.contains_key("done"));
+    let swarm = &report.loaded.swarms["s1"];
+    assert_eq!(swarm.items, vec!["a", "b"]);
+    assert_eq!(swarm.logs, vec!["agent-1.jsonl", "agent-2.jsonl"]);
+    assert_eq!(swarm.results, vec![None, Some(("broke".to_string(), true))]);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn load_drops_a_swarm_whose_call_left_the_conversation() {
+    let dir = std::env::temp_dir().join(format!("killi-swarmcompact-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("1-1.jsonl");
+    let lines = [
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "message", "message": {"role": "assistant", "tool_calls": [{"id": "s1"}]}}),
+        json!({"type": "swarm", "id": "s1", "items": ["a"], "logs": ["agent-1.jsonl"]}),
+        json!({"type": "swarm_result", "id": "s1", "index": 0, "is_error": false, "text": "old"}),
+        json!({"type": "compaction", "messages": [{"role": "system", "content": "sys"}]}),
+    ];
+    fs::write(
+        &path,
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let report = load_reported(&path).unwrap();
+    assert!(
+        report.loaded.swarms.is_empty(),
+        "its call is summarized away, so its reports must not graft onto a later call"
+    );
+    fs::remove_dir_all(dir).unwrap();
 }

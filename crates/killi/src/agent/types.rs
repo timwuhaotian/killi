@@ -370,11 +370,13 @@ pub struct Stats {
 }
 
 /// An in-flight `agent_swarm` call's results so far: its tool-call id, its item labels,
-/// and each finished subagent's `(text, is_error)` at its item's index.
+/// each finished subagent's `(text, is_error)` at its item's index, and each subagent's
+/// log file in the session folder, so an interruption keeps a pointer to unfinished work.
 pub(super) struct PartialSwarm {
     pub(super) id: String,
     pub(super) items: Vec<String>,
     pub(super) results: Vec<Option<(String, bool)>>,
+    pub(super) logs: Vec<String>,
 }
 
 /// Length `RECAP_NOTE` asks the model to keep a recap to, in characters.

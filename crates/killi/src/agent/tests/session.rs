@@ -594,6 +594,7 @@ fn recover_keeps_finished_swarm_reports() {
         id: "s1".into(),
         items: vec!["a".into(), "b".into()],
         results: vec![Some(("item zero report".into(), false)), None],
+        logs: vec!["agent-1.jsonl".into(), "agent-2.jsonl".into()],
     });
     agent.recover().unwrap();
     assert!(agent.interrupted);
@@ -620,7 +621,15 @@ fn recover_keeps_finished_swarm_reports() {
         ),
         "{content}"
     );
-    assert!(content.contains("Run the failed items again"), "{content}");
+    assert!(content.contains("Rerun only the failed items"), "{content}");
+    assert!(
+        content.contains("Partial log: agent-2.jsonl."),
+        "the unfinished item points at its partial work: {content}"
+    );
+    assert!(
+        content.contains("read an item's log before retrying it"),
+        "{content}"
+    );
     assert_ne!(content, "Interrupted by the user before this finished.");
 }
 
@@ -637,6 +646,54 @@ fn recover_marks_a_tool_result_as_interrupted() {
         .unwrap();
     agent.recover().unwrap();
     assert!(agent.interrupted);
+}
+
+#[test]
+fn resume_rebuilds_an_interrupted_swarm_from_persisted_results() {
+    let dir = crate::test_temp::TempDir::new("killi-resume-swarm");
+    let log = dir.join("1-1.jsonl");
+    let lines = [
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "message", "message": {"role": "user", "content": "do it"}}),
+        json!({"type": "message", "message": {"role": "assistant", "tool_calls": [{"id": "s1"}]}}),
+        json!({"type": "swarm", "id": "s1", "items": ["a", "b"], "logs": ["agent-1.jsonl", "agent-2.jsonl"]}),
+        json!({"type": "swarm_result", "id": "s1", "index": 0, "is_error": false, "text": "item zero report"}),
+    ];
+    std::fs::write(
+        &log,
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let report = crate::session::load_reported(&log).unwrap();
+    let agent = Agent::resume_reported(
+        test_client(),
+        None,
+        &dir,
+        &log,
+        report,
+        Vec::new(),
+        Settings::default(),
+        Controls::default(),
+        Rc::new(|_| {}),
+    )
+    .unwrap();
+    assert!(agent.interrupted);
+    let content = agent
+        .messages
+        .iter()
+        .find(|m| m["role"] == "tool" && m["tool_call_id"] == "s1")
+        .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+        .unwrap();
+    assert!(content.contains("item zero report"), "{content}");
+    assert!(
+        content.contains("<subagent item=\"b\" outcome=\"failed\">"),
+        "{content}"
+    );
+    assert!(
+        content.contains("Partial log: agent-2.jsonl."),
+        "the unfinished item points at its partial work: {content}"
+    );
+    assert!(content.contains("Rerun only the failed items"), "{content}");
 }
 
 #[test]

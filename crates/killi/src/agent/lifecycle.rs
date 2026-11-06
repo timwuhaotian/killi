@@ -63,7 +63,7 @@ impl Agent {
         sink: Sink,
     ) -> Result<Self> {
         let crate::session::LoadReport {
-            loaded,
+            mut loaded,
             skipped,
             repaired,
         } = report;
@@ -111,6 +111,18 @@ impl Agent {
                 logged.display(),
                 log.display()
             )));
+        }
+        // A swarm in flight when the log stopped: its finished members were persisted as
+        // they came in, so the interruption keeps their reports instead of losing the swarm.
+        for id in unanswered(&agent.messages) {
+            if let Some(swarm) = loaded.swarms.remove(&id) {
+                agent.partial_swarm = Some(PartialSwarm {
+                    id,
+                    items: swarm.items,
+                    results: swarm.results,
+                    logs: swarm.logs,
+                });
+            }
         }
         agent.recover()?;
         agent.share();

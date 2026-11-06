@@ -71,8 +71,16 @@ pub fn prompts(args: &Value) -> Result<Vec<(String, String)>, String> {
 }
 
 /// Every subagent's report in item order. When they don't fit in `limit` characters, each is
-/// cut to an equal share and the full text is saved to a file.
-pub fn report(ctx: &tools::Context, items: &[String], outputs: &[Output], limit: usize) -> Output {
+/// cut to an equal share and the full text is saved to a file. `logs` holds each subagent's
+/// log file in the session folder (`""` when unknown), so a failed item points at its partial
+/// work instead of being run again from scratch.
+pub fn report(
+    ctx: &tools::Context,
+    items: &[String],
+    outputs: &[Output],
+    logs: &[String],
+    limit: usize,
+) -> Output {
     let failed = outputs.iter().filter(|o| o.is_error).count();
     let done = outputs.len() - failed;
     let summary = if failed == 0 {
@@ -80,20 +88,29 @@ pub fn report(ctx: &tools::Context, items: &[String], outputs: &[Output], limit:
     } else {
         format!("completed: {done}, failed: {failed}")
     };
+    let has_logs = outputs.iter().enumerate().any(|(n, output)| {
+        output.is_error && logs.get(n).is_some_and(|log| !log.is_empty())
+    });
     let render = |share: Option<usize>, note: &str| {
         let mut text = format!("<agent_swarm_result>\n<summary>{summary}</summary>\n");
-        for (item, output) in items.iter().zip(outputs) {
+        for (n, (item, output)) in items.iter().zip(outputs).enumerate() {
             let outcome = if output.is_error {
                 "failed"
             } else {
                 "completed"
             };
-            let body = match share {
+            let mut body = match share {
                 Some(share) if output.text.len() > share => {
                     format!("{} […]", crate::llm::truncate(&output.text, share))
                 }
                 _ => output.text.clone(),
             };
+            // After the cut, so the pointer survives it.
+            if output.is_error
+                && let Some(log) = logs.get(n).filter(|log| !log.is_empty())
+            {
+                body.push_str(&format!("\nPartial log: {log}."));
+            }
             text.push_str(&format!(
                 "<subagent item=\"{}\" outcome=\"{outcome}\">\n{body}\n</subagent>\n",
                 escape(item)
@@ -104,11 +121,18 @@ pub fn report(ctx: &tools::Context, items: &[String], outputs: &[Output], limit:
         text
     };
     let retry = if failed > 0 {
-        "Run the failed items again with agent_swarm or agent if their work is still needed.\n"
+        let mut retry = "Rerun only the failed items with agent_swarm or agent if their work is still needed; don't rerun the completed ones.\n".to_string();
+        if has_logs {
+            retry.push_str(&format!(
+                "Partial logs are in {}; read an item's log before retrying it.\n",
+                ctx.spill_dir.display()
+            ));
+        }
+        retry
     } else {
-        ""
+        String::new()
     };
-    let mut text = render(None, retry);
+    let mut text = render(None, &retry);
     if text.len() > limit {
         let saved = match tools::spill(ctx, "swarm", &text) {
             Some(path) => format!(
@@ -197,7 +221,7 @@ mod tests {
         let ctx = tools::Context::new(dir.clone(), dir.clone());
         let items = vec!["a\"1".to_string(), "b".to_string()];
         let outputs = vec![Output::ok("fine"), Output::error("broke")];
-        let short = report(&ctx, &items, &outputs, 10_000);
+        let short = report(&ctx, &items, &outputs, &[], 10_000);
         assert!(!short.is_error);
         assert!(
             short
@@ -209,15 +233,48 @@ mod tests {
                 .text
                 .contains("<subagent item=\"a&quot;1\" outcome=\"completed\">\nfine\n</subagent>")
         );
-        assert!(short.text.contains("Run the failed items again"));
+        assert!(short.text.contains("Rerun only the failed items"));
+        assert!(short.text.contains("don't rerun the completed ones"));
 
         let outputs = vec![
             Output::ok("x".repeat(30_000)),
             Output::ok("y".repeat(30_000)),
         ];
-        let long = report(&ctx, &items, &outputs, 20_000);
+        let long = report(&ctx, &items, &outputs, &[], 20_000);
         assert!(long.text.len() <= 20_000, "{}", long.text.len());
         assert!(long.text.contains("[…]") && long.text.contains("all of them are in"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_item_points_at_its_partial_log() {
+        let dir = std::env::temp_dir().join(format!("killi-swarm-log-{}", std::process::id()));
+        let ctx = tools::Context::new(dir.clone(), dir.clone());
+        let items = vec!["a".to_string(), "b".to_string()];
+        let outputs = vec![Output::ok("fine"), Output::error("broke")];
+        let logs = vec!["agent-1.jsonl".to_string(), "agent-2.jsonl".to_string()];
+        let out = report(&ctx, &items, &outputs, &logs, 10_000);
+        assert!(
+            out.text.contains("broke\nPartial log: agent-2.jsonl."),
+            "{}",
+            out.text
+        );
+        assert!(!out.text.contains("agent-1.jsonl"), "{}", out.text);
+        assert!(
+            out.text.contains(&format!(
+                "Partial logs are in {}; read an item's log before retrying it.",
+                dir.display()
+            )),
+            "{}",
+            out.text
+        );
+        // The pointer survives the cut to fit.
+        let outputs = vec![
+            Output::ok("x".repeat(30_000)),
+            Output::error("y".repeat(30_000)),
+        ];
+        let out = report(&ctx, &items, &outputs, &logs, 20_000);
+        assert!(out.text.contains("Partial log: agent-2.jsonl."), "{}", out.text);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
