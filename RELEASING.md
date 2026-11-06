@@ -16,6 +16,7 @@ Releases are built locally on an Apple silicon Mac; CI only checks. Users instal
 6. **Check the update** from an installed copy: `killi update` should report the new version.
    GitHub serves raw files through a cache for about five minutes after a push, so until then
    `killi update` may still see the previous version.
+7. **Clean up:** `cargo clean` to drop the local `target/` directory the release build left behind.
 
 To refresh the size, memory and capability charts and the README numbers, follow the
 `refresh-metrics` skill (`.agents/skills/refresh-metrics`); it needs `kimi` and `claude`
