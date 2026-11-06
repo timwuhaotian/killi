@@ -15,6 +15,16 @@ fn a_spent_chatgpt_plan_is_not_retried() {
 }
 
 #[test]
+fn a_spent_chinese_token_plan_is_not_retried() {
+    let body = r#"{"type":"error","error":{"type":"rate_limit_error","message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)"}}"#;
+    let failure = classify(StatusCode::TOO_MANY_REQUESTS, None, body);
+    assert_eq!(failure.kind, ErrorKind::Quota);
+    assert!(!failure.retryable);
+    let variant = r#"{"error":{"message":"已达到使用上限，请稍后再试"}}"#;
+    assert!(!classify(StatusCode::TOO_MANY_REQUESTS, None, variant).retryable);
+}
+
+#[test]
 fn rate_limits_and_server_errors_are_retried() {
     assert!(
         classify(

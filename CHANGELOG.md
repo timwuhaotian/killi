@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.47 — 2026-11-06
+
+- A 429 whose body says the plan's usage cap ran out in Chinese (`用量上限`) now
+  fails at once instead of retrying for minutes: the quota classifier only knew
+  the English wording.
+
 ## 0.6.46 — 2026-11-06
 
 - Interrupting a swarm no longer loses its progress: finished members' reports are kept,

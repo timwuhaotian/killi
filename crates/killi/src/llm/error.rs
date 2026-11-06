@@ -131,12 +131,15 @@ pub(super) fn excerpt(body: &str) -> String {
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
 
 /// Words in a 429 body that say a usage quota ran out, not that requests came too fast.
-const QUOTA_WORDS: [&str; 5] = [
+/// The last two are the Chinese wording some gateways send for a spent plan.
+const QUOTA_WORDS: [&str; 7] = [
     "usage limit",
     "quota",
     "reset at",
     "exceeded your current",
     "usage_limit_exceeded",
+    "用量上限",
+    "使用上限",
 ];
 
 /// Words in a rejection body that say the conversation no longer fits the context window.
