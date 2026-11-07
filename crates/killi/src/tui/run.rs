@@ -368,6 +368,14 @@ pub(super) async fn provider_add(
             "command-code" => crate::login::commandcode_add(&key)
                 .await
                 .map(|code| (code.added, code.notes)),
+            "anthropic" => crate::config::add_anthropic(&key).map(|added| (added, Vec::new())),
+            "kimi" => crate::config::add_kimi(&key).map(|added| (added, Vec::new())),
+            "mimo" => crate::config::add_mimo(&key).map(|added| (added, Vec::new())),
+            "minimax" => crate::config::add_minimax(&key).map(|added| (added, Vec::new())),
+            "qwen" => crate::config::add_qwen(&key).map(|added| (added, Vec::new())),
+            "stepfun" => crate::config::add_stepfun(&key).map(|added| (added, Vec::new())),
+            "unisound" => crate::config::add_unisound(&key).map(|added| (added, Vec::new())),
+            "zai" => crate::config::add_zai(&key).map(|added| (added, Vec::new())),
             _ => crate::config::add_muse(&key).map(|added| (added, Vec::new())),
         });
         Ok((String::new(), Stop::Completed))

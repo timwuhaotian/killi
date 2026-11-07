@@ -104,23 +104,38 @@ fn provider_question(preset: &str) -> &'static str {
         "muse-code" => "Muse Code API key:",
         "opencode-go" => "OpenCode Go API key:",
         "command-code" => "Command Code API key:",
+        "anthropic" => "Anthropic API key:",
+        "kimi" => "Kimi API key:",
+        "mimo" => "MiMo API key:",
+        "minimax" => "MiniMax API key:",
+        "qwen" => "Qwen API key:",
+        "stepfun" => "StepFun API key:",
+        "unisound" => "Unisound API key:",
+        "zai" => "Z.AI API key:",
         _ => "",
     }
 }
 
 /// A /provider preset's explanation, and the question its key answers.
 fn provider_setup(preset: &str) -> (&'static str, &'static str) {
-    match preset {
-        "opencode-go" => (
-            "Writes an `opencode-go` provider with the key, and the models Go serves. Usage: https://opencode.ai/console",
-            "OpenCode Go API key:",
-        ),
-        "command-code" => (
-            "Writes a `commandcode` provider with the key, and the models the subscription serves. `killi login command-code` signs in with the browser instead.",
-            "Command Code API key:",
-        ),
-        _ => (crate::config::MUSE_ABOUT, "Muse Code API key:"),
-    }
+    let note = match preset {
+        "opencode-go" => {
+            "Writes an `opencode-go` provider with the key, and the models Go serves. Usage: https://opencode.ai/console"
+        }
+        "command-code" => {
+            "Writes a `commandcode` provider with the key, and the models the subscription serves. `killi login command-code` signs in with the browser instead."
+        }
+        "anthropic" => crate::config::ANTHROPIC_ABOUT,
+        "kimi" => crate::config::KIMI_ABOUT,
+        "mimo" => crate::config::MIMO_ABOUT,
+        "minimax" => crate::config::MINIMAX_ABOUT,
+        "qwen" => crate::config::QWEN_ABOUT,
+        "stepfun" => crate::config::STEPFUN_ABOUT,
+        "unisound" => crate::config::UNISOUND_ABOUT,
+        "zai" => crate::config::ZAI_ABOUT,
+        _ => crate::config::MUSE_ABOUT,
+    };
+    (note, provider_question(preset))
 }
 
 impl App {
@@ -510,35 +525,31 @@ impl App {
     /// The /provider list: the presets killi knows how to add, marked when already in.
     pub(super) fn open_provider_picker(&mut self, config: &crate::config::Config) {
         let mark = |on: bool| if on { " · signed in" } else { "" };
-        let muse = config
-            .find_provider(crate::config::muse_ours)
-            .is_some_and(|(_, key)| key);
-        let options = vec![
+        let has = |ours: fn(&crate::config::Provider) -> bool| {
+            config.find_provider(ours).is_some_and(|(_, key)| key)
+        };
+        let options: Vec<(String, String, PickerChoice)> = [
+            ("muse-code", "Meta's Muse Code subscription, with the key from the muse CLI", has(crate::config::muse_ours)),
+            ("opencode-go", "OpenCode Go, with the API key from its console", crate::login::opencode_go_signed_in()),
+            ("command-code", "Command Code, with the API key from its account", crate::login::commandcode_signed_in()),
+            ("anthropic", "Anthropic's API, with your API key", has(crate::config::anthropic_ours)),
+            ("kimi", "Kimi's coding plan, with your API key", has(crate::config::kimi_ours)),
+            ("mimo", "Xiaomi's MiMo, with your API key", has(crate::config::mimo_ours)),
+            ("minimax", "MiniMax, with your API key", has(crate::config::minimax_ours)),
+            ("qwen", "Qwen, with your API key", has(crate::config::qwen_ours)),
+            ("stepfun", "StepFun, with your API key", has(crate::config::stepfun_ours)),
+            ("unisound", "Unisound, with your API key", has(crate::config::unisound_ours)),
+            ("zai", "Zhipu's Z.AI, with your API key", has(crate::config::zai_ours)),
+        ]
+        .into_iter()
+        .map(|(name, blurb, on)| {
             (
-                "muse-code".to_string(),
-                format!(
-                    "Meta's Muse Code subscription, with the key from the muse CLI{}",
-                    mark(muse)
-                ),
-                PickerChoice::Provider("muse-code".into()),
-            ),
-            (
-                "opencode-go".to_string(),
-                format!(
-                    "OpenCode Go, with the API key from its console{}",
-                    mark(crate::login::opencode_go_signed_in())
-                ),
-                PickerChoice::Provider("opencode-go".into()),
-            ),
-            (
-                "command-code".to_string(),
-                format!(
-                    "Command Code, with the API key from its account{}",
-                    mark(crate::login::commandcode_signed_in())
-                ),
-                PickerChoice::Provider("command-code".into()),
-            ),
-        ];
+                name.to_string(),
+                format!("{blurb}{}", mark(on)),
+                PickerChoice::Provider(name.into()),
+            )
+        })
+        .collect();
         self.picker = Some(Picker::new("Provider to add".into(), options, 0));
     }
 
@@ -547,7 +558,7 @@ impl App {
     pub(super) fn provider_pick(&mut self, preset: &str) {
         if provider_question(preset).is_empty() {
             return self.error(
-                "Pick one of the presets: /provider muse-code, /provider opencode-go or /provider command-code.",
+                "Pick one of the presets: /provider anthropic, kimi, mimo, minimax, qwen, stepfun, unisound, zai, muse-code, opencode-go or command-code.",
             );
         }
         let (note, question) = provider_setup(preset);

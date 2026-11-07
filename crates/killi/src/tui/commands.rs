@@ -104,7 +104,7 @@ pub(super) const COMMANDS: &[Command] = &[
         name: "provider",
         aliases: &[],
         args: "[name]",
-        about: "Add a provider and its models: muse-code or opencode-go",
+        about: "Add a provider and its models with an API key",
     },
     Command {
         name: "model",

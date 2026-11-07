@@ -323,6 +323,30 @@ fn ctrl_c_arms_an_exit_hint_instead_of_printing_one() {
 }
 
 #[test]
+fn every_provider_preset_asks_its_key() {
+    let mut app = test_app();
+    app.open_provider_picker(&crate::config::Config::default());
+    let presets: Vec<String> = app
+        .picker
+        .as_ref()
+        .expect("the list is open")
+        .options
+        .iter()
+        .map(|(name, _, _)| name.clone())
+        .collect();
+    assert_eq!(presets.len(), 11, "{presets:?}");
+    for preset in &presets {
+        app.provider_pick(preset);
+        assert!(
+            app.provider.as_ref().is_some_and(|flow| &flow.preset == preset),
+            "{preset} asks no key"
+        );
+        app.provider = None;
+        app.asking = None;
+    }
+}
+
+#[test]
 fn a_provider_key_applies_as_it_is_answered() {
     let mut app = test_app();
     app.provider_pick("muse-code");

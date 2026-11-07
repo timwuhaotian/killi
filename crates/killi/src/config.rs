@@ -1,11 +1,19 @@
+mod anthropic;
 mod command;
 mod edit;
 mod guide;
 mod import;
+mod kimi;
+mod mimo;
+mod minimax;
 mod models;
 mod muse;
+mod qwen;
 mod resolve;
+mod stepfun;
+mod unisound;
 mod yaml;
+mod zai;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -18,7 +26,15 @@ pub use edit::{remove_provider_key, set_backup_model, set_model_effort, set_sear
 pub use guide::{guide_model, init, set_up_if_missing};
 pub use import::{import_kimi, import_omp, import_opencode, import_pi};
 pub use models::{Added, Additions, NewModel, add_models};
+pub use anthropic::{ABOUT as ANTHROPIC_ABOUT, add as add_anthropic, ours as anthropic_ours};
+pub use kimi::{ABOUT as KIMI_ABOUT, add as add_kimi, ours as kimi_ours};
+pub use mimo::{ABOUT as MIMO_ABOUT, add as add_mimo, ours as mimo_ours};
+pub use minimax::{ABOUT as MINIMAX_ABOUT, add as add_minimax, ours as minimax_ours};
 pub use muse::{ABOUT as MUSE_ABOUT, add as add_muse, ours as muse_ours};
+pub use qwen::{ABOUT as QWEN_ABOUT, add as add_qwen, ours as qwen_ours};
+pub use stepfun::{ABOUT as STEPFUN_ABOUT, add as add_stepfun, ours as stepfun_ours};
+pub use unisound::{ABOUT as UNISOUND_ABOUT, add as add_unisound, ours as unisound_ours};
+pub use zai::{ABOUT as ZAI_ABOUT, add as add_zai, ours as zai_ours};
 
 use edit::{KEY_FIELDS, set_default_model, set_provider_key, with_provider_fields};
 use guide::prompt_section;
