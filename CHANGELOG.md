@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.52 — 2026-11-07
+
 - The working row is an island: the snowflake and the action word sit on the
   selection ground, the flake is one column turning in place (its glints are
   gone), two sparkles cross the word against each other, and the turn's
