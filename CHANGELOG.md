@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.55 — 2026-11-07
+
 - `/provider` covers every API-key provider: anthropic, kimi, mimo, minimax, qwen, stepfun,
   unisound and zai join muse-code, opencode-go and command-code, each writing its provider
   with the pasted key and its models. `killi login` stays for the services that sign in.
