@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.51 — 2026-11-07
+
+- The working row sparkles: the snowflake is bolder and stays one shape as it
+  turns, its glints twinkle in turn, and a highlight travels across the action
+  word while killi works.
+
 ## 0.6.50 — 2026-11-07
 
 - grep, glob and read are faster. grep no longer allocates a String per line when
