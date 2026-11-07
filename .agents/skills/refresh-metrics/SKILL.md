@@ -39,7 +39,9 @@ it was measured). It runs each tool in an empty folder: startup (`--version`, me
 resident set size of a one-prompt run, median of 3) and the first request's input tokens. Run
 it **at least twice**. Size, memory and tokens agree within a few percent between runs; if
 they don't, something else was running. Quote startup as a round "under N ms" unless the load
-was low, and never as a single-digit figure from a loaded machine.
+was low, and never as a single-digit figure from a loaded machine. killi runs with
+`KILLI_NO_HOOKS=1` (bench.py sets it): hooks are the user's own programs in other
+processes, and `time -l` counts the whole tree's peak.
 
 Things that change between runs for reasons that aren't killi:
 - Claude Code runs its *default* model; `docs/bench.json` records which. If it changed

@@ -5,13 +5,13 @@
   "tools": [
     {
       "name": "killi",
-      "version": "0.6.55",
+      "version": "0.6.56",
       "runtime": "Rust",
       "model": "mimo-v2.6-pro",
       "size_mb": 7.4,
-      "startup_ms": 29,
-      "memory_mb": 36.8,
-      "tokens": 4292,
+      "startup_ms": 4,
+      "memory_mb": 17.7,
+      "tokens": 4294,
       "measured": "2026-11-07"
     },
     {
@@ -26,6 +26,7 @@
       "tokens": 44306
     },
     {
+      "measured": "2026-11-07",
       "name": "Claude Code",
       "version": "2.1.319",
       "runtime": "Bun",
@@ -33,8 +34,7 @@
       "size_mb": 307.1,
       "startup_ms": 72,
       "memory_mb": 317.6,
-      "tokens": 48277,
-      "measured": "2026-11-07"
+      "tokens": 48277
     },
     {
       "measured": "2026-10-23",

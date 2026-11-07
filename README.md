@@ -35,8 +35,8 @@ How these were measured: [Size and memory](#size-and-memory) · [Capability test
 
 ## Features
 
-- **Small and quick.** One 7 MB binary with no runtime to install. It starts in under 30 ms and
-  uses about 37 MB of memory running a prompt, where Kimi Code uses 408 MB, Claude Code 318 MB
+- **Small and quick.** One 7 MB binary with no runtime to install. It starts in under 10 ms and
+  uses about 18 MB of memory running a prompt, where Kimi Code uses 408 MB, Claude Code 318 MB
   and opencode 2 332 MB.
 - **Few tokens.** The system prompt and every tool together come to about 2,600 tokens, plus
   your `AGENTS.md` files and about 4 tokens per installed skill. In the
@@ -79,9 +79,10 @@ MiMo-V2.6-Pro; Claude Code ran its default, now Claude Opus 5.5 (Sonnet 5.5 in O
 token count moved with the model). killi, Kimi Code and Claude Code
 loaded this machine's skills, global instructions and MCP servers; opencode 2 ran with a fresh
 config holding only the model, so it loaded the skills but no MCP servers, and with `--standalone`
-so that it is one process. killi (0.6.55) and Claude Code (2.1.319) were measured on 2026-11-07
+so that it is one process. killi (0.6.56) and Claude Code (2.1.319) were measured on 2026-11-07
 on an M4 Pro; the Kimi Code (2.3.0) and opencode 2 (2.1.3) rows are from 2026-10-22 and 2026-10-23
-on an M1 Pro.
+on an M1 Pro. killi runs with `KILLI_NO_HOOKS=1`: hooks are your own programs in other
+processes, so they don't count toward its memory.
 
 ## Capability tests
 
