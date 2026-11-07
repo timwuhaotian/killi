@@ -172,15 +172,15 @@ fn project_trust_is_keyed_by_repo_and_command_lines() {
         "an approval matches: {store:?}"
     );
     assert!(
-        !store
+        store
             .get(&format!("{key}-other"))
-            .is_some_and(|known| *known == fingerprint),
+            .is_none_or(|known| *known != fingerprint),
         "another repo is not trusted by it"
     );
     assert!(
-        !store
+        store
             .get(&key)
-            .is_some_and(|known| *known == "0000000000000000"),
+            .is_none_or(|known| *known != "0000000000000000"),
         "changed commands no longer match"
     );
 
