@@ -313,20 +313,14 @@ impl Rows {
     }
 }
 
-/// A code row wrapped for `max` columns: continuation rows keep the `▏` gutter, four columns
-/// wide like the indent they stand in for. Too narrow to hang the gutter, the row stays whole.
+/// A code row wrapped for `max` columns: continuation rows keep the four-column indent
+/// code blocks stand in for, so pasting from the terminal takes only the code.
+/// Too narrow to hang the indent, the row stays whole.
 pub fn wrap_code(line: &str, max: usize) -> Vec<String> {
     if max < 8 {
         return vec![line.to_string()];
     }
-    let gutter = format!("  {FAINT}▏{RESET} ");
     wrap_words(line, max, 4)
-        .into_iter()
-        .map(|row| match row.strip_prefix("    ") {
-            Some(rest) => format!("{gutter}{rest}"),
-            None => row,
-        })
-        .collect()
 }
 
 /// The columns a line's leading spaces and list marker take, for wrapping its later rows

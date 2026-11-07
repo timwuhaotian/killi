@@ -324,7 +324,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <tr>
 <td>Pane, code</td>
 <td><code>bg-raised</code>, <code>bg-sunken</code></td>
-<td>web only; the TUI paints no panes and hangs code blocks off a <code>▏</code> gutter</td>
+<td>web only; the TUI indents code blocks four spaces so terminal copy takes only the code</td>
 </tr>
 <tr>
 <td>Tint</td>
@@ -389,7 +389,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <h2>Layout &amp; spacing</h2>
 <ul>
 <li>A status row is a glyph in column 0, a space, then its text in column 2 (<code>✓ read src/lib.rs</code>). Output under it hangs off a <code>│</code> in <code>fg-faint</code> in column 2, its text in column 4.</li>
-<li>Killi's prose and Markdown start in column 0 with no marker; list items wrap under their text, code blocks hang off <code>▏</code>.</li>
+<li>Killi's prose and Markdown start in column 0 with no marker; list items wrap under their text, code blocks are indented four spaces.</li>
 <li>Blank rows do the separating, never two in a row: one before and after your message, one between a run of tool calls and the prose next to it, one before the working row, one before and after anything that is neither (a notice, an error, a question, <code>/help</code>, a <code>/btw</code> answer, <code>Ctrl+O</code> output). Consecutive notices stay together, and so do consecutive tool calls and the thought above them.</li>
 <li>Width: prose wraps between words at the terminal width; status rows are cut with <code>…</code>, never wrapped, and a cut always says so. Key hints drop their least useful items before they cut one; the banner's hints wrap between items, never inside one. Tables shrink their widest column to fit.</li>
 <li>The live area, bottom up: the status line, the prompt between two rules, the task list, then the rows of work in flight with the working spinner nearest the prompt. A blank row sits above the prompt's top rule and above the task list, so the conversation, the work and the prompt never touch. A picker or the choices of a question open under the prompt after a blank row too, and a list's key hints are set off from the status line by a blank row.</li>
@@ -426,7 +426,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <tr><td>Subagent</td><td><code>↳ label:</code></td><td><code>fg-muted</code></td><td>its label</td></tr>
 <tr><td>Task: done / doing / to do</td><td><code>✓</code> / <code>◐</code> / <code>○</code></td><td><code>lagoon</code> / <code>lagoon</code> / <code>fg-faint</code></td><td>—</td></tr>
 <tr><td>Output gutter</td><td><code>│</code></td><td><code>fg-faint</code></td><td>—</td></tr>
-<tr><td>Code gutter</td><td><code>▏</code></td><td><code>fg-faint</code></td><td>the language</td></tr>
+<tr><td>Code block</td><td>four-space indent</td><td><code>fg-muted</code></td><td>the language</td></tr>
 <tr><td>Branch</td><td><code>⎇</code></td><td><code>fg-muted</code></td><td>the branch, <code>*</code> when dirty</td></tr>
 <tr><td>Meter</td><td><code>━</code> filled / <code>╌</code> empty</td><td><code>lagoon</code> (≥80 % <code>warn</code>) / <code>fg-faint</code></td><td>used/window</td></tr>
 </tbody>

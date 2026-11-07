@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.49 — 2026-11-07
+
+- Code blocks no longer carry the `▏` gutter into the terminal: they are
+  indented four spaces instead, so selecting and copying a command pastes
+  only the command with no leading `│`/`▏` to clean up. Syntax colors and
+  the language label stay as they were.
+
 ## 0.6.48 — 2026-11-06
 
 - Resuming a session no longer loses its recap: the last shown recap is kept in the

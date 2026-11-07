@@ -109,14 +109,14 @@ impl Markdown {
             };
             let label = if self.in_code { lang } else { "" };
             return (!label.is_empty())
-                .then(|| Part::Row(format!("  {FAINT}▏{RESET} {DIM}{label}{RESET}")));
+                .then(|| Part::Row(format!("    {DIM}{label}{RESET}")));
         }
         if self.in_code {
             let code = match self.lang {
                 Lang::Plain => line.to_string(),
                 lang => highlight(lang, line),
             };
-            return Some(Part::Code(format!("  {FAINT}▏{RESET} {code}")));
+            return Some(Part::Code(format!("    {code}")));
         }
         if let Some((level, rest)) = heading(trimmed) {
             let color = if level <= 2 {
