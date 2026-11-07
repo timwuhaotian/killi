@@ -2,3 +2,4 @@
 /evals/runs/
 __pycache__/
 /out/
+.commandcode/

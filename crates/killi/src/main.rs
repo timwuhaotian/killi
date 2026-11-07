@@ -46,7 +46,7 @@ Usage:
   killi -p <prompt> [-m <model>] [-c] [--json] Run one task, print the answer and exit
   killi init                                   Write a starting ~/.killi/config.toml, or add [prompt] to yours
   killi import-kimi [--force]                  Copy providers, models and MCP servers from Kimi Code
-  killi login [<service>]                      Sign in to chatgpt, opencode-go or muse-code, adding its models
+  killi login [<service>]                      Sign in to chatgpt, opencode-go, muse-code or command-code, adding its models
   killi logout [<service>]                     Sign out of one
   killi update                                 Install the latest published version
   killi sessions [<pid>] [--json]              The killi sessions running on this machine, or what one is doing
@@ -113,6 +113,7 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
                 config::set_up_if_missing()?;
                 config::guide_model(options.model.as_deref())?;
                 login::chatgpt::offer(options.model.as_deref()).await?;
+                login::commandcode_offer(options.model.as_deref()).await?;
             }
             quit_on_signals();
             let config = config::Config::load()?;

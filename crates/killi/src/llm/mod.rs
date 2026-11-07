@@ -3,6 +3,7 @@
 //! the bytes sent for earlier messages never change.
 
 mod anthropic;
+mod commandcode;
 mod error;
 mod history;
 mod openai;
@@ -26,6 +27,7 @@ use error::{
 use history::{arguments_object, content_text, system_text};
 use tokens::cap_output;
 
+pub(crate) use commandcode::CLI_VERSION;
 pub(crate) use error::error_chain;
 pub use error::{ErrorKind, ProviderError};
 pub use openai::REASONING_KEYS;
@@ -253,6 +255,7 @@ impl Client {
             Protocol::OpenAi => openai::prepare(&self.model, messages, tools, cache_key),
             Protocol::Anthropic => anthropic::prepare(&self.model, messages, tools),
             Protocol::Responses => responses::prepare(&self.model, messages, tools, cache_key),
+            Protocol::CommandCode => commandcode::prepare(&self.model, messages, tools, cache_key),
         }?;
         if let Some(name) = &self.model.session_header {
             prepared.headers.push((name.clone(), cache_key.to_string()));
@@ -286,6 +289,10 @@ impl Client {
                 }
                 let advice = if self.model.chatgpt {
                     crate::login::chatgpt::advice(&failure.message)
+                } else if self.model.protocol == Protocol::CommandCode
+                    && failure.kind == ErrorKind::Auth
+                {
+                    "run `killi login command-code` to sign in again".to_string()
                 } else {
                     String::new()
                 };
@@ -394,9 +401,12 @@ impl Client {
                     .trim()
                     .to_ascii_lowercase()
             });
-        if content_type
-            .as_deref()
-            .is_some_and(|content_type| content_type != "text/event-stream")
+        // Command Code answers NDJSON with its own content type, not an event stream.
+        let ndjson = self.model.protocol == Protocol::CommandCode;
+        if !ndjson
+            && content_type
+                .as_deref()
+                .is_some_and(|content_type| content_type != "text/event-stream")
         {
             let body = body_excerpt(&mut response).await;
             let message = format!(
@@ -416,6 +426,7 @@ impl Client {
             Protocol::OpenAi => Box::new(openai::Parser::new(&self.model.tool_names)),
             Protocol::Anthropic => Box::new(anthropic::Parser::new(&self.model.tool_names)),
             Protocol::Responses => Box::new(responses::Parser::new(&self.model.tool_names)),
+            Protocol::CommandCode => Box::new(commandcode::Parser::new(&self.model.tool_names)),
         };
         let mut reply = Reply::default();
         let mut stream = response.bytes_stream();
@@ -438,6 +449,23 @@ impl Client {
             lines.push(&chunk);
             while let Some(line) = lines.next_line() {
                 let line = String::from_utf8_lossy(&line);
+                if ndjson {
+                    let data = line.trim();
+                    if data.is_empty() {
+                        continue;
+                    }
+                    saw_data = true;
+                    let event: Value = serde_json::from_str(data).map_err(|e| {
+                        Failure::of(
+                            ErrorKind::BadResponse,
+                            None,
+                            true,
+                            format!("malformed NDJSON: {e}"),
+                        )
+                    })?;
+                    parser.event(&event, &mut reply, on_delta)?;
+                    continue;
+                }
                 let Some(data) = line.trim().strip_prefix("data:") else {
                     continue;
                 };

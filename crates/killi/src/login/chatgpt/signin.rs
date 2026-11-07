@@ -1,6 +1,5 @@
 use super::*;
 use std::io::IsTerminal;
-use std::process::{Command, Stdio};
 
 use crate::config::{Additions, Config};
 use anyhow::{Context, anyhow, bail};
@@ -46,7 +45,7 @@ pub async fn login() -> Result<()> {
     let attempt = Attempt::new()?;
     let url = authorize_url(&saved, &attempt, &redirect_uri)?;
     eprintln!("Continue with ChatGPT in your browser. If it didn't open, go to:\n\n  {url}\n");
-    open_browser(url.as_str());
+    crate::login::open_browser(url.as_str());
     let callback = tokio::time::timeout(SIGN_IN_WAIT, wait_for_callback(&listener, &attempt.state))
         .await
         .map_err(|_| {
@@ -190,17 +189,3 @@ async fn revoke(http: &reqwest::Client, credentials: &Credentials) -> Result<()>
     Ok(())
 }
 
-/// Opens `url` in the system browser; the printed link is there when it can't.
-fn open_browser(url: &str) {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    let _ = Command::new(opener)
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-}

@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.54 — 2026-11-07
+
+- Command Code subscriptions work in killi: `killi login command-code` signs in with the
+  commandcode.ai account in the browser, the way the commandcode CLI does, and writes a
+  `commandcode` provider with the models the subscription serves; `/provider` takes a pasted
+  key instead, and a first start on one of its models offers to sign in. Requests speak the
+  CLI's own API and count toward the subscription's usage.
+
 ## 0.6.53 — 2026-11-07
 
 - Tool rows carry killi's highlight colors: the status glyph is lagoon when

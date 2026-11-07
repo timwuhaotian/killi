@@ -365,6 +365,9 @@ pub(super) async fn provider_add(
             "opencode-go" => crate::login::opencode_go_add(Some(&key))
                 .await
                 .map(|go| (go.added, go.notes)),
+            "command-code" => crate::login::commandcode_add(&key)
+                .await
+                .map(|code| (code.added, code.notes)),
             _ => crate::config::add_muse(&key).map(|added| (added, Vec::new())),
         });
         Ok((String::new(), Stop::Completed))

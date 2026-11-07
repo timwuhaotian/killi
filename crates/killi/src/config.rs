@@ -169,7 +169,8 @@ pub struct SkillsConfig {
 #[derive(Debug, Deserialize)]
 pub struct Provider {
     /// "openai" (Chat Completions), "anthropic" (Messages), "openai_responses" (Responses),
-    /// or "chatgpt": Responses on the user's ChatGPT plan, signed in with `killi login`.
+    /// "commandcode" (Command Code's subscription API), or "chatgpt": Responses on the
+    /// user's ChatGPT plan, signed in with `killi login`.
     #[serde(rename = "type")]
     pub kind: String,
     pub base_url: Option<String>,
@@ -287,6 +288,8 @@ pub enum Protocol {
     Anthropic,
     /// OpenAI Responses.
     Responses,
+    /// Command Code's subscription API.
+    CommandCode,
 }
 
 /// The model killi would start on when its provider has no key.

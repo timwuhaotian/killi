@@ -103,6 +103,7 @@ fn provider_question(preset: &str) -> &'static str {
     match preset {
         "muse-code" => "Muse Code API key:",
         "opencode-go" => "OpenCode Go API key:",
+        "command-code" => "Command Code API key:",
         _ => "",
     }
 }
@@ -113,6 +114,10 @@ fn provider_setup(preset: &str) -> (&'static str, &'static str) {
         "opencode-go" => (
             "Writes an `opencode-go` provider with the key, and the models Go serves. Usage: https://opencode.ai/console",
             "OpenCode Go API key:",
+        ),
+        "command-code" => (
+            "Writes a `commandcode` provider with the key, and the models the subscription serves. `killi login command-code` signs in with the browser instead.",
+            "Command Code API key:",
         ),
         _ => (crate::config::MUSE_ABOUT, "Muse Code API key:"),
     }
@@ -525,6 +530,14 @@ impl App {
                 ),
                 PickerChoice::Provider("opencode-go".into()),
             ),
+            (
+                "command-code".to_string(),
+                format!(
+                    "Command Code, with the API key from its account{}",
+                    mark(crate::login::commandcode_signed_in())
+                ),
+                PickerChoice::Provider("command-code".into()),
+            ),
         ];
         self.picker = Some(Picker::new("Provider to add".into(), options, 0));
     }
@@ -533,8 +546,9 @@ impl App {
     /// preset writes is said first, so the key's owner knows where it goes.
     pub(super) fn provider_pick(&mut self, preset: &str) {
         if provider_question(preset).is_empty() {
-            return self
-                .error("Pick one of the presets: /provider muse-code or /provider opencode-go.");
+            return self.error(
+                "Pick one of the presets: /provider muse-code, /provider opencode-go or /provider command-code.",
+            );
         }
         let (note, question) = provider_setup(preset);
         self.provider = Some(ProviderFlow {

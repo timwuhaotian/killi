@@ -38,8 +38,9 @@ impl Config {
             "openai" => Protocol::OpenAi,
             "anthropic" => Protocol::Anthropic,
             "openai_responses" | "chatgpt" => Protocol::Responses,
+            "commandcode" => Protocol::CommandCode,
             other => bail!(
-                "model `{alias}` uses the `{other}` API, which killi doesn't support; use openai, anthropic, openai_responses or chatgpt"
+                "model `{alias}` uses the `{other}` API, which killi doesn't support; use openai, anthropic, openai_responses, commandcode or chatgpt"
             ),
         };
         if chatgpt && protocol != Protocol::Responses {
@@ -53,6 +54,7 @@ impl Config {
         ) {
             (Some(url), _) => url.clone(),
             (None, Protocol::Anthropic) => "https://api.anthropic.com".to_string(),
+            (None, Protocol::CommandCode) => "https://api.commandcode.ai".to_string(),
             (None, _) => "https://api.openai.com/v1".to_string(),
         };
         let api_key = match chatgpt {
@@ -98,6 +100,13 @@ impl Config {
             .iter()
             .find(|(_, provider)| ours(provider))
             .map(|(name, provider)| (name.as_str(), provider.key().is_some()))
+    }
+
+    /// The model killi would start on, when it runs on a Command Code subscription.
+    pub fn commandcode_model<'a>(&'a self, requested: Option<&'a str>) -> Option<&'a str> {
+        let alias = requested.or(self.default_model.as_deref())?;
+        let model = self.models.get(alias)?;
+        (self.providers.get(&model.provider)?.kind == "commandcode").then_some(alias)
     }
 
     /// The model killi would start on, when it runs on a ChatGPT plan.

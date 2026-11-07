@@ -165,9 +165,10 @@ model = "MiniMax-M3.1-Flash"
 ```
 
 To use a subscription instead of a pay-as-you-go key, run `killi login` and pick one, or name
-it: `killi login chatgpt`, `killi login opencode-go` or `killi login muse-code`. Either way killi
-adds the provider and its models to the config; `killi logout` signs out. Inside a session,
-`/provider` does the same for OpenCode Go and Muse Code. Run on a provider the config already
+it: `killi login chatgpt`, `killi login opencode-go`, `killi login muse-code` or `killi login
+command-code`. Either way killi adds the provider and its models to the config; `killi logout`
+signs out. Inside a session, `/provider` does the same for OpenCode Go, Muse Code and Command
+Code. Run on a provider the config already
 has, it also brings that provider's API, URL and tool names up to date and keeps the rest.
 
 - **ChatGPT** (Plus or Pro) signs in in the browser, through OpenAI's [sign-in for open-source
@@ -184,6 +185,9 @@ has, it also brings that provider's API, URL and tool names up to date and keeps
   on the Responses API with `tool_names = { bash = "run_command", web_search = "search_web" }`:
   Meta refuses a subscription's requests whose tools carry another client's names, so the
   requests carry the mapped names and the replies are read back under killi's.
+- **Command Code** signs in with your commandcode.ai account in the browser, the way its CLI
+does, and writes a `commandcode` provider with the models the subscription serves. Requests
+speak the CLI's own API (`/alpha/generate`) and count toward the subscription's usage.
 
 A model can use OpenAI's Responses API with `protocol = "openai_responses"`. A Claude model
 behind an OpenAI-compatible gateway (Bedrock through LiteLLM) caches nothing unless the request
