@@ -42,11 +42,18 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   (every protocol sends the mapped names and reads replies back under killi's, for an API
   that refuses another client's tool names), and `session_header` (a header that carries
   the conversation's ID on every request, such as OpenCode Go's `x-opencode-session`).
-  `killi login opencode-go` and `killi login muse-code` write the provider and its models
-  from the key, and in the TUI `/provider` does the same. Muse Code's provider carries the
-  tool-name mapping Meta needs. Run again on a provider the config already has, they set the
-  fields the preset owns (`type`, `base_url`, `tool_names`, the key) and keep the rest, so
-  either one repairs a `meta` provider that has no `tool_names`.
+  `killi login` signs in to one of four services: `chatgpt` and `command-code` in the
+  browser (command-code falls back to a pasted key), `opencode-go` with the key from its
+  console (pasted, or `$OPENCODE_API_KEY` when confirmed) and `muse-code` with the muse
+  CLI's key (`LLM|…`); each writes the provider and its models. In the TUI `/provider`
+  does the same for 11 presets — `muse-code`, `opencode-go`, `command-code` and the API-key
+  eight (`anthropic`, `kimi`, `mimo`, `minimax`, `qwen`, `stepfun`, `unisound`, `zai`) —
+  always from a pasted key, so command-code's `/provider` never opens the browser and
+  `$OPENCODE_API_KEY` only works in `login`. Bare `/provider` opens the preset picker. Run
+  again on a provider the config already has, they set the fields the preset owns (the key,
+  `type`, `base_url`) and keep the rest, so either one repairs a broken provider; only
+  muse-code's preset owns `tool_names` (the mapping Meta needs), so only it repairs a `meta`
+  provider that has none.
 - `[models."<provider>/<model>"]`: `provider` (a `[providers]` name), `model` (the API's
   model id), `protocol` (overrides the provider's `type` for this model), `base_url` (overrides
   the provider's, for a gateway with a URL per API), `cache_control = true`

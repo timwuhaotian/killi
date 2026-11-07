@@ -21,6 +21,23 @@ use tokio::process::Command;
 
 use crate::tools::{OwnSession, Tracked, track};
 
+#[cfg(test)]
+thread_local! {
+    /// Tests flip this instead of the environment, so one test's override never leaks
+    /// into another test running on a different thread.
+    static NO_HOOKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Hooks are off for the whole process when `KILLI_NO_HOOKS` is set: every event runs
+/// nothing, and the agent behaves as if no hooks were configured.
+pub fn disabled() -> bool {
+    #[cfg(test)]
+    if NO_HOOKS.with(|v| v.get()) {
+        return true;
+    }
+    std::env::var_os("KILLI_NO_HOOKS").is_some()
+}
+
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(transparent)]
 pub struct HooksConfig(BTreeMap<String, Vec<Hook>>);
@@ -46,14 +63,15 @@ pub struct Outcome {
 
 impl HooksConfig {
     pub fn is_empty(&self) -> bool {
-        self.0.values().all(Vec::is_empty)
+        disabled() || self.0.values().all(Vec::is_empty)
     }
 
     /// Whether any hook could see a tool call: reads run side by side only when none could.
     pub fn has_tool_hooks(&self) -> bool {
-        ["PreToolUse", "PostToolUse"]
-            .iter()
-            .any(|event| self.0.get(*event).is_some_and(|hooks| !hooks.is_empty()))
+        !disabled()
+            && ["PreToolUse", "PostToolUse"]
+                .iter()
+                .any(|event| self.0.get(*event).is_some_and(|hooks| !hooks.is_empty()))
     }
 
     /// Runs every hook for `event` whose matcher fits `tool`, in order.
@@ -66,6 +84,9 @@ impl HooksConfig {
         mut payload: Value,
     ) -> Outcome {
         let mut outcome = Outcome::default();
+        if disabled() {
+            return outcome;
+        }
         let Some(hooks) = self.0.get(event) else {
             return outcome;
         };
@@ -331,6 +352,25 @@ mod tests {
         assert!(!config("[[hooks.SessionStart]]\ncommand = ':'\n").has_tool_hooks());
         assert!(config("[[hooks.PreToolUse]]\ncommand = ':'\n").has_tool_hooks());
         assert!(config("[[hooks.PostToolUse]]\ncommand = ':'\n").has_tool_hooks());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn no_hooks_env_runs_nothing() {
+        let hooks = config(
+            "[[hooks.PreToolUse]]\ncommand = \"echo blocked >&2; exit 2\"\n",
+        );
+        NO_HOOKS.with(|v| v.set(true));
+        assert!(disabled());
+        assert!(hooks.is_empty());
+        assert!(!hooks.has_tool_hooks());
+        let outcome = hooks
+            .run("PreToolUse", Some("bash"), &std::env::temp_dir(), "s", json!({}))
+            .await;
+        NO_HOOKS.with(|v| v.set(false));
+        assert!(outcome.block.is_none());
+        assert!(outcome.context.is_empty());
+        assert!(outcome.failures.is_empty());
+        assert!(!disabled());
     }
 
     #[tokio::test(flavor = "current_thread")]

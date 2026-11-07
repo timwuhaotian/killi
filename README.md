@@ -93,10 +93,10 @@ misleading README. Each starts from a fresh git repo; it passes when its check (
 clippy, or an exact answer) succeeds after the tool finishes, with the tests restored first.
 Every task was checked to fail as given and pass with its reference solution.
 [`scripts/eval.py`](scripts/eval.py) runs them; [docs/eval.md](docs/eval.md) has every result.
-killi's row is 0.2.16; Kimi Code's and Claude Code's were measured earlier (2.2.0 and 2.1.306), and each
-tool ran every task once, so a single task's token count can swing by a third or more. killi's times
-were taken on a busy machine and aren't comparable with the other two; tokens and memory are not
-affected by load.
+killi's row is 0.6.55, measured on 2026-11-07; Kimi Code's (2.2.0) and Claude Code's (2.1.306)
+rows are from 2026-10-22. Each tool ran every task once, so a single task's token count can swing
+by a third or more. killi's times were taken on a busy machine and aren't comparable with the
+other two; tokens and memory are not affected by load.
 
 ## Install
 
@@ -327,6 +327,8 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
   matcher = "edit|write"
   command = "cargo check --quiet 2>&1 | head -30; exit 0"
   ```
+
+  `KILLI_NO_HOOKS=1` runs a session with every hook off.
 
 - **Entire:** killi sessions checkpoint to [Entire](https://entire.io), which mirrors the
   repo and links each commit to the session behind it (see the

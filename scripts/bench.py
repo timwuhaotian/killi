@@ -5,6 +5,8 @@ For each tool: installed size, startup time (`--version`, median of 5), peak mem
 resident set size of a one-prompt run, median of 3, from /usr/bin/time -l), and the input
 tokens of the first request as the tool itself reports them. Every run happens in an empty
 folder. killi, Kimi Code and opencode use BENCH_MODEL; Claude Code uses its default model.
+killi runs with KILLI_NO_HOOKS=1: hooks are the user's own programs in other processes,
+and `time -l` counts the whole tree's peak, so leaving them on would measure them instead.
 
 `--tools killi,opencode` measures only those; the other tools keep their rows in
 docs/bench.json, each with the date it was measured.
@@ -141,8 +143,9 @@ def measure(name, version_cmd, run_cmd, tokens_from, size_paths, runtime, model,
 
 def measure_killi():
     killi = binary("KILLI_BIN", "killi")
+    env = {**ENV, "KILLI_NO_HOOKS": "1"}
     return measure("killi", [killi, "--version"], [killi, "--json", "-m", MODEL, "-p", PROMPT],
-                   lambda out, _: json.loads(out)["first_prompt_tokens"], [killi], "Rust", MODEL.split("/")[-1])
+                   lambda out, _: json.loads(out)["first_prompt_tokens"], [killi], "Rust", MODEL.split("/")[-1], env=env)
 
 
 def measure_kimi():

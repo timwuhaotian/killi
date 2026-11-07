@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.56 — 2026-11-07
+
+- `KILLI_NO_HOOKS=1` runs a session with every hook off: no event runs anything, and the
+  agent behaves as if no hooks were configured. `scripts/bench.py` measures killi that way,
+  since a hook's own peak memory used to count toward killi's number.
+
 ## 0.6.55 — 2026-11-07
 
 - `/provider` covers every API-key provider: anthropic, kimi, mimo, minimax, qwen, stepfun,
