@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.50 — 2026-11-07
+
+- grep, glob and read are faster. grep no longer allocates a String per line when
+  scanning; glob stats only the files that match the pattern instead of every
+  entry; read decodes valid UTF-8 without copying and reuses a scratch buffer
+  for line formatting. Measured on a 108 MB corpus: glob 3×, grep full scan
+  ~12%.
+
 ## 0.6.49 — 2026-11-07
 
 - Code blocks no longer carry the `▏` gutter into the terminal: they are
