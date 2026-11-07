@@ -1,18 +1,18 @@
 {
-  "measured": "2026-10-23",
-  "machine": "Apple M1 Pro, macOS 26.6.2",
+  "measured": "2026-11-07",
+  "machine": "Apple M4 Pro, macOS 27.0",
   "prompt": "Reply with the single word OK.",
   "tools": [
     {
-      "measured": "2026-10-23",
       "name": "killi",
-      "version": "0.2.33",
+      "version": "0.6.55",
       "runtime": "Rust",
       "model": "mimo-v2.6-pro",
-      "size_mb": 6.4,
-      "startup_ms": 18,
-      "memory_mb": 15.3,
-      "tokens": 3564
+      "size_mb": 7.4,
+      "startup_ms": 29,
+      "memory_mb": 36.8,
+      "tokens": 4292,
+      "measured": "2026-11-07"
     },
     {
       "measured": "2026-10-22",
@@ -26,17 +26,18 @@
       "tokens": 44306
     },
     {
-      "measured": "2026-10-22",
       "name": "Claude Code",
-      "version": "2.1.308",
+      "version": "2.1.319",
       "runtime": "Bun",
-      "model": "claude-sonnet-5-5",
-      "size_mb": 262.0,
-      "startup_ms": 28,
-      "memory_mb": 324.4,
-      "tokens": 29984
+      "model": "claude-opus-5-5",
+      "size_mb": 307.1,
+      "startup_ms": 72,
+      "memory_mb": 317.6,
+      "tokens": 48277,
+      "measured": "2026-11-07"
     },
     {
+      "measured": "2026-10-23",
       "name": "opencode 2",
       "version": "2.1.3",
       "runtime": "Bun",
@@ -44,8 +45,7 @@
       "size_mb": 204.4,
       "startup_ms": 77,
       "memory_mb": 331.7,
-      "tokens": 15014,
-      "measured": "2026-10-23"
+      "tokens": 15014
     }
   ]
 }

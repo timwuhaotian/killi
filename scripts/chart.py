@@ -75,7 +75,8 @@ def bench_body(data, c):
             out.append(f'<text x="{BAR_X + width + 10:.1f}" y="{y + 24}" font-size="14" font-weight="{weight}" fill="{c["text"]}">{escape(fmt(tool[key]))}{extra}</text>')
             y += ROW
         y += 34
-    when = " and ".join(sorted({t.get("measured", data["measured"]) for t in tools}))
+    dates = sorted({t.get("measured", data["measured"]) for t in tools})
+    when = dates[0] if len(dates) == 1 else ", ".join(dates[:-1]) + " and " + dates[-1]
     notes = [
         f'Measured {when} on {data["machine"]} with scripts/bench.py, prompt “{data["prompt"]}” in an empty folder.',
         "Size is the installed binary (Kimi Code’s includes its bundled rg and fd). Memory is the median maximum resident set size of 3 runs.",

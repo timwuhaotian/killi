@@ -35,8 +35,8 @@ How these were measured: [Size and memory](#size-and-memory) · [Capability test
 
 ## Features
 
-- **Small and quick.** One 6 MB binary with no runtime to install. It starts in under 20 ms and
-  uses about 15 MB of memory running a prompt, where Kimi Code uses 408 MB, Claude Code 324 MB
+- **Small and quick.** One 7 MB binary with no runtime to install. It starts in under 30 ms and
+  uses about 37 MB of memory running a prompt, where Kimi Code uses 408 MB, Claude Code 318 MB
   and opencode 2 332 MB.
 - **Few tokens.** The system prompt and every tool together come to about 2,600 tokens, plus
   your `AGENTS.md` files and about 4 tokens per installed skill. In the
@@ -75,11 +75,13 @@ How these were measured: [Size and memory](#size-and-memory) · [Capability test
 
 The top half of the chart above. Measured with [`scripts/bench.py`](scripts/bench.py); the versions and models are in
 [`docs/bench.json`](docs/bench.json). killi, Kimi Code and opencode 2 ran the same model,
-MiMo-V2.6-Pro; Claude Code ran its default, Claude Sonnet 5.5. killi, Kimi Code and Claude Code
+MiMo-V2.6-Pro; Claude Code ran its default, now Claude Opus 5.5 (Sonnet 5.5 in October, and its
+token count moved with the model). killi, Kimi Code and Claude Code
 loaded this machine's skills, global instructions and MCP servers; opencode 2 ran with a fresh
 config holding only the model, so it loaded the skills but no MCP servers, and with `--standalone`
-so that it is one process. killi and opencode 2 (2.1.3) were measured on 2026-10-23, Kimi Code and
-Claude Code the day before, on the same machine.
+so that it is one process. killi (0.6.55) and Claude Code (2.1.319) were measured on 2026-11-07
+on an M4 Pro; the Kimi Code (2.3.0) and opencode 2 (2.1.3) rows are from 2026-10-22 and 2026-10-23
+on an M1 Pro.
 
 ## Capability tests
 
@@ -133,7 +135,7 @@ Code, copy its providers, models and MCP servers:
 killi import-kimi
 ```
 
-Otherwise `killi init` writes a starting config to edit. It looks like this:
+Otherwise `killi init` writes a starting config to edit. One with two providers looks like this:
 
 ```toml
 default_model = "mimo/mimo-v2.6-pro"
@@ -167,9 +169,11 @@ model = "MiniMax-M3.1-Flash"
 To use a subscription instead of a pay-as-you-go key, run `killi login` and pick one, or name
 it: `killi login chatgpt`, `killi login opencode-go`, `killi login muse-code` or `killi login
 command-code`. Either way killi adds the provider and its models to the config; `killi logout`
-signs out. Inside a session, `/provider` does the same for OpenCode Go, Muse Code and Command
-Code. Run on a provider the config already
-has, it also brings that provider's API, URL and tool names up to date and keeps the rest.
+signs out. Inside a session, `/provider` lists every preset and adds one from a pasted key:
+opencode-go, muse-code and command-code, plus anthropic, kimi, mimo, minimax, qwen, stepfun,
+unisound and zai. (ChatGPT and the browser sign-ins stay in `killi login`.) Run on a provider
+the config already has, it also brings that provider's key, API and URL up to date (and the
+tool names for muse-code) and keeps the rest.
 
 - **ChatGPT** (Plus or Pro) signs in in the browser, through OpenAI's [sign-in for open-source
   tools](https://developers.openai.com/siwc/token-sharing-open-source), and keeps the credentials
@@ -177,8 +181,9 @@ has, it also brings that provider's API, URL and tool names up to date and keeps
   killi refreshes the hourly token itself; [ChatGPT settings → Usage](https://chatgpt.com/settings/usage)
   shows and limits what killi uses.
 - **[OpenCode Go](https://opencode.ai/docs/go/)** takes the API key from the [OpenCode
-  Console](https://opencode.ai/console) (or `$OPENCODE_API_KEY`). Its models answer on Chat
-  Completions, Responses or Anthropic Messages; killi writes each with the API and URL
+  Console](https://opencode.ai/console) (`killi login` also takes `$OPENCODE_API_KEY`).
+  Its models answer on Chat Completions, Responses or Anthropic Messages; killi writes
+  each with the API and URL
   [models.dev](https://models.dev) gives it, and leaves out the ones on Gemini's API. Requests
   carry `x-opencode-session` with the session's ID, as OpenCode asks.
 - **Muse Code** (Meta) takes the muse CLI's API key (`LLM|…`). killi writes a `meta` provider
@@ -186,8 +191,9 @@ has, it also brings that provider's API, URL and tool names up to date and keeps
   Meta refuses a subscription's requests whose tools carry another client's names, so the
   requests carry the mapped names and the replies are read back under killi's.
 - **Command Code** signs in with your commandcode.ai account in the browser, the way its CLI
-does, and writes a `commandcode` provider with the models the subscription serves. Requests
-speak the CLI's own API (`/alpha/generate`) and count toward the subscription's usage.
+does, and writes a `commandcode` provider with the models the subscription serves
+(`/provider command-code` takes a pasted key instead). Requests speak the CLI's own API
+(`/alpha/generate`) and count toward the subscription's usage.
 
 A model can use OpenAI's Responses API with `protocol = "openai_responses"`. A Claude model
 behind an OpenAI-compatible gateway (Bedrock through LiteLLM) caches nothing unless the request
@@ -209,8 +215,10 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | @ | the file menu: fuzzy-search the workspace, Tab or Enter inserts `@path`; the file's contents go to the model with your message |
 | Enter | send; while the agent works, your message reaches it at its next step |
 | Shift+Enter, Ctrl+J | new line |
+| ! | run a shell command without involving the model; a bare `!` opens your shell |
 | Esc | interrupt; before the reply begins, your message comes back to the prompt as if never sent |
-| Ctrl+S | while the agent works, interrupt it and send your message now |
+| Ctrl+S | while the agent works, interrupt it and send your message now; during a swarm the first press only queues it |
+| Ctrl+C | copy the prompt's selection, else clear the prompt; on an empty prompt, interrupt, twice to quit |
 | Shift+Tab | plan mode |
 | Ctrl+V | paste an image from the clipboard as `[Image #1]` (Cmd+V too in [Kil](https://github.com/timwuhaotian/kil)) |
 | drag a file in | an image is attached as `[Image #1]`; any other file is named as `@path` |
@@ -223,12 +231,16 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
   <img src="docs/menu.svg" width="960" alt="The slash menu after typing /re: resume, reload and the refactor skill first, then the other commands and skills whose descriptions match, each with its description">
 </p>
 
-Commands: `/model [alias]`, `/effort [level]` (thinking effort), `/new` (or `/clear`),
-`/resume`, `/compact [focus]`, `/recap`, `/undo`, `/plan`, `/swarm [task|on|off]`,
+Commands: `/provider [name]` (add a provider from a pasted key), `/model [alias]`,
+`/backup-model [alias]` (the fallback when the primary keeps failing), `/mcp [server]`
+(turn servers on or off), `/web-search-config`, `/effort [level]` (thinking effort),
+`/new` (or `/clear`), `/resume`, `/btw <question>` (a side question, never kept),
+`/compact [focus]`, `/recap`, `/undo`, `/plan`, `/swarm [task|on|off]`,
 `/goal [<text>|done|clear]` (a session goal: `/exit`, `/new` and `/resume` wait until it is
 `/goal done`, or `/goal clear` when it is truly impossible or no longer wanted), `/usage`, `/session`
 (copies the session's id, log path and summary for another agent to read), `/sessions` (the
-other killi sessions running on this machine), `/prune [keep]`
+other killi sessions running on this machine), `/later [done N]` (what the agent noted for
+later in this folder), `/prune [keep]`
 (deletes every session on the machine but the newest few), `/reload`,
 `/help`, `/exit`, and
 `/<skill-name> [request]` for any skill. The menu matches loosely, the way Kimi Code's does:
