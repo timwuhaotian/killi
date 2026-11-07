@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.53 — 2026-11-07
+
 - Tool rows carry killi's highlight colors: the status glyph is lagoon when
   done and bold lagoon while running, bold danger on failure; a running
   call's name is lagoon too and falls back to bold when it lands. The
