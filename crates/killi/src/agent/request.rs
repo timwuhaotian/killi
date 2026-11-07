@@ -7,6 +7,7 @@ impl Agent {
             sink(match delta {
                 Delta::Text(text) => Event::Text(text.to_string()),
                 Delta::Reasoning(text) => Event::Reasoning(text.to_string()),
+                Delta::Tool(text) => Event::ToolDelta(text.len()),
                 Delta::Retry {
                     attempt,
                     wait,

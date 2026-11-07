@@ -22,6 +22,9 @@ pub enum Event {
         display: Option<String>,
         output: String,
     },
+    /// Bytes of tool-call arguments streamed by the request in flight: feed for a live
+    /// output estimate, nothing to show.
+    ToolDelta(usize),
     /// After each request: that request's usage, and the context it used.
     Usage(Usage),
     Todos(Vec<Todo>),

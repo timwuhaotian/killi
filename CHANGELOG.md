@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- The working row is an island: the snowflake and the action word sit on the
+  selection ground, the flake is one column turning in place (its glints are
+  gone), two sparkles cross the word against each other, and the turn's
+  output token count beside it grows as text streams — an estimate marked
+  `~` until each request's real usage lands.
+
 ## 0.6.51 — 2026-11-07
 
 - The working row sparkles: the snowflake is bolder and stays one shape as it

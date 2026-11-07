@@ -330,6 +330,7 @@ impl StreamParser for Parser {
                 }
                 if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
                     slot.arguments.push_str(arguments);
+                    on_delta(Delta::Tool(arguments));
                 }
             }
         }

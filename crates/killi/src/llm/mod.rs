@@ -116,6 +116,9 @@ pub struct ToolCall {
 pub enum Delta<'a> {
     Text(&'a str),
     Reasoning(&'a str),
+    /// A fragment of a tool call's arguments: counted toward the live output estimate,
+    /// never shown.
+    Tool(&'a str),
     Retry {
         attempt: u32,
         wait: Duration,

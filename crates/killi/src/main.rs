@@ -533,6 +533,7 @@ impl Printer {
                 }
             }
             Event::Reasoning(_)
+            | Event::ToolDelta(_)
             | Event::Usage(_)
             | Event::Todos(_)
             | Event::Ask(_)

@@ -60,6 +60,8 @@ impl App {
                 context: agent.stats.context,
                 ..Status::default()
             },
+            turn_out_base: 0,
+            streamed_bytes: 0,
             controls,
             spinner: 0,
             retry: None,

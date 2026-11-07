@@ -583,37 +583,64 @@ fn interrupt_hint(elapsed: Duration) -> String {
     )
 }
 
-/// The working line while the snapshot runs: the snowflake spinner, the whole snapshot word
-/// beside it in the logo's gradient, then the elapsed time and the interrupt hint.
-pub(super) fn snapshot_rows(seq: usize, frame: usize, elapsed: Duration) -> Vec<String> {
+/// The working line's island: `inner` on the selection ground with a space of it on each
+/// side. The ground is reapplied after every reset inside, since a reset would end it.
+fn island(inner: String) -> String {
+    let ground = SELECT.to_string();
+    format!(
+        "{ground} {} {RESET}",
+        inner.replace(RESET, &format!("{RESET}{ground}"))
+    )
+}
+
+/// The working line while the snapshot runs: the island of the snowflake spinner and the
+/// whole snapshot word beside it in the logo's gradient, then the turn's output count, the
+/// elapsed time and the interrupt hint.
+pub(super) fn snapshot_rows(
+    seq: usize,
+    frame: usize,
+    elapsed: Duration,
+    out: &str,
+) -> Vec<String> {
     vec![format!(
-        "{} {} {FAINT}·{RESET} {}",
-        banner::snowflake(frame),
-        banner::steady_word(frame, &snapshot_word(seq, frame)),
+        "{} {FAINT}·{RESET} {TOKENS}{out}{RESET} {FAINT}·{RESET} {}",
+        island(format!(
+            "{} {}",
+            banner::snowflake(frame),
+            banner::steady_word(frame, &snapshot_word(seq, frame))
+        )),
         interrupt_hint(elapsed)
     )]
 }
 
-/// The working line: the snowflake spinner, the turn's action word (`thinking`, `writing`, …)
-/// with what it is doing after it, then the elapsed time and the interrupt hint. While a failed
-/// request waits to be retried the action word counts that wait down instead, since nothing is
-/// working then.
+/// The working line: the island of the snowflake spinner and the turn's action word
+/// (`thinking`, `writing`, …), what it is doing after it, then the turn's output count,
+/// the elapsed time and the interrupt hint. While a failed request waits to be retried
+/// the action word counts that wait down instead, since nothing is working then.
 pub(super) fn working_rows(
     frame: usize,
     elapsed: Duration,
     action: &str,
     detail: &str,
+    out: &str,
+    width: usize,
 ) -> Vec<String> {
-    let action_line = match detail.is_empty() {
-        true => banner::action_word(frame, action),
-        false => format!("{} {detail}", banner::action_word(frame, action)),
-    };
-    vec![format!(
-        "{} {} {FAINT}·{RESET} {}",
+    let head = island(format!(
+        "{} {}",
         banner::snowflake(frame),
-        action_line,
+        banner::action_word(frame, action)
+    ));
+    let tail = format!(
+        " {FAINT}·{RESET} {TOKENS}{out}{RESET} {FAINT}·{RESET} {}",
         interrupt_hint(elapsed)
-    )]
+    );
+    // The detail gives way first: the count and the hint stay whole at any width.
+    let room = width.saturating_sub(text::width(&head) + text::width(&tail));
+    let detail = match (detail.is_empty(), room) {
+        (false, 8..) => format!(" {}", clip(detail, room - 1)),
+        _ => String::new(),
+    };
+    vec![format!("{head}{detail}{tail}")]
 }
 
 /// A message queued while the agent works, saying Ctrl+S can send it now instead of

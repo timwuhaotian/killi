@@ -461,9 +461,9 @@ impl StreamParser for Parser {
                         );
                     }
                     (Some(Block::Tool(i)), Some("input_json_delta")) => {
-                        reply.tool_calls[*i]
-                            .arguments
-                            .push_str(delta["partial_json"].as_str().unwrap_or_default());
+                        let text = delta["partial_json"].as_str().unwrap_or_default();
+                        reply.tool_calls[*i].arguments.push_str(text);
+                        on_delta(Delta::Tool(text));
                     }
                     _ => {}
                 }

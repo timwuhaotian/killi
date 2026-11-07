@@ -220,9 +220,9 @@ impl StreamParser for Parser {
             }
             Some("response.function_call_arguments.delta") => {
                 if let Some(&i) = self.calls.get(&index) {
-                    reply.tool_calls[i]
-                        .arguments
-                        .push_str(event["delta"].as_str().unwrap_or_default());
+                    let text = event["delta"].as_str().unwrap_or_default();
+                    reply.tool_calls[i].arguments.push_str(text);
+                    on_delta(Delta::Tool(text));
                 }
             }
             Some("response.output_item.done") => {

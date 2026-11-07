@@ -518,9 +518,9 @@ fn the_live_area_merges_the_thought_into_the_action_row() {
     let (rows, _, _) = app.live();
     let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
     assert!(
-        shown
-            .iter()
-            .any(|row| row.contains("thinking The internal § references are relative.")),
+        shown.iter().any(|row| {
+            row.contains("thinking") && row.contains("The internal § references")
+        }),
         "{shown:?}"
     );
     assert!(
@@ -532,6 +532,48 @@ fn the_live_area_merges_the_thought_into_the_action_row() {
     assert!(
         !shown.iter().any(|row| row.contains('∴')),
         "the old thinking row is gone: {shown:?}"
+    );
+}
+
+#[test]
+fn the_working_island_counts_output_as_it_streams_and_settles_on_usage() {
+    let mut app = test_app();
+    app.status.completion = 100;
+    app.begin_busy();
+    assert_eq!(app.turn_out(), "0 out");
+    app.on_agent(Event::Text("x".repeat(40)));
+    assert_eq!(app.turn_out(), "~10 out", "text streams count as they land");
+    app.on_agent(Event::Reasoning("y".repeat(40)));
+    assert_eq!(app.turn_out(), "~20 out", "reasoning counts too");
+    app.on_agent(Event::ToolDelta(40));
+    assert_eq!(app.turn_out(), "~30 out", "tool arguments count too");
+    app.on_agent(Event::Usage(Usage {
+        prompt: 10,
+        cached: 0,
+        completion: 25,
+        reasoning: 0,
+    }));
+    assert_eq!(
+        app.turn_out(),
+        "25 out",
+        "the request's real usage replaces the estimate"
+    );
+    let (rows, _, _) = app.live();
+    let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
+    assert!(
+        shown.iter().any(|row| row.contains("· 25 out ·")),
+        "{shown:?}"
+    );
+    app.on_agent(Event::Text("z".repeat(40)));
+    app.on_agent(Event::Retry {
+        attempt: 1,
+        wait: Duration::from_secs(1),
+        reason: "boom".into(),
+    });
+    assert_eq!(
+        app.turn_out(),
+        "25 out",
+        "a discarded partial is not counted twice"
     );
 }
 

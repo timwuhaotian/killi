@@ -112,6 +112,8 @@ pub(super) fn test_app() -> App {
         detail_back: 0,
         ctrl_o_taught: false,
         status: Status::default(),
+        turn_out_base: 0,
+        streamed_bytes: 0,
         controls: Controls::default(),
         spinner: 0,
         retry: None,

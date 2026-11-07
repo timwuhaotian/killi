@@ -108,34 +108,20 @@ const SNOWFLAKES: [char; 4] = ['❄', '❅', '❆', '❅'];
 const SNOWFLAKE_HOLD: usize = 4;
 /// Frames (a tenth of a second each) for the snowflake's full bright-to-bright cycle.
 const WAX_CYCLE: f32 = 24.0;
-/// The glints around the snowflake, in the order they flow from a dim dot to a bright
-/// sparkle and back.
-const GLINT: [char; 3] = ['·', '✦', '✧'];
-/// Frames each glint state holds.
-const GLINT_HOLD: usize = 4;
-
-/// The spinner `frame` tenths of a second in: a bold snowflake pulsing through its variants
-/// in the logo's gradient while its light waxes and wanes, with glints flowing around it
-/// that twinkle in turn — one side shines while the other rests — so the working line
-/// carries a small detailed icon that changes slowly.
+/// The spinner `frame` tenths of a second in: one bold snowflake in a single column,
+/// turning through its variants in the logo's gradient while its light waxes and wanes,
+/// so the working line's icon changes shape in place instead of spreading out.
 pub fn snowflake(frame: usize) -> String {
     let c = SNOWFLAKES[(frame / SNOWFLAKE_HOLD) % SNOWFLAKES.len()];
     let t = frame as f32 / WAX_CYCLE;
     let wax = (1.0 - (std::f32::consts::TAU * t).cos()) / 2.0;
     let fade = 0.55 + 0.45 * wax;
-    let step = frame / GLINT_HOLD;
-    let left = GLINT[step % GLINT.len()];
-    let right = GLINT[(step + 1) % GLINT.len()];
     let across = (0.5 + frame as f32 * 0.012) % 2.0;
     let (r, g, b) = gradient(if across > 1.0 { 2.0 - across } else { across });
-    let lit = truecolor();
-    let shine = format!("{BOLD}{}", color(r * fade, g * fade, b * fade, lit));
-    let dim = color(r * fade * 0.55, g * fade * 0.55, b * fade * 0.55, lit);
-    let (left_glint, right_glint) = match step.is_multiple_of(2) {
-        true => (shine.as_str(), dim.as_str()),
-        false => (dim.as_str(), shine.as_str()),
-    };
-    format!("{left_glint}{left}{RESET}{shine}{c}{RESET}{right_glint}{right}{RESET}")
+    format!(
+        "{BOLD}{}{c}{RESET}",
+        color(r * fade, g * fade, b * fade, truecolor())
+    )
 }
 
 /// The wave and the space after it, rising from a flat line at first.
@@ -189,11 +175,11 @@ pub fn action(frame: usize, word: &str) -> String {
 }
 
 /// `word` fading in letter by letter beside the snowflake, each letter taking the logo's
-/// gradient as it flows with `frame`; letters not yet there are dim dots. A sparkle
-/// travels across the letters, one per frame, so the word shimmers while it works.
+/// gradient as it flows with `frame`; letters not yet there are dim dots. Two sparkles
+/// travel across the letters against each other, so the word shimmers while it works.
 pub fn action_word(frame: usize, word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
-    let sweep = sweep_at(frame, chars.len());
+    let lit = sparkles(frame, chars.len());
     let mut out = String::new();
     for (i, c) in chars.iter().enumerate() {
         let appeared = (frame as f32 - 4.0 * i as f32 + 2.0) / 6.0;
@@ -201,7 +187,7 @@ pub fn action_word(frame: usize, word: &str) -> String {
             out.push_str(&format!("{DIM}·{RESET}"));
             continue;
         }
-        let (bold, fade) = match i == sweep {
+        let (bold, fade) = match lit.contains(&i) {
             true => (BOLD, 1.0),
             false => ("", appeared.clamp(0.0, 1.0) * 0.75 + 0.25),
         };
@@ -219,13 +205,13 @@ pub fn action_word(frame: usize, word: &str) -> String {
 }
 
 /// `word` shown whole at once beside the snowflake, in the logo's gradient flowing with
-/// `frame`, with the same sparkle traveling across it as `action_word`.
+/// `frame`, with the same two sparkles traveling across it as `action_word`.
 pub fn steady_word(frame: usize, word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
-    let sweep = sweep_at(frame, chars.len());
+    let lit = sparkles(frame, chars.len());
     let mut out = String::new();
     for (i, c) in chars.iter().enumerate() {
-        let bold = match i == sweep {
+        let bold = match lit.contains(&i) {
             true => BOLD,
             false => "",
         };
@@ -242,10 +228,12 @@ pub fn steady_word(frame: usize, word: &str) -> String {
     out
 }
 
-/// The letter the sparkle sits on `frame` tenths of a second in: across the word one per
-/// frame, then round again.
-fn sweep_at(frame: usize, len: usize) -> usize {
-    frame.checked_rem(len.max(1)).unwrap_or(0)
+/// The letters the two sparkles sit on `frame` tenths of a second in: one crosses left to
+/// right a letter per frame, the other right to left a letter every two frames, so the
+/// pair keeps falling in and out of step — and lands on one letter when they meet.
+fn sparkles(frame: usize, len: usize) -> [usize; 2] {
+    let len = len.max(1);
+    [frame % len, len - 1 - (frame / 2) % len]
 }
 
 /// A progress bar `cells` wide with `fraction` of it filled: heavy strokes taking the logo's
@@ -398,9 +386,9 @@ mod tests {
     }
 
     #[test]
-    fn the_snowflake_is_three_columns_and_turns_slowly() {
+    fn the_snowflake_is_one_column_and_turns_slowly() {
         for frame in 0..120 {
-            assert_eq!(width(&snowflake(frame)), 3, "frame {frame}");
+            assert_eq!(width(&snowflake(frame)), 1, "frame {frame}");
         }
         let glyph = |frame| unstyled(&snowflake(frame));
         assert!(
@@ -413,73 +401,74 @@ mod tests {
             glyphs.insert(unstyled(&snowflake(frame)));
         }
         let shown: String = glyphs.iter().cloned().collect();
-        assert_eq!(
-            glyphs.len(),
-            SNOWFLAKES.len(),
-            "every glyph shows: {glyphs:?}"
-        );
+        assert_eq!(glyphs.len(), 3, "one glyph at a time, in place: {glyphs:?}");
         for c in SNOWFLAKES {
             assert!(shown.contains(c), "missing {c}: {glyphs:?}");
         }
     }
 
     #[test]
-    fn the_snowflake_is_bold_and_its_glints_twinkle_in_turn() {
+    fn the_snowflake_is_bold() {
         for frame in 0..40 {
             let flake = snowflake(frame);
             let parts: Vec<&str> = flake.split(RESET).collect();
-            assert_eq!(parts.len(), 4, "frame {frame}: two glints and a flake");
-            assert!(parts[1].contains(BOLD), "frame {frame}: the flake is bold");
-            let step = frame / GLINT_HOLD;
-            assert_eq!(
-                parts[0].contains(BOLD),
-                step.is_multiple_of(2),
-                "frame {frame}: the left glint twinkles"
-            );
-            assert_eq!(
-                parts[2].contains(BOLD),
-                !step.is_multiple_of(2),
-                "frame {frame}: the right glint twinkles"
-            );
+            assert_eq!(parts.len(), 2, "frame {frame}: the flake alone");
+            assert!(parts[0].contains(BOLD), "frame {frame}: the flake is bold");
         }
     }
 
     #[test]
-    fn a_sparkle_travels_across_the_action_and_snapshot_words() {
+    fn two_sparkles_cross_the_action_and_snapshot_words() {
         for frame in 60..84 {
             for styled in [
                 action_word(frame, "thinking"),
                 steady_word(frame, "thinking"),
             ] {
                 assert_eq!(
-                    styled.matches(BOLD).count(),
-                    1,
-                    "frame {frame}: one sparkle"
+                    sweep_letters(&styled),
+                    lit_letters("thinking", frame),
+                    "frame {frame}: two sparkles, one where they meet"
                 );
-                let want = "thinking".chars().nth(frame % 8).unwrap();
-                assert_eq!(sweep_letter(&styled), want, "frame {frame}");
             }
-            let long = steady_word(frame, "chiaroscuro");
             assert_eq!(
-                sweep_letter(&long),
-                "chiaroscuro".chars().nth(frame % 11).unwrap(),
+                sweep_letters(&steady_word(frame, "chiaroscuro")),
+                lit_letters("chiaroscuro", frame),
                 "frame {frame}"
             );
         }
+        // The pair is apart more often than together: two highlights, not one in disguise.
+        let apart = (60..84)
+            .filter(|&frame| sweep_letters(&steady_word(frame, "thinking")).len() == 2)
+            .count();
+        assert!(apart > 12, "the sparkles rarely part: {apart}/24");
     }
 
-    /// The letter the sweep highlights: the first character after BOLD past its color.
-    fn sweep_letter(styled: &str) -> char {
-        let at = styled.find(BOLD).expect("the sweep highlights one letter");
-        let mut chars = styled[at + BOLD.len()..].chars();
-        while let Some(c) = chars.next() {
-            if c == '\x1b' {
-                chars.by_ref().find(char::is_ascii_alphabetic);
-            } else {
-                return c;
-            }
-        }
-        panic!("no letter after the highlight");
+    /// The letters of `word` the sparkles light at `frame`, in word order.
+    fn lit_letters(word: &str, frame: usize) -> Vec<char> {
+        let lit = sparkles(frame, word.chars().count());
+        word.chars()
+            .enumerate()
+            .filter(|(i, _)| lit.contains(i))
+            .map(|(_, c)| c)
+            .collect()
+    }
+
+    /// The letters the sweeps highlight: the first character after each BOLD past its color.
+    fn sweep_letters(styled: &str) -> Vec<char> {
+        styled
+            .match_indices(BOLD)
+            .map(|(at, _)| {
+                let mut chars = styled[at + BOLD.len()..].chars();
+                while let Some(c) = chars.next() {
+                    if c == '\x1b' {
+                        chars.by_ref().find(char::is_ascii_alphabetic);
+                    } else {
+                        return c;
+                    }
+                }
+                panic!("no letter after the highlight");
+            })
+            .collect()
     }
 
     fn unstyled(line: &str) -> String {

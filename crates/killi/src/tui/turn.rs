@@ -295,6 +295,8 @@ impl App {
     pub(super) fn begin_busy(&mut self) {
         self.busy = Some(Instant::now());
         self.spinner = 0;
+        self.turn_out_base = self.status.completion;
+        self.streamed_bytes = 0;
         self.later_noted = false;
         self.last_end = None;
     }
@@ -307,6 +309,7 @@ impl App {
         self.swarm_send_armed = false;
         self.aside = None;
         self.retry = None;
+        self.streamed_bytes = 0;
         self.busy = None;
     }
 
@@ -411,6 +414,19 @@ impl App {
         self.status.completion += usage.completion;
         if main {
             self.status.context = usage.prompt;
+            // The request's real count replaces the streamed estimate.
+            self.streamed_bytes = 0;
+        }
+    }
+
+    /// This busy spell's output so far, for the working island: the settled usage since it
+    /// began plus a four-bytes-per-token estimate of what the request in flight has
+    /// streamed, marked `~` while any of it is still an estimate.
+    pub(super) fn turn_out(&self) -> String {
+        let settled = self.status.completion.saturating_sub(self.turn_out_base);
+        match self.streamed_bytes {
+            0 => format!("{} out", short(settled)),
+            bytes => format!("~{} out", short(settled + bytes.saturating_add(3) / 4)),
         }
     }
 

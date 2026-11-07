@@ -13,6 +13,9 @@ impl App {
         }
         match event {
             Event::Text(text) => {
+                if self.busy.is_some() {
+                    self.streamed_bytes += text.len() as u64;
+                }
                 let text = if self.last_kind == Kind::Text {
                     text.as_str()
                 } else {
@@ -42,6 +45,9 @@ impl App {
                 }
             }
             Event::Reasoning(delta) => {
+                if self.busy.is_some() {
+                    self.streamed_bytes += delta.len() as u64;
+                }
                 let clean = self.reasoning.push(&delta);
                 match &mut self.thinking {
                     Some((_, buffer)) => buffer.push_str(&clean),
@@ -54,6 +60,8 @@ impl App {
                 reason,
             } => {
                 self.retry = Some((attempt, Instant::now() + wait));
+                // The discarded partial streams again on the retry; don't count it twice.
+                self.streamed_bytes = 0;
                 let discarded = self.flush_partial();
                 self.thinking = None;
                 let _ = self.reasoning.finish();
@@ -118,6 +126,11 @@ impl App {
                     self.push_detail(summary, detail);
                 } else {
                     self.push_detail(summary, output.into_owned());
+                }
+            }
+            Event::ToolDelta(bytes) => {
+                if self.busy.is_some() {
+                    self.streamed_bytes += bytes as u64;
                 }
             }
             Event::Usage(usage) => self.add_usage(&usage, true),

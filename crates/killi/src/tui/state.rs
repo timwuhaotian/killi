@@ -215,6 +215,12 @@ pub(super) struct App {
     /// The first row that left output out has said how to read it; the rest don't repeat it.
     pub(super) ctrl_o_taught: bool,
     pub(super) status: Status,
+    /// The session's completion total when this busy spell began: the working island's
+    /// output count starts from it, so it reads as this turn's output.
+    pub(super) turn_out_base: u64,
+    /// Bytes streamed by the request in flight — text, reasoning and tool-call arguments —
+    /// for the island's live output estimate; the real usage replaces it when it lands.
+    pub(super) streamed_bytes: u64,
     pub(super) controls: Controls,
     pub(super) spinner: usize,
     pub(super) exit_armed: Option<Instant>,
