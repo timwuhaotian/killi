@@ -151,7 +151,8 @@ impl fmt::Display for Sgr {
 // The roles of the design system (`docs/killi-design-system.html`): each token's exact color
 // where the terminal shows 24-bit color, else its nearest 256-color shade.
 
-/// Killi: running work, the active mode, commands, links and the selected row's mark.
+/// Killi: running work, a finished call's tick, the active mode, commands, links and the
+/// selected row's mark.
 pub const LAGOON: Sgr = Sgr::fixed(
     "\x1b[38;5;80m",
     "\x1b[38;5;23m",
@@ -179,7 +180,7 @@ pub const DANGER: Sgr = Sgr::fixed(
     "\x1b[38;2;255;111;125m",
     "\x1b[38;2;179;38;30m",
 );
-/// Marks the eye may skip: a finished call's tick, gutters, hints, the empty part of a meter.
+/// Marks the eye may skip: gutters, hints, the empty part of a meter.
 pub const FAINT: Sgr = Sgr::derived(
     Role::Faint,
     "\x1b[38;5;242m",
@@ -240,16 +241,16 @@ pub const ADD: Sgr = Sgr::derived(
     Role::Add,
     "\x1b[49m",
     "\x1b[49m",
-    "\x1b[48;2;21;35;37m",
-    "\x1b[48;2;224;239;231m",
+    "\x1b[48;2;30;57;54m",
+    "\x1b[48;2;203;230;219m",
 );
 /// Behind a removed line of a diff.
 pub const DEL: Sgr = Sgr::derived(
     Role::Del,
     "\x1b[49m",
     "\x1b[49m",
-    "\x1b[48;2;41;30;35m",
-    "\x1b[48;2;248;229;226m",
+    "\x1b[48;2;72;45;50m",
+    "\x1b[48;2;249;211;208m",
 );
 /// Behind inline code, in 24-bit color.
 pub const CHIP: Sgr = Sgr::derived(

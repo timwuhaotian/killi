@@ -282,14 +282,14 @@ impl App {
     ) {
         let (glyph, note) = if is_error {
             (
-                format!("{DANGER}✗{RESET}"),
+                format!("{BOLD}{DANGER}✗{RESET}"),
                 format!(" {DANGER}{brief}{RESET}"),
             )
         } else if brief.is_empty() {
-            (format!("{FAINT}✓{RESET}"), String::new())
+            (format!("{LAGOON}✓{RESET}"), String::new())
         } else {
             (
-                format!("{FAINT}✓{RESET}"),
+                format!("{LAGOON}✓{RESET}"),
                 format!(" {DIM}· {brief}{RESET}"),
             )
         };
@@ -309,7 +309,7 @@ impl App {
                 Some(label) => {
                     format!("  {DIM}↳ {label}:{RESET} {glyph} {DIM}{summary}{RESET}{note}")
                 }
-                None => format!("{glyph} {}{note}", tool_summary(&summary)),
+                None => format!("{glyph} {}{note}", tool_summary(&summary, false)),
             };
             vec![fit(&line, width)]
         }));

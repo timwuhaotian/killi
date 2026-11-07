@@ -25,7 +25,7 @@ pub struct Ground {
 pub enum Role {
     /// Hairlines: the rules around the prompt.
     Rule,
-    /// Marks the eye may skip: a tick, hints, the empty part of a meter.
+    /// Marks the eye may skip: hints, the empty part of a meter.
     Faint,
     /// Secondary text: results, command output, notes.
     Muted,
@@ -125,8 +125,10 @@ pub fn derive(ground: Ground) -> Palette {
     colors[Role::Muted as usize] = step(target(0.5, 3.2, 5.8));
     colors[Role::Tint as usize] = from_lab(mix(lift(0.075), cast(0.12, lagoon), 0.35));
     colors[Role::Select as usize] = from_lab(mix(lift(0.10), cast(0.20, lagoon), 0.55));
-    colors[Role::Add as usize] = from_lab(cast(0.14, lch(0.72, 0.11, 172.0)));
-    colors[Role::Del as usize] = from_lab(cast(0.15, lch(0.72, 0.15, 18.0)));
+    // The stripes cast further than the other grounds: at a tint's depth green and red
+    // read as the same mud on a warm ground.
+    colors[Role::Add as usize] = from_lab(cast(0.28, lch(0.72, 0.11, 172.0)));
+    colors[Role::Del as usize] = from_lab(cast(0.30, lch(0.72, 0.15, 18.0)));
     colors[Role::Chip as usize] = from_lab(lift(0.11));
     Palette { colors }
 }
@@ -319,8 +321,13 @@ mod tests {
             let palette = derive(ground);
             for role in [Role::Tint, Role::Select, Role::Add, Role::Del, Role::Chip] {
                 let against = contrast(palette.rgb(role), ground.background);
+                // The diff stripes lift further than the tints so their hues separate.
+                let ceiling = match role {
+                    Role::Add | Role::Del => 1.75,
+                    _ => 1.45,
+                };
                 assert!(
-                    (1.02..1.45).contains(&against),
+                    (1.02..ceiling).contains(&against),
                     "{role:?} on {ground:?}: {against}"
                 );
             }
@@ -334,6 +341,23 @@ mod tests {
             assert!(
                 contrast(palette.rgb(Role::Muted), palette.rgb(Role::Tint)) > 4.5,
                 "muted text reads on the band"
+            );
+        }
+    }
+
+    #[test]
+    fn the_diff_stripes_read_green_and_red_on_every_ground() {
+        for ground in [NIGHT, EMBER, PAPER] {
+            let palette = derive(ground);
+            let (ar, ag, ab) = palette.rgb(Role::Add);
+            let (dr, dg, db) = palette.rgb(Role::Del);
+            assert!(
+                ag > ar && ag > ab,
+                "added stripe on {ground:?} is not green: ({ar}, {ag}, {ab})"
+            );
+            assert!(
+                dr > dg && dr > db,
+                "removed stripe on {ground:?} is not red: ({dr}, {dg}, {db})"
             );
         }
     }

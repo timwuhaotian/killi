@@ -179,7 +179,7 @@ impl Swarm {
         };
         let meter = banner::bar(finished as f32 / total.max(1) as f32, METER);
         let lead = format!(
-            "{LAGOON}{}{RESET} {BOLD}swarm{RESET} ",
+            "{BOLD}{LAGOON}{}{RESET} {BOLD}{LAGOON}swarm{RESET} ",
             QUARTER[frame % QUARTER.len()]
         );
         let tails = [
@@ -248,9 +248,9 @@ fn clip_middle(text: &str, max: usize) -> String {
 fn glyph(state: State, frame: usize) -> String {
     match state {
         State::Queued => format!("{FAINT}○{RESET}"),
-        State::Running => format!("{LAGOON}{}{RESET}", QUARTER[frame % QUARTER.len()]),
-        State::Done => format!("{FAINT}✓{RESET}"),
-        State::Failed => format!("{DANGER}✗{RESET}"),
+        State::Running => format!("{BOLD}{LAGOON}{}{RESET}", QUARTER[frame % QUARTER.len()]),
+        State::Done => format!("{LAGOON}✓{RESET}"),
+        State::Failed => format!("{BOLD}{DANGER}✗{RESET}"),
     }
 }
 

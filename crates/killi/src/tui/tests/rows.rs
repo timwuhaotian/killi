@@ -181,23 +181,28 @@ fn the_status_line_drops_detail_before_the_model_as_it_narrows() {
 #[test]
 fn tool_rows_bold_the_name_mute_the_folders_and_hang_output_off_a_gutter() {
     assert_eq!(
-        tool_summary("read src/lib.rs"),
+        tool_summary("read src/lib.rs", false),
         format!("{BOLD}read{RESET} {DIM}src/{RESET}lib.rs")
     );
     assert_eq!(
-        tool_summary("edit Cargo.toml"),
+        tool_summary("read src/lib.rs", true),
+        format!("{BOLD}{LAGOON}read{RESET} {DIM}src/{RESET}lib.rs"),
+        "a live call's name is lagoon too"
+    );
+    assert_eq!(
+        tool_summary("edit Cargo.toml", false),
         format!("{BOLD}edit{RESET} Cargo.toml")
     );
     assert_eq!(
-        tool_summary("write crates/a/b.rs"),
+        tool_summary("write crates/a/b.rs", false),
         format!("{BOLD}write{RESET} {DIM}crates/a/{RESET}b.rs")
     );
     assert_eq!(
-        tool_summary("grep \"x\" src/"),
+        tool_summary("grep \"x\" src/", false),
         format!("{BOLD}grep{RESET} \"x\" src/"),
         "only a path argument is split"
     );
-    assert_eq!(tool_summary("todo"), format!("{BOLD}todo{RESET}"));
+    assert_eq!(tool_summary("todo", false), format!("{BOLD}todo{RESET}"));
     assert_eq!(
         unstyled(&diff_row("+12\tlet x = 1;", 40, false)),
         "  │   12 + let x = 1;"
@@ -361,17 +366,30 @@ fn a_task_list_update_gets_no_row_unless_it_failed() {
 }
 
 #[test]
-fn bash_rows_lead_with_a_faint_dollar_instead_of_the_word() {
+fn bash_rows_lead_with_a_lagoon_dollar_and_a_bold_command() {
     assert_eq!(tool_text("bash cargo test"), "$ cargo test");
     assert_eq!(tool_text("bash [src] ls"), "$ [src] ls");
     assert_eq!(tool_text("bash"), "$");
     assert_eq!(tool_text("bashful x"), "bashful x");
     assert_eq!(tool_text("read src/lib.rs"), "read src/lib.rs");
     assert_eq!(
-        tool_summary(&tool_text("bash cargo test")),
-        format!("{FAINT}${RESET} cargo test")
+        tool_summary(&tool_text("bash cargo test"), false),
+        format!("{LAGOON}${RESET} {BOLD}cargo{RESET} test")
     );
-    assert_eq!(tool_summary(&tool_text("bash")), format!("{FAINT}${RESET}"));
+    assert_eq!(
+        tool_summary(&tool_text("bash cargo test"), true),
+        format!("{LAGOON}${RESET} {BOLD}{LAGOON}cargo{RESET} test"),
+        "a live command's name is lagoon too"
+    );
+    assert_eq!(
+        tool_summary(&tool_text("bash [src] ls -a"), false),
+        format!("{LAGOON}${RESET} [src] {BOLD}ls{RESET} -a"),
+        "the [dir] label stays plain, the command after it is the name"
+    );
+    assert_eq!(
+        tool_summary(&tool_text("bash"), false),
+        format!("{LAGOON}${RESET}")
+    );
 }
 
 #[test]

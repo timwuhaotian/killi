@@ -146,8 +146,9 @@ body { font-family: var(--font-mono); font-size: 13px; line-height: var(--row-1)
 .ki-tool-name { font-weight: 700; }
 .ki-tool-note { color: var(--fg-muted); }
 .ki-tool[data-status="failed"] .ki-tool-brief { color: var(--danger); }
-.ki-tool[data-status="done"] .ki-ok { color: var(--fg-faint); }
-.ki-tool-dollar { color: var(--fg-faint); }
+.ki-tool[data-status="running"] .ki-tool-name { color: var(--lagoon); }
+.ki-tool[data-status="running"] .ki-glyph, .ki-tool[data-status="failed"] .ki-glyph { font-weight: 700; }
+.ki-tool-dollar { color: var(--lagoon); }
 .ki-tool-dir { color: var(--fg-muted); }
 .ki-tool[data-sub="true"] .ki-tool-name, .ki-tool[data-sub="true"] .ki-tool-args { font-weight: 400; color: var(--fg-muted); }
 
@@ -294,7 +295,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <li><strong>Quiet by default.</strong> The ground is the terminal's, the text is <code>fg</code>, and most lines carry no color at all. Hierarchy is tone, not hue: text, <code>fg-muted</code>, <code>fg-faint</code>, a hairline. Color is spent only where something is live or waiting.</li>
 <li><strong>Two colors, two meanings.</strong> <code>lagoon</code> is Killi at work — running calls, the active mode, commands, the selected row. <code>fin</code> is the human — the prompt's caret, your messages, questions waiting on you, your answers. Never swap them; never use both on one element. The status line alone adds a hue per kind of figure (<code>effort</code>, <code>tokens</code>, <code>branch</code>) and they mean nothing else.</li>
 <li><strong>The grid is the layout.</strong> Everything aligns to character cells and rows. A status glyph sits in column 0 and its text in column 2; output hangs off a <code>│</code> gutter in column 2. Separate with blank rows, never with boxes.</li>
-<li><strong>Compact and durable.</strong> One row per tool call, long output behind <code>Ctrl+O</code>, never two blank rows in a row. Every state has a glyph and a word, not just a color, so it still reads with <code>NO_COLOR</code>. Success is quiet: a finished call's <code>✓</code> is <code>fg-faint</code>, so what is running or wrong is what the eye finds.</li>
+<li><strong>Compact and durable.</strong> One row per tool call, long output behind <code>Ctrl+O</code>, never two blank rows in a row. Every state has a glyph and a word, not just a color, so it still reads with <code>NO_COLOR</code>. The status column is one hue — <code>lagoon</code> for the running glyph and a finished call's <code>✓</code>, bold <code>danger</code> for <code>✗</code> — so the eye scans it for the one red glyph or the one still turning.</li>
 </ol>
 <h2>Voice</h2>
 <ul>
@@ -334,7 +335,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <tr>
 <td>Text</td>
 <td><code>fg</code>, <code>fg-muted</code>, <code>fg-faint</code>, <code>rule</code></td>
-<td>prose / results, output, notes, metrics / a finished call's ✓, gutters, hints, empty meter cells / the rules around the prompt</td>
+<td>prose / results, output, notes, metrics / gutters, hints, empty meter cells / the rules around the prompt</td>
 </tr>
 <tr>
 <td>Killi</td>
@@ -366,8 +367,8 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <p>Rules:</p>
 <ul>
 <li><code>fin</code> is never used for success and <code>lagoon</code> never for a warning. When in doubt, who is it waiting on? Human → <code>fin</code>. Killi → <code>lagoon</code>.</li>
-<li><code>fg-faint</code> is for marks the user can afford to miss (a finished call's <code>✓</code>, the gutter <code>│</code>, hints, the empty part of a meter); the rules around the prompt are the fainter <code>rule</code>. Any text that must be read is <code>fg-muted</code> or <code>fg</code>.</li>
-<li>Success has no green of its own, and it is quiet: a finished call's <code>✓</code> is <code>fg-faint</code>, and <code>lagoon</code> marks work that is live. Green, yellow and magenta exist only as syntax colors inside code blocks, where they mean nothing about state.</li>
+<li><code>fg-faint</code> is for marks the user can afford to miss (the gutter <code>│</code>, hints, the empty part of a meter); the rules around the prompt are the fainter <code>rule</code>. Any text that must be read is <code>fg-muted</code> or <code>fg</code>.</li>
+<li>Success has no green of its own: a finished call's <code>✓</code> is <code>lagoon</code> (<code>ok</code>), and a live call's name is <code>lagoon</code> too until it lands and falls back to strong <code>fg</code>. Green, yellow and magenta exist only as syntax colors inside code blocks, where they mean nothing about state.</li>
 <li>Solid fills (<code>lagoon</code>, <code>fin</code> as backgrounds) are for keycaps and mode badges on the web; the TUI has none.</li>
 </ul>
 <h3>Terminal colors</h3>
@@ -417,8 +418,8 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <tr><td>Your message</td><td><code>❯</code> (bold) on the tint</td><td><code>fin</code></td><td>—</td></tr>
 <tr><td>Running tool call</td><td><code>◐ ◓ ◑ ◒</code> (frames)</td><td><code>lagoon</code></td><td>the elapsed time</td></tr>
 <tr><td>Working</td><td>the braille wave and the action word (<code>thinking</code>, <code>writing</code>, …)</td><td>banner gradient</td><td>what it is doing, plain</td></tr>
-<tr><td>Done</td><td><code>✓</code></td><td><code>fg-faint</code></td><td>the result: <code>24 lines</code></td></tr>
-<tr><td>Failed</td><td><code>✗</code></td><td><code>danger</code></td><td>the reason</td></tr>
+<tr><td>Done</td><td><code>✓</code></td><td><code>lagoon</code> (<code>ok</code>)</td><td>the result: <code>24 lines</code></td></tr>
+<tr><td>Failed</td><td><code>✗</code> (bold)</td><td><code>danger</code></td><td>the reason</td></tr>
 <tr><td>Warning, retry</td><td><code>⚠</code></td><td><code>warn</code></td><td><code>retry</code></td></tr>
 <tr><td>Question for you</td><td><code>?</code></td><td><code>fin</code></td><td>the question</td></tr>
 <tr><td>Your answer</td><td><code>↳</code></td><td><code>fin</code></td><td>—</td></tr>
@@ -432,7 +433,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 </tbody>
 </table>
 <h2>States</h2>
-<p>A tool call is <code>running</code> in the live area, then <code>done</code> or <code>failed</code> in the scrollback, in the same column. Render the glyph in column 0 (<code>fg-faint</code> once done, <code>danger</code> when failed), the tool's name in <code>body-strong</code>, its arguments in <code>fg</code> — a path keeps its folders in <code>fg-muted</code> so the file stands out, and a <code>bash</code> call is a faint <code>$</code> and the command — then <code>· result · time</code> in <code>fg-muted</code> (time only from a second up). A failure puts its reason in <code>danger</code> and, for <code>bash</code>, shows the last lines of output under the gutter instead of the first. A call that only keeps the task list prints no row unless it failed. The first row of a session that leaves output out says <code>Ctrl+O</code> shows it; the rows after it only count.</p>
+<p>A tool call is <code>running</code> in the live area, then <code>done</code> or <code>failed</code> in the scrollback, in the same column. Render the glyph in column 0 (<code>lagoon</code> once done, bold <code>danger</code> when failed), the tool's name in <code>body-strong</code> — <code>lagoon</code> too while the call runs — its arguments in <code>fg</code> — a path keeps its folders in <code>fg-muted</code> so the file stands out, and a <code>bash</code> call is a <code>lagoon</code> <code>$</code> and the command with its first word strong — then <code>· result · time</code> in <code>fg-muted</code> (time only from a second up). A failure puts its reason in <code>danger</code> and, for <code>bash</code>, shows the last lines of output under the gutter instead of the first. A call that only keeps the task list prints no row unless it failed. The first row of a session that leaves output out says <code>Ctrl+O</code> shows it; the rows after it only count.</p>
 <h2>Motion</h2>
 <p>Only four things move, on one 100ms tick: the wave and wordmark on the working row, the quarter glyph of each running tool call, the elapsed timers, and the stream of tokens as they arrive. No fades, no slides, no blinking. The terminal's own cursor marks where you type. On the web, <code>prefers-reduced-motion</code> holds every animation on its first frame.</p>
 <h2>Logo</h2>
@@ -504,7 +505,7 @@ pre.dts { background: var(--bg-sunken); padding: var(--row-half) var(--cell-2); 
 <section class="comp" id="c-ToolCall">
   <div class="comp-head"><h3>ToolCall</h3><span class="muted">Conversation</span></div>
   <div class="stage ki-stage" id="stage-ToolCall"></div>
-  <div class="guide"><p>One tool call is one row: the status glyph, the tool's name in <code>body-strong</code>, its arguments (a path with its folders in <code>fg-muted</code>; a <code>bash</code> call as a faint <code>$</code> and the command), then <code>· result · time</code> in <code>fg-muted</code>. While it runs it lives in the live area with a turning <code>◐</code>; when it ends it is printed to the scrollback as a faint <code>✓</code> or a <code>danger</code> <code>✗</code> in the same column.</p>
+  <div class="guide"><p>One tool call is one row: the status glyph, the tool's name in <code>body-strong</code>, its arguments (a path with its folders in <code>fg-muted</code>; a <code>bash</code> call as a <code>lagoon</code> <code>$</code> and the command with its first word strong), then <code>· result · time</code> in <code>fg-muted</code>. While it runs it lives in the live area with a turning bold <code>◐</code> and its name in <code>lagoon</code>; when it ends it is printed to the scrollback as a <code>lagoon</code> <code>✓</code> or a bold <code>danger</code> <code>✗</code> in the same column.</p>
 <p><strong>Provide:</strong> <code>name</code>, <code>args</code>, <code>status</code> (<code>running</code> · <code>done</code> · <code>failed</code>), <code>brief</code> (<code>24 lines</code>, <code>+9 −1</code>, or the failure), <code>duration</code>, optional <code>label</code> for a subagent's call, output as children.</p>
 <ul>
 <li>Do show up to three lines of a <code>bash</code> call's output under the <code>│</code> gutter: the first when it passed, the last when it failed, then <code>… n more lines</code>; the first such row of a session adds <code> · Ctrl+O</code>, since only the newest call's key does anything.</li>
@@ -1151,7 +1152,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   /* A bash call is drawn as the `$` of a prompt; a path keeps its folders muted so the file stands out. */
   function callHead(props) {
     var args = props.args || '';
-    if (props.name === 'bash') return [h('span', { key: 'n', className: 'ki-tool-dollar' }, '$'), args ? ' ' + args : ''];
+    if (props.name === 'bash') { var cmd = args.match(/^(\[[^\]]*\] )?(\S+)(.*)$/); return [h('span', { key: 'n', className: 'ki-tool-dollar' }, '$'), cmd ? [' ' + (cmd[1] || ''), h('span', { key: 'c', className: 'ki-tool-name' }, cmd[2]), cmd[3]] : '']; }
     var path = /^(read|write|edit)$/.test(props.name) ? args.match(/^(.*\/)([^\/]+)$/) : null;
     return [h('span', { key: 'n', className: 'ki-tool-name' }, props.name),
       path ? [' ', h('span', { key: 'd', className: 'ki-tool-dir' }, path[1]), path[2]] : args ? ' ' + args : ''];

@@ -388,16 +388,36 @@ pub(super) fn tool_text(summary: &str) -> String {
     }
 }
 
-/// `tool_text` with the tool's name in bold, `read src/lib.rs`, or the `$` faint.
-pub(super) fn tool_summary(summary: &str) -> String {
+/// `tool_text` with its name styled: `read src/lib.rs` bolds the tool, in lagoon too while
+/// the call is live, since lagoon marks work in flight. The shell's `$` is lagoon always,
+/// and the command after it is the bold name, a `[dir]` label before it staying plain.
+pub(super) fn tool_summary(summary: &str, live: bool) -> String {
     let (name, rest) = match summary.split_once(' ') {
         Some((name, args)) => (name, format!(" {args}")),
         None => (summary, String::new()),
     };
+    let head = match live {
+        true => format!("{BOLD}{LAGOON}"),
+        false => BOLD.to_string(),
+    };
     match name {
-        "$" => format!("{FAINT}${RESET}{rest}"),
-        "read" | "write" | "edit" => format!("{BOLD}{name}{RESET}{}", path_style(&rest)),
-        _ => format!("{BOLD}{name}{RESET}{rest}"),
+        "$" => {
+            let line = rest.strip_prefix(' ').unwrap_or(&rest);
+            let (label, line) = match line.split_once(' ') {
+                Some((first, tail)) if first.starts_with('[') && first.ends_with(']') => {
+                    (format!("{first} "), tail)
+                }
+                _ => (String::new(), line),
+            };
+            match line.split_once(' ') {
+                Some((cmd, args)) => format!("{LAGOON}${RESET} {label}{head}{cmd}{RESET} {args}"),
+                None if line.is_empty() && label.is_empty() => format!("{LAGOON}${RESET}"),
+                None if line.is_empty() => format!("{LAGOON}${RESET} {}", label.trim_end()),
+                None => format!("{LAGOON}${RESET} {label}{head}{line}{RESET}"),
+            }
+        }
+        "read" | "write" | "edit" => format!("{head}{name}{RESET}{}", path_style(&rest)),
+        _ => format!("{head}{name}{RESET}{rest}"),
     }
 }
 

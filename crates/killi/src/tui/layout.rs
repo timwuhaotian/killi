@@ -168,12 +168,12 @@ impl App {
                 let took = format!(" {DIM}· {}{RESET}", clock(running.started.elapsed()));
                 let line = match &running.label {
                     Some(label) => format!(
-                        "  {DIM}↳ {label}:{RESET} {LAGOON}{frame}{RESET} {DIM}{}{RESET}{took}",
+                        "  {DIM}↳ {label}:{RESET} {BOLD}{LAGOON}{frame}{RESET} {DIM}{}{RESET}{took}",
                         tool_text(&running.summary)
                     ),
                     None => format!(
-                        "{LAGOON}{frame}{RESET} {}{took}",
-                        tool_summary(&tool_text(&running.summary))
+                        "{BOLD}{LAGOON}{frame}{RESET} {}{took}",
+                        tool_summary(&tool_text(&running.summary), true)
                     ),
                 };
                 rows.push(fit(&line, width));
@@ -186,7 +186,7 @@ impl App {
                 shrink_head.push(rows.len());
                 rows.push(fit(
                     &format!(
-                        "{LAGOON}{frame}{RESET} {BOLD}{FIN}btw{RESET} {question}{DIM} · {}{RESET}",
+                        "{BOLD}{LAGOON}{frame}{RESET} {BOLD}{FIN}btw{RESET} {question}{DIM} · {}{RESET}",
                         clock(since.elapsed())
                     ),
                     width,

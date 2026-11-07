@@ -124,7 +124,7 @@ impl App {
             .iter()
             .map(|(_, who, question, since)| {
                 let question = clip(&question.split_whitespace().collect::<Vec<_>>().join(" "), width.saturating_sub(who.len() + 16));
-                fit(&format!("{LAGOON}{frame}{RESET} {BOLD}{FIN}{who} asks{RESET} {question}{DIM} · {}{RESET}", clock(since.elapsed())), width)
+                fit(&format!("{BOLD}{LAGOON}{frame}{RESET} {BOLD}{FIN}{who} asks{RESET} {question}{DIM} · {}{RESET}", clock(since.elapsed())), width)
             })
             .collect()
     }

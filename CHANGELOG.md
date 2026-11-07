@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- Tool rows carry killi's highlight colors: the status glyph is lagoon when
+  done and bold lagoon while running, bold danger on failure; a running
+  call's name is lagoon too and falls back to bold when it lands. The
+  shell's `$` is lagoon and the command it runs is bold like a tool name.
+- Diff stripes cast twice as far toward green and red: at the old depth the
+  two read as the same mud on a warm terminal ground, leaving only the
+  `+`/`-` sign to tell added from removed.
+
 ## 0.6.52 — 2026-11-07
 
 - The working row is an island: the snowflake and the action word sit on the
