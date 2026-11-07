@@ -29,30 +29,31 @@ pub(super) fn glob_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        if let Err(error) = entry.metadata() {
-            errors.record(cwd, entry.path(), error);
-            continue;
-        }
         if scanned == MAX_SCAN_FILES {
             scan_limited = true;
             break;
         }
         scanned += 1;
         let relative = entry.path().strip_prefix(root).unwrap_or(entry.path());
-        if matcher.is_match(relative) {
-            if found.len() == MAX_FILES {
-                more = true;
-                break;
-            }
-            found.push(
-                entry
-                    .path()
-                    .strip_prefix(cwd)
-                    .unwrap_or(entry.path())
-                    .display()
-                    .to_string(),
-            );
+        if !matcher.is_match(relative) {
+            continue;
         }
+        if let Err(error) = entry.metadata() {
+            errors.record(cwd, entry.path(), error);
+            continue;
+        }
+        if found.len() == MAX_FILES {
+            more = true;
+            break;
+        }
+        found.push(
+            entry
+                .path()
+                .strip_prefix(cwd)
+                .unwrap_or(entry.path())
+                .display()
+                .to_string(),
+        );
     }
     let incomplete = scan_limited || errors.count > 0;
     if found.is_empty() {

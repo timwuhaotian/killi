@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
+use base64::Engine;
 use serde_json::Value;
 
 use super::{Context, MAX_BYTES, MAX_LINES, Output, is_binary, resolve};
@@ -42,7 +43,7 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
             bytes.len()
         ));
     }
-    let text = TextFile::decode(&bytes).text;
+    let text = TextFile::decode(bytes).text;
     if text.is_empty() {
         return Output::ok("(empty file)");
     }
@@ -58,19 +59,24 @@ pub fn read(ctx: &Context, args: &Value) -> Output {
     let limit = super::uint(args, "limit").map_or(MAX_LINES, |l| (l as usize).clamp(1, MAX_LINES));
 
     let mut out = String::new();
+    let mut entry = String::new();
     let mut last = offset - 1;
     let mut hit_bytes = false;
     for (i, line) in lines().enumerate().skip(offset - 1).take(limit) {
-        let entry = if line.len() > MAX_LINE_CHARS {
-            format!(
-                "{}\t{}… [line truncated: {} chars]\n",
+        entry.clear();
+        if line.len() > MAX_LINE_CHARS {
+            use std::fmt::Write;
+            let _ = writeln!(
+                entry,
+                "{}\t{}… [line truncated: {} chars]",
                 i + 1,
                 truncate(line, MAX_LINE_CHARS),
                 line.len()
-            )
+            );
         } else {
-            format!("{}\t{line}\n", i + 1)
-        };
+            use std::fmt::Write;
+            let _ = writeln!(entry, "{}\t{line}", i + 1);
+        }
         if !out.is_empty() && out.len() + entry.len() > MAX_BYTES {
             hit_bytes = true;
             break;
@@ -226,27 +232,12 @@ pub fn image_url(name: &str, full: &Path, media_type: &str) -> Result<(String, u
         )
     };
     Ok((
-        format!("data:{media_type};base64,{}", base64(&bytes)),
+        format!(
+            "data:{media_type};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        ),
         bytes.len(),
     ))
-}
-
-fn base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = (u32::from(chunk[0]) << 16)
-            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*chunk.get(2).unwrap_or(&0));
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(TABLE[(n >> (18 - 6 * i) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
 }
 
 pub fn write(ctx: &Context, args: &Value) -> Output {
@@ -284,14 +275,24 @@ pub struct TextFile {
 }
 
 impl TextFile {
-    pub fn decode(bytes: &[u8]) -> Self {
-        let raw = String::from_utf8_lossy(bytes);
+    pub fn decode(bytes: Vec<u8>) -> Self {
+        let raw = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        };
         let (bom, raw) = match raw.strip_prefix('\u{feff}') {
             Some(rest) => (true, rest.to_string()),
-            None => (false, raw.into_owned()),
+            None => (false, raw),
         };
-        let newlines = raw.matches('\n').count();
-        let crlf = newlines > 0 && raw.matches("\r\n").count() == newlines;
+        let mut newlines = 0;
+        let mut all_crlf = true;
+        for (i, _) in raw.match_indices('\n') {
+            newlines += 1;
+            if i == 0 || raw.as_bytes()[i - 1] != b'\r' {
+                all_crlf = false;
+            }
+        }
+        let crlf = newlines > 0 && all_crlf;
         let text = if crlf { raw.replace("\r\n", "\n") } else { raw };
         Self { text, bom, crlf }
     }
@@ -317,15 +318,6 @@ mod tests {
 
     fn ctx(dir: &std::path::Path) -> Context {
         Context::new(dir.to_path_buf(), dir.join("spill"))
-    }
-
-    #[test]
-    fn base64_matches_the_standard() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
     }
 
     #[test]
@@ -406,7 +398,7 @@ mod tests {
 
     #[test]
     fn crlf_and_bom_round_trip() {
-        let file = TextFile::decode("\u{feff}a\r\nb\r\n".as_bytes());
+        let file = TextFile::decode("\u{feff}a\r\nb\r\n".as_bytes().to_vec());
         assert_eq!(file.text, "a\nb\n");
         assert_eq!(file.encode("a\nc\n"), "\u{feff}a\r\nc\r\n");
     }

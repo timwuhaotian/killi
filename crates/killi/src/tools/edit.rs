@@ -41,7 +41,7 @@ pub fn edit(ctx: &Context, args: &Value) -> Output {
             e.valid_up_to()
         ));
     }
-    let file = TextFile::decode(&bytes);
+    let file = TextFile::decode(bytes);
     match apply(&file.text, &edits, path) {
         Ok(applied) => match fs::write(&full, file.encode(&applied.text)) {
             Ok(()) => {
