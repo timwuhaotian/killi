@@ -14,6 +14,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
   history is untouched. Responses reasoning from older logs, which has no recorded issuer, is
   not replayed either; text and tool calls still carry over any switch.
 
+## 0.6.67 — 2026-11-08
+
+- The repeat breaker no longer lets a model loop on the same call. An identical call
+
 ## 0.6.66 — 2026-11-08
 
 - A tool call a provider streams without arguments no longer breaks the session. Its

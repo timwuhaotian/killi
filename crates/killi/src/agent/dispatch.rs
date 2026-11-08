@@ -2,6 +2,8 @@ use super::*;
 
 pub(super) const REPEAT_WARNINGS: [u32; 3] = [3, 5, 7];
 pub(super) const REPEAT_STOP: u32 = 8;
+/// An identical call that has already returned the same result twice is not run again.
+pub(super) const REPEAT_BLOCK_AFTER: u32 = 2;
 
 /// The result of a call that didn't run because the user sent a message before its turn.
 pub(super) const SKIPPED_FOR_MESSAGE: &str =
@@ -33,10 +35,17 @@ impl Agent {
                 }
                 break;
             }
+            if let Some((same_as, output)) = self.repeat_block(&calls[i].1) {
+                let (id, call) = &calls[i];
+                let started = Instant::now();
+                stop |= self.finish_call(id, call, output, started.elapsed(), Some(same_as))?;
+                i += 1;
+                continue;
+            }
             if !self.settings.hooks.has_tool_hooks() && parallel_read(&calls[i].1) {
                 let end = calls[i..]
                     .iter()
-                    .position(|(_, c)| !parallel_read(c))
+                    .position(|(_, c)| !parallel_read(c) || self.repeat_block(c).is_some())
                     .map_or(calls.len(), |n| i + n);
                 let started = Instant::now();
                 let outputs = self.execute_reads(&calls[i..end], truncated).await;
@@ -52,7 +61,7 @@ impl Agent {
                             image.clone(),
                         ));
                     }
-                    stop |= self.finish_call(id, call, output, took)?;
+                    stop |= self.finish_call(id, call, output, took, None)?;
                 }
                 i = end;
                 continue;
@@ -66,7 +75,7 @@ impl Agent {
                 let outputs = self.run_subagents(&calls[i..end]).await;
                 let took = started.elapsed();
                 for ((id, call), output) in calls[i..end].iter().zip(outputs) {
-                    stop |= self.finish_call(id, call, output, took)?;
+                    stop |= self.finish_call(id, call, output, took, None)?;
                 }
                 i = end;
                 continue;
@@ -75,7 +84,7 @@ impl Agent {
             if call.name == "agent_swarm" && self.depth == 0 {
                 let started = Instant::now();
                 let output = self.run_swarm(id, call).await;
-                stop |= self.finish_call(id, call, output, started.elapsed())?;
+                stop |= self.finish_call(id, call, output, started.elapsed(), None)?;
                 i += 1;
                 continue;
             }
@@ -92,7 +101,7 @@ impl Agent {
                     image.clone(),
                 ));
             }
-            stop |= self.finish_call(id, call, output, took)?;
+            stop |= self.finish_call(id, call, output, took, None)?;
             i += 1;
         }
         if !images.is_empty() {
@@ -346,12 +355,15 @@ impl Agent {
     }
 
     /// Reports and records a call's result. Returns true when the repeat breaker trips.
+    /// `same_as` is the previous result's hash for a call the repeat breaker refused to run
+    /// again, so it counts as the same result instead of breaking the streak.
     pub(super) fn finish_call(
         &mut self,
         id: &str,
         call: &ToolCall,
         mut output: tools::Output,
         took: Duration,
+        same_as: Option<u64>,
     ) -> Result<bool> {
         if self
             .partial_swarm
@@ -376,29 +388,64 @@ impl Agent {
         if output.text.len() > MAX_RESULT_BYTES {
             output.text = self.shorten(&output.text);
         }
-        let result = hash_text(&output.text);
+        let result = same_as.unwrap_or_else(|| hash_text(&output.text));
+        let key = repeat_key(call, result);
+        // A blocked repeat keeps the tail of the earlier result, so a further repeat still
+        // points at the hint that should have changed the call.
+        let tail = if same_as.is_some() {
+            self.repeats.get(&key).map(|r| r.tail.clone()).unwrap_or_default()
+        } else {
+            tail_of(&output.text)
+        };
         let (count, same) = self
             .repeats
-            .entry(repeat_key(call, result))
+            .entry(key)
             .or_default()
-            .note(result);
-        if REPEAT_WARNINGS.contains(&count) {
-            let warning = if same {
-                " and got the same result. Repeating it won't change the result; try a different approach."
-            } else {
-                ". Its result changed, so this is a repetition warning, not a stale-result loop."
-            };
-            output.text.push_str(&format!(
-                "\n\n<system-reminder>You have made this exact {} call {count} times{warning}</system-reminder>",
-                call.name
-            ));
-        }
+            .note(result, &tail);
         let meta = json!({"name": call.name, "is_error": output.is_error, "brief": output.brief, "ms": millis(took)});
         self.push_meta(
             json!({"role": "tool", "tool_call_id": id, "content": output.text}),
             Some(meta),
         )?;
+        if REPEAT_WARNINGS.contains(&count) {
+            let same_part = if same {
+                let brief = if output.brief.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", output.brief)
+                };
+                format!("and got the same result each time{brief}. Repeating it won't change the result; change the call or reply in text.")
+            } else {
+                "and its result changed, so this is a repetition warning, not a stale-result loop."
+                    .to_string()
+            };
+            self.push(json!({"role": "user", "content": format!(
+                "<system-reminder>You have made this exact {} call {count} times {same_part}</system-reminder>",
+                call.name
+            )}))?;
+        }
         Ok(same && count >= REPEAT_STOP)
+    }
+
+    /// An identical call that has already returned the same result twice is not run again:
+    /// re-running it cannot get anything new, and the model must change the call or reply in
+    /// text instead of looping. Returns the previous result's hash (so `finish_call` counts
+    /// this call as the same result) and the output to record. Waits on background tasks are
+    /// never blocked: polling is the point, and their key already carries the result.
+    pub(super) fn repeat_block(&self, call: &ToolCall) -> Option<(u64, tools::Output)> {
+        if call.name == "task_output" {
+            return None;
+        }
+        let repeat = self.repeats.get(&hash_call(call))?;
+        if repeat.count < REPEAT_BLOCK_AFTER || !repeat.same {
+            return None;
+        }
+        let output = tools::Output::ok(format!(
+            "Not run again: this exact `{}` call was already made {} times and returned the same result each time. The previous result ended with:\n{}\n\nChange the call (different arguments or another tool) or reply in text instead of repeating it.",
+            call.name, repeat.count, repeat.tail
+        ))
+        .brief(format!("not run: repeated {}", call.name));
+        Some((repeat.result, output))
     }
 
     /// Runs a tool call's PostToolUse hooks over its result, appending what they say.
@@ -475,6 +522,24 @@ fn hash_text(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+/// The end of a tool result, enough for a blocked repeat to point at its continuation hint.
+fn tail_of(text: &str) -> String {
+    const TAIL_CHARS: usize = 300;
+    let tail: String = text
+        .chars()
+        .rev()
+        .take(TAIL_CHARS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    if tail.chars().count() == text.chars().count() {
+        tail
+    } else {
+        format!("…{tail}")
+    }
 }
 
 /// Identifies a tool call by its name and exact arguments, without keeping the arguments.

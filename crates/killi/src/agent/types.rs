@@ -390,20 +390,28 @@ pub(super) struct PendingPrompt {
     pub(super) notes: Vec<String>,
 }
 
-/// How often one exact tool call was made, and a hash of what its latest result said.
+/// How often one exact tool call was made, a hash of what its latest result said, whether the
+/// latest result matched the one before it, and the end of that result for a blocked repeat to
+/// point at.
 #[derive(Default)]
 pub(super) struct Repeat {
-    count: u32,
-    result: u64,
+    pub(super) count: u32,
+    pub(super) result: u64,
+    /// Whether the latest result matched the one before it, so the call can be blocked.
+    pub(super) same: bool,
+    /// The end of the latest result, for a blocked repeat to point at.
+    pub(super) tail: String,
 }
 
 impl Repeat {
     /// Counts another identical call. Returns how many there have been, and whether this one
     /// got the same result as the one before it.
-    pub(super) fn note(&mut self, result: u64) -> (u32, bool) {
+    pub(super) fn note(&mut self, result: u64, tail: &str) -> (u32, bool) {
         let same = self.count > 0 && self.result == result;
         self.count += 1;
         self.result = result;
+        self.same = same;
+        self.tail = tail.to_string();
         (self.count, same)
     }
 }
