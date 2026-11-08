@@ -69,7 +69,10 @@ How these were measured: [Size and memory](#size-and-memory) · [Capability test
   `AGENTS.md` (or `CLAUDE.md`) files, including ones in subfolders.
 - **Every session on disk**, exactly as sent, so `killi -c` continues where you left off with
   the cache still warm.
-- **Updates itself.** `killi update` installs the latest release after checking its checksum.
+- **Updates itself.** `killi update` installs the latest release after checking its checksum,
+  and a session that finds a newer release (at start and every six hours) prints what changed
+  since your version and asks whether to install it now. `KILLI_NO_UPDATE_CHECK=1` turns the
+  check off.
 
 ## Size and memory
 

@@ -23,6 +23,11 @@ impl App {
             self.recap = None;
             return Ok(Some(Input::Prompt(text, images)));
         }
+        // A newer killi found while the last turn ran is offered now that the prompt is back.
+        if self.updates.found.is_some() {
+            self.offer_update();
+            self.draw()?;
+        }
         let mut edge = tokio::time::interval(Duration::from_millis(50));
         edge.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -99,6 +104,22 @@ impl App {
                     self.draw()?;
                     continue;
                 }
+                // Checking for a newer killi, and installing one, run as tasks beside the
+                // session; their answers are taken here.
+                () = async { tokio::time::sleep_until(self.updates.due.expect("a check is due").into()).await }, if self.updates.due.is_some() && self.updates.check.is_none() => {
+                    self.start_update_check();
+                    continue;
+                }
+                checked = async { (&mut self.updates.check.as_mut().expect("a check runs")).await }, if self.updates.check.is_some() => {
+                    self.on_update_checked(checked);
+                    self.draw()?;
+                    continue;
+                }
+                installed = async { (&mut self.updates.install.as_mut().expect("an install runs").1).await }, if self.updates.install.is_some() => {
+                    self.on_update_installed(installed);
+                    self.draw()?;
+                    continue;
+                }
             };
             let Some(event) = event else { return Ok(None) };
             let event = event?;
@@ -108,6 +129,10 @@ impl App {
                 self.edited();
             }
             self.sync_menu();
+            // A release that waited for the prompt to empty is offered once it has.
+            if matches!(result, Idle::Continue) && self.updates.found.is_some() {
+                self.offer_update();
+            }
             self.draw()?;
             match result {
                 Idle::Continue => {}

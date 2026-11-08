@@ -190,6 +190,7 @@ recap = false
     subprocess.run(["git", "init", "-q", "-b", "master"], cwd=project, check=True)
     subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "init"], cwd=project, check=True)
     env = {k: v for k, v in os.environ.items() if k not in ("TERM_PROGRAM", "KILLI_PID")}
+    env["KILLI_NO_UPDATE_CHECK"] = "1"
     env.update(HOME=str(home), TERM="xterm-256color", TERM_PROGRAM="live-check")
     live = home / ".killi" / "live"
     sessions, failed = [], []

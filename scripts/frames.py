@@ -12,7 +12,8 @@ for its background and foreground, and the pseudo-terminal answers with the them
 drawn as Kil draws it, each channel scaled to two thirds. Scenes: start, menu, files (the `@`
 menu), picker, theme (`/theme` previewing the last theme as its selection lands on it, with the
 specimen of its colors above the prompt), conv (a bug fix with a diff), question, plan, busy (mid-turn), swarm and swarm-big (an
-`agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), peers (the banner
+`agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), update (a newer
+killi offered from a local release site, its changelog above the question), peers (the banner
 with another session in the repository), sessions (`/sessions`) and peer (that session's question and
 message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
 selection in reverse video), select-prompt (Shift+Alt+Left over the prompt's last words), held (a prompt waiting for its first token) and takeback (Esc before that
@@ -44,7 +45,10 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pyte
@@ -89,6 +93,7 @@ SCENES = {
     "swarm-done": dict(keys=["SWARM review the open PRs\r"], until="nothing blocks"),
     "peers": dict(keys=[], peer=True),
     "sessions": dict(keys=["/sessions\r"], peer=True),
+    "update": dict(keys=[], until="Update killi", update=True),
     "peer": dict(keys=["ASK:Which files are you changing, and is anything committed?", "TELL:The base branch is pushed and green; rebase on it when you get there."], peer=True),
 }
 
@@ -216,6 +221,41 @@ class Scratch:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
+# The release site the update scene's session finds a newer killi on: `latest.toml` under
+# `releases/` and the changelog beside that folder, as the real site has them.
+CHANGELOG = """# Changelog
+
+## Unreleased
+
+## 9.9.9 — 2026-11-09
+
+- Sessions ask to update when a newer killi is out, with what changed since your version
+  printed above the question.
+- `killi update` keeps working as before.
+
+## 9.9.8 — 2026-11-08
+
+- The working row is quieter.
+"""
+
+
+class Quiet(SimpleHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+
+def release_site(scratch):
+    """Serves a release of killi 9.9.9 from the scratch folder; returns the server and the
+    `KILLI_RELEASES_URL` that points at it."""
+    site = scratch.dir / "site"
+    (site / "releases").mkdir(parents=True, exist_ok=True)
+    (site / "releases" / "latest.toml").write_text(f'version = "9.9.9"\nsha256 = "{"0" * 64}"\n')
+    (site / "CHANGELOG.md").write_text(CHANGELOG)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(Quiet, directory=str(site)))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}/releases"
+
+
 def osc(code, hex_color):
     r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
     return f"\x1b]{code};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\".encode()
@@ -258,14 +298,18 @@ def run_scene(args, scratch, scene, cols, rows, theme):
     """Runs killi through `scene` and returns the screen as rows of (char, fg, bg, bold, dim)."""
     background, foreground, _ = THEMES[theme]
     peer = hold_peer(scratch) if scene.get("peer") else None
+    site, releases = release_site(scratch) if scene.get("update") else (None, None)
     screen = pyte.Screen(cols, rows)
     stream = pyte.ByteStream(screen)
     pid, fd = pty.fork()
     if pid == 0:
         fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         env = {k: v for k, v in os.environ.items() if k not in ("COLORFGBG", "COLORTERM", "NO_COLOR", "TERM_PROGRAM")}
-        env.update(TERM="xterm-256color", HOME=str(scratch.home), TERM_PROGRAM="frames" if args.inline else "kil")
+        env.update(TERM="xterm-256color", HOME=str(scratch.home), TERM_PROGRAM="frames" if args.inline else "kil", KILLI_NO_UPDATE_CHECK="1")
         env["PATH"] = f"{scratch.bin}{os.pathsep}{env.get('PATH', '')}"
+        if releases:
+            del env["KILLI_NO_UPDATE_CHECK"]
+            env["KILLI_RELEASES_URL"] = releases
         if args.colors == "truecolor":
             env["COLORTERM"] = "truecolor"
         if args.no_color:
@@ -376,6 +420,8 @@ def run_scene(args, scratch, scene, cols, rows, theme):
         pass
     if peer:
         peer.close()
+    if site:
+        site.shutdown()
     return cells
 
 

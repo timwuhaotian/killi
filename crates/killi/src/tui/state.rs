@@ -187,6 +187,8 @@ pub(super) struct App {
     pub(super) provider: Option<ProviderFlow>,
     /// The SearXNG instance Docker is starting for that flow, when one is.
     pub(super) searxng: Option<PendingSearxng>,
+    /// Checks for a newer killi, the offer to install it, and the install.
+    pub(super) updates: Updates,
     /// Input to act on before reading keys again, such as `/model <alias>`.
     pub(super) next_input: Option<Input>,
     /// An effort picked while the agent works; it applies once the turn ends.

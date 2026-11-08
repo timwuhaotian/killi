@@ -15,6 +15,8 @@ use crate::tui::banner;
 use crate::tui::megabytes;
 use crate::tui::text::{DIM, LAGOON, RESET, plain, width, wrap};
 
+pub(crate) mod notes;
+
 /// Where releases are published; `KILLI_RELEASES_URL` points elsewhere, e.g. a local mirror.
 /// The raw host directly: `github.com/.../raw/...` only redirects here, and that hop is the
 /// one that answers 504 when GitHub's front door is having a bad minute.
@@ -49,7 +51,7 @@ pub async fn update() -> Result<()> {
 }
 
 async fn run(status: &mut Status) -> Result<()> {
-    let base = std::env::var("KILLI_RELEASES_URL").unwrap_or_else(|_| RELEASES_URL.to_string());
+    let base = releases_url();
     let http = http_client()?;
     let (version, sha256) = status
         .during("checking", "for updates", latest(&http, &base))
@@ -59,22 +61,119 @@ async fn run(status: &mut Status) -> Result<()> {
         status.finish(&format!("killi {current} is up to date."));
         return Ok(());
     }
-
-    let exe = fs::canonicalize(std::env::current_exe()?)?;
-    let staging = exe.with_file_name(format!(".killi-update-{}", std::process::id()));
-    let bytes = download(status, &http, &format!("{base}/{BINARY}"), &version).await?;
-    fs::write(&staging, &bytes)
-        .with_context(|| format!("could not write {}", staging.display()))?;
-    let result = verify_and_install(&staging, &sha256, &version, &exe);
-    if result.is_err() {
-        let _ = fs::remove_file(&staging);
-    }
-    result?;
+    let exe = install_with(status, &http, &base, &version, &sha256).await?;
     status.finish(&format!(
         "Updated killi {current} → {version} ({}).",
         exe.display()
     ));
     Ok(())
+}
+
+fn releases_url() -> String {
+    std::env::var("KILLI_RELEASES_URL").unwrap_or_else(|_| RELEASES_URL.to_string())
+}
+
+/// Downloads `version`, checks it against `sha256` and its own `--version`, and puts it in
+/// place of the running binary, whose path it returns.
+async fn install_with(
+    status: &mut Status,
+    http: &reqwest::Client,
+    base: &str,
+    version: &str,
+    sha256: &str,
+) -> Result<std::path::PathBuf> {
+    let exe = fs::canonicalize(std::env::current_exe()?)?;
+    let staging = exe.with_file_name(format!(".killi-update-{}", std::process::id()));
+    let bytes = download(status, http, &format!("{base}/{BINARY}"), version).await?;
+    fs::write(&staging, &bytes)
+        .with_context(|| format!("could not write {}", staging.display()))?;
+    let (sha256, version) = (sha256.to_string(), version.to_string());
+    let (staged, target) = (staging.clone(), exe.clone());
+    // Checking runs `shasum` and the staged binary: off the runtime's thread, so a session's
+    // screen keeps answering while it does.
+    let result = tokio::task::spawn_blocking(move || {
+        verify_and_install(&staged, &sha256, &version, &target)
+    })
+    .await
+    .map_err(|e| anyhow!("the install check stopped: {e}"))
+    .and_then(|result| result);
+    if result.is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+    result.map(|()| exe)
+}
+
+/// A published version newer than this one, offered by a session: what installing it needs,
+/// and the changelog's sections from here to it.
+#[derive(Clone, Debug)]
+pub struct Release {
+    pub version: String,
+    sha256: String,
+    /// Each release's heading and its notes, newest first.
+    pub notes: Vec<notes::Section>,
+}
+
+#[cfg(test)]
+impl Release {
+    pub fn sample(version: &str) -> Self {
+        Self {
+            version: version.into(),
+            sha256: String::new(),
+            notes: Vec::new(),
+        }
+    }
+}
+
+/// Asks the release site for a version newer than this one, with its changelog. The
+/// changelog is a courtesy: when it can't be fetched the release comes without notes.
+pub async fn check() -> Result<Option<Release>> {
+    check_at(&http_client()?, &releases_url(), env!("CARGO_PKG_VERSION")).await
+}
+
+async fn check_at(http: &reqwest::Client, base: &str, current: &str) -> Result<Option<Release>> {
+    let (version, sha256) = latest(http, base).await?;
+    if parse(&version) <= parse(current) {
+        return Ok(None);
+    }
+    let notes = match changelog(http, base).await {
+        Ok(text) => notes::between(&text, current, &version),
+        Err(_) => Vec::new(),
+    };
+    Ok(Some(Release {
+        version,
+        sha256,
+        notes,
+    }))
+}
+
+/// Installs `release` in place of the running binary without drawing anything, for a session
+/// that shows its own progress.
+pub async fn install(release: Release) -> Result<()> {
+    let base = releases_url();
+    let http = http_client()?;
+    let mut status = Status::silent();
+    install_with(
+        &mut status,
+        &http,
+        &base,
+        &release.version,
+        &release.sha256,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// `CHANGELOG.md`, which sits beside the `releases/` folder: one level above `base`.
+async fn changelog(http: &reqwest::Client, base: &str) -> Result<String> {
+    let url = reqwest::Url::parse(&format!("{}/", base.trim_end_matches('/')))?
+        .join("../CHANGELOG.md")?;
+    Ok(http
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?)
 }
 
 /// Whether a failed fetch is worth trying again: a 5xx, a 429, or no answer at all.
@@ -279,6 +378,15 @@ impl Status {
         }
     }
 
+    /// A status that never draws, for an update a session runs under its own screen.
+    fn silent() -> Self {
+        Self {
+            live: false,
+            started: Instant::now(),
+            drawn: false,
+        }
+    }
+
     /// Redraws the line in one write, inside a synchronized update with the cursor hidden.
     fn draw(&mut self, word: &str, detail: &str, transfer: Option<Transfer>) {
         if !self.live {
@@ -393,213 +501,4 @@ fn progress(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_the_published_version_is_installed() {
-        let tmp = crate::test_temp::TempDir::new("killi-update-version");
-        let right = tmp.join("killi-right");
-        let wrong = tmp.join("killi-wrong");
-        std::fs::write(&right, "#!/bin/sh\necho 'killi 0.2.31'\n").unwrap();
-        std::fs::write(&wrong, "#!/bin/sh\necho 'something else'\n").unwrap();
-        for path in [&right, &wrong] {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        assert!(super::check_version(&right, "0.2.31").is_ok());
-        let longer = tmp.join("killi-longer");
-        std::fs::write(&longer, "#!/bin/sh\necho 'killi 0.2.310'\n").unwrap();
-        std::fs::set_permissions(&longer, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(
-            super::check_version(&longer, "0.2.31").is_err(),
-            "a version that only starts with the expected one is not it"
-        );
-        let err = super::check_version(&wrong, "0.2.31")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("something else") && err.contains("0.2.31"),
-            "{err}"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_download_past_the_limit_is_refused() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/", listener.local_addr().unwrap());
-        tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut discard = [0u8; 1024];
-            let _ = socket.read(&mut discard).await;
-            let _ = socket
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\n\r\n")
-                .await;
-            let chunk = vec![b'a'; 1024 * 1024];
-            for _ in 0..70 {
-                if socket.write_all(&chunk).await.is_err() {
-                    return;
-                }
-            }
-        });
-        let http = super::http_client().unwrap();
-        let mut status = super::Status::new();
-        let err = format!(
-            "{:#}",
-            super::download(&mut status, &http, &url, "9.9.9")
-                .await
-                .unwrap_err()
-        );
-        assert!(err.contains("64 MB"), "{err}");
-    }
-
-    /// Serves each response once, in order, and returns the base URL.
-    async fn serve(responses: Vec<String>) -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move {
-            for response in responses {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut discard = [0u8; 1024];
-                let _ = socket.read(&mut discard).await;
-                let _ = socket.write_all(response.as_bytes()).await;
-            }
-        });
-        url
-    }
-
-    fn respond(status: &str, body: &str) -> String {
-        format!(
-            "HTTP/1.1 {status}\r\ncontent-length: {}\r\n\r\n{body}",
-            body.len()
-        )
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_504_checking_for_updates_is_retried() {
-        let base = serve(vec![
-            respond("504 Gateway Timeout", ""),
-            respond("504 Gateway Timeout", ""),
-            respond("200 OK", "version = \"9.9.9\"\nsha256 = \"abc\"\n"),
-        ])
-        .await;
-        let http = super::http_client().unwrap();
-        assert_eq!(
-            super::latest(&http, &base).await.unwrap(),
-            ("9.9.9".to_string(), "abc".to_string())
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_504_download_is_retried_from_the_start() {
-        let base = serve(vec![
-            respond("504 Gateway Timeout", ""),
-            respond("200 OK", "bin"),
-        ])
-        .await;
-        let http = super::http_client().unwrap();
-        let mut status = super::Status::new();
-        let bytes = super::download(&mut status, &http, &format!("{base}/killi-arm64"), "9.9.9")
-            .await
-            .unwrap();
-        assert_eq!(bytes, b"bin");
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_404_is_not_retried() {
-        let base = serve(vec![respond("404 Not Found", "")]).await;
-        let http = super::http_client().unwrap();
-        let err = super::latest(&http, &base).await.unwrap_err();
-        assert!(
-            format!("{err:#}").contains("could not check for updates"),
-            "{err:#}"
-        );
-    }
-
-    #[test]
-    fn versions_compare_numerically() {
-        assert!(super::parse("0.10.0") > super::parse("0.9.3"));
-        assert!(super::parse("0.1.0") == super::parse("0.1.0"));
-    }
-
-    fn transfer(done: u64, total: Option<u64>) -> Option<Transfer> {
-        Some(Transfer {
-            done,
-            total,
-            per_second: 2_300_000,
-        })
-    }
-
-    #[test]
-    fn the_status_line_always_fits_the_terminal() {
-        for columns in 1..=140 {
-            for transfer in [
-                None,
-                transfer(0, Some(6_700_000)),
-                transfer(4_100_000, Some(6_700_000)),
-                transfer(4_100_000, None),
-            ] {
-                let line = live_line(7, "downloading", "0.2.31", transfer, columns);
-                assert!(width(&line) < columns.max(2), "{columns} columns: {line:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_download_shows_bar_sizes_and_speed_until_the_terminal_is_too_narrow() {
-        let at = |columns| {
-            live_line(
-                30,
-                "downloading",
-                "0.2.31",
-                transfer(4_100_000, Some(6_700_000)),
-                columns,
-            )
-        };
-        let wide = at(100);
-        assert!(
-            wide.contains("4.1 MB / 6.7 MB")
-                && wide.contains("2.3 MB/s")
-                && wide.contains('━')
-                && wide.contains('─')
-        );
-        let narrow = at(55);
-        assert!(
-            narrow.contains("4.1 MB / 6.7 MB") && !narrow.contains("MB/s") && narrow.contains('━'),
-            "{narrow:?}"
-        );
-        let tiny = at(30);
-        assert!(!tiny.contains('━') && !tiny.contains("MB"), "{tiny:?}");
-    }
-
-    #[test]
-    fn an_unknown_size_has_no_bar() {
-        let line = live_line(30, "downloading", "0.2.31", transfer(4_100_000, None), 100);
-        assert!(
-            line.contains("4.1 MB")
-                && line.contains("MB/s")
-                && !line.contains('━')
-                && !line.contains('─')
-        );
-    }
-
-    #[test]
-    fn before_the_download_starts_there_is_only_the_island_and_its_detail() {
-        let line = live_line(40, "checking", "for updates", None, 100);
-        assert!(
-            line.starts_with(&crate::tui::text::SELECT.to_string()),
-            "the session's island ground: {line:?}"
-        );
-        assert!(
-            line.ends_with("for updates") && !line.contains("MB"),
-            "{line:?}"
-        );
-        assert!(
-            ['❄', '❅', '❆'].iter().any(|flake| line.contains(*flake)),
-            "the snowflake spinner: {line:?}"
-        );
-    }
-}
+mod tests;

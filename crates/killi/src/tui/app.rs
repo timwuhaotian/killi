@@ -38,6 +38,7 @@ impl App {
             search: None,
             provider: None,
             searxng: None,
+            updates: Updates::new(),
             next_input: None,
             effort_later: None,
             entries: Vec::new(),

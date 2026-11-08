@@ -5,6 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.64 — 2026-11-08
+
+- A session asks to update. When a newer killi is out — checked as the session starts and
+  every six hours after — it prints the changelog of every release since yours (the newest
+  three in full, older ones counted) and asks "Update killi <yours> → <newer>?" right under
+  the prompt, waiting until nothing is typed and no turn runs. "Update now" downloads,
+  checks and installs it beside the session, which keeps working; `/exit` and `killi -c`
+  continue on the new version. "Not now" or Esc isn't asked again for that version in the
+  session. A failed check stays quiet. `KILLI_NO_UPDATE_CHECK=1` turns the check off.
+
 ## 0.6.63 — 2026-11-08
 
 - Rust and TypeScript get real syntax colors in an edit's diff, and richer ones in code

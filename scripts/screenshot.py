@@ -51,7 +51,7 @@ def run(args):
     if pid == 0:
         fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
         env = {k: v for k, v in os.environ.items() if k != "COLORFGBG"}
-        env.update(COLORTERM="truecolor", TERM="xterm-256color")
+        env.update(COLORTERM="truecolor", TERM="xterm-256color", KILLI_NO_UPDATE_CHECK="1")
         if args.home:
             env["HOME"] = args.home
         os.chdir(args.project)

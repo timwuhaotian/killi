@@ -5,7 +5,7 @@ mod helpers;
 mod rows;
 
 /// `line` without escape codes, whatever colors the theme picked.
-fn unstyled(line: &str) -> String {
+pub(super) fn unstyled(line: &str) -> String {
     let mut out = String::new();
     let mut rest = line;
     while let Some(c) = rest.chars().next() {
@@ -96,6 +96,7 @@ pub(super) fn test_app() -> App {
         search: None,
         provider: None,
         searxng: None,
+        updates: Updates::default(),
         next_input: None,
         effort_later: None,
         entries: Vec::new(),

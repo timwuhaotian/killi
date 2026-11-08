@@ -98,6 +98,8 @@ pub(super) enum PickerChoice {
     Prune(usize),
     Search(String),
     Provider(String),
+    /// Whether to install the newer killi on offer.
+    Update(bool),
 }
 
 /// The counts `/prune` offers to keep, from fewest to most, each removing something.
@@ -171,6 +173,7 @@ impl App {
             }
             KeyCode::Esc => {
                 self.picker = None;
+                self.update_dismissed();
                 if let Some(before) = self.theme_before_preview.take() {
                     text::set_theme(&before);
                     follow = true;
@@ -178,6 +181,7 @@ impl App {
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.picker = None;
+                self.update_dismissed();
                 if let Some(before) = self.theme_before_preview.take() {
                     text::set_theme(&before);
                     follow = true;
@@ -229,6 +233,10 @@ impl App {
                         }
                         PickerChoice::Provider(preset) => {
                             self.provider_pick(&preset);
+                            Idle::Continue
+                        }
+                        PickerChoice::Update(install) => {
+                            self.on_update_choice(install);
                             Idle::Continue
                         }
                     };

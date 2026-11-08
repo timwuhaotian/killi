@@ -37,6 +37,7 @@ pub(crate) mod text;
 mod theme;
 mod turn;
 mod undo;
+mod update;
 
 use std::cell::RefCell;
 use std::io::{Stdout, Write, stdout};
@@ -111,6 +112,7 @@ use state::{
     SinceBanner, Status, Totals,
 };
 use undo::{restore_steered, undo_empty, undo_note, undo_paths};
+use update::Updates;
 
 const MAX_INPUT_ROWS: usize = 10;
 const MENU_ROWS: usize = 8;
