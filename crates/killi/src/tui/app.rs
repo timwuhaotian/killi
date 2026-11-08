@@ -83,6 +83,7 @@ impl App {
             recap_unsaved: None,
             suggesting: None,
             suggestion: None,
+            complete_at: None,
             last_end: None,
             cwd: cwd.to_path_buf(),
             notify_after: Duration::from_secs(10),

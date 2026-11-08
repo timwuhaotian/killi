@@ -17,7 +17,7 @@ with another session in the repository), sessions (`/sessions`) and peer (that s
 message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
 selection in reverse video), select-prompt (Shift+Alt+Left over the prompt's last words), held (a prompt waiting for its first token) and takeback (Esc before that
 token: the prompt back in the editor), suggest (the next-prompt suggestion the model gave, and
-Tab filling it into the prompt), and shell (a local command being typed). Three scenes feed the
+Tab filling it into the prompt, the model then continuing it), draft (a typed draft, paused, its continuation faint after it), and shell (a local command being typed). Three scenes feed the
 README: readme (the slugify fix under its natural prompt, banner and all, at a tall inline size),
 skin (`/theme` just opened, previewing the session's own theme) and slash (the `/` menu narrowed
 by `/re`, a skill among the commands) — draw them with
@@ -74,7 +74,8 @@ SCENES = {
     "readme": dict(keys=["The slugify test fails. Fix it and run the tests.\r"], until="fills it"),
     "skin": dict(keys=["/theme\r"]),
     "slash": dict(keys=["/re"]),
-    "suggest": dict(keys=[FIX, "WAITFOR:fills it", "\t"], until="test the empty title"),
+    "suggest": dict(keys=[FIX, "WAITFOR:fills it", "\t"], until="test the empty title in slug.py"),
+    "draft": dict(keys=[FIX, "IDLE", "now check the slug"], until="now check the slug in slug.py"),
     "select": dict(keys=[FIX, "IDLE", "MOUSE:press:14:0", "MOUSE:drag:9:40", "MOUSE:wheel-up:9:40", "MOUSE:wheel-up:9:40", "MOUSE:up:9:40"]),
     "question": dict(keys=["QUESTION please\r"], until="Esc dismisses"),
     "plan": dict(keys=["\x1b[Z", "add a flag"]),

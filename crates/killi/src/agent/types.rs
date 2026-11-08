@@ -159,17 +159,29 @@ impl Aside {
         }
     }
 
-    /// A next-prompt suggestion: what the user might ask next, in one short line. Asked the
-    /// same way as a side question, so it adds nothing to the conversation.
-    pub fn suggest(&self) -> impl Future<Output = Result<String>> + 'static {
-        let answer = self.side(SUGGEST_NOTE, "", None);
+    /// What the prompt `typed` so far could become, as the whole prompt: for an empty one, what
+    /// the user might ask next, in one short line; else `typed` continued by a few words. Asked
+    /// the same way as a side question, so it adds nothing to the conversation.
+    pub fn suggest(&self, typed: &str) -> impl Future<Output = Result<String>> + 'static {
+        let typed = typed.to_string();
+        let answer = if typed.is_empty() {
+            self.side(SUGGEST_NOTE, "", None)
+        } else {
+            self.side(COMPLETE_NOTE, &format!("<draft>\n{typed}\n</draft>"), None)
+        };
         async move {
             let (text, _) = answer.await?;
-            let text = fit_suggestion(&text);
-            if text.is_empty() {
-                bail!("the model sent no suggestion");
+            if typed.is_empty() {
+                let text = fit_suggestion(&text);
+                if text.is_empty() {
+                    bail!("the model sent no suggestion");
+                }
+                return Ok(text);
             }
-            Ok(text)
+            match fit_completion(&typed, &text) {
+                Some(more) => Ok(typed + &more),
+                None => bail!("the model sent no continuation of the draft"),
+            }
         }
     }
 
@@ -235,15 +247,50 @@ pub(super) fn fit_suggestion(text: &str) -> String {
     let line = text.lines().next().unwrap_or("").trim();
     let line = line.trim_matches(['"', '\'', '“', '”', '‘', '’', '「', '」']);
     let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    let chars: Vec<char> = line.chars().collect();
-    if chars.len() <= SUGGEST_MAX {
-        return line;
+    cut_at_word(&line, SUGGEST_MAX)
+}
+
+/// `text` cut to at most `max` characters, at a word's end where one falls within them.
+fn cut_at_word(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max {
+        return text.to_string();
     }
-    let cut: String = chars[..SUGGEST_MAX].iter().collect();
-    match cut.rfind(char::is_whitespace) {
-        Some(word) if word > 0 => cut[..word].trim().to_string(),
+    let cut: String = chars[..max].iter().collect();
+    match cut.trim_start().rfind(char::is_whitespace) {
+        Some(word) if word > 0 => {
+            let lead = cut.len() - cut.trim_start().len();
+            cut[..lead + word].trim_end().to_string()
+        }
         _ => cut,
     }
+}
+
+/// What follows `typed` in the model's `reply` to `COMPLETE_NOTE`, at most `COMPLETE_MAX`
+/// characters on one line; none when the reply doesn't continue the draft. The reply is the
+/// draft's last line continued, which says whether the next word is new or ends the half-typed
+/// one; a reply that changes that line is a different prompt, not a continuation, and is dropped.
+pub(super) fn fit_completion(typed: &str, reply: &str) -> Option<String> {
+    let reply = reply.lines().find(|l| !l.trim().is_empty())?;
+    let last = typed.rsplit('\n').next().unwrap_or("").trim_start();
+    let reply = reply.trim_start();
+    let reply = if last.starts_with(['"', '\'']) {
+        reply
+    } else {
+        reply.trim_start_matches(['"', '\'', '“', '‘', '「'])
+    };
+    let rest = reply.strip_prefix(last)?.trim_end();
+    let rest = rest.trim_end_matches(['"', '“', '”', '’', '」']);
+    let rest = if typed.ends_with(char::is_whitespace) {
+        rest.trim_start()
+    } else {
+        rest
+    };
+    // Whitespace collapsed, a lead space kept: it says the next word is a new one.
+    let lead = if rest.starts_with(char::is_whitespace) { " " } else { "" };
+    let words = rest.split_whitespace().collect::<Vec<_>>().join(" ");
+    let more = cut_at_word(&format!("{lead}{words}"), COMPLETE_MAX);
+    (!more.trim().is_empty()).then_some(more)
 }
 
 /// The history with a side question at the end. Tool calls still running get a placeholder
@@ -395,5 +442,10 @@ pub(super) const RECAP_NOTE: &str = "<system-reminder>The user is back at this s
 pub(super) const SUGGEST_MAX: usize = 20;
 
 pub(super) const SUGGEST_NOTE: &str = "<system-reminder>The user's turn is over. Suggest what they would ask next, written as the prompt they would type. Reply with that prompt only, in the user's language, at most 20 characters, one line, no quotes and no explanation. Don't call tools. This request and your reply won't be kept in the conversation.</system-reminder>";
+
+/// Longest continuation of a draft shown, in characters; see `fit_completion`.
+pub(super) const COMPLETE_MAX: usize = 30;
+
+pub(super) const COMPLETE_NOTE: &str = "<system-reminder>The user is typing their next prompt and paused; the draft so far is in <draft> tags. Don't answer it: guess how they go on. Reply with the draft's last line exactly as typed, continued by at most 30 characters in the same language. One line, no quotes and no explanation. Don't call tools. This request and your reply won't be kept in the conversation.</system-reminder>";
 
 pub(super) const BTW_NOTE: &str = "<system-reminder>A side question from the user. Answer it briefly from what this conversation already shows. Don't call tools. The question and your answer won't be kept in the conversation.</system-reminder>";

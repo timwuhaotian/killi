@@ -69,8 +69,8 @@ use turn::{
 };
 #[cfg(test)]
 use types::{
-    BTW_NOTE, RECAP_CHARS, RECAP_MAX, RECAP_NOTE, SUGGEST_MAX, SUGGEST_NOTE, fit_recap,
-    fit_suggestion, side_request,
+    BTW_NOTE, COMPLETE_MAX, COMPLETE_NOTE, RECAP_CHARS, RECAP_MAX, RECAP_NOTE, SUGGEST_MAX,
+    SUGGEST_NOTE, fit_completion, fit_recap, fit_suggestion, side_request,
 };
 
 /// A backstop in bytes above the tools' own output budget (`tools::MAX_BYTES`): a result a tool

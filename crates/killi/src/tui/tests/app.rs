@@ -1107,6 +1107,93 @@ fn a_typed_prompt_hides_the_suggestion_and_the_keys_keep_their_meaning() {
     );
 }
 
+fn shown(app: &mut App) -> String {
+    let (rows, _, _) = app.live();
+    rows.iter()
+        .map(|row| unstyled(row))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn a_draft_shows_its_continuation_after_the_cursor_and_tab_takes_it() {
+    let mut app = test_app();
+    app.editor.insert("fix the bu");
+    app.suggestion = Some("fix the bug in the parser".into());
+    let (rows, row, column) = app.live();
+    let at = rows
+        .iter()
+        .position(|r| unstyled(r).contains("fix the bug in the parser"))
+        .expect("the continuation is drawn after the draft");
+    assert!(rows[at].contains(&format!("{FAINT}g in the parser")), "{:?}", rows[at]);
+    assert_eq!(row, at, "the cursor stays on the draft's row");
+    assert_eq!(column, 2 + "fix the bu".len(), "the cursor stays where the draft ends");
+    app.edit_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.editor.text(), "fix the bug in the parser");
+    assert!(app.ghost().is_none());
+    let mut app = test_app();
+    app.editor.insert("fix the bu");
+    app.suggestion = Some("fix the bug in the parser".into());
+    app.edit_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(app.editor.text(), "fix the bug in the parser");
+}
+
+#[test]
+fn typing_along_the_continuation_keeps_it_and_other_typing_asks_after_a_pause() {
+    let mut app = test_app();
+    app.editor.insert("fix the bu");
+    app.suggestion = Some("fix the bug in the parser".into());
+    app.edit_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    app.edited();
+    assert_eq!(app.ghost(), Some(" in the parser"));
+    assert!(app.complete_at.is_none(), "the suggestion still leads on");
+    app.edit_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    app.edited();
+    assert!(app.ghost().is_none());
+    assert!(!shown(&mut app).contains("in the parser"));
+    let due = app.complete_at.expect("a pause asks how the draft goes on");
+    assert!(due > Instant::now() + crate::tui::suggest::COMPLETE_PAUSE / 2, "not before the pause");
+}
+
+#[test]
+fn taking_the_whole_suggestion_asks_at_once_for_more() {
+    let mut app = test_app();
+    app.suggestion = Some("run the tests".into());
+    app.edit_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.edited();
+    assert!(app.complete_at.expect("more is asked for") <= Instant::now());
+    app.ask_suggestion();
+    assert!(app.suggesting.is_some(), "the draft is sent for a continuation");
+}
+
+#[test]
+fn the_cursor_away_from_the_end_hides_the_continuation() {
+    let mut app = test_app();
+    app.editor.insert("fix the bu");
+    app.suggestion = Some("fix the bug in the parser".into());
+    app.edit_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert!(app.ghost().is_none());
+    assert!(!shown(&mut app).contains("in the parser"));
+    app.edit_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(app.editor.text(), "fix the bu", "→ moves the cursor");
+    assert_eq!(app.ghost(), Some("g in the parser"), "back at the end");
+}
+
+#[test]
+fn commands_shell_lines_and_history_are_not_continued() {
+    for text in ["/hel", "!git st", "   "] {
+        let mut app = test_app();
+        app.editor.insert(text);
+        app.ask_suggestion();
+        assert!(app.suggesting.is_none(), "{text:?} was sent");
+    }
+    let mut app = test_app();
+    app.editor.insert("fix the");
+    app.busy = Some(Instant::now());
+    app.ask_suggestion();
+    assert!(app.suggesting.is_none(), "not while the agent works");
+}
+
 #[test]
 fn a_new_turn_drops_the_suggestion_of_the_turn_before_it() {
     let mut app = test_app();

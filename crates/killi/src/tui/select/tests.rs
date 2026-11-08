@@ -35,7 +35,7 @@ fn app_with_rows(rows: usize, view: usize) -> App {
 fn app_with_prompt(text: &str) -> App {
     let mut app = app_with_rows(30, 10);
     app.editor.insert(text);
-    app.editor.render("❯ ", 12, &|_| false);
+    app.editor.render("❯ ", 12, &|_| false, "");
     app.input_rows = InputRows {
         top: 12,
         first: 0,
@@ -189,7 +189,7 @@ fn prompt_view_follows_the_cursor_only_when_needed_and_clamps_after_edits_and_re
     app.editor.press(0);
     app.editor.insert(&"long ".repeat(20));
     layout_prompt(&mut app);
-    assert!(app.input_first <= app.editor.render("❯ ", 20, &|_| false).1);
+    assert!(app.input_first <= app.editor.render("❯ ", 20, &|_| false, "").1);
     app.editor.select_all();
     app.editor.insert("short");
     layout_prompt(&mut app);

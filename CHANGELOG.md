@@ -5,6 +5,17 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.62 — 2026-11-08
+
+- The prompt is completed as you type. When you pause for a second, or take a suggestion
+  with Tab or →, the model guesses how the prompt goes on and shows up to 30 more characters
+  faint after the cursor, wrapping with the text; Tab or → takes them and asks again, so a
+  prompt can be built a few words at a time. Typing what it shows keeps the rest; typing
+  something else drops it until the next pause. Commands, `!` shell lines, history entries
+  and drafts an `@` menu is completing aren't sent, and nothing is asked while the agent
+  works. Like the next-prompt suggestion it is a side request: never kept in the
+  conversation, and the cached prefix still hits.
+
 ## 0.6.61 — 2026-11-08
 
 - A new icon: a flat, rounded ice cube wearing the `>_` prompt as a face, drawn from the

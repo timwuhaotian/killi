@@ -228,14 +228,8 @@ impl App {
         self.ask_view = None;
         self.ask_corrections.clear();
         // The suggestion belongs to the turn that just ended.
-        self.suggestion = None;
-        self.suggesting = None;
+        self.drop_suggestion();
         self.begin_busy();
-    }
-
-    /// Asks the model what the user might ask next; the empty prompt offers its answer.
-    pub(super) fn ask_suggestion(&mut self) {
-        self.suggesting = Some(Box::pin(self.controls.aside.borrow().suggest()));
     }
 
     /// Prints what the user typed as their message block.
@@ -455,8 +449,7 @@ impl App {
         // The suggestion and any recap belong to the conversation that was left: a pending
         // recap answers the old history, and an unsaved one is dropped rather than kept
         // in the wrong log (the switch flushes it first).
-        self.suggestion = None;
-        self.suggesting = None;
+        self.drop_suggestion();
         self.recap = None;
         self.recap_unsaved = None;
         *snapshots = Snapshots::new(cwd);

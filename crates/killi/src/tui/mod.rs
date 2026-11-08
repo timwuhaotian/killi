@@ -31,6 +31,7 @@ mod select;
 mod shell;
 mod start;
 mod state;
+mod suggest;
 mod swarm;
 pub(crate) mod text;
 mod theme;

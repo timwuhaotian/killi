@@ -28,12 +28,23 @@ impl Editor {
     /// A tab stays in the text but is laid
     /// out as the spaces to the next 4-column stop, counted from its line's first column, so
     /// the row widths and the cursor agree with what the screen shows.
+    ///
+    /// `ghost`, one line, is drawn faint after the text and wraps with it, the cursor staying
+    /// where the text ends: what Tab would add.
     pub fn render(
         &self,
         prompt: &str,
         width: usize,
         known: &dyn Fn(&str) -> bool,
+        ghost: &str,
     ) -> (Vec<String>, usize, usize) {
+        let ghosted;
+        let text = if ghost.is_empty() {
+            &self.text
+        } else {
+            ghosted = format!("{}{}", self.text, ghost.replace('\n', " "));
+            &ghosted
+        };
         let prompt_width = text::width(prompt);
         let room = width.saturating_sub(prompt_width).max(1);
         self.room.set(room);
@@ -43,7 +54,7 @@ impl Editor {
         let mut cursor = (0, prompt_width);
         let mut offset = 0;
         let mut end_full = false;
-        for (n, line) in self.text.split('\n').enumerate() {
+        for (n, line) in text.split('\n').enumerate() {
             let lead = if n == 0 {
                 prompt.to_string()
             } else {
@@ -70,8 +81,8 @@ impl Editor {
             for (r, span) in bounds.windows(2).enumerate() {
                 let mut row = String::new();
                 let mut row_width = 0;
-                // Whether the characters drawn last were lit and were selected.
-                let mut style = (false, false);
+                // Whether the characters drawn last were lit, were selected and were ghost.
+                let mut style = (false, false, false);
                 let mut placed = usize::MAX;
                 for &(i, c, w) in &chars[span[0]..span[1]] {
                     // A space that would pass the edge is not drawn: the row ends there.
@@ -93,10 +104,14 @@ impl Editor {
                     let now = (
                         marked.iter().any(|&(s, e)| (s..e).contains(&byte)),
                         selected.is_some_and(|(s, e)| (s..e).contains(&byte)),
+                        byte >= self.text.len(),
                     );
                     if now != style {
-                        if style != (false, false) {
+                        if style != (false, false, false) {
                             row.push_str(RESET);
+                        }
+                        if now.2 {
+                            row.push_str(&FAINT.to_string());
                         }
                         if now.0 {
                             row.push_str(&LAGOON.to_string());
@@ -109,7 +124,7 @@ impl Editor {
                     row.push(c);
                     row_width += w;
                 }
-                if style != (false, false) {
+                if style != (false, false, false) {
                     row.push_str(RESET);
                 }
                 if span[1] == chars.len() {

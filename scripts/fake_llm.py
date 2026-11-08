@@ -10,12 +10,14 @@ one containing "QUESTION" is an `ask_user_question`, "SWARM" an `agent_swarm` of
 ("SWARMBIG": forty) whose prompts say "SWARMCHILD" and that each run a few slow commands,
 a question from another session (`killi ask`) a line about the work, "SLOW" a one-line answer
 that starts only after three seconds (time to press Esc first), the next-prompt suggestion
-a short line to offer in the empty prompt, anything else a one-line answer. The
+a short line to offer in the empty prompt, a paused draft its last line with " in slug.py" added,
+anything else a one-line answer. The
 step is the number of assistant messages since the last real user message, so the reminders
 killi appends as user messages (`<system-reminder>`) don't restart the script.
 """
 
 import json
+import re
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -103,6 +105,10 @@ def text_of(message):
 def step_for(messages):
     if messages and "The user's turn is over" in text_of(messages[-1]):
         return {"text": "test the empty title"}
+    draft = re.search(r"<draft>\n(.*)\n</draft>", text_of(messages[-1]), re.S) if messages else None
+    if draft:
+        last = draft.group(1).split("\n")[-1]
+        return {"text": last if last.endswith("slug.py") else last.rstrip() + " in slug.py"}
     if messages and "A question about your work from" in text_of(messages[-1]):
         return {"text": "Fixing `slugify` in `slug.py`, on master. The tests pass now; nothing is committed yet."}
     real = [i for i, m in enumerate(messages) if m.get("role") == "user" and not text_of(m).lstrip().startswith("<system-reminder>")]

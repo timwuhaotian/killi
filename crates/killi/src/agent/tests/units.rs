@@ -363,6 +363,50 @@ fn a_suggestion_is_one_short_line() {
 }
 
 #[test]
+fn a_completion_is_what_follows_the_draft() {
+    assert_eq!(
+        fit_completion("fix the bu", "fix the bug in the parser").as_deref(),
+        Some("g in the parser"),
+        "the half-typed word is finished"
+    );
+    assert_eq!(
+        fit_completion("fix the", "fix the bug").as_deref(),
+        Some(" bug"),
+        "a new word keeps the space before it"
+    );
+    assert_eq!(
+        fit_completion("fix the ", "fix the  bug").as_deref(),
+        Some("bug"),
+        "no second space after a typed one"
+    );
+    assert_eq!(
+        fit_completion("给 README 加上", "给 README 加上安装步骤").as_deref(),
+        Some("安装步骤")
+    );
+    assert_eq!(
+        fit_completion("first line\n  and then", "and then run the tests\n").as_deref(),
+        Some(" run the tests"),
+        "only the last line is repeated, its indent aside"
+    );
+    assert_eq!(
+        fit_completion("fix the", "\"fix the bug\"").as_deref(),
+        Some(" bug"),
+        "quotes around the reply go"
+    );
+    assert_eq!(
+        fit_completion("fix the bug", "Sure, I will fix the bug"),
+        None,
+        "an answer to the draft is not a continuation of it"
+    );
+    assert_eq!(fit_completion("fix the bug", "fix the bug"), None);
+    assert_eq!(fit_completion("fix the bug", "fix the bug   "), None);
+    let long = fit_completion("add", &format!("add {}", "word ".repeat(20))).unwrap();
+    assert!(long.chars().count() <= COMPLETE_MAX, "{long:?}");
+    assert!(long.starts_with(" word") && long.ends_with("word"), "{long:?}");
+    assert!(COMPLETE_NOTE.contains("30 characters"));
+}
+
+#[test]
 fn a_recap_request_ends_with_its_note_alone() {
     let history = vec![
         json!({"role": "user", "content": "fix it"}),

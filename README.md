@@ -225,7 +225,7 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | drag a file in | an image is attached as `[Image #1]`; any other file is named as `@path` |
 | Ctrl+O | the last tool output or thought in full |
 | ↑ ↓ | history |
-| Tab, → | in an empty prompt, put the suggested next prompt there |
+| Tab, → | at the end of the prompt, take the faint suggestion after it |
 | Shift+arrows, Shift+Home/End | select in the prompt, by words with Alt; typing replaces the selection, Ctrl+C copies it; in fullscreen mode a drag, double- or triple-click selects too |
 
 <p align="center">
@@ -261,8 +261,10 @@ automatic one off. A recap is a side request like `/btw`: it is never kept in th
 and the cached prefix still hits.
 
 After a turn ends, the model suggests what to ask next: the empty prompt shows the suggestion
-as its placeholder, and Tab or → puts it in the prompt. It is a side request like `/btw`, so it
-is never kept in the conversation and the cached prefix still hits.
+as its placeholder, and Tab or → puts it in the prompt. Once you take it, or pause for a second
+while typing a prompt, the model guesses how the prompt goes on and shows that faint after the
+cursor; Tab or → takes it and asks for more, and typing along it keeps it. Each is a side request
+like `/btw`, so it is never kept in the conversation and the cached prefix still hits.
 
 killi runs commands and edits files without asking; `/undo` is the safety net.
 

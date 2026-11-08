@@ -135,6 +135,7 @@ pub(super) fn test_app() -> App {
         recap_unsaved: None,
         suggesting: None,
         suggestion: None,
+        complete_at: None,
         last_end: None,
         cwd: PathBuf::from("/test"),
         notify_after: Duration::from_secs(10),

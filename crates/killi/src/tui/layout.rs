@@ -298,7 +298,13 @@ impl App {
         } else {
             format!("{FIN}❯{RESET} ")
         };
-        let (mut input, cursor_row, cursor_col) = self.editor.render(&prompt, width, &known);
+        // An empty prompt shows the suggestion as its placeholder instead.
+        let ghost = self
+            .ghost()
+            .filter(|_| !self.editor.is_empty())
+            .unwrap_or("");
+        let (mut input, cursor_row, cursor_col) =
+            self.editor.render(&prompt, width, &known, ghost);
         if let Some(hint) = self.placeholder() {
             input[0] = fit(&format!("{FIN}❯{RESET} {hint}"), width);
         }
@@ -510,7 +516,7 @@ impl App {
         if !self.editor.is_empty() || self.picker.is_some() || self.asking.is_some() {
             return None;
         }
-        if let Some(suggestion) = &self.suggestion {
+        if let Some(suggestion) = self.ghost() {
             return Some(format!(
                 "{FAINT}{suggestion}{RESET}{DIM} · Tab or → fills it{RESET}"
             ));

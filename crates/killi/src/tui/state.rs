@@ -257,10 +257,13 @@ pub(super) struct App {
     pub(super) recap: Option<PendingRecap>,
     /// A shown recap not yet kept in the log; the main loop saves it once it holds the agent.
     pub(super) recap_unsaved: Option<String>,
-    /// The next-prompt suggestion on its way from the model.
+    /// The suggestion on its way from the model, for the prompt as it was when asked.
     pub(super) suggesting: Option<PendingSuggestion>,
-    /// The next-prompt suggestion the model gave, shown in the empty prompt.
+    /// The whole prompt the model suggests: what to ask next, or what was typed continued.
+    /// The part still ahead of what is typed shows after it, and Tab or → takes it.
     pub(super) suggestion: Option<String>,
+    /// When the prompt as typed is sent for a continuation: a pause after an edit.
+    pub(super) complete_at: Option<Instant>,
     pub(super) last_end: Option<LastEnd>,
     pub(super) cwd: PathBuf,
     pub(super) notify_after: Duration,

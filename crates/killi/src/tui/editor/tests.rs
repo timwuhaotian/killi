@@ -43,7 +43,7 @@ fn history_comes_back_with_the_draft() {
 fn up_and_down_move_between_visual_rows_of_a_wrapped_line() {
     let mut e = Editor::with_history(vec!["earlier".into()]);
     e.insert("hello there world");
-    e.render("› ", 12, &|_| false);
+    e.render("› ", 12, &|_| false, "");
     assert_eq!(e.cursor, 17);
     e.up();
     assert_eq!(
@@ -78,14 +78,14 @@ fn up_and_down_move_between_visual_rows_of_a_wrapped_line() {
 fn up_and_down_still_move_between_lines_after_a_render() {
     let mut e = Editor::default();
     e.insert("hello\nworld!");
-    e.render("", 20, &|_| false);
+    e.render("", 20, &|_| false, "");
     e.up();
     assert_eq!(e.cursor, 5);
     e.down();
     assert_eq!(e.cursor, 11);
     let mut e = Editor::default();
     e.insert("ab cd\nef gh");
-    e.render("", 3, &|_| false);
+    e.render("", 3, &|_| false, "");
     assert_eq!(e.cursor, 11);
     e.up();
     assert_eq!(e.cursor, 8, "up crosses into the wrapped row above");
@@ -105,9 +105,9 @@ fn up_and_down_still_move_between_lines_after_a_render() {
 fn a_full_last_row_keeps_its_extra_cursor_row_when_the_cursor_moves() {
     let mut e = Editor::with_history(Vec::new());
     e.insert("abcdefgh");
-    let (at_end, _, _) = e.render("", 4, &|_| false);
+    let (at_end, _, _) = e.render("", 4, &|_| false, "");
     e.press(0);
-    let (at_start, _, _) = e.render("", 4, &|_| false);
+    let (at_start, _, _) = e.render("", 4, &|_| false, "");
     assert_eq!(at_end, at_start);
     assert_eq!(at_start.len(), 3);
 }
@@ -116,7 +116,7 @@ fn a_full_last_row_keeps_its_extra_cursor_row_when_the_cursor_moves() {
 fn history_draft_round_trip_after_a_render() {
     let mut e = Editor::with_history(vec!["first".into(), "second".into()]);
     e.insert("draft");
-    e.render("", 20, &|_| false);
+    e.render("", 20, &|_| false, "");
     e.up();
     assert_eq!(e.text(), "second");
     e.up();
@@ -159,7 +159,7 @@ fn pasted_images_go_with_the_placeholders_left_in() {
 fn render_wraps_and_places_the_cursor() {
     let mut e = Editor::default();
     e.insert("abcdef\n中文");
-    let (rows, row, col) = e.render("› ", 6, &|_| false);
+    let (rows, row, col) = e.render("› ", 6, &|_| false, "");
     assert_eq!(
         rows,
         vec!["› abcd", "  ef", "  中文", "  "],
@@ -167,22 +167,22 @@ fn render_wraps_and_places_the_cursor() {
     );
     assert_eq!((row, col), (3, 2));
     e.home();
-    assert_eq!(e.render("› ", 6, &|_| false).1, 2);
-    assert_eq!(e.render("› ", 6, &|_| false).2, 2);
+    assert_eq!(e.render("› ", 6, &|_| false, "").1, 2);
+    assert_eq!(e.render("› ", 6, &|_| false, "").2, 2);
 }
 
 #[test]
 fn render_breaks_rows_between_words() {
     let mut e = Editor::default();
     e.insert("hello there world");
-    let (rows, row, col) = e.render("› ", 12, &|_| false);
+    let (rows, row, col) = e.render("› ", 12, &|_| false, "");
     assert_eq!(rows, vec!["› hello ", "  there ", "  world"]);
     assert_eq!((row, col), (2, 7));
     e.home();
     assert_eq!(
         (
-            e.render("› ", 12, &|_| false).1,
-            e.render("› ", 12, &|_| false).2
+            e.render("› ", 12, &|_| false, "").1,
+            e.render("› ", 12, &|_| false, "").2
         ),
         (0, 2)
     );
@@ -191,15 +191,15 @@ fn render_breaks_rows_between_words() {
     }
     assert_eq!(
         (
-            e.render("› ", 12, &|_| false).1,
-            e.render("› ", 12, &|_| false).2
+            e.render("› ", 12, &|_| false, "").1,
+            e.render("› ", 12, &|_| false, "").2
         ),
         (1, 2),
         "the cursor on a word that moved down is on its row"
     );
     let mut e = Editor::default();
     e.insert("a extraordinarily b");
-    let (rows, ..) = e.render("", 8, &|_| false);
+    let (rows, ..) = e.render("", 8, &|_| false, "");
     assert_eq!(
         rows,
         vec!["a ", "extraord", "inarily ", "b"],
@@ -207,7 +207,7 @@ fn render_breaks_rows_between_words() {
     );
     let mut e = Editor::default();
     e.insert("abcdefgh ij");
-    let (rows, row, col) = e.render("", 8, &|_| false);
+    let (rows, row, col) = e.render("", 8, &|_| false, "");
     assert_eq!(
         rows,
         vec!["abcdefgh", "ij"],
@@ -220,10 +220,10 @@ fn render_breaks_rows_between_words() {
 fn known_slash_words_are_colored() {
     let mut e = Editor::default();
     e.insert("a /pdf /nope b/pdf\n/pdf");
-    let (rows, ..) = e.render("", 40, &|name| name == "pdf");
+    let (rows, ..) = e.render("", 40, &|name| name == "pdf", "");
     assert_eq!(rows[0], format!("a {LAGOON}/pdf{RESET} /nope b/pdf"));
     assert_eq!(rows[1], format!("{LAGOON}/pdf{RESET}"));
-    let (rows, ..) = e.render("", 7, &|name| name == "pdf");
+    let (rows, ..) = e.render("", 7, &|name| name == "pdf", "");
     assert_eq!(rows[0], format!("a {LAGOON}/pdf{RESET} "));
 }
 
@@ -232,7 +232,7 @@ fn a_tab_lays_out_to_the_next_stop_with_the_cursor_on_it() {
     let mut e = Editor::default();
     e.insert("a\tbc");
     assert_eq!(e.text(), "a\tbc", "the text keeps its tab");
-    let (rows, row, col) = e.render("", 20, &|_| false);
+    let (rows, row, col) = e.render("", 20, &|_| false, "");
     assert_eq!(
         rows,
         ["a   bc"],
@@ -242,25 +242,25 @@ fn a_tab_lays_out_to_the_next_stop_with_the_cursor_on_it() {
     e.home();
     e.right();
     assert_eq!(
-        e.render("", 20, &|_| false).2,
+        e.render("", 20, &|_| false, "").2,
         1,
         "the cursor after the first character"
     );
     e.right();
     assert_eq!(
-        e.render("", 20, &|_| false).2,
+        e.render("", 20, &|_| false, "").2,
         4,
         "and just past the tab, where its spaces end"
     );
     e.right();
     assert_eq!(
-        e.render("", 20, &|_| false).2,
+        e.render("", 20, &|_| false, "").2,
         5,
         "and before the character after it"
     );
     let mut e = Editor::default();
     e.insert("x\n\ty");
-    let (rows, ..) = e.render("", 20, &|_| false);
+    let (rows, ..) = e.render("", 20, &|_| false, "");
     assert_eq!(
         rows,
         ["x", "    y"],
@@ -327,7 +327,7 @@ fn select_all_cuts_whole_and_shift_up_stays_in_the_text() {
 fn the_mouse_presses_drags_and_picks_words_and_rows() {
     let mut e = Editor::default();
     e.insert("fix the slug_test now");
-    e.render("❯ ", 12, &|_| false);
+    e.render("❯ ", 12, &|_| false, "");
     // Rows at 10 columns: "fix the " and "slug_test " and "now".
     let at = e.point(1, 2);
     assert_eq!(&e.text()[at..], "ug_test now");
@@ -355,11 +355,26 @@ fn the_selection_is_drawn_in_reverse_video_across_a_lit_command() {
     e.insert("/help me");
     e.select(Editor::word_left);
     e.select(Editor::word_left);
-    let (rows, _, _) = e.render("> ", 40, &|name| name == "help");
+    let (rows, _, _) = e.render("> ", 40, &|name| name == "help", "");
     let lagoon = LAGOON.to_string();
     assert_eq!(
         rows[0],
         format!("> {lagoon}/{RESET}{lagoon}{REVERSE}help{RESET}{REVERSE} me{RESET}"),
         "the selection starts after the slash and its reverse video outlasts the command's reset"
     );
+}
+
+#[test]
+fn a_ghost_wraps_after_the_text_and_leaves_the_cursor_where_the_text_ends() {
+    let mut e = Editor::default();
+    e.insert("fix the");
+    let (rows, row, column) = e.render("> ", 14, &|_| false, " bug in parser");
+    let plain: Vec<String> = rows
+        .iter()
+        .map(|r| r.replace(&FAINT.to_string(), "").replace(RESET, ""))
+        .collect();
+    assert_eq!(plain, ["> fix the bug ", "  in parser"]);
+    assert!(rows[0].ends_with(&format!("{FAINT} bug {RESET}")), "{:?}", rows[0]);
+    assert_eq!((row, column), (0, 9));
+    assert_eq!(e.text(), "fix the", "the ghost is drawn, not typed");
 }

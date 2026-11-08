@@ -1,6 +1,6 @@
 //! The prompt editor: multi-line text with a cursor, readline-style keys and history.
 
-use super::text::{self, LAGOON, RESET, REVERSE};
+use super::text::{self, FAINT, LAGOON, RESET, REVERSE};
 use crate::agent::Image;
 use unicode_width::UnicodeWidthChar;
 
@@ -40,6 +40,11 @@ impl Editor {
 
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    /// The cursor is at the end of the text and nothing is selected: where typing adds on.
+    pub fn at_end(&self) -> bool {
+        self.cursor == self.text.len() && self.selection().is_none()
     }
 
     pub fn before_cursor(&self) -> &str {
