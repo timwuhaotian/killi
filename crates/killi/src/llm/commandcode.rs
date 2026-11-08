@@ -423,8 +423,9 @@ impl StreamParser for Parser {
         Ok(())
     }
 
-    fn finish(&mut self, _reply: &mut Reply) -> Result<(), Failure> {
+    fn finish(&mut self, reply: &mut Reply) -> Result<(), Failure> {
         if self.terminal {
+            reply.repair_call_arguments();
             Ok(())
         } else {
             Err(Failure::of(

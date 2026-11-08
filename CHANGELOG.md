@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.65 — 2026-11-08
+
+- A tool call a provider streams without arguments no longer breaks the session. Its
+  arguments become `{}` when the stream ends — every adapter, whatever the provider sent —
+  instead of staying an empty string in the history, which an OpenAI-compatible API rejects
+  with `400: arguments must be valid JSON` on every later request, so the session could only
+  fail. Histories already carrying such a call are repaired on the copy being sent, so those
+  sessions resume; what is stored stays exactly as it was.
+
 ## 0.6.64 — 2026-11-08
 
 - A session asks to update. When a newer killi is out — checked as the session starts and

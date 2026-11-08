@@ -24,7 +24,7 @@ use crate::config::{Protocol, ResolvedModel};
 use error::{
     backoff, body_excerpt, classify, excerpt, kind_for_status, retryable_status, transport_failure,
 };
-use history::{arguments_object, content_text, system_text};
+use history::{arguments_object, arguments_valid, content_text, json_arguments, system_text};
 use tokens::cap_output;
 
 pub(crate) use commandcode::CLI_VERSION;
@@ -103,6 +103,17 @@ impl Reply {
             self.unread_fields.sort();
             self.unread_fields.dedup();
             self.unread_fields.truncate(8);
+        }
+    }
+
+    /// Tool-call arguments that aren't valid JSON become `{}`: whatever a provider streamed,
+    /// the stored history must stay replayable, or every request after it fails with a 400.
+    /// Each adapter calls this as its stream finishes.
+    pub fn repair_call_arguments(&mut self) {
+        for call in &mut self.tool_calls {
+            if !arguments_valid(&call.arguments) {
+                call.arguments = "{}".into();
+            }
         }
     }
 }

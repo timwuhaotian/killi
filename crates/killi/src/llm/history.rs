@@ -33,3 +33,19 @@ pub(super) fn arguments_object(arguments: &str) -> Value {
         _ => Value::Object(Default::default()),
     }
 }
+
+/// Whether tool-call arguments are JSON an API accepts back. A provider can end a streamed
+/// call without ever sending arguments, and the empty string is not valid JSON.
+pub(super) fn arguments_valid(arguments: &str) -> bool {
+    serde_json::from_str::<Value>(arguments).is_ok()
+}
+
+/// Tool-call arguments as they go back to a provider: as stored when valid, `{}` when not,
+/// so a broken stored call can't fail every later request with the same 400.
+pub(super) fn json_arguments(arguments: &str) -> &str {
+    if arguments_valid(arguments) {
+        arguments
+    } else {
+        "{}"
+    }
+}

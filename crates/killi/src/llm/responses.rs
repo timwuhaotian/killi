@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 
 use super::{
     Delta, ErrorKind, Failure, IMAGE_OMITTED, Prepared, Reply, StreamParser, ToolCall, cap_output,
-    content_text, system_text, truncate,
+    content_text, json_arguments, system_text, truncate,
 };
 use crate::config::{ResolvedModel, Thinking};
 
@@ -111,11 +111,12 @@ fn convert_input(
                     input.push(json!({"role": "assistant", "content": text}));
                 }
                 for call in message["tool_calls"].as_array().into_iter().flatten() {
+                    let arguments = call["function"]["arguments"].as_str().unwrap_or_default();
                     input.push(json!({
                         "type": "function_call",
                         "call_id": call["id"],
                         "name": wire(&call["function"]["name"]),
-                        "arguments": call["function"]["arguments"],
+                        "arguments": json_arguments(arguments),
                     }));
                 }
             }
@@ -306,8 +307,9 @@ impl StreamParser for Parser {
         Ok(())
     }
 
-    fn finish(&mut self, _reply: &mut Reply) -> Result<(), Failure> {
+    fn finish(&mut self, reply: &mut Reply) -> Result<(), Failure> {
         if self.terminal {
+            reply.repair_call_arguments();
             Ok(())
         } else {
             Err(Failure::of(
@@ -395,6 +397,32 @@ mod tests {
         assert_eq!(reply.finish_reason.as_deref(), Some("tool_calls"));
         assert_eq!((reply.usage.prompt, reply.usage.cached), (50, 40));
         parser.finish(&mut reply).unwrap();
+    }
+
+    #[test]
+    fn a_call_without_streamed_arguments_becomes_empty_json() {
+        let mut parser = Parser::default();
+        let mut reply = Reply::default();
+        let mut sink = |_: Delta| {};
+        let events = [
+            json!({"type": "response.output_item.added", "output_index": 1, "item": {"type": "function_call", "call_id": "c1", "name": "read"}}),
+            json!({"type": "response.output_item.done", "output_index": 1, "item": {"type": "function_call", "call_id": "c1", "name": "read"}}),
+            json!({"type": "response.completed", "response": {"usage": {}}}),
+        ];
+        for event in &events {
+            parser.event(event, &mut reply, &mut sink).ok().unwrap();
+        }
+        parser.finish(&mut reply).unwrap();
+        assert_eq!(reply.tool_calls[0].arguments, "{}");
+    }
+
+    #[test]
+    fn stored_arguments_that_arent_json_are_repaired_in_input() {
+        let history = vec![json!({"role": "assistant", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "bash", "arguments": ""}}
+        ]})];
+        let input = convert_input(&history, true, &Default::default());
+        assert_eq!(input[0]["arguments"], "{}");
     }
 
     #[test]

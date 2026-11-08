@@ -516,11 +516,7 @@ impl StreamParser for Parser {
                 "Anthropic stream ended without message_stop".into(),
             ));
         }
-        for call in &mut reply.tool_calls {
-            if call.arguments.trim().is_empty() {
-                call.arguments = "{}".into();
-            }
-        }
+        reply.repair_call_arguments();
         Ok(())
     }
 }

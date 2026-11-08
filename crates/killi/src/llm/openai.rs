@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::{
     Delta, ErrorKind, Failure, IMAGE_OMITTED, Prepared, Reply, StreamParser, ToolCall, Usage,
-    cap_output, truncate,
+    arguments_valid, cap_output, truncate,
 };
 use crate::config::{ResolvedModel, Thinking};
 
@@ -45,6 +45,7 @@ pub(super) fn prepare(
         .max_output
         .map(|n| cap_output(model, messages, tools, n).clamp(1, 131_072));
     let mut messages = replay_history(messages);
+    repair_call_arguments(&mut messages);
     if !model.images {
         omit_images(&mut messages);
     }
@@ -171,6 +172,24 @@ fn replay_history(messages: &[Value]) -> Vec<Value> {
             message
         })
         .collect()
+}
+
+/// Stored arguments that aren't valid JSON become `{}` on the copy being sent: an API that
+/// validates arguments would reject the whole request, and a call some provider once streamed
+/// empty (or history an older build wrote) would then fail every request with the same 400.
+fn repair_call_arguments(messages: &mut [Value]) {
+    for call in messages
+        .iter_mut()
+        .filter_map(|message| message.get_mut("tool_calls"))
+        .filter_map(Value::as_array_mut)
+        .flatten()
+    {
+        if let Some(arguments) = call["function"]["arguments"].as_str()
+            && !arguments_valid(arguments)
+        {
+            call["function"]["arguments"] = json!("{}");
+        }
+    }
 }
 
 /// The copy being sent carries the provider's tool names where it maps any, so an API that
@@ -372,6 +391,7 @@ impl StreamParser for Parser {
                 ),
             ));
         }
+        reply.repair_call_arguments();
         Ok(())
     }
 }

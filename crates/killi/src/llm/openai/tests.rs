@@ -127,6 +127,59 @@ fn calls_without_names_are_dropped_when_the_stream_finishes() {
 }
 
 #[test]
+fn a_call_without_streamed_arguments_becomes_empty_json() {
+    let mut parser = Parser::default();
+    let mut reply = Reply::default();
+    let mut sink = |_: Delta| {};
+    let events = [
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"bash"}}]}}]}),
+        json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+    ];
+    for event in &events {
+        parser.event(event, &mut reply, &mut sink).unwrap();
+    }
+    parser.done();
+    parser.finish(&mut reply).unwrap();
+    assert_eq!(reply.tool_calls[0].arguments, "{}");
+}
+
+#[test]
+fn stored_arguments_that_arent_json_are_repaired_on_the_copy_being_sent() {
+    let model = ResolvedModel {
+        alias: "m".into(),
+        model: "gpt".into(),
+        protocol: crate::config::Protocol::OpenAi,
+        base_url: "http://localhost".into(),
+        api_key: String::new(),
+        headers: Default::default(),
+        tool_names: Default::default(),
+        session_header: None,
+        max_output: None,
+        context_window: None,
+        images: false,
+        thinking: Thinking::Off,
+        cache_control: false,
+        chatgpt: false,
+    };
+    let messages = vec![json!({
+        "role": "assistant", "content": null,
+        "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "bash", "arguments": ""}},
+            {"id": "c2", "type": "function", "function": {"name": "read", "arguments": "{\"path\":\"a\"}"}},
+        ]
+    })];
+    let original = messages.clone();
+    let body: Value =
+        serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
+    assert_eq!(body["messages"][0]["tool_calls"][0]["function"]["arguments"], "{}");
+    assert_eq!(
+        body["messages"][0]["tool_calls"][1]["function"]["arguments"],
+        r#"{"path":"a"}"#
+    );
+    assert_eq!(messages, original, "history stays as stored");
+}
+
+#[test]
 fn reasoning_detail_deltas_accumulate_by_item() {
     let mut parser = Parser::default();
     let mut reply = Reply::default();
