@@ -111,7 +111,13 @@ impl Agent {
     pub(super) fn note_hidden_reasoning(&mut self, reply: &Reply) -> Result<()> {
         if hides_reasoning(reply) && !std::mem::replace(&mut self.reasoning_noted, true) {
             let counted = reply.usage.reasoning;
-            let advice = " If it offers the Responses API, set `type = \"openai_responses\"` on its provider in config.toml.";
+            // The Responses switch exists only on the OpenAI chat dialect; on another API
+            // the advice would send the user to break a working provider entry.
+            let advice = if self.client.model.protocol == crate::config::Protocol::OpenAi {
+                " If it offers the Responses API, set `type = \"openai_responses\"` on its provider in config.toml."
+            } else {
+                ""
+            };
             let why = match reply.reasoning_key {
                 Some(key) => format!(
                     "The provider counted {counted} reasoning tokens but its `{key}` field was empty, so there was nothing to keep."

@@ -81,6 +81,7 @@ def analyze(path):
     model, awaiting, calls, answered, sleeping, peers = None, None, {}, set(), set(), False
     cwd, moving = None, {}
     streak, grew_from = 0, None
+    seen_models = set()
     for entry in read(path):
         kind = entry.get("type")
         if isinstance(entry.get("ts"), int):
@@ -158,6 +159,14 @@ def analyze(path):
             stats["turns"] += 1
             stats["prompt"] += entry.get("prompt", 0)
             stats["cached"] += entry.get("cached", 0)
+            # A model's first request in a session is a cache miss by construction, so the
+            # share that judges a provider's cache counts only the requests after it.
+            if current in seen_models:
+                stats["turns_after_first"] += 1
+                stats["prompt_after_first"] += entry.get("prompt", 0)
+                stats["cached_after_first"] += entry.get("cached", 0)
+            else:
+                seen_models.add(current)
             awaiting = None
             if entry.get("reasoning", 0) > 0:
                 stats["billed_reasoning"] += 1
@@ -215,8 +224,8 @@ def findings(sessions, models, versions_of):
         return f"[v{','.join(listed)}] " if listed else ""
 
     for model, m in models.items():
-        if m["turns"] >= 5 and m["cached"] / max(m["prompt"], 1) < LOW_CACHE:
-            found.append(f"{tag(versions_of[model])}**{model}: only {pct(m['cached'], m['prompt'])} of input came from the cache over {m['turns']} turns.** "
+        if m["turns_after_first"] >= 5 and m["cached_after_first"] / max(m["prompt_after_first"], 1) < LOW_CACHE:
+            found.append(f"{tag(versions_of[model])}**{model}: only {pct(m['cached_after_first'], m['prompt_after_first'])} of input came from the cache over {m['turns_after_first']} turns past each session's first.** "
                          "Probe the provider with `scripts/probe.py cache`.")
         if m["billed_reasoning"] and m["reasoning_lost"] == m["billed_reasoning"]:
             split = ", ".join(filter(None, [

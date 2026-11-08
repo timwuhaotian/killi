@@ -5,6 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.57 — 2026-11-08
+
+- Command Code turns keep their reasoning summaries: the parser now stores streamed
+  reasoning under the field the next request replays it from, instead of showing it and
+  dropping it. The "reasoning counted but not sent" warning no longer advises the
+  Responses API switch on APIs that have no such switch.
+- `scripts/probe.py` probes Command Code providers on the gateway's own NDJSON API
+  (`stream` and `cache`), and `scripts/sessions.py`'s cache finding ignores each
+  session's first request per model, which is a miss by construction.
+
 ## 0.6.56 — 2026-11-07
 
 - `KILLI_NO_HOOKS=1` runs a session with every hook off: no event runs anything, and the

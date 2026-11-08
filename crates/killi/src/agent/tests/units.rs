@@ -156,6 +156,21 @@ fn hidden_reasoning_is_recorded_with_evidence_and_worded_by_case() {
         "{}",
         warns[0]
     );
+
+    let mut agent = idle_agent("reasoning-other-api", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.protocol =
+        crate::config::Protocol::CommandCode;
+    let mut reply = Reply::default();
+    reply.usage.reasoning = 40;
+    agent.note_hidden_reasoning(&reply).unwrap();
+    let warns = warn_of(&records(&agent));
+    assert_eq!(warns.len(), 1);
+    assert!(warns[0].contains("sent no reasoning"), "{}", warns[0]);
+    assert!(
+        !warns[0].contains("Responses API"),
+        "another API has no Responses switch to offer: {}",
+        warns[0]
+    );
 }
 
 #[test]

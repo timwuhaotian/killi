@@ -349,9 +349,16 @@ impl StreamParser for Parser {
                 reply.text.push_str(text);
                 on_delta(Delta::Text(text));
             }
+            // Named by the history field `prepare` replays reasoning from, so what the
+            // gateway streamed is stored under it; an opened block that stays empty still
+            // records which channel carried no reasoning.
+            Some("reasoning-start") => {
+                reply.reasoning_key.get_or_insert("reasoning_content");
+            }
             Some("reasoning-delta") => {
                 let text = event["text"].as_str().unwrap_or_default();
                 reply.reasoning.push_str(text);
+                reply.reasoning_key.get_or_insert("reasoning_content");
                 on_delta(Delta::Reasoning(text));
             }
             Some("tool-input-start") => {
@@ -641,6 +648,11 @@ mod tests {
         }
         assert_eq!(reply.text, "reading ");
         assert_eq!(reply.reasoning, "hmm");
+        assert_eq!(
+            reply.reasoning_key,
+            Some("reasoning_content"),
+            "the history field `prepare` replays it from"
+        );
         assert_eq!(reply.tool_calls.len(), 1);
         assert_eq!(reply.tool_calls[0].arguments, "{\"path\":\"a\"}");
         assert_eq!(reply.finish_reason.as_deref(), Some("tool_calls"));

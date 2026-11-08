@@ -8,10 +8,12 @@
 <model> is an alias from ~/.killi/config.toml (--config changes the file), such as meta/muse-wonder-1.0-contributor.
 Each probe sends two or three small synthetic requests (`cache` sends about 6k tokens twice) with the
 provider's own key, which is never printed. Providers of type `anthropic` aren't probed: killi already
-speaks their cache protocol.
+speaks their cache protocol. Providers of type `commandcode` are probed on the CLI gateway's own
+NDJSON API (the wire format of `llm/commandcode.rs`); `responses` doesn't apply to them.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -44,15 +46,20 @@ class RateLimited(Exception):
     """A 429 that outlived its retries."""
 
 
-def post(url, headers, body, rate_limit_retries=0):
-    """Yields each server-sent event's JSON of a streamed request. A 429 is retried
-    up to `rate_limit_retries` times, waiting 20/40/60 s between tries."""
+def post(url, headers, body, rate_limit_retries=0, ndjson=False):
+    """Yields each streamed event's JSON: server-sent events, or one JSON object per
+    line when `ndjson`. A 429 is retried up to `rate_limit_retries` times, waiting
+    20/40/60 s between tries."""
     request = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
     for try_n in range(rate_limit_retries + 1):
         try:
             with urllib.request.urlopen(request, timeout=180) as reply:
                 for raw in reply:
                     line = raw.decode("utf-8", "replace").strip()
+                    if ndjson:
+                        if line:
+                            yield json.loads(line)
+                        continue
                     if not line.startswith("data:"):
                         continue
                     data = line[5:].strip()
@@ -70,6 +77,8 @@ def post(url, headers, body, rate_limit_retries=0):
 
 
 def stream(model, kind, base, headers, effort):
+    if kind == "commandcode":
+        return stream_commandcode(model, base, headers, effort)
     body = {"model": model, "stream": True, "stream_options": {"include_usage": True}, "max_tokens": 2000,
             "messages": [{"role": "user", "content": ASK}], "tools": [{"type": "function", "function": BASH}]}
     if effort:
@@ -96,7 +105,71 @@ def stream(model, kind, base, headers, effort):
         print("VERDICT: no reasoning billed or streamed.")
 
 
+# Command Code's gateway speaks the CLI's own NDJSON protocol, not chat/completions; the
+# constants and shapes below mirror `llm/commandcode.rs` (keep CLI_VERSION in step).
+CLI_VERSION = "1.88.5"
+
+
+def thread_id(key):
+    digest = bytearray(hashlib.sha256(key.encode()).digest()[:16])
+    digest[6] = (digest[6] & 0x0F) | 0x40
+    digest[8] = (digest[8] & 0x3F) | 0x80
+    hexed = digest.hex()
+    return f"{hexed[:8]}-{hexed[8:12]}-{hexed[12:16]}-{hexed[16:20]}-{hexed[20:]}"
+
+
+def commandcode_call(model, base, headers, system, ask, thread, effort=None, tools=False, max_tokens=2000, rate_limit_retries=0):
+    """One streamed request to the gateway; returns (event type counts, samples, totalUsage)."""
+    params = {"model": model, "stream": True, "max_tokens": max_tokens,
+              "system": [{"type": "text", "text": system}] if system else [],
+              "messages": [{"role": "user", "content": [{"type": "text", "text": ask}]}],
+              "tools": [{"name": BASH["name"], "description": BASH["description"], "input_schema": BASH["parameters"]}] if tools else []}
+    if effort:
+        params["reasoning"] = {"effort": effort}
+        params["reasoning_effort"] = effort
+    body = {"config": {"workingDir": ".", "date": time.strftime("%Y-%m-%d"), "environment": "darwin",
+                       "structure": [], "isGitRepo": False, "currentBranch": "", "mainBranch": "",
+                       "gitStatus": "", "recentCommits": []},
+            "memory": None, "taste": None, "skills": None, "permissionMode": "auto-accept",
+            "threadId": thread, "params": params}
+    sent = {**headers, "user-agent": "cli", "x-command-code-version": CLI_VERSION,
+            "x-cli-environment": "production", "x-project-slug": "private-killi",
+            "x-taste-learning": "false", "x-session-id": thread,
+            "traceparent": f"00-{os.urandom(16).hex()}-{os.urandom(8).hex()}-01"}
+    events, samples, usage = {}, {}, None
+    for event in post(base + "/alpha/generate", sent, body, rate_limit_retries=rate_limit_retries, ndjson=True):
+        kind = event.get("type")
+        events[kind] = events.get(kind, 0) + 1
+        if kind in ("text-delta", "reasoning-delta") and event.get("text") and kind not in samples:
+            samples[kind] = event["text"][:140]
+        if kind == "error":
+            raise SystemExit(f"gateway error event: {json.dumps(event)[:300]}")
+        if kind == "finish":
+            usage = event.get("totalUsage")
+    return events, samples, usage
+
+
+def stream_commandcode(model, base, headers, effort):
+    events, samples, usage = commandcode_call(model, base, headers, "", ASK,
+                                             thread_id(f"probe-{int(time.time())}"), effort or "high", tools=True)
+    print("events streamed:", events)
+    for key, value in samples.items():
+        print(f"  {key} = {value}")
+    print("usage:", json.dumps(usage))
+    billed = max(((usage or {}).get("outputTokenDetails") or {}).get("reasoningTokens", 0),
+                 (usage or {}).get("reasoningTokens", 0))
+    if billed and "reasoning-delta" not in samples:
+        print(f"VERDICT: {billed} reasoning tokens billed but no reasoning-delta text streamed, so killi can't keep them. "
+              "The gateway has no second API to switch to; this is the provider's behavior to report, not a config fix.")
+    elif "reasoning-delta" in samples:
+        print("VERDICT: reasoning arrives as reasoning-delta events; killi keeps and replays it.")
+    else:
+        print("VERDICT: no reasoning billed or streamed.")
+
+
 def responses(model, kind, base, headers):
+    if kind == "commandcode":
+        raise SystemExit("Command Code's gateway has no Responses API; probe it with `stream` or `cache`")
     body = {"model": model, "stream": True, "store": False, "max_output_tokens": 2000,
             "input": [{"role": "user", "content": ASK}], "tools": [{"type": "function", **BASH}],
             "reasoning": {"effort": "high", "summary": "auto"}, "include": ["reasoning.encrypted_content"]}
@@ -119,11 +192,35 @@ def responses(model, kind, base, headers):
         print("VERDICT: no reasoning items returned on the Responses API.")
 
 
+def cache_commandcode(model, base, headers, system, tag):
+    thread = thread_id("probe-" + tag)
+    reads = []
+    for attempt in (1, 2):
+        try:
+            _, _, usage = commandcode_call(model, base, headers, system, "Say ok.", thread,
+                                            max_tokens=20, rate_limit_retries=3 if attempt == 2 else 0)
+        except RateLimited:
+            print("inconclusive: provider rate-limited, so the cache can't be judged this run. Try again later.")
+            return
+        print(f"request {attempt}:", json.dumps(usage))
+        reads.append(max(((usage or {}).get("inputTokenDetails") or {}).get("cacheReadTokens", 0),
+                         (usage or {}).get("cachedInputTokens", 0)))
+        time.sleep(2)
+    if reads[1]:
+        print(f"VERDICT: the second request read {reads[1]} tokens from the cache.")
+    else:
+        print("VERDICT: no cache read on the second request, in the same gateway thread as the first.")
+
+
 def cache(model, kind, base, headers, cache_control):
-    if kind != "openai":
-        raise SystemExit("the cache probe speaks chat/completions; use it on a provider of type `openai`")
     rules = " ".join(f"Rule {i}: keep answers short and precise, and cite the rule number when it applies." for i in range(1, 330))
     tag = f"[probe {int(time.time())}] "
+    if kind == "commandcode":
+        if cache_control:
+            raise SystemExit("--cache-control marks a chat/completions system message; the Command Code gateway has no such marking")
+        return cache_commandcode(model, base, headers, tag + rules, tag)
+    if kind != "openai":
+        raise SystemExit("the cache probe speaks chat/completions; use it on a provider of type `openai` (or `commandcode`)")
     system = tag + rules
     if cache_control:
         system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
