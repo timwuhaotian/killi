@@ -150,30 +150,37 @@ fn provider_setup(preset: &str) -> (&'static str, &'static str) {
 
 impl App {
     pub(super) fn on_key_picker(&mut self, key: KeyEvent) -> Idle {
+        // The colors changed under the picker (a preview, or closing one): the banner still
+        // on screen is repainted in them after the match, once `picker` is let go.
+        let mut follow = false;
         let picker = self.picker.as_mut().expect("picker is open");
         match key.code {
             KeyCode::Up => {
                 picker.selected = picker.selected.saturating_sub(1);
                 if self.theme_before_preview.is_some() {
                     picker.preview_theme();
+                    follow = true;
                 }
             }
             KeyCode::Down => {
                 picker.selected = (picker.selected + 1).min(picker.shown.len().saturating_sub(1));
                 if self.theme_before_preview.is_some() {
                     picker.preview_theme();
+                    follow = true;
                 }
             }
             KeyCode::Esc => {
                 self.picker = None;
                 if let Some(before) = self.theme_before_preview.take() {
                     text::set_theme(&before);
+                    follow = true;
                 }
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.picker = None;
                 if let Some(before) = self.theme_before_preview.take() {
                     text::set_theme(&before);
+                    follow = true;
                 }
             }
             KeyCode::Backspace => {
@@ -182,6 +189,7 @@ impl App {
                 picker.filter(query);
                 if self.theme_before_preview.is_some() {
                     picker.preview_theme();
+                    follow = true;
                 }
             }
             KeyCode::Char(c)
@@ -193,6 +201,7 @@ impl App {
                 picker.filter(query);
                 if self.theme_before_preview.is_some() {
                     picker.preview_theme();
+                    follow = true;
                 }
             }
             KeyCode::Enter | KeyCode::Tab => {
@@ -226,6 +235,9 @@ impl App {
                 }
             }
             _ => {}
+        }
+        if follow {
+            self.follow_theme_preview();
         }
         Idle::Continue
     }

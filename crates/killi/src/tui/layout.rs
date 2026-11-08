@@ -264,6 +264,15 @@ impl App {
             }
             shrink_tasks.extend((tasks..rows.len()).rev());
         }
+        if self.picker.is_some() && self.theme_before_preview.is_some() {
+            // The /theme specimen stands where the conversation's newest rows would, above
+            // the prompt, in the colors being previewed; a short window takes its rows from
+            // the bottom, so its header and swatches are the last of it to go.
+            let specimen = rows.len();
+            space(&mut rows);
+            rows.extend(self.theme_specimen_rows(width));
+            shrink_head.extend((specimen..rows.len()).rev());
+        }
         let shell = (self.asking.is_none() && self.picker.is_none())
             .then(|| super::shell::shell_arg(self.editor.text()))
             .flatten();

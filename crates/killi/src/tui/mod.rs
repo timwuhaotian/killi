@@ -33,6 +33,7 @@ mod start;
 mod state;
 mod swarm;
 pub(crate) mod text;
+mod theme;
 mod turn;
 mod undo;
 
@@ -76,8 +77,8 @@ use history::{Entry as Line, History};
 use menu::{Entry, Fill, Item, Suggestions};
 use palette::Ground;
 use text::{
-    ADD, BOLD, BRANCH, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET, RULE,
-    SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_code, wrap_words,
+    ADD, BOLD, BRANCH, CHIP, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET,
+    RULE, SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_code, wrap_words,
 };
 
 use commands::{
@@ -375,7 +376,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 // not a switch to the theme already in use.
                 let previewed_from = app.theme_before_preview.take();
                 if !text::THEMES.iter().any(|(known, _)| *known == name) {
-                    app.error("Pick default, batman, iced-coffee or creamery-station; /theme alone lists them.");
+                    let names: Vec<&str> =
+                        text::THEMES.iter().map(|(known, _)| *known).collect();
+                    app.error(&format!(
+                        "Pick one of {}; /theme alone lists them.",
+                        names.join(", ")
+                    ));
                 } else if name == text::skin_name()
                     && previewed_from.as_deref().is_none_or(|before| before == name)
                 {

@@ -145,7 +145,7 @@ impl App {
         self.history.banner_starts();
         self.commit(String::new());
         let tall = self.height >= banner::COMPACT_ROWS;
-        self.emit(Line::block(move |width| {
+        let block = Line::block(move |width| {
             let version = env!("CARGO_PKG_VERSION");
             if banner::compact(width, tall) {
                 let cwd = shorten_path(&cwd, width.saturating_sub(7).max(20));
@@ -168,7 +168,16 @@ impl App {
             ];
             side.extend(setup.iter().cloned());
             banner::render(width, &side)
-        }));
+        });
+        let render = match &block {
+            Line::Block(render) => Some(render.clone()),
+            _ => None,
+        };
+        let at = self.pending.len();
+        self.emit(block);
+        if let (Some(since), Some(render)) = (&mut self.since_banner, render) {
+            since.block = Some((render, at, self.pending.len() - at));
+        }
         self.commit(String::new());
         for problem in &overview.problems {
             self.commit(format!("{WARN}!{RESET} {problem}"));
@@ -237,6 +246,49 @@ impl App {
             self.pending.extend(waiting);
             (self.last_kind, self.last_blank) = (last_kind, last_blank);
         }
+    }
+
+    /// Repaints the banner in the colors now in use while a /theme preview moves, when its
+    /// top row is still on screen (or it is still kept in fullscreen), so the header the
+    /// session opened with previews a theme along with the live area. Only the logo block is
+    /// drawn again; what was printed under it is printed again as it was.
+    pub(super) fn follow_theme_preview(&mut self) {
+        if self.fullscreen {
+            self.history.repaint_banner();
+            return;
+        }
+        let Some(since) = self.since_banner.take() else {
+            return;
+        };
+        let fits = since.rows + self.shown.len() <= self.height;
+        let block = since.block.clone().filter(|(_, at, count)| {
+            fits && at + count <= since.lines.len()
+        });
+        let Some((render, at, count)) = block else {
+            self.since_banner = Some(since);
+            return;
+        };
+        let fresh = Line::Block(render.clone()).render(self.width);
+        let mut lines = since.lines;
+        lines.splice(at..at + count, fresh.iter().cloned());
+        let _ = queue!(
+            self.out,
+            MoveUp((self.cursor_row + since.rows) as u16),
+            MoveToColumn(0),
+            Clear(ClearType::FromCursorDown)
+        );
+        self.cursor_row = 0;
+        self.shown.clear();
+        self.content_rows = self.content_rows.saturating_sub(since.rows);
+        let waiting = std::mem::take(&mut self.pending);
+        self.since_banner = Some(SinceBanner {
+            banner: since.banner - count + fresh.len(),
+            resumed: since.resumed,
+            block: Some((render, at, fresh.len())),
+            ..SinceBanner::default()
+        });
+        self.pending = lines;
+        self.pending.extend(waiting);
     }
 
     /// Shows the model and effort the agent runs on in the status line and the slash menu.

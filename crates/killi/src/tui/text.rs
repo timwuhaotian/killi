@@ -25,6 +25,12 @@ enum Theme {
     Batman,
     IcedCoffee,
     Creamery,
+    Pastel,
+    Cappuccino,
+    Gray,
+    OffWhite,
+    RedOrange,
+    SnowIce,
 }
 
 impl Theme {
@@ -34,6 +40,12 @@ impl Theme {
             "batman" => Some(Theme::Batman),
             "iced-coffee" => Some(Theme::IcedCoffee),
             "creamery-station" => Some(Theme::Creamery),
+            "pastel-tweencore" => Some(Theme::Pastel),
+            "cappuccino" => Some(Theme::Cappuccino),
+            "shades-of-gray" => Some(Theme::Gray),
+            "off-white" => Some(Theme::OffWhite),
+            "red-orange" => Some(Theme::RedOrange),
+            "snow-and-ice" => Some(Theme::SnowIce),
             _ => None,
         }
     }
@@ -44,6 +56,12 @@ impl Theme {
             Theme::Batman => Some(0),
             Theme::IcedCoffee => Some(1),
             Theme::Creamery => Some(2),
+            Theme::Pastel => Some(3),
+            Theme::Cappuccino => Some(4),
+            Theme::Gray => Some(5),
+            Theme::OffWhite => Some(6),
+            Theme::RedOrange => Some(7),
+            Theme::SnowIce => Some(8),
             Theme::Dark | Theme::Light => None,
         }
     }
@@ -56,6 +74,12 @@ pub const THEMES: &[(&str, &str)] = &[
     ("batman", "signal yellow and olive on slate and black"),
     ("iced-coffee", "sky blue, coral and amber on dark"),
     ("creamery-station", "cream, butter and tan on dark"),
+    ("pastel-tweencore", "pastel pink, lavender and baby blue on dark"),
+    ("cappuccino", "cream, tan and rust over coffee browns"),
+    ("shades-of-gray", "grays only, light to dark"),
+    ("off-white", "warm whites and ivory on dark"),
+    ("red-orange", "amber through orange to red on dark"),
+    ("snow-and-ice", "white and ice cyan on dark"),
 ];
 
 /// A theme name as the lookup takes it: lowercase, with spaces and underscores as dashes,
@@ -112,6 +136,12 @@ pub fn skin_name() -> &'static str {
         Theme::Batman => "batman",
         Theme::IcedCoffee => "iced-coffee",
         Theme::Creamery => "creamery-station",
+        Theme::Pastel => "pastel-tweencore",
+        Theme::Cappuccino => "cappuccino",
+        Theme::Gray => "shades-of-gray",
+        Theme::OffWhite => "off-white",
+        Theme::RedOrange => "red-orange",
+        Theme::SnowIce => "snow-and-ice",
         Theme::Dark | Theme::Light => "default",
     }
 }
@@ -176,8 +206,8 @@ pub struct Sgr {
     light: &'static str,
     dark_true: &'static str,
     light_true: &'static str,
-    /// Batman, iced coffee and creamery station, in `Theme::skin`'s order.
-    skins: [SkinShade; 3],
+    /// Every named skin's shade, in `Theme::skin`'s order.
+    skins: [SkinShade; 9],
     derived: Option<Role>,
 }
 
@@ -187,7 +217,7 @@ impl Sgr {
         light: &'static str,
         dark_true: &'static str,
         light_true: &'static str,
-        skins: [SkinShade; 3],
+        skins: [SkinShade; 9],
     ) -> Sgr {
         Sgr {
             dark,
@@ -206,7 +236,7 @@ impl Sgr {
         light: &'static str,
         dark_true: &'static str,
         light_true: &'static str,
-        skins: [SkinShade; 3],
+        skins: [SkinShade; 9],
     ) -> Sgr {
         Sgr {
             dark,
@@ -257,8 +287,15 @@ impl fmt::Display for Sgr {
 // where the terminal shows 24-bit color, else its nearest 256-color shade. The skins' shades
 // are their palettes' colors — batman #fdff00/#988829/#242424/#282e3c/#505c7c, iced coffee
 // #cfe2f3/#6fa8dc/#ef6868/#f4cccc/#ce7e00, creamery station
-// #f8f2e7/#fff9cf/#fce9b2/#dec092/#cab297 — lightened or darkened a role at a time so each
-// keeps the contrast its default shade has on a dark ground.
+// #f8f2e7/#fff9cf/#fce9b2/#dec092/#cab297, pastel tweencore
+// #ff9cd2/#fffbee/#ffcffc/#cbbeff/#d9ecff, cappuccino
+// #4b3832/#854442/#fff4e6/#3c2f2f/#be9b7b, shades of gray
+// #999999/#777777/#555555/#333333/#111111, off white
+// #fffff2/#f9f9f9/#fffff4/#fbf7f5/#f9f1f1, red-orange
+// #ffc100/#ff9a00/#ff7400/#ff4d00/#ff0000 and snow and ice
+// #ffffff/#b9e8ea/#86d6d8/#3fd0d4/#20c3d0 — lightened or darkened a role at a time so each
+// keeps the contrast its default shade has on a dark ground. Skins that are only shades of
+// one hue (the grays, the whites) take the lighter and darker shades their scale points to.
 
 /// Killi: running work, a finished call's tick, the active mode, commands, links and the
 /// selected row's mark.
@@ -271,6 +308,12 @@ pub const LAGOON: Sgr = Sgr::fixed(
         ("\x1b[38;5;226m", "\x1b[38;2;253;255;0m"),
         ("\x1b[38;5;74m", "\x1b[38;2;111;168;220m"),
         ("\x1b[38;5;223m", "\x1b[38;2;252;233;178m"),
+        ("\x1b[38;5;218m", "\x1b[38;2;255;156;210m"),
+        ("\x1b[38;5;186m", "\x1b[38;2;230;196;155m"),
+        ("\x1b[38;5;255m", "\x1b[38;2;238;238;238m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;255;255;242m"),
+        ("\x1b[38;5;208m", "\x1b[38;2;255;154;0m"),
+        ("\x1b[38;5;80m", "\x1b[38;2;63;208;212m"),
     ],
 );
 /// The human: your messages, the prompt, questions and anything else waiting on you.
@@ -283,6 +326,12 @@ pub const FIN: Sgr = Sgr::fixed(
         ("\x1b[38;5;146m", "\x1b[38;2;159;176;212m"),
         ("\x1b[38;5;224m", "\x1b[38;2;244;204;204m"),
         ("\x1b[38;5;180m", "\x1b[38;2;222;192;146m"),
+        ("\x1b[38;5;195m", "\x1b[38;2;217;236;255m"),
+        ("\x1b[38;5;173m", "\x1b[38;2;201;120;110m"),
+        ("\x1b[38;5;252m", "\x1b[38;2;204;204;204m"),
+        ("\x1b[38;5;255m", "\x1b[38;2;249;241;241m"),
+        ("\x1b[38;5;208m", "\x1b[38;2;255;116;0m"),
+        ("\x1b[38;5;116m", "\x1b[38;2;134;214;216m"),
     ],
 );
 /// Retries, a context window nearly full, an interrupted turn.
@@ -295,10 +344,16 @@ pub const WARN: Sgr = Sgr::fixed(
         ("\x1b[38;5;185m", "\x1b[38;2;230;200;50m"),
         ("\x1b[38;5;178m", "\x1b[38;2;224;156;38m"),
         ("\x1b[38;5;179m", "\x1b[38;2;217;168;79m"),
+        ("\x1b[38;5;225m", "\x1b[38;2;255;207;252m"),
+        ("\x1b[38;5;215m", "\x1b[38;2;238;190;110m"),
+        ("\x1b[38;5;253m", "\x1b[38;2;221;221;221m"),
+        ("\x1b[38;5;230m", "\x1b[38;2;255;244;214m"),
+        ("\x1b[38;5;214m", "\x1b[38;2;255;193;0m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;255;255;255m"),
     ],
 );
-/// Failed tool calls, errors and removed lines. Batman and creamery station have no red of
-/// their own; they keep the default's, so a failure reads as one in every theme.
+/// Failed tool calls, errors and removed lines. Skins with no red of their own keep the
+/// default's, so a failure reads as one in every theme.
 pub const DANGER: Sgr = Sgr::fixed(
     "\x1b[38;5;204m",
     "\x1b[38;5;124m",
@@ -307,6 +362,12 @@ pub const DANGER: Sgr = Sgr::fixed(
     [
         ("\x1b[38;5;204m", "\x1b[38;2;255;111;125m"),
         ("\x1b[38;5;203m", "\x1b[38;2;239;104;104m"),
+        ("\x1b[38;5;204m", "\x1b[38;2;255;111;125m"),
+        ("\x1b[38;5;204m", "\x1b[38;2;255;111;125m"),
+        ("\x1b[38;5;167m", "\x1b[38;2;230;95;80m"),
+        ("\x1b[38;5;204m", "\x1b[38;2;255;111;125m"),
+        ("\x1b[38;5;204m", "\x1b[38;2;255;111;125m"),
+        ("\x1b[38;5;203m", "\x1b[38;2;255;77;60m"),
         ("\x1b[38;5;204m", "\x1b[38;2;255;111;125m"),
     ],
 );
@@ -321,6 +382,12 @@ pub const FAINT: Sgr = Sgr::derived(
         ("\x1b[38;5;60m", "\x1b[38;2;80;92;124m"),
         ("\x1b[38;5;60m", "\x1b[38;2;91;113;134m"),
         ("\x1b[38;5;101m", "\x1b[38;2;138;122;95m"),
+        ("\x1b[38;5;96m", "\x1b[38;2;122;114;153m"),
+        ("\x1b[38;5;101m", "\x1b[38;2;140;118;104m"),
+        ("\x1b[38;5;243m", "\x1b[38;2;119;119;119m"),
+        ("\x1b[38;5;246m", "\x1b[38;2;150;145;138m"),
+        ("\x1b[38;5;95m", "\x1b[38;2;153;92;51m"),
+        ("\x1b[38;5;66m", "\x1b[38;2;84;134;136m"),
     ],
 );
 /// Hairlines: the rules around the prompt. As faint as a mark until the ground is known.
@@ -334,6 +401,12 @@ pub const RULE: Sgr = Sgr::derived(
         ("\x1b[38;5;59m", "\x1b[38;2;58;67;92m"),
         ("\x1b[38;5;59m", "\x1b[38;2;61;76;92m"),
         ("\x1b[38;5;59m", "\x1b[38;2;95;83;64m"),
+        ("\x1b[38;5;240m", "\x1b[38;2;81;76;102m"),
+        ("\x1b[38;5;239m", "\x1b[38;2;92;74;64m"),
+        ("\x1b[38;5;240m", "\x1b[38;2;85;85;85m"),
+        ("\x1b[38;5;241m", "\x1b[38;2;105;100;95m"),
+        ("\x1b[38;5;238m", "\x1b[38;2;102;58;34m"),
+        ("\x1b[38;5;239m", "\x1b[38;2;50;88;92m"),
     ],
 );
 /// Secondary text. SGR dim is the fallback, not the design: Kil and Alacritty scale each
@@ -348,6 +421,12 @@ pub const DIM: Sgr = Sgr::derived(
         ("\x1b[38;5;103m", "\x1b[38;2;139;150;179m"),
         ("\x1b[38;5;146m", "\x1b[38;2;157;180;201m"),
         ("\x1b[38;5;144m", "\x1b[38;2;179;160;134m"),
+        ("\x1b[38;5;146m", "\x1b[38;2;173;162;217m"),
+        ("\x1b[38;5;138m", "\x1b[38;2;190;155;123m"),
+        ("\x1b[38;5;246m", "\x1b[38;2;153;153;153m"),
+        ("\x1b[38;5;251m", "\x1b[38;2;200;194;186m"),
+        ("\x1b[38;5;173m", "\x1b[38;2;230;140;64m"),
+        ("\x1b[38;5;73m", "\x1b[38;2;110;175;180m"),
     ],
 );
 /// The thinking effort in the status line and the banner.
@@ -360,6 +439,12 @@ pub const EFFORT: Sgr = Sgr::fixed(
         ("\x1b[38;5;100m", "\x1b[38;2;152;136;41m"),
         ("\x1b[38;5;189m", "\x1b[38;2;207;226;243m"),
         ("\x1b[38;5;230m", "\x1b[38;2;255;249;207m"),
+        ("\x1b[38;5;183m", "\x1b[38;2;203;190;255m"),
+        ("\x1b[38;5;230m", "\x1b[38;2;255;244;230m"),
+        ("\x1b[38;5;254m", "\x1b[38;2;230;230;230m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;249;249;249m"),
+        ("\x1b[38;5;221m", "\x1b[38;2;255;210;80m"),
+        ("\x1b[38;5;152m", "\x1b[38;2;185;232;234m"),
     ],
 );
 /// Token counts and the cache hit rate in the status line.
@@ -372,6 +457,12 @@ pub const TOKENS: Sgr = Sgr::fixed(
         ("\x1b[38;5;103m", "\x1b[38;2;126;147;189m"),
         ("\x1b[38;5;110m", "\x1b[38;2;143;192;232m"),
         ("\x1b[38;5;180m", "\x1b[38;2;214;189;143m"),
+        ("\x1b[38;5;153m", "\x1b[38;2;185;216;250m"),
+        ("\x1b[38;5;180m", "\x1b[38;2;205;170;140m"),
+        ("\x1b[38;5;248m", "\x1b[38;2;170;170;170m"),
+        ("\x1b[38;5;253m", "\x1b[38;2;220;220;214m"),
+        ("\x1b[38;5;215m", "\x1b[38;2;255;174;77m"),
+        ("\x1b[38;5;80m", "\x1b[38;2;100;205;215m"),
     ],
 );
 /// The git branch in the status line.
@@ -384,6 +475,12 @@ pub const BRANCH: Sgr = Sgr::fixed(
         ("\x1b[38;5;188m", "\x1b[38;2;199;207;223m"),
         ("\x1b[38;5;217m", "\x1b[38;2;240;154;154m"),
         ("\x1b[38;5;255m", "\x1b[38;2;248;242;231m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;255;251;238m"),
+        ("\x1b[38;5;180m", "\x1b[38;2;232;160;140m"),
+        ("\x1b[38;5;255m", "\x1b[38;2;245;245;245m"),
+        ("\x1b[38;5;255m", "\x1b[38;2;243;230;230m"),
+        ("\x1b[38;5;203m", "\x1b[38;2;255;90;60m"),
+        ("\x1b[38;5;195m", "\x1b[38;2;210;244;245m"),
     ],
 );
 /// A background a step off the terminal's own, for your messages.
@@ -397,6 +494,12 @@ pub const TINT: Sgr = Sgr::derived(
         ("\x1b[48;5;236m", "\x1b[48;2;40;46;60m"),
         ("\x1b[48;5;236m", "\x1b[48;2;34;48;62m"),
         ("\x1b[48;5;236m", "\x1b[48;2;58;50;34m"),
+        ("\x1b[48;5;236m", "\x1b[48;2;64;39;53m"),
+        ("\x1b[48;5;236m", "\x1b[48;2;60;47;47m"),
+        ("\x1b[48;5;235m", "\x1b[48;2;38;38;38m"),
+        ("\x1b[48;5;236m", "\x1b[48;2;52;50;46m"),
+        ("\x1b[48;5;235m", "\x1b[48;2;64;32;16m"),
+        ("\x1b[48;5;235m", "\x1b[48;2;18;52;56m"),
     ],
 );
 /// The selected row of a list: a little more than a tint, with more lagoon in it.
@@ -410,6 +513,12 @@ pub const SELECT: Sgr = Sgr::derived(
         ("\x1b[48;5;60m", "\x1b[48;2;57;68;95m"),
         ("\x1b[48;5;238m", "\x1b[48;2;47;74;99m"),
         ("\x1b[48;5;238m", "\x1b[48;2;85;72;44m"),
+        ("\x1b[48;5;239m", "\x1b[48;2;89;61;84m"),
+        ("\x1b[48;5;237m", "\x1b[48;2;75;56;50m"),
+        ("\x1b[48;5;238m", "\x1b[48;2;64;64;64m"),
+        ("\x1b[48;5;238m", "\x1b[48;2;74;70;64m"),
+        ("\x1b[48;5;58m", "\x1b[48;2;92;48;20m"),
+        ("\x1b[48;5;23m", "\x1b[48;2;24;78;84m"),
     ],
 );
 /// Behind an added line of a diff. Only drawn in 24-bit color, where it can be this soft.
@@ -423,6 +532,12 @@ pub const ADD: Sgr = Sgr::derived(
         ("\x1b[49m", "\x1b[48;2;63;61;23m"),
         ("\x1b[49m", "\x1b[48;2;46;74;92m"),
         ("\x1b[49m", "\x1b[48;2;77;69;32m"),
+        ("\x1b[49m", "\x1b[48;2;52;62;84m"),
+        ("\x1b[49m", "\x1b[48;2;70;58;40m"),
+        ("\x1b[49m", "\x1b[48;2;52;52;52m"),
+        ("\x1b[49m", "\x1b[48;2;60;60;50m"),
+        ("\x1b[49m", "\x1b[48;2;76;54;14m"),
+        ("\x1b[49m", "\x1b[48;2;20;84;80m"),
     ],
 );
 /// Behind a removed line of a diff.
@@ -435,6 +550,12 @@ pub const DEL: Sgr = Sgr::derived(
     [
         ("\x1b[49m", "\x1b[48;2;72;45;50m"),
         ("\x1b[49m", "\x1b[48;2;95;47;44m"),
+        ("\x1b[49m", "\x1b[48;2;72;45;50m"),
+        ("\x1b[49m", "\x1b[48;2;77;47;63m"),
+        ("\x1b[49m", "\x1b[48;2;88;48;44m"),
+        ("\x1b[49m", "\x1b[48;2;72;45;50m"),
+        ("\x1b[49m", "\x1b[48;2;72;45;50m"),
+        ("\x1b[49m", "\x1b[48;2;92;32;20m"),
         ("\x1b[49m", "\x1b[48;2;72;45;50m"),
     ],
 );
@@ -449,6 +570,12 @@ pub const CHIP: Sgr = Sgr::derived(
         ("\x1b[49m", "\x1b[48;2;46;52;68m"),
         ("\x1b[49m", "\x1b[48;2;43;56;68m"),
         ("\x1b[49m", "\x1b[48;2;69;59;38m"),
+        ("\x1b[49m", "\x1b[48;2;56;52;77m"),
+        ("\x1b[49m", "\x1b[48;2;68;54;48m"),
+        ("\x1b[49m", "\x1b[48;2;44;44;44m"),
+        ("\x1b[49m", "\x1b[48;2;58;55;50m"),
+        ("\x1b[49m", "\x1b[48;2;70;40;22m"),
+        ("\x1b[49m", "\x1b[48;2;22;62;66m"),
     ],
 );
 
@@ -462,6 +589,12 @@ const STRING: Sgr = Sgr::fixed(
         ("\x1b[38;5;143m", "\x1b[38;2;169;184;107m"),
         ("\x1b[38;5;217m", "\x1b[38;2;238;179;179m"),
         ("\x1b[38;5;230m", "\x1b[38;2;255;249;207m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;255;251;238m"),
+        ("\x1b[38;5;230m", "\x1b[38;2;255;244;230m"),
+        ("\x1b[38;5;252m", "\x1b[38;2;204;204;204m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;251;247;245m"),
+        ("\x1b[38;5;214m", "\x1b[38;2;255;193;0m"),
+        ("\x1b[38;5;152m", "\x1b[38;2;185;232;234m"),
     ],
 );
 const NUMBER: Sgr = Sgr::fixed(
@@ -473,6 +606,12 @@ const NUMBER: Sgr = Sgr::fixed(
         ("\x1b[38;5;185m", "\x1b[38;2;232;227;60m"),
         ("\x1b[38;5;178m", "\x1b[38;2;224;156;38m"),
         ("\x1b[38;5;180m", "\x1b[38;2;222;192;146m"),
+        ("\x1b[38;5;225m", "\x1b[38;2;255;207;252m"),
+        ("\x1b[38;5;215m", "\x1b[38;2;238;190;110m"),
+        ("\x1b[38;5;255m", "\x1b[38;2;238;238;238m"),
+        ("\x1b[38;5;230m", "\x1b[38;2;255;240;200m"),
+        ("\x1b[38;5;222m", "\x1b[38;2;255;224;130m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;255;255;255m"),
     ],
 );
 const KEYWORD: Sgr = Sgr::fixed(
@@ -484,6 +623,12 @@ const KEYWORD: Sgr = Sgr::fixed(
         ("\x1b[38;5;103m", "\x1b[38;2;126;147;189m"),
         ("\x1b[38;5;74m", "\x1b[38;2;111;168;220m"),
         ("\x1b[38;5;223m", "\x1b[38;2;252;233;178m"),
+        ("\x1b[38;5;218m", "\x1b[38;2;255;156;210m"),
+        ("\x1b[38;5;174m", "\x1b[38;2;222;150;120m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;250;250;250m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;255;255;244m"),
+        ("\x1b[38;5;208m", "\x1b[38;2;255;116;0m"),
+        ("\x1b[38;5;38m", "\x1b[38;2;32;195;208m"),
     ],
 );
 

@@ -10,7 +10,8 @@ scratch HOME, and each screen is written as an SVG painted on the theme's own pa
 The themes are Kil's five (crates/kil/src/theme.rs in the Kil repo): killi asks the terminal
 for its background and foreground, and the pseudo-terminal answers with the theme's. SGR dim is
 drawn as Kil draws it, each channel scaled to two thirds. Scenes: start, menu, files (the `@`
-menu), picker, conv (a bug fix with a diff), question, plan, busy (mid-turn), swarm and swarm-big (an
+menu), picker, theme (`/theme` previewing the last theme as its selection lands on it, with the
+specimen of its colors above the prompt), conv (a bug fix with a diff), question, plan, busy (mid-turn), swarm and swarm-big (an
 `agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), peers (the banner
 with another session in the repository), sessions (`/sessions`) and peer (that session's question and
 message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
@@ -64,6 +65,7 @@ SCENES = {
     "shell": dict(keys=["!git status"]),
     "files": dict(keys=["fix @sl"]),
     "picker": dict(keys=["/model\r"]),
+    "theme": dict(keys=["/theme\r"] + ["\x1b[B"] * 9),
     "conv": dict(keys=[FIX], until="fills it"),
     "suggest": dict(keys=[FIX, "WAITFOR:fills it", "\t"], until="add a test for the e"),
     "select": dict(keys=[FIX, "IDLE", "MOUSE:press:14:0", "MOUSE:drag:9:40", "MOUSE:wheel-up:9:40", "MOUSE:wheel-up:9:40", "MOUSE:up:9:40"]),

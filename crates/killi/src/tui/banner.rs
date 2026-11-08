@@ -29,7 +29,7 @@ const STOPS_LIGHT: Stops = [
 ];
 /// Each skin's gradient, from its palette: batman's signal yellow through its olive to its
 /// slate, iced coffee's blue through its pale blue to its coral, creamery station's butter
-/// through its tans.
+/// through its tans, and the rest each across the three shades of theirs that read brightest.
 const STOPS_BATMAN: Stops = [
     (253.0, 255.0, 0.0),
     (191.0, 168.0, 63.0),
@@ -44,6 +44,36 @@ const STOPS_CREAMERY: Stops = [
     (252.0, 233.0, 178.0),
     (222.0, 192.0, 146.0),
     (202.0, 178.0, 151.0),
+];
+const STOPS_PASTEL: Stops = [
+    (255.0, 156.0, 210.0),
+    (203.0, 190.0, 255.0),
+    (217.0, 236.0, 255.0),
+];
+const STOPS_CAPPUCCINO: Stops = [
+    (255.0, 244.0, 230.0),
+    (190.0, 155.0, 123.0),
+    (201.0, 120.0, 110.0),
+];
+const STOPS_GRAY: Stops = [
+    (240.0, 240.0, 240.0),
+    (170.0, 170.0, 170.0),
+    (119.0, 119.0, 119.0),
+];
+const STOPS_OFF_WHITE: Stops = [
+    (255.0, 255.0, 242.0),
+    (251.0, 247.0, 245.0),
+    (249.0, 241.0, 241.0),
+];
+const STOPS_RED_ORANGE: Stops = [
+    (255.0, 193.0, 0.0),
+    (255.0, 116.0, 0.0),
+    (255.0, 0.0, 0.0),
+];
+const STOPS_SNOW_ICE: Stops = [
+    (255.0, 255.0, 255.0),
+    (134.0, 214.0, 216.0),
+    (32.0, 195.0, 208.0),
 ];
 
 /// Rows a terminal needs before the block-letter logo is worth its six; with fewer the banner
@@ -325,6 +355,12 @@ fn gradient(t: f32) -> (f32, f32, f32) {
         "batman" => &STOPS_BATMAN,
         "iced-coffee" => &STOPS_ICED_COFFEE,
         "creamery-station" => &STOPS_CREAMERY,
+        "pastel-tweencore" => &STOPS_PASTEL,
+        "cappuccino" => &STOPS_CAPPUCCINO,
+        "shades-of-gray" => &STOPS_GRAY,
+        "off-white" => &STOPS_OFF_WHITE,
+        "red-orange" => &STOPS_RED_ORANGE,
+        "snow-and-ice" => &STOPS_SNOW_ICE,
         _ if is_light() => &STOPS_LIGHT,
         _ => &STOPS_DARK,
     };

@@ -381,6 +381,76 @@ fn moving_in_the_theme_picker_previews_it_and_esc_restores_it() {
 }
 
 #[test]
+fn the_theme_picker_shows_a_specimen_of_the_previewed_theme() {
+    for (width, height) in [(118, 40), (80, 24), (60, 24)] {
+        let mut app = test_app();
+        (app.width, app.height) = (width, height);
+        let rows = app.theme_specimen_rows(width);
+        assert!(
+            rows.iter().all(|row| text::width(row) <= width),
+            "specimen fits {width}x{height}"
+        );
+        let shown = rows
+            .iter()
+            .map(|row| unstyled(row))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for sample in [
+            "Theme preview ·",
+            "warning",
+            "your band",
+            "make the failing test pass",
+            "read",
+            "cargo",
+            "previewed",
+            "let count = 42",
+            "keep this theme?",
+            "main",
+        ] {
+            assert!(shown.contains(sample), "{width}x{height} lacks {sample:?}: {shown}");
+        }
+    }
+    let mut app = test_app();
+    app.height = 40;
+    app.open_theme_picker();
+    let shown = |app: &mut App| {
+        app.live()
+            .0
+            .iter()
+            .map(|row| unstyled(row))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let open = shown(&mut app);
+    assert!(open.contains("Theme preview ·"), "{open}");
+    assert!(open.contains("Color theme"), "{open}");
+    app.on_key_picker(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!shown(&mut app).contains("Theme preview ·"), "closing the list closes the specimen");
+}
+
+#[test]
+fn a_theme_preview_repaints_the_banner_still_on_screen() {
+    use std::cell::Cell;
+    // Fullscreen: the banner's block is asked again, so its new reading shows.
+    let mut app = test_app();
+    app.fullscreen = true;
+    let seen = Rc::new(Cell::new("before"));
+    let cell = seen.clone();
+    app.history.banner_starts();
+    app.history.push(Line::block(move |_| vec![cell.get().to_string()]));
+    app.history.banner_ends();
+    seen.set("previewed");
+    assert_eq!(app.history.rows(), ["before"], "laid out blocks are cached");
+    app.follow_theme_preview();
+    assert_eq!(app.history.rows(), ["previewed"]);
+    // The scrollback repaint writes to the terminal, so it is exercised by the `theme`
+    // scene in scripts/frames.py rather than here.
+}
+
+#[test]
 fn a_provider_key_applies_as_it_is_answered() {
     let mut app = test_app();
     app.provider_pick("muse-code");

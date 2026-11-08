@@ -5,6 +5,21 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.60 — 2026-11-08
+
+- Six more `/theme` themes, each painted role by role from its color-hex palette for a dark
+  terminal, banner gradient included: `pastel-tweencore` (pink, lavender and baby blue),
+  `cappuccino` (cream, tan and rust over coffee browns), `shades-of-gray` (grays only),
+  `off-white` (warm whites and ivory), `red-orange` (amber through orange to red) and
+  `snow-and-ice` (white and ice cyan). A palette with no red of its own keeps the default's
+  for failures, as before.
+- A `/theme` preview now carries the whole screen with it: the banner still on screen is
+  repainted in the highlighted theme as the selection moves, and a specimen stands above
+  the prompt while the list is open — the header as the banner draws it, a swatch for every
+  color's job, and one of each element the colors sit on (your message's band, finished and
+  failed calls, a diff, prose and code, the task marks). Esc restores the theme the list
+  opened on, banner and all.
+
 ## 0.6.59 — 2026-11-08
 
 - The `/theme` list previews as it moves: the highlighted theme's colors apply at once, so

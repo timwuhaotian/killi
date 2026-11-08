@@ -208,6 +208,15 @@ impl History {
         }
     }
 
+    /// Lays every entry out again while the banner is kept, so its block takes the colors in
+    /// use now, as a /theme preview moves. Rows printed as text keep the colors they were
+    /// printed in; only blocks are asked again.
+    pub fn repaint_banner(&mut self) {
+        if self.banner.is_some() {
+            self.layout();
+        }
+    }
+
     /// Removes the banner and what follows it, returning what followed; None when the banner
     /// is no longer kept.
     pub fn cut_banner(&mut self) -> Option<Vec<Entry>> {

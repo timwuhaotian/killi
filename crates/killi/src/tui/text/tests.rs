@@ -399,6 +399,48 @@ fn skins_paint_their_palettes_own_colors() {
         DANGER.shade(Theme::Dark, true),
         "a skin with no red of its own keeps the default's"
     );
+    assert_eq!(
+        LAGOON.shade(Theme::Pastel, true),
+        "\x1b[38;2;255;156;210m",
+        "pastel tweencore's pink #ff9cd2"
+    );
+    assert_eq!(
+        TINT.shade(Theme::Cappuccino, true),
+        "\x1b[48;2;60;47;47m",
+        "cappuccino's darkest brown #3c2f2f behind your messages"
+    );
+    assert_eq!(
+        DIM.shade(Theme::Gray, true),
+        "\x1b[38;2;153;153;153m",
+        "shades of gray's lightest gray #999999 for secondary text"
+    );
+    assert_eq!(
+        LAGOON.shade(Theme::OffWhite, true),
+        "\x1b[38;2;255;255;242m",
+        "off white's ivory #fffff2"
+    );
+    assert_eq!(
+        WARN.shade(Theme::RedOrange, true),
+        "\x1b[38;2;255;193;0m",
+        "red-orange's amber #ffc100"
+    );
+    assert_eq!(
+        LAGOON.shade(Theme::SnowIce, true),
+        "\x1b[38;2;63;208;212m",
+        "snow and ice's cyan #3fd0d4"
+    );
+    for skin in [
+        Theme::Pastel,
+        Theme::Gray,
+        Theme::OffWhite,
+        Theme::SnowIce,
+    ] {
+        assert_eq!(
+            DANGER.shade(skin, true),
+            DANGER.shade(Theme::Dark, true),
+            "a skin with no red of its own keeps the default's"
+        );
+    }
     for role in [
         LAGOON, FIN, WARN, DANGER, FAINT, RULE, DIM, EFFORT, TOKENS, BRANCH,
     ] {
@@ -423,9 +465,22 @@ fn a_theme_name_reads_the_ground_only_when_it_pins_nothing() {
     assert!(!reads_ground(Some("batman")));
     assert!(!reads_ground(Some("Iced Coffee")));
     assert!(!reads_ground(Some("creamery_station")));
+    assert!(!reads_ground(Some("Snow and Ice")));
+    assert!(!reads_ground(Some("off_white")));
     assert_eq!(
         THEMES.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
-        ["default", "batman", "iced-coffee", "creamery-station"]
+        [
+            "default",
+            "batman",
+            "iced-coffee",
+            "creamery-station",
+            "pastel-tweencore",
+            "cappuccino",
+            "shades-of-gray",
+            "off-white",
+            "red-orange",
+            "snow-and-ice"
+        ]
     );
     for (name, _) in THEMES.iter().skip(1) {
         assert!(Theme::skin_named(name).is_some(), "{name} names a skin");

@@ -117,8 +117,8 @@ impl SearchConfig {
 /// `[ui]`: how the terminal UI looks.
 #[derive(Debug, Default, Deserialize)]
 pub struct UiConfig {
-    /// The color theme, as `/theme` picks it: "default", "batman", "iced-coffee" or
-    /// "creamery-station", or "dark"/"light" to pin the default's shades to a terminal
+    /// The color theme, as `/theme` picks it: "default" or a named skin `/theme` lists
+    /// ("batman", "snow-and-ice", …), or "dark"/"light" to pin the default's shades to a terminal
     /// background. Without it the default reads `COLORFGBG` and assumes dark when that isn't
     /// set. The named themes are made for a dark terminal.
     pub theme: Option<String>,

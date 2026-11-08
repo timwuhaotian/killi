@@ -1,5 +1,9 @@
 use super::*;
 
+/// The banner's logo block and where its rows sit in the lines printed from the banner on
+/// (first, count), kept in `SinceBanner`.
+pub(super) type BannerBlock = (Rc<dyn Fn(usize) -> Vec<String>>, usize, usize);
+
 /// A /btw question and its answer on the way.
 pub(super) type PendingAside = (
     String,
@@ -312,6 +316,9 @@ pub(super) struct SinceBanner {
     /// The screen rows `lines` take.
     pub(super) rows: usize,
     pub(super) resumed: bool,
+    /// The banner's logo block, so a /theme preview can repaint it in the colors being
+    /// previewed without the agent the banner was drawn from.
+    pub(super) block: Option<BannerBlock>,
 }
 
 #[derive(PartialEq, Clone, Copy)]

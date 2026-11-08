@@ -83,8 +83,8 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   definitions; other servers start when first used through the `mcp` tool.
 - `[prompt] system = '''...'''`: the system prompt's guidance in place of the built-in text;
   `killi init` adds the built-in text to a config without it. Blank means built in.
-- `[ui]`: `theme` (the color theme `/theme` picks: "default", "batman", "iced-coffee" or
-  "creamery-station" — the three named ones are made for a dark terminal — or "dark"/"light"
+- `[ui]`: `theme` (the color theme `/theme` picks: "default" or a named skin `/theme`
+  lists, such as "batman" or "snow-and-ice" — the named ones are made for a dark terminal — or "dark"/"light"
   to pin the default; without it the default asks the terminal, then reads `COLORFGBG`),
   `fullscreen = true` (take the whole screen, with the prompt on the bottom rows;
   without it only Kil does that), `recap = false` (no automatic 100-character recap after a
