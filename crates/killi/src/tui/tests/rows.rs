@@ -204,45 +204,92 @@ fn tool_rows_bold_the_name_mute_the_folders_and_hang_output_off_a_gutter() {
     );
     assert_eq!(tool_summary("todo", false), format!("{BOLD}todo{RESET}"));
     assert_eq!(
-        unstyled(&diff_row("+12\tlet x = 1;", 40, false)),
+        unstyled(&diff_row("+12\tlet x = 1;", 40, false, text::Lang::Plain)),
         "  │   12 + let x = 1;"
     );
-    assert!(diff_row("-3\told", 40, false).contains(&format!("{DANGER}- old")));
-    assert_eq!(unstyled(&diff_row("@@ hunk", 40, true)), "  │ @@ hunk");
+    assert!(
+        diff_row("-3\told", 40, false, text::Lang::Plain).contains(&format!("{DANGER}- old"))
+    );
+    assert_eq!(
+        unstyled(&diff_row("@@ hunk", 40, true, text::Lang::Plain)),
+        "  │ @@ hunk"
+    );
 }
 
 #[test]
 fn an_added_or_removed_line_sits_on_a_stripe_to_the_edge_of_the_window() {
-    let added = diff_row("+12\tlet x = 1;", 30, true);
+    let added = diff_row("+12\tlet x = 1;", 30, true, text::Lang::Plain);
     assert!(added.contains(&ADD.to_string()) && added.ends_with(RESET));
     assert_eq!(text::width(&added), 30);
     assert_eq!(
         unstyled(&added),
         format!("  │   12 + let x = 1;{}", " ".repeat(30 - 21))
     );
-    let removed = diff_row("-3\told", 30, true);
+    let removed = diff_row("-3\told", 30, true, text::Lang::Plain);
     assert!(removed.contains(&DEL.to_string()) && removed.contains(&format!("{DANGER}-")));
     assert!(
         !removed.contains(&format!("{DANGER}- old")),
         "the text keeps its own color"
     );
-    let context = diff_row(" 4\tkept", 30, true);
+    let context = diff_row(" 4\tkept", 30, true, text::Lang::Plain);
     assert!(
         !context.contains(&ADD.to_string()) && !context.contains(&DEL.to_string()),
         "context has no stripe"
     );
     assert_eq!(
-        text::width(&diff_row("+1\t", 30, false)),
+        text::width(&diff_row("+1\t", 30, false, text::Lang::Plain)),
         11,
         "without stripes the row ends with its text"
     );
-    let long = diff_row(&format!("+1\t{}", "x".repeat(80)), 30, true);
+    let long = diff_row(
+        &format!("+1\t{}", "x".repeat(80)),
+        30,
+        true,
+        text::Lang::Plain,
+    );
     assert_eq!(text::width(&long), 30);
     assert!(
         unstyled(&long).ends_with('…'),
         "a long line is cut with an ellipsis, on its stripe to the end"
     );
     assert!(long.contains(&ADD.to_string()));
+}
+
+#[test]
+fn rust_and_typescript_diff_lines_are_syntax_colored_on_their_stripe() {
+    let line = "+74\tlet x: Option<u32> = foo(42); // note";
+    let rust = diff_row(line, 80, true, text::Lang::of_path("src/a.rs"));
+    assert_eq!(
+        unstyled(&rust).trim_end(),
+        "  │   74 + let x: Option<u32> = foo(42); // note",
+        "the text itself is unchanged"
+    );
+    assert!(
+        rust.matches(&ADD.to_string()).count() > 2,
+        "the stripe resumes after each colored token: {rust:?}"
+    );
+    let ts = diff_row(
+        "+1\tconst n: number = add(1);",
+        80,
+        false,
+        text::Lang::of_path("src/a.tsx"),
+    );
+    assert!(
+        ts.matches(&LAGOON.to_string()).count() > 1,
+        "without a stripe the ink resumes after each token: {ts:?}"
+    );
+    assert!(text::Lang::of_path("src/a.ts").rich());
+    assert!(text::Lang::of_path("src/a.rs").rich());
+    assert!(!text::Lang::of_path("src/a.py").rich());
+    assert!(!text::Lang::of_path("Makefile").rich());
+    let plain = diff_row(line, 80, true, text::Lang::of_path("src/a.py"));
+    assert_eq!(
+        plain.matches(&ADD.to_string()).count(),
+        diff_row(line, 80, true, text::Lang::Plain)
+            .matches(&ADD.to_string())
+            .count(),
+        "other languages keep the uncolored text"
+    );
 }
 
 #[test]

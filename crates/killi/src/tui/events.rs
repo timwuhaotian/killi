@@ -120,7 +120,11 @@ impl App {
                         .take(DIFF_ROWS)
                         .map(str::to_string)
                         .collect();
-                    self.emit(Line::block(move |width| diff_rows(&shown, width)));
+                    let path = summary
+                        .split_once(' ')
+                        .map_or(summary.as_str(), |(_, path)| path);
+                    let lang = text::Lang::of_path(path);
+                    self.emit(Line::block(move |width| diff_rows(&shown, width, lang)));
                     self.hidden_note(display.lines().count().saturating_sub(DIFF_ROWS), "more");
                     let detail = text::sanitize(&display).into_owned();
                     self.push_detail(summary, detail);

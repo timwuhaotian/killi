@@ -102,7 +102,7 @@ other two; tokens and memory are not affected by load.
 ## Install
 
 ```sh
-curl -fsSL https://github.com/timwuhaotian/killi/raw/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh | sh
 ```
 
 This puts `killi` in `~/.local/bin` after checking its SHA-256 against

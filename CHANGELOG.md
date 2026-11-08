@@ -5,6 +5,27 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.63 — 2026-11-08
+
+- Rust and TypeScript get real syntax colors in an edit's diff, and richer ones in code
+  blocks: types and calls join the keywords, strings, numbers and comments that were
+  already colored, along with Rust lifetimes, char and raw-string literals and
+  `#[attributes]`, and TypeScript's `@decorators`. It is the same built-in line
+  tokenizer as before — no LSP, no syntect, no new dependency — and the colors sit on
+  the diff's own stripes and inks, in every theme. Other languages keep the colors
+  they had, and their diffs stay plain for now.
+- `killi update` fetches releases straight from `raw.githubusercontent.com` instead of
+  through `github.com`'s redirect to it, the hop that can answer 504 while the files
+  themselves are fine, and a transient 5xx, 429 or dropped connection is retried up to
+  three times before the update gives up (a failed download starts over). `install.sh`
+  takes the same address and retries. Older installs still update through the redirect
+  once, and land on the direct address with this release.
+- `killi update`'s progress is the session's working island — the snowflake and the
+  gradient action word on the selection ground, with the version and the download's
+  bar beside it — drawn by the same code as the session's working line. The braille
+  wave spinner it used before is gone; a session and an update now say "working" the
+  same way.
+
 ## 0.6.62 — 2026-11-08
 
 - The prompt is completed as you type. When you pause for a second, or take a suggestion

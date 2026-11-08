@@ -355,9 +355,11 @@ pub fn render_table(rows: &[String], max_width: usize) -> Vec<String> {
     out
 }
 
-/// A language whose code blocks get colors.
+/// A language whose code blocks get colors. Rust and the JavaScript family (TypeScript
+/// included) get the full treatment — types and calls colored too — in code blocks and
+/// in an edit's diff; the rest keep the keyword, string and number colors in blocks.
 #[derive(Default, Clone, Copy, PartialEq)]
-enum Lang {
+pub enum Lang {
     #[default]
     Plain,
     Rust,
@@ -371,6 +373,20 @@ enum Lang {
 }
 
 impl Lang {
+    /// The language of the file at `path`, by its extension.
+    pub fn of_path(path: &str) -> Lang {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        match name.rsplit_once('.') {
+            Some((_, extension)) => Lang::of(extension),
+            None => Lang::Plain,
+        }
+    }
+
+    /// Whether the language gets types and calls colored, and its diff lines highlighted.
+    pub fn rich(self) -> bool {
+        matches!(self, Lang::Rust | Lang::Js)
+    }
+
     fn of(info: &str) -> Lang {
         match info.to_lowercase().as_str() {
             "rust" | "rs" => Lang::Rust,
@@ -391,7 +407,8 @@ impl Lang {
                 "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod",
                 "match", "if", "else", "for", "while", "loop", "return", "self", "Self", "async",
                 "await", "move", "const", "static", "type", "where", "crate", "super", "as", "in",
-                "ref", "dyn", "unsafe", "break", "continue", "true", "false",
+                "ref", "dyn", "unsafe", "break", "continue", "true", "false", "extern", "union",
+                "macro_rules", "yield", "gen", "try",
             ],
             Lang::Js => &[
                 "function",
@@ -429,6 +446,26 @@ impl Lang {
                 "this",
                 "of",
                 "in",
+                "enum",
+                "namespace",
+                "declare",
+                "readonly",
+                "abstract",
+                "implements",
+                "keyof",
+                "infer",
+                "satisfies",
+                "is",
+                "as",
+                "private",
+                "public",
+                "protected",
+                "static",
+                "delete",
+                "instanceof",
+                "yield",
+                "finally",
+                "do",
             ],
             Lang::Py => &[
                 "def", "class", "return", "if", "elif", "else", "for", "while", "import", "from",
@@ -472,10 +509,27 @@ impl Lang {
             Lang::Plain | Lang::Diff => &[],
         }
     }
+
+    /// The built-in type names that don't start with a capital.
+    fn types(self) -> &'static [&'static str] {
+        match self {
+            Lang::Rust => &[
+                "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8",
+                "i16", "i32", "i64", "i128", "isize", "f32", "f64",
+            ],
+            Lang::Js => &[
+                "string", "number", "boolean", "bigint", "symbol", "any", "unknown", "never",
+                "void", "object",
+            ],
+            _ => &[],
+        }
+    }
 }
 
-/// One line of code with comments, strings, numbers and keywords colored.
-fn highlight(lang: Lang, line: &str) -> String {
+/// One line of code with comments, strings, numbers and keywords colored; a rich language
+/// (see `Lang::rich`) also gets its types, calls, lifetimes and attributes colored. State
+/// never crosses a line, so a block comment or string spanning lines colors each on its own.
+pub fn highlight(lang: Lang, line: &str) -> String {
     if lang == Lang::Diff {
         let color = match line.chars().next() {
             Some('+') if !line.starts_with("+++") => LAGOON.to_string(),
@@ -495,8 +549,17 @@ fn highlight(lang: Lang, line: &str) -> String {
         _ => &['"', '\''],
     };
     let words = lang.keywords();
+    let types = lang.types();
+    let rich = lang.rich();
     let chars: Vec<char> = line.chars().collect();
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let at = |i: usize| chars.get(i).copied();
+    let word_end = |from: usize| {
+        chars[from..]
+            .iter()
+            .position(|&ch| !is_word(ch))
+            .map_or(chars.len(), |p| from + p)
+    };
     let mut out = String::new();
     let mut i = 0;
     while i < chars.len() {
@@ -509,6 +572,80 @@ fn highlight(lang: Lang, line: &str) -> String {
                 chars[i..].iter().collect::<String>()
             ));
             break;
+        }
+        if rich && c == '/' && at(i + 1) == Some('*') {
+            let mut end = i + 2;
+            while end + 1 < chars.len() && !(chars[end] == '*' && chars[end + 1] == '/') {
+                end += 1;
+            }
+            let end = (end + 2).min(chars.len());
+            out.push_str(&format!(
+                "{DIM}{}{RESET}",
+                chars[i..end].iter().collect::<String>()
+            ));
+            i = end;
+            continue;
+        }
+        if lang == Lang::Rust
+            && c == '#'
+            && (at(i + 1) == Some('[') || (at(i + 1) == Some('!') && at(i + 2) == Some('[')))
+        {
+            let mut depth = 0usize;
+            let mut end = i;
+            while end < chars.len() {
+                match chars[end] {
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                end += 1;
+            }
+            out.push_str(&format!(
+                "{KEYWORD}{}{RESET}",
+                chars[i..end].iter().collect::<String>()
+            ));
+            i = end;
+            continue;
+        }
+        if lang == Lang::Js && c == '@' && at(i + 1).is_some_and(is_word) {
+            let end = word_end(i + 1);
+            out.push_str(&format!(
+                "{KEYWORD}{}{RESET}",
+                chars[i..end].iter().collect::<String>()
+            ));
+            i = end;
+            continue;
+        }
+        if lang == Lang::Rust && c == '\'' {
+            let end = word_end(i + 1);
+            if at(i + 1) == Some('\\') || (end == i + 2 && at(end) == Some('\'')) {
+                let mut close = i + 1;
+                while close < chars.len() && chars[close] != '\'' {
+                    close += if chars[close] == '\\' { 2 } else { 1 };
+                }
+                let close = (close + 1).min(chars.len());
+                out.push_str(&format!(
+                    "{STRING}{}{RESET}",
+                    chars[i..close].iter().collect::<String>()
+                ));
+                i = close;
+            } else if end > i + 1 {
+                out.push_str(&format!(
+                    "{TYPE}{}{RESET}",
+                    chars[i..end].iter().collect::<String>()
+                ));
+                i = end;
+            } else {
+                out.push(c);
+                i += 1;
+            }
+            continue;
         }
         if quotes.contains(&c) {
             let mut end = i + 1;
@@ -536,13 +673,55 @@ fn highlight(lang: Lang, line: &str) -> String {
             continue;
         }
         if is_word(c) {
-            let end = chars[i..]
-                .iter()
-                .position(|&ch| !is_word(ch))
-                .map_or(chars.len(), |p| i + p);
+            let end = word_end(i);
             let word: String = chars[i..end].iter().collect();
+            if lang == Lang::Rust && matches!(word.as_str(), "r" | "br") {
+                let mut open = end;
+                while at(open) == Some('#') {
+                    open += 1;
+                }
+                if at(open) == Some('"') {
+                    let hashes = open - end;
+                    let mut close = open + 1;
+                    let raw_end = loop {
+                        match chars[close..].iter().position(|&ch| ch == '"') {
+                            Some(found) => {
+                                close += found;
+                                let after = chars[close + 1..]
+                                    .iter()
+                                    .take(hashes)
+                                    .take_while(|&&ch| ch == '#')
+                                    .count();
+                                if after == hashes {
+                                    break close + 1 + hashes;
+                                }
+                                close += 1;
+                            }
+                            None => break chars.len(),
+                        }
+                    };
+                    out.push_str(&format!(
+                        "{STRING}{}{RESET}",
+                        chars[i..raw_end].iter().collect::<String>()
+                    ));
+                    i = raw_end;
+                    continue;
+                }
+            }
+            let called = rich
+                && (at(end) == Some('(')
+                    || lang == Lang::Rust
+                        && at(end) == Some('!')
+                        && matches!(at(end + 1), Some('(' | '[' | '{')));
             if words.contains(&word.as_str()) {
                 out.push_str(&format!("{KEYWORD}{word}{RESET}"));
+            } else if rich
+                && (types.contains(&word.as_str())
+                    || word.chars().next().is_some_and(char::is_uppercase))
+            {
+                out.push_str(&format!("{TYPE}{word}{RESET}"));
+            } else if called {
+                out.push_str(&format!("{CALL}{word}{RESET}"));
             } else {
                 out.push_str(&word);
             }

@@ -1,7 +1,7 @@
 //! The start-up banner: killi in block letters with a sky-to-violet gradient, and a few lines
 //! about the session beside it.
 
-use super::text::{self, BOLD, DIM, FAINT, RESET, is_light, truecolor, width};
+use super::text::{self, BOLD, DIM, FAINT, RESET, SELECT, is_light, truecolor, width};
 
 const LOGO: [&str; 6] = [
     "██╗  ██╗██╗██╗     ██╗     ██╗",
@@ -99,44 +99,8 @@ pub fn wordmark(version: &str) -> String {
     format!("{out}{RESET} {DIM}{version}{RESET}")
 }
 
-/// The wordmark that stands in for a spinner.
+/// The wordmark's word.
 const WORD: &str = "killi";
-/// Braille cells in the wave drawn before the word; each is two dots wide and four tall.
-const WAVE: usize = 6;
-/// Frames (a tenth of a second each) the wave takes to rise from a flat line.
-const RISE: f32 = 8.0;
-
-/// The top dot row of a `dots`-column wave `frame` tenths of a second in, 0 on top. A flat
-/// line at first, it rises into a wave that travels to the right a dot column per frame,
-/// swelling and easing a little.
-fn wave_at(frame: usize, dots: usize) -> Vec<usize> {
-    let t = frame as f32;
-    let height = (t / RISE).min(1.0) * (0.86 + 0.14 * (t * 0.16).sin());
-    (0..dots)
-        .map(|x| {
-            let phase = (x as f32 - t) / dots.max(1) as f32 * std::f32::consts::TAU;
-            (1.0 - height * phase.sin()).round().clamp(0.0, 2.0) as usize
-        })
-        .collect()
-}
-
-/// The top dot row of the wave's two-dot-thick ribbon in each dot column `frame` tenths of a
-/// second in, 0 on top. A flat line at first, it rises into a wave that travels to the right a
-/// dot column per frame, swelling and easing a little.
-fn wave(frame: usize) -> [usize; WAVE * 2] {
-    wave_at(frame, WAVE * 2)
-        .try_into()
-        .expect("wave_at returns one height per dot column")
-}
-
-/// The braille cell whose left column has the dots at `left` and `left + 1` lit, and whose
-/// right column those at `right` and `right + 1`.
-fn cell(left: usize, right: usize) -> char {
-    const LEFT: [u32; 4] = [0x01, 0x02, 0x04, 0x40];
-    const RIGHT: [u32; 4] = [0x08, 0x10, 0x20, 0x80];
-    let bits = LEFT[left] | LEFT[left + 1] | RIGHT[right] | RIGHT[right + 1];
-    char::from_u32(0x2800 + bits).expect("braille patterns are characters")
-}
 
 /// The logo's gradient at `across` (0 to 1 along its piece, `shift`ed half way round for
 /// words so the two never match) with the spinner's drift at `frame`, dimmed by `fade`.
@@ -172,54 +136,26 @@ pub fn snowflake(frame: usize) -> String {
     )
 }
 
-/// The wave and the space after it, rising from a flat line at first.
-fn wave_head(frame: usize) -> String {
-    let dots = wave(frame);
-    let rise = (frame as f32 / RISE).min(1.0);
-    let mut out = String::new();
-    for i in 0..WAVE {
-        out.push_str(&flow(
-            frame,
-            i as f32 / (WAVE - 1) as f32,
-            0.0,
-            0.5 + 0.5 * rise,
-        ));
-        out.push(cell(dots[2 * i], dots[2 * i + 1]));
-    }
-    out.push_str(RESET);
-    out.push(' ');
-    out
+/// The working line's island: `inner` on the selection ground with a space of it on each
+/// side. The ground is reapplied after every reset inside, since a reset would end it.
+fn island(inner: String) -> String {
+    let ground = SELECT.to_string();
+    format!(
+        "{ground} {} {RESET}",
+        inner.replace(RESET, &format!("{RESET}{ground}"))
+    )
 }
 
-/// The spinner, `frame` tenths of a second after work began: a braille ribbon that rises from
-/// a flat line and rolls on, then the `killi` wordmark fading in letter by letter, each with
-/// the logo's gradient flowing through it. Always as wide as the wave, a space and the word.
-pub fn working(frame: usize) -> String {
-    action(frame, WORD)
+/// The spinner `frame` tenths of a second in, as the session's working line shows it and
+/// `killi update` mirrors it: the island of the snowflake and the action word fading in
+/// beside it. Always the snowflake, a space and the word, with a space of ground each side.
+pub fn working_island(frame: usize, word: &str) -> String {
+    island(format!("{} {}", snowflake(frame), action_word(frame, word)))
 }
 
-/// The spinner with an action word (`thinking`, `writing`, …) in place of the wordmark: the
-/// wave is unchanged, and the word fades in letter by letter with the logo's gradient
-/// flowing through it, like the wordmark does. As wide as the wave, a space and the word.
-pub fn action(frame: usize, word: &str) -> String {
-    let mut out = wave_head(frame);
-    let chars: Vec<char> = word.chars().collect();
-    for (i, c) in chars.iter().enumerate() {
-        let appeared = (frame as f32 - 2.0 * i as f32 + 1.0) / 3.0;
-        if appeared <= 0.0 {
-            out.push_str(&format!("{DIM}·{RESET}"));
-            continue;
-        }
-        out.push_str(&flow(
-            frame,
-            i as f32 / (chars.len() - 1).max(1) as f32,
-            0.5,
-            appeared.clamp(0.0, 1.0) * 0.75 + 0.25,
-        ));
-        out.push(*c);
-        out.push_str(RESET);
-    }
-    out
+/// The same island with the word shown whole at once, for work too brief to fade in.
+pub fn steady_island(frame: usize, word: &str) -> String {
+    island(format!("{} {}", snowflake(frame), steady_word(frame, word)))
 }
 
 /// `word` fading in letter by letter beside the snowflake, each letter taking the logo's
@@ -402,23 +338,28 @@ mod tests {
     }
 
     #[test]
-    fn the_spinner_is_always_the_same_width() {
+    fn the_islands_are_always_the_same_width_and_carry_their_ground() {
         for frame in 0..200 {
             assert_eq!(
-                width(&working(frame)),
-                WAVE + 1 + WORD.len(),
+                width(&working_island(frame, "downloading")),
+                1 + 1 + 1 + 11 + 1,
                 "frame {frame}"
             );
             assert_eq!(
-                width(&action(frame, "thinking")),
-                WAVE + 1 + 8,
+                width(&steady_island(frame, "contrapposto")),
+                1 + 1 + 1 + 12 + 1,
                 "frame {frame}"
             );
         }
-        assert!(working(0).contains('·'));
-        assert!(!working(20).contains('·'));
-        assert!(action(0, "writing").contains('·'));
-        assert!(!action(20, "writing").contains('·'));
+        let ground = SELECT.to_string();
+        let island = working_island(30, "thinking");
+        assert!(island.starts_with(&ground) && island.ends_with(RESET), "{island:?}");
+        assert!(
+            island.matches(&ground).count() > 1,
+            "the ground is reapplied inside: {island:?}"
+        );
+        assert_eq!(unstyled(&working_island(40, "checking")), " ❆ checking ");
+        assert_eq!(unstyled(&steady_island(0, "checking")), " ❄ checking ");
     }
 
     #[test]
@@ -536,22 +477,6 @@ mod tests {
             }
         }
         out
-    }
-
-    #[test]
-    fn the_wave_rises_from_a_flat_line_and_rolls_on_as_one_unbroken_line() {
-        assert!(wave(0).iter().all(|&row| row == wave(0)[0]));
-        let mut rows = std::collections::HashSet::new();
-        for frame in 8..120 {
-            let dots = wave(frame);
-            rows.extend(dots);
-            assert_ne!(dots, wave(frame + 1), "frame {frame} stands still");
-            assert!(
-                dots.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1),
-                "frame {frame} jumps: {dots:?}"
-            );
-        }
-        assert_eq!(rows.len(), 3, "the ribbon uses every height");
     }
 
     #[test]

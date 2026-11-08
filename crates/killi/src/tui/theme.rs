@@ -103,6 +103,7 @@ impl App {
                 "-7\tlet theme = \"before\";".to_string(),
             ],
             width,
+            text::Lang::of_path("specimen.rs"),
         ));
         let mut markdown = Markdown::new(width);
         let mut styled = markdown.line("Set `theme` in **config**, then *restart*:");

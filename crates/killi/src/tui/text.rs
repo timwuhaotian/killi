@@ -631,6 +631,42 @@ const KEYWORD: Sgr = Sgr::fixed(
         ("\x1b[38;5;38m", "\x1b[38;2;32;195;208m"),
     ],
 );
+/// Type names in code: the sky the token counts wear, in each skin's own shades.
+const TYPE: Sgr = Sgr::fixed(
+    "\x1b[36m",
+    "\x1b[38;5;24m",
+    "\x1b[36m",
+    "\x1b[38;5;24m",
+    [
+        ("\x1b[38;5;146m", "\x1b[38;2;159;176;212m"),
+        ("\x1b[38;5;110m", "\x1b[38;2;143;192;232m"),
+        ("\x1b[38;5;180m", "\x1b[38;2;214;189;143m"),
+        ("\x1b[38;5;153m", "\x1b[38;2;185;216;250m"),
+        ("\x1b[38;5;180m", "\x1b[38;2;205;170;140m"),
+        ("\x1b[38;5;248m", "\x1b[38;2;170;170;170m"),
+        ("\x1b[38;5;253m", "\x1b[38;2;220;220;214m"),
+        ("\x1b[38;5;215m", "\x1b[38;2;255;174;77m"),
+        ("\x1b[38;5;80m", "\x1b[38;2;100;205;215m"),
+    ],
+);
+/// Function and macro names at a call: the periwinkle the effort wears, skin by skin.
+const CALL: Sgr = Sgr::fixed(
+    "\x1b[34m",
+    "\x1b[38;5;26m",
+    "\x1b[34m",
+    "\x1b[38;5;26m",
+    [
+        ("\x1b[38;5;100m", "\x1b[38;2;152;136;41m"),
+        ("\x1b[38;5;189m", "\x1b[38;2;207;226;243m"),
+        ("\x1b[38;5;230m", "\x1b[38;2;255;249;207m"),
+        ("\x1b[38;5;183m", "\x1b[38;2;203;190;255m"),
+        ("\x1b[38;5;230m", "\x1b[38;2;255;244;230m"),
+        ("\x1b[38;5;254m", "\x1b[38;2;230;230;230m"),
+        ("\x1b[38;5;231m", "\x1b[38;2;249;249;249m"),
+        ("\x1b[38;5;221m", "\x1b[38;2;255;210;80m"),
+        ("\x1b[38;5;152m", "\x1b[38;2;185;232;234m"),
+    ],
+);
 
 /// Closes an OSC 8 hyperlink.
 pub const LINK_CLOSE: &str = "\x1b]8;;\x1b\\";
@@ -795,7 +831,7 @@ fn without_colors(params: &str) -> String {
 mod markdown;
 mod wrap;
 
-pub use markdown::{Markdown, Part, render_table};
+pub use markdown::{Lang, Markdown, Part, highlight as highlight_code, render_table};
 pub use wrap::{
     Sanitizer, ellipsize, hanging_indent, sanitize, sanitize_row, width, wrap, wrap_code,
     wrap_words,

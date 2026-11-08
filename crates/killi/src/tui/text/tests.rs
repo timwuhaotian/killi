@@ -281,6 +281,45 @@ fn code_blocks_are_colored_by_language() {
 }
 
 #[test]
+fn rust_and_typescript_get_types_calls_and_their_own_corners() {
+    let rust = highlight_code(
+        Lang::Rust,
+        "let x: Option<u32> = foo::bar!(r#\"a \" b\"#); let y: &'a str = baz('c');",
+    );
+    assert!(rust.contains(&format!("{TYPE}Option{RESET}")), "{rust}");
+    assert!(rust.contains(&format!("{TYPE}u32{RESET}")), "{rust}");
+    assert!(rust.contains(&format!("{CALL}bar{RESET}")), "{rust}");
+    assert!(rust.contains(&format!("{CALL}baz{RESET}")), "{rust}");
+    assert!(
+        rust.contains(&format!("{STRING}r#\"a \" b\"#{RESET}")),
+        "{rust}"
+    );
+    assert!(rust.contains(&format!("{TYPE}'a{RESET}")), "{rust}");
+    assert!(rust.contains(&format!("{STRING}'c'{RESET}")), "{rust}");
+    let attr = highlight_code(Lang::Rust, "#[derive(Debug)] struct S;");
+    assert!(
+        attr.contains(&format!("{KEYWORD}#[derive(Debug)]{RESET}")),
+        "{attr}"
+    );
+    let ts = highlight_code(
+        Lang::of_path("a.tsx"),
+        "@sealed class Box<T> { n: number = add(1); s = `x${y}`; }",
+    );
+    assert!(ts.contains(&format!("{KEYWORD}@sealed{RESET}")), "{ts}");
+    assert!(ts.contains(&format!("{KEYWORD}class{RESET}")), "{ts}");
+    assert!(ts.contains(&format!("{TYPE}Box{RESET}")), "{ts}");
+    assert!(ts.contains(&format!("{TYPE}number{RESET}")), "{ts}");
+    assert!(ts.contains(&format!("{CALL}add{RESET}")), "{ts}");
+    assert!(
+        ts.contains(&format!("{STRING}`x${{y}}`{RESET}")),
+        "{ts}"
+    );
+    // Not rich: the same words stay plain, keywords aside.
+    let py = highlight_code(Lang::Py, "x = Option(foo(1))");
+    assert!(!py.contains(&TYPE.to_string()) && !py.contains(&CALL.to_string()));
+}
+
+#[test]
 fn tables_line_up_and_shrink_to_the_width() {
     let mut md = Markdown::new(40);
     assert!(

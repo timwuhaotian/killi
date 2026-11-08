@@ -314,17 +314,19 @@ pub(super) fn wrap_items(items: &[String], width: usize) -> Vec<String> {
 }
 
 /// The rows of an edit's diff behind the output gutter: the line number, the sign, the text.
-pub(super) fn diff_rows(lines: &[String], width: usize) -> Vec<String> {
+/// Rust and TypeScript lines (`lang` rich) are syntax-colored like a code block's.
+pub(super) fn diff_rows(lines: &[String], width: usize, lang: text::Lang) -> Vec<String> {
     lines
         .iter()
-        .map(|line| diff_row(line, width, text::truecolor()))
+        .map(|line| diff_row(line, width, text::truecolor(), lang))
         .collect()
 }
 
 /// One row of a diff. With `stripes` an added or removed line sits on a soft stripe that runs to
 /// the window's edge, its sign in lagoon or danger and its text left as it is; without, the sign
-/// and the text take those colors. Context lines are muted either way.
-pub(super) fn diff_row(line: &str, width: usize, stripes: bool) -> String {
+/// and the text take those colors. Context lines are muted either way. Syntax colors sit on
+/// top of the row's own ink or stripe, which is reapplied after each colored token.
+pub(super) fn diff_row(line: &str, width: usize, stripes: bool, lang: text::Lang) -> String {
     let Some((head, text)) = line
         .split_once('\t')
         .filter(|(head, _)| head.len() > 1 && head.is_char_boundary(1))
@@ -346,12 +348,22 @@ pub(super) fn diff_row(line: &str, width: usize, stripes: bool) -> String {
         "-" if stripes => Some(DEL.to_string()),
         _ => None,
     };
+    // A colored token ends with a reset; the row's ink or stripe resumes after each one.
+    let styled = |base: &str| {
+        if lang.rich() {
+            text::highlight_code(lang, &text).replace(RESET, &format!("{RESET}{base}"))
+        } else {
+            text.to_string()
+        }
+    };
     let Some(ground) = ground else {
+        let text = styled(&ink);
         return fit(
             &format!("  {FAINT}│{RESET} {DIM}{number:>4}{RESET} {ink}{sign} {text}{RESET}"),
             width,
         );
     };
+    let text = styled(&ground);
     let row = fit(
         &format!(
             "  {FAINT}│{RESET}{ground} {DIM}{number:>4}{RESET}{ground} {ink}{sign}{RESET}{ground} {text}"
@@ -603,16 +615,6 @@ fn interrupt_hint(elapsed: Duration) -> String {
     )
 }
 
-/// The working line's island: `inner` on the selection ground with a space of it on each
-/// side. The ground is reapplied after every reset inside, since a reset would end it.
-fn island(inner: String) -> String {
-    let ground = SELECT.to_string();
-    format!(
-        "{ground} {} {RESET}",
-        inner.replace(RESET, &format!("{RESET}{ground}"))
-    )
-}
-
 /// The working line while the snapshot runs: the island of the snowflake spinner and the
 /// whole snapshot word beside it in the logo's gradient, then the turn's output count, the
 /// elapsed time and the interrupt hint.
@@ -624,11 +626,7 @@ pub(super) fn snapshot_rows(
 ) -> Vec<String> {
     vec![format!(
         "{} {FAINT}·{RESET} {TOKENS}{out}{RESET} {FAINT}·{RESET} {}",
-        island(format!(
-            "{} {}",
-            banner::snowflake(frame),
-            banner::steady_word(frame, &snapshot_word(seq, frame))
-        )),
+        banner::steady_island(frame, &snapshot_word(seq, frame)),
         interrupt_hint(elapsed)
     )]
 }
@@ -645,11 +643,7 @@ pub(super) fn working_rows(
     out: &str,
     width: usize,
 ) -> Vec<String> {
-    let head = island(format!(
-        "{} {}",
-        banner::snowflake(frame),
-        banner::action_word(frame, action)
-    ));
+    let head = banner::working_island(frame, action);
     let tail = format!(
         " {FAINT}·{RESET} {TOKENS}{out}{RESET} {FAINT}·{RESET} {}",
         interrupt_hint(elapsed)
