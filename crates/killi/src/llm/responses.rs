@@ -37,7 +37,7 @@ pub(super) fn prepare(
     }
     body.insert(
         "input".into(),
-        convert_input(history, model.images, &model.tool_names).into(),
+        convert_input(history, model.images, &model.tool_names, &model.alias).into(),
     );
     let tools: Vec<Value> = tools
         .iter()
@@ -88,6 +88,7 @@ fn convert_input(
     history: &[Value],
     images: bool,
     tool_names: &BTreeMap<String, String>,
+    origin: &str,
 ) -> Vec<Value> {
     let wire = |name: &Value| {
         let name = name.as_str().unwrap_or_default();
@@ -103,8 +104,17 @@ fn convert_input(
         match message["role"].as_str() {
             Some("assistant") => {
                 for item in message["reasoning_items"].as_array().into_iter().flatten() {
-                    if item["type"] == "reasoning" && replayable_reasoning(item) {
-                        input.push(item.clone());
+                    if item["type"] == "reasoning"
+                        && item["killi_origin"] == origin
+                        && replayable_reasoning(item)
+                    {
+                        let mut item = item.clone();
+                        if let Some(object) = item.as_object_mut() {
+                            object.remove("killi_origin");
+                            // ChatGPT returns this output-only field but rejects it in input.
+                            object.remove("status");
+                        }
+                        input.push(item);
                     }
                 }
                 if let Some(text) = message["content"].as_str().filter(|t| !t.is_empty()) {
@@ -165,16 +175,20 @@ pub(super) struct Parser {
     calls: HashMap<u64, usize>,
     /// The provider's `tool_names` inverted: the name the API sends back to the session's name.
     names: HashMap<String, String>,
+    /// The model whose caller owns encrypted reasoning emitted by this stream.
+    origin: String,
     terminal: bool,
 }
 
 impl Parser {
-    pub(super) fn new(tool_names: &BTreeMap<String, String>) -> Self {
+    pub(super) fn new(model: &ResolvedModel) -> Self {
         Self {
-            names: tool_names
+            names: model
+                .tool_names
                 .iter()
                 .map(|(ours, wire)| (wire.clone(), ours.clone()))
                 .collect(),
+            origin: model.alias.clone(),
             ..Parser::default()
         }
     }
@@ -229,7 +243,11 @@ impl StreamParser for Parser {
             Some("response.output_item.done") => {
                 let item = &event["item"];
                 match item["type"].as_str() {
-                    Some("reasoning") => reply.reasoning_items.push(item.clone()),
+                    Some("reasoning") => {
+                        let mut item = item.clone();
+                        item["killi_origin"] = self.origin.clone().into();
+                        reply.reasoning_items.push(item);
+                    }
                     Some("function_call") => {
                         if let (Some(&i), Some(arguments)) =
                             (self.calls.get(&index), item["arguments"].as_str())
@@ -330,13 +348,15 @@ mod tests {
     fn history_becomes_input_items() {
         let history = vec![
             json!({"role": "user", "content": "hi"}),
-            json!({"role": "assistant", "reasoning_items": [{"type": "reasoning", "encrypted_content": "e"}],
+            json!({"role": "assistant", "reasoning_items": [{"type": "reasoning", "killi_origin": "m", "status": "completed", "encrypted_content": "e"}],
                    "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]}),
             json!({"role": "tool", "tool_call_id": "c1", "content": "data"}),
         ];
-        let input = convert_input(&history, true, &Default::default());
+        let input = convert_input(&history, true, &Default::default(), "m");
         assert_eq!(input[0], json!({"role": "user", "content": "hi"}));
         assert_eq!(input[1]["encrypted_content"], "e");
+        assert!(input[1].get("killi_origin").is_none());
+        assert!(input[1].get("status").is_none());
         assert_eq!(
             input[2],
             json!({"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"})
@@ -348,12 +368,22 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_from_another_or_unknown_model_is_not_replayed() {
+        let history = vec![json!({"role": "assistant", "reasoning_items": [
+            {"type": "reasoning", "id": "rs_other", "killi_origin": "other/m", "encrypted_content": "other"},
+            {"type": "reasoning", "id": "rs_legacy", "encrypted_content": "legacy"},
+        ]})];
+        let input = convert_input(&history, true, &Default::default(), "m");
+        assert!(input.is_empty(), "{input:?}");
+    }
+
+    #[test]
     fn images_become_text_when_the_model_cannot_see_them() {
         let history = vec![json!({"role": "user", "content": [
             {"type": "text", "text": "look"},
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
         ]})];
-        let input = convert_input(&history, false, &Default::default());
+        let input = convert_input(&history, false, &Default::default(), "m");
         let content = input[0]["content"].clone();
         assert!(
             content
@@ -421,7 +451,7 @@ mod tests {
         let history = vec![json!({"role": "assistant", "tool_calls": [
             {"id": "c1", "type": "function", "function": {"name": "bash", "arguments": ""}}
         ]})];
-        let input = convert_input(&history, true, &Default::default());
+        let input = convert_input(&history, true, &Default::default(), "m");
         assert_eq!(input[0]["arguments"], "{}");
     }
 
@@ -473,9 +503,9 @@ mod tests {
         let messages = vec![
             json!({"role": "user", "content": "hi"}),
             json!({"role": "assistant", "content": "ok", "reasoning_items": [
-                {"type": "reasoning", "id": "rs_bare"},
-                {"type": "reasoning", "id": "rs_summary", "summary": [{"type": "summary_text", "text": "for gateways"}]},
-                {"type": "reasoning", "id": "rs_encrypted", "encrypted_content": "e"},
+                {"type": "reasoning", "id": "rs_bare", "killi_origin": "m"},
+                {"type": "reasoning", "id": "rs_summary", "killi_origin": "m", "summary": [{"type": "summary_text", "text": "for gateways"}]},
+                {"type": "reasoning", "id": "rs_encrypted", "killi_origin": "m", "encrypted_content": "e"},
             ]}),
         ];
         let prepared = prepare(&model, &messages, &[], "k").unwrap();
@@ -629,7 +659,7 @@ mod tests {
             "a replayed call keeps the wire name"
         );
 
-        let mut parser = Parser::new(&model.tool_names);
+        let mut parser = Parser::new(&model);
         let mut reply = Reply::default();
         let mut sink = |_: Delta| {};
         let added = json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "call_id": "c2", "name": "search_web"}});
@@ -638,6 +668,9 @@ mod tests {
             reply.tool_calls[0].name, "web_search",
             "the call comes back under killi's name"
         );
+        let reasoning = json!({"type": "response.output_item.done", "item": {"type": "reasoning", "encrypted_content": "e"}});
+        parser.event(&reasoning, &mut reply, &mut sink).unwrap();
+        assert_eq!(reply.reasoning_items[0]["killi_origin"], "m");
     }
 
     #[test]

@@ -5,7 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
-## 0.6.65 — 2026-11-08
+- A model switch no longer replays the previous model's Responses reasoning. Encrypted
+  reasoning belongs to the caller that issued it: switching to another model used to send it
+  back and get `400: reasoning encrypted_content was not issued to this caller`, and ChatGPT
+  rejects the replayed items' output-only `status` field (`Unknown parameter: 'input[2].status'`).
+  Each Responses reply now records which model issued it and only that model gets it back, with
+  the internal marker and output-only fields stripped from the copy being sent — the stored
+  history is untouched. Responses reasoning from older logs, which has no recorded issuer, is
+  not replayed either; text and tool calls still carry over any switch.
+
+## 0.6.66 — 2026-11-08
 
 - A tool call a provider streams without arguments no longer breaks the session. Its
   arguments become `{}` when the stream ends — every adapter, whatever the provider sent —
