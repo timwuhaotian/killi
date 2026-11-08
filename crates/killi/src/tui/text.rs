@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 use std::fmt;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use super::palette::{self, Ground, Role};
 
@@ -16,29 +16,119 @@ pub const STRIKE: &str = "\x1b[9m";
 pub const REVERSE: &str = "\x1b[7m";
 pub const NOT_REVERSE: &str = "\x1b[27m";
 
-/// The terminal's background: it decides which shade each color takes.
+/// Which shades each color takes: the default theme on a dark or light terminal, or one of
+/// the named skins `/theme` offers, each made for a dark terminal.
 #[derive(Clone, Copy, PartialEq)]
 enum Theme {
     Dark,
     Light,
+    Batman,
+    IcedCoffee,
+    Creamery,
 }
 
-static THEME: OnceLock<Theme> = OnceLock::new();
+impl Theme {
+    /// The skin a (normalized) theme name picks, when it picks one.
+    fn skin_named(name: &str) -> Option<Theme> {
+        match name {
+            "batman" => Some(Theme::Batman),
+            "iced-coffee" => Some(Theme::IcedCoffee),
+            "creamery-station" => Some(Theme::Creamery),
+            _ => None,
+        }
+    }
 
-/// Fixes the theme for the session: `"dark"` or `"light"`, anything else goes by the
-/// terminal's `ground` when it answered the color queries, else by `COLORFGBG`, which most
-/// terminals that have a light background set. A ground also gives the grays, tints and stripes
-/// their shades (see `palette`); a pinned theme has none, and keeps the fixed shades.
+    /// This theme's row in an `Sgr`'s skin shades, when it is a skin.
+    fn skin(self) -> Option<usize> {
+        match self {
+            Theme::Batman => Some(0),
+            Theme::IcedCoffee => Some(1),
+            Theme::Creamery => Some(2),
+            Theme::Dark | Theme::Light => None,
+        }
+    }
+}
+
+/// The color themes `/theme` offers, each with what it looks like. All but the default are
+/// made for a dark terminal; the default follows the terminal's own dark or light ground.
+pub const THEMES: &[(&str, &str)] = &[
+    ("default", "killi's colors, dark or light with the terminal"),
+    ("batman", "signal yellow and olive on slate and black"),
+    ("iced-coffee", "sky blue, coral and amber on dark"),
+    ("creamery-station", "cream, butter and tan on dark"),
+];
+
+/// A theme name as the lookup takes it: lowercase, with spaces and underscores as dashes,
+/// so "iced coffee" names `iced-coffee`.
+fn normalized(name: &str) -> String {
+    name.trim().to_lowercase().replace([' ', '_'], "-")
+}
+
+/// Whether `setting` leaves the terminal's ground to decide the shades: anything but a
+/// pinned `"dark"`/`"light"` or a skin's name.
+pub fn reads_ground(setting: Option<&str>) -> bool {
+    let Some(name) = setting.map(normalized) else {
+        return true;
+    };
+    !matches!(name.as_str(), "dark" | "light") && Theme::skin_named(&name).is_none()
+}
+
+static THEME: RwLock<Option<Theme>> = RwLock::new(None);
+/// The default theme this session resolved at its start, which `/theme default` goes back to.
+static BASE: OnceLock<Theme> = OnceLock::new();
+
+fn current_theme() -> Theme {
+    if let Some(theme) = *THEME.read().expect("theme lock") {
+        return theme;
+    }
+    let theme = *BASE.get_or_init(detect_theme);
+    *THEME.write().expect("theme lock") = Some(theme);
+    theme
+}
+
+/// Fixes the theme for the session: `"dark"` or `"light"` pins the default's shades, a
+/// skin's name takes that skin, anything else goes by the terminal's `ground` when it answered
+/// the color queries, else by `COLORFGBG`, which most terminals that have a light background
+/// set. A ground also gives the grays, tints and stripes their shades (see `palette`); a
+/// pinned theme has none, and keeps the fixed shades.
 pub fn init_theme(setting: Option<&str>, ground: Option<Ground>) {
-    let pinned = matches!(setting, Some("dark" | "light"));
-    let ground = ground.filter(|_| !pinned);
-    let theme = match setting {
+    let ground = ground.filter(|_| reads_ground(setting));
+    let name = setting.map(normalized);
+    let skin = name.as_deref().and_then(Theme::skin_named);
+    let base = match name.as_deref() {
         Some("dark") => Theme::Dark,
         Some("light") => Theme::Light,
+        _ if skin.is_some() => Theme::Dark,
         _ => ground.map_or_else(detect_theme, |ground| theme_for(ground.background)),
     };
-    let _ = THEME.set(theme);
+    let _ = BASE.set(base);
+    *THEME.write().expect("theme lock") = Some(skin.unwrap_or(base));
     palette::init(ground);
+}
+
+/// The name of the theme in use, as `/theme` writes it.
+pub fn skin_name() -> &'static str {
+    match current_theme() {
+        Theme::Batman => "batman",
+        Theme::IcedCoffee => "iced-coffee",
+        Theme::Creamery => "creamery-station",
+        Theme::Dark | Theme::Light => "default",
+    }
+}
+
+/// Switches to the theme `name` picks from `THEMES`, for everything printed from here on.
+/// False when no theme goes by that name.
+pub fn set_theme(name: &str) -> bool {
+    let name = normalized(name);
+    let theme = match name.as_str() {
+        "default" => *BASE.get_or_init(detect_theme),
+        _ => match Theme::skin_named(&name) {
+            Some(skin) => skin,
+            None => return false,
+        },
+    };
+    *THEME.write().expect("theme lock") = Some(theme);
+    true
 }
 
 /// The theme for a background color: light when it reflects more than half the light.
@@ -63,7 +153,7 @@ fn detect_theme() -> Theme {
 
 /// Whether the session runs on a light terminal.
 pub fn is_light() -> bool {
-    *THEME.get_or_init(detect_theme) == Theme::Light
+    current_theme() == Theme::Light
 }
 
 /// Whether the terminal takes 24-bit colors, as `COLORTERM` announces.
@@ -73,15 +163,21 @@ pub fn truecolor() -> bool {
         .get_or_init(|| std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit"))
 }
 
+/// The shades one skin gives a token: its 256-color escape and its truecolor one.
+type SkinShade = (&'static str, &'static str);
+
 /// A color escape that comes out in the shade for the current theme when it is printed: the
 /// design token itself on a truecolor terminal, else its nearest 256-color shade. A derived
-/// role takes the shade `palette` made from the terminal's ground when there is one.
+/// role takes the shade `palette` made from the terminal's ground when there is one, under
+/// the default theme; a skin always paints its own fixed shades.
 #[derive(Clone, Copy)]
 pub struct Sgr {
     dark: &'static str,
     light: &'static str,
     dark_true: &'static str,
     light_true: &'static str,
+    /// Batman, iced coffee and creamery station, in `Theme::skin`'s order.
+    skins: [SkinShade; 3],
     derived: Option<Role>,
 }
 
@@ -91,12 +187,14 @@ impl Sgr {
         light: &'static str,
         dark_true: &'static str,
         light_true: &'static str,
+        skins: [SkinShade; 3],
     ) -> Sgr {
         Sgr {
             dark,
             light,
             dark_true,
             light_true,
+            skins,
             derived: None,
         }
     }
@@ -108,34 +206,41 @@ impl Sgr {
         light: &'static str,
         dark_true: &'static str,
         light_true: &'static str,
+        skins: [SkinShade; 3],
     ) -> Sgr {
         Sgr {
             dark,
             light,
             dark_true,
             light_true,
+            skins,
             derived: Some(role),
         }
     }
 
     fn shade(&self, theme: Theme, truecolor: bool) -> &'static str {
+        if let Some(skin) = theme.skin() {
+            let (plain, exact) = self.skins[skin];
+            return if truecolor { exact } else { plain };
+        }
         match (theme, truecolor) {
-            (Theme::Dark, true) => self.dark_true,
-            (Theme::Dark, false) => self.dark,
             (Theme::Light, true) => self.light_true,
             (Theme::Light, false) => self.light,
+            (_, true) => self.dark_true,
+            (_, false) => self.dark,
         }
     }
 }
 
 impl fmt::Display for Sgr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let theme = current_theme();
         match self.derived {
             // Colors are about to be stripped; what recedes keeps receding, as dim.
             Some(Role::Faint | Role::Rule | Role::Muted) if no_color() => {
                 return f.write_str("\x1b[2m");
             }
-            Some(role) if !no_color() => {
+            Some(role) if !no_color() && theme.skin().is_none() => {
                 if let Some(palette) = palette::get()
                     && let Some(written) = palette.write(f, role, truecolor())
                 {
@@ -144,12 +249,16 @@ impl fmt::Display for Sgr {
             }
             _ => {}
         }
-        f.write_str(self.shade(*THEME.get_or_init(detect_theme), truecolor()))
+        f.write_str(self.shade(theme, truecolor()))
     }
 }
 
 // The roles of the design system (`docs/killi-design-system.html`): each token's exact color
-// where the terminal shows 24-bit color, else its nearest 256-color shade.
+// where the terminal shows 24-bit color, else its nearest 256-color shade. The skins' shades
+// are their palettes' colors — batman #fdff00/#988829/#242424/#282e3c/#505c7c, iced coffee
+// #cfe2f3/#6fa8dc/#ef6868/#f4cccc/#ce7e00, creamery station
+// #f8f2e7/#fff9cf/#fce9b2/#dec092/#cab297 — lightened or darkened a role at a time so each
+// keeps the contrast its default shade has on a dark ground.
 
 /// Killi: running work, a finished call's tick, the active mode, commands, links and the
 /// selected row's mark.
@@ -158,6 +267,11 @@ pub const LAGOON: Sgr = Sgr::fixed(
     "\x1b[38;5;23m",
     "\x1b[38;2;79;209;197m",
     "\x1b[38;2;10;110;101m",
+    [
+        ("\x1b[38;5;226m", "\x1b[38;2;253;255;0m"),
+        ("\x1b[38;5;74m", "\x1b[38;2;111;168;220m"),
+        ("\x1b[38;5;223m", "\x1b[38;2;252;233;178m"),
+    ],
 );
 /// The human: your messages, the prompt, questions and anything else waiting on you.
 pub const FIN: Sgr = Sgr::fixed(
@@ -165,6 +279,11 @@ pub const FIN: Sgr = Sgr::fixed(
     "\x1b[38;5;130m",
     "\x1b[38;2;255;140;90m",
     "\x1b[38;2;173;63;20m",
+    [
+        ("\x1b[38;5;146m", "\x1b[38;2;159;176;212m"),
+        ("\x1b[38;5;224m", "\x1b[38;2;244;204;204m"),
+        ("\x1b[38;5;180m", "\x1b[38;2;222;192;146m"),
+    ],
 );
 /// Retries, a context window nearly full, an interrupted turn.
 pub const WARN: Sgr = Sgr::fixed(
@@ -172,13 +291,24 @@ pub const WARN: Sgr = Sgr::fixed(
     "\x1b[38;5;94m",
     "\x1b[38;2;242;193;78m",
     "\x1b[38;2;138;90;0m",
+    [
+        ("\x1b[38;5;185m", "\x1b[38;2;230;200;50m"),
+        ("\x1b[38;5;178m", "\x1b[38;2;224;156;38m"),
+        ("\x1b[38;5;179m", "\x1b[38;2;217;168;79m"),
+    ],
 );
-/// Failed tool calls, errors and removed lines.
+/// Failed tool calls, errors and removed lines. Batman and creamery station have no red of
+/// their own; they keep the default's, so a failure reads as one in every theme.
 pub const DANGER: Sgr = Sgr::fixed(
     "\x1b[38;5;204m",
     "\x1b[38;5;124m",
     "\x1b[38;2;255;111;125m",
     "\x1b[38;2;179;38;30m",
+    [
+        ("\x1b[38;5;204m", "\x1b[38;2;255;111;125m"),
+        ("\x1b[38;5;203m", "\x1b[38;2;239;104;104m"),
+        ("\x1b[38;5;204m", "\x1b[38;2;255;111;125m"),
+    ],
 );
 /// Marks the eye may skip: gutters, hints, the empty part of a meter.
 pub const FAINT: Sgr = Sgr::derived(
@@ -187,6 +317,11 @@ pub const FAINT: Sgr = Sgr::derived(
     "\x1b[38;5;245m",
     "\x1b[38;2;92;107;122m",
     "\x1b[38;2;117;131;138m",
+    [
+        ("\x1b[38;5;60m", "\x1b[38;2;80;92;124m"),
+        ("\x1b[38;5;60m", "\x1b[38;2;91;113;134m"),
+        ("\x1b[38;5;101m", "\x1b[38;2;138;122;95m"),
+    ],
 );
 /// Hairlines: the rules around the prompt. As faint as a mark until the ground is known.
 pub const RULE: Sgr = Sgr::derived(
@@ -195,16 +330,37 @@ pub const RULE: Sgr = Sgr::derived(
     "\x1b[38;5;245m",
     "\x1b[38;2;92;107;122m",
     "\x1b[38;2;117;131;138m",
+    [
+        ("\x1b[38;5;59m", "\x1b[38;2;58;67;92m"),
+        ("\x1b[38;5;59m", "\x1b[38;2;61;76;92m"),
+        ("\x1b[38;5;59m", "\x1b[38;2;95;83;64m"),
+    ],
 );
 /// Secondary text. SGR dim is the fallback, not the design: Kil and Alacritty scale each
 /// channel to two thirds, which makes dim text darker than body text on a light theme.
-pub const DIM: Sgr = Sgr::derived(Role::Muted, "\x1b[2m", "\x1b[2m", "\x1b[2m", "\x1b[2m");
+pub const DIM: Sgr = Sgr::derived(
+    Role::Muted,
+    "\x1b[2m",
+    "\x1b[2m",
+    "\x1b[2m",
+    "\x1b[2m",
+    [
+        ("\x1b[38;5;103m", "\x1b[38;2;139;150;179m"),
+        ("\x1b[38;5;146m", "\x1b[38;2;157;180;201m"),
+        ("\x1b[38;5;144m", "\x1b[38;2;179;160;134m"),
+    ],
+);
 /// The thinking effort in the status line and the banner.
 pub const EFFORT: Sgr = Sgr::fixed(
     "\x1b[38;5;147m",
     "\x1b[38;5;60m",
     "\x1b[38;2;170;169;235m",
     "\x1b[38;2;94;90;154m",
+    [
+        ("\x1b[38;5;100m", "\x1b[38;2;152;136;41m"),
+        ("\x1b[38;5;189m", "\x1b[38;2;207;226;243m"),
+        ("\x1b[38;5;230m", "\x1b[38;2;255;249;207m"),
+    ],
 );
 /// Token counts and the cache hit rate in the status line.
 pub const TOKENS: Sgr = Sgr::fixed(
@@ -212,6 +368,11 @@ pub const TOKENS: Sgr = Sgr::fixed(
     "\x1b[38;5;24m",
     "\x1b[38;2;129;188;229m",
     "\x1b[38;2;43;105;145m",
+    [
+        ("\x1b[38;5;103m", "\x1b[38;2;126;147;189m"),
+        ("\x1b[38;5;110m", "\x1b[38;2;143;192;232m"),
+        ("\x1b[38;5;180m", "\x1b[38;2;214;189;143m"),
+    ],
 );
 /// The git branch in the status line.
 pub const BRANCH: Sgr = Sgr::fixed(
@@ -219,6 +380,11 @@ pub const BRANCH: Sgr = Sgr::fixed(
     "\x1b[38;5;96m",
     "\x1b[38;2;215;160;202m",
     "\x1b[38;2;134;76;122m",
+    [
+        ("\x1b[38;5;188m", "\x1b[38;2;199;207;223m"),
+        ("\x1b[38;5;217m", "\x1b[38;2;240;154;154m"),
+        ("\x1b[38;5;255m", "\x1b[38;2;248;242;231m"),
+    ],
 );
 /// A background a step off the terminal's own, for your messages.
 pub const TINT: Sgr = Sgr::derived(
@@ -227,6 +393,11 @@ pub const TINT: Sgr = Sgr::derived(
     "\x1b[48;5;254m",
     "\x1b[48;2;23;30;35m",
     "\x1b[48;2;223;229;226m",
+    [
+        ("\x1b[48;5;236m", "\x1b[48;2;40;46;60m"),
+        ("\x1b[48;5;236m", "\x1b[48;2;34;48;62m"),
+        ("\x1b[48;5;236m", "\x1b[48;2;58;50;34m"),
+    ],
 );
 /// The selected row of a list: a little more than a tint, with more lagoon in it.
 pub const SELECT: Sgr = Sgr::derived(
@@ -235,6 +406,11 @@ pub const SELECT: Sgr = Sgr::derived(
     "\x1b[48;5;254m",
     "\x1b[48;2;27;41;45m",
     "\x1b[48;2;210;220;217m",
+    [
+        ("\x1b[48;5;60m", "\x1b[48;2;57;68;95m"),
+        ("\x1b[48;5;238m", "\x1b[48;2;47;74;99m"),
+        ("\x1b[48;5;238m", "\x1b[48;2;85;72;44m"),
+    ],
 );
 /// Behind an added line of a diff. Only drawn in 24-bit color, where it can be this soft.
 pub const ADD: Sgr = Sgr::derived(
@@ -243,6 +419,11 @@ pub const ADD: Sgr = Sgr::derived(
     "\x1b[49m",
     "\x1b[48;2;30;57;54m",
     "\x1b[48;2;203;230;219m",
+    [
+        ("\x1b[49m", "\x1b[48;2;63;61;23m"),
+        ("\x1b[49m", "\x1b[48;2;46;74;92m"),
+        ("\x1b[49m", "\x1b[48;2;77;69;32m"),
+    ],
 );
 /// Behind a removed line of a diff.
 pub const DEL: Sgr = Sgr::derived(
@@ -251,6 +432,11 @@ pub const DEL: Sgr = Sgr::derived(
     "\x1b[49m",
     "\x1b[48;2;72;45;50m",
     "\x1b[48;2;249;211;208m",
+    [
+        ("\x1b[49m", "\x1b[48;2;72;45;50m"),
+        ("\x1b[49m", "\x1b[48;2;95;47;44m"),
+        ("\x1b[49m", "\x1b[48;2;72;45;50m"),
+    ],
 );
 /// Behind inline code, in 24-bit color.
 pub const CHIP: Sgr = Sgr::derived(
@@ -259,12 +445,47 @@ pub const CHIP: Sgr = Sgr::derived(
     "\x1b[49m",
     "\x1b[48;2;30;35;40m",
     "\x1b[48;2;217;219;218m",
+    [
+        ("\x1b[49m", "\x1b[48;2;46;52;68m"),
+        ("\x1b[49m", "\x1b[48;2;43;56;68m"),
+        ("\x1b[49m", "\x1b[48;2;69;59;38m"),
+    ],
 );
 
 // Syntax colors for code blocks only; they carry no meaning in the rest of the UI.
-const STRING: Sgr = Sgr::fixed("\x1b[32m", "\x1b[38;5;28m", "\x1b[32m", "\x1b[38;5;28m");
-const NUMBER: Sgr = Sgr::fixed("\x1b[33m", "\x1b[38;5;130m", "\x1b[33m", "\x1b[38;5;130m");
-const KEYWORD: Sgr = Sgr::fixed("\x1b[35m", "\x1b[38;5;90m", "\x1b[35m", "\x1b[38;5;90m");
+const STRING: Sgr = Sgr::fixed(
+    "\x1b[32m",
+    "\x1b[38;5;28m",
+    "\x1b[32m",
+    "\x1b[38;5;28m",
+    [
+        ("\x1b[38;5;143m", "\x1b[38;2;169;184;107m"),
+        ("\x1b[38;5;217m", "\x1b[38;2;238;179;179m"),
+        ("\x1b[38;5;230m", "\x1b[38;2;255;249;207m"),
+    ],
+);
+const NUMBER: Sgr = Sgr::fixed(
+    "\x1b[33m",
+    "\x1b[38;5;130m",
+    "\x1b[33m",
+    "\x1b[38;5;130m",
+    [
+        ("\x1b[38;5;185m", "\x1b[38;2;232;227;60m"),
+        ("\x1b[38;5;178m", "\x1b[38;2;224;156;38m"),
+        ("\x1b[38;5;180m", "\x1b[38;2;222;192;146m"),
+    ],
+);
+const KEYWORD: Sgr = Sgr::fixed(
+    "\x1b[35m",
+    "\x1b[38;5;90m",
+    "\x1b[35m",
+    "\x1b[38;5;90m",
+    [
+        ("\x1b[38;5;103m", "\x1b[38;2;126;147;189m"),
+        ("\x1b[38;5;74m", "\x1b[38;2;111;168;220m"),
+        ("\x1b[38;5;223m", "\x1b[38;2;252;233;178m"),
+    ],
+);
 
 /// Closes an OSC 8 hyperlink.
 pub const LINK_CLOSE: &str = "\x1b]8;;\x1b\\";

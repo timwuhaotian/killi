@@ -72,6 +72,9 @@ pub(super) enum Input {
     /// `none` to drop it. Saved in the config, so every session starts on it.
     BackupModel(String),
     Effort(String),
+    /// A `/theme` pick: a name from `text::THEMES`. Saved in the config, so every session
+    /// starts on it.
+    Theme(String),
     /// Turns an MCP server on or off; true when picked from the /mcp list, which then reopens.
     Mcp(String, bool),
     /// Deletes every session but the newest this many and the current one.
@@ -187,6 +190,7 @@ pub(super) struct App {
     pub(super) skills: crate::skills::Skills,
     pub(super) model_choices: Vec<Item>,
     pub(super) effort_choices: Vec<Item>,
+    pub(super) theme_choices: Vec<Item>,
     pub(super) menu_selected: usize,
     /// The text the menu's selection belongs to; another text starts it over.
     pub(super) menu_text: String,

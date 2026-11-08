@@ -101,6 +101,7 @@ pub(super) fn test_app() -> App {
         skills: crate::skills::Skills::default(),
         model_choices: Vec::new(),
         effort_choices: Vec::new(),
+        theme_choices: Vec::new(),
         menu_selected: 0,
         menu_text: String::new(),
         menu_closed: None,

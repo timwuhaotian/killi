@@ -362,6 +362,77 @@ fn roles_print_their_tokens_exactly_on_truecolor_terminals() {
 }
 
 #[test]
+fn skins_paint_their_palettes_own_colors() {
+    assert_eq!(
+        LAGOON.shade(Theme::Batman, true),
+        "\x1b[38;2;253;255;0m",
+        "batman's signal yellow #fdff00"
+    );
+    assert_eq!(LAGOON.shade(Theme::Batman, false), "\x1b[38;5;226m");
+    assert_eq!(
+        TINT.shade(Theme::Batman, true),
+        "\x1b[48;2;40;46;60m",
+        "batman's dark slate #282e3c behind your messages"
+    );
+    assert_eq!(
+        EFFORT.shade(Theme::Batman, true),
+        "\x1b[38;2;152;136;41m",
+        "batman's olive #988829"
+    );
+    assert_eq!(
+        LAGOON.shade(Theme::IcedCoffee, true),
+        "\x1b[38;2;111;168;220m",
+        "iced coffee's blue #6fa8dc"
+    );
+    assert_eq!(
+        DANGER.shade(Theme::IcedCoffee, true),
+        "\x1b[38;2;239;104;104m",
+        "iced coffee's coral #ef6868"
+    );
+    assert_eq!(
+        LAGOON.shade(Theme::Creamery, true),
+        "\x1b[38;2;252;233;178m",
+        "creamery station's butter #fce9b2"
+    );
+    assert_eq!(
+        DANGER.shade(Theme::Creamery, true),
+        DANGER.shade(Theme::Dark, true),
+        "a skin with no red of its own keeps the default's"
+    );
+    for role in [
+        LAGOON, FIN, WARN, DANGER, FAINT, RULE, DIM, EFFORT, TOKENS, BRANCH,
+    ] {
+        for (plain, exact) in role.skins {
+            assert!(exact.starts_with("\x1b[38;2;") && plain.starts_with("\x1b[38;5;"));
+        }
+    }
+    for ground in [TINT, SELECT, ADD, DEL, CHIP] {
+        for (_, exact) in ground.skins {
+            assert!(exact.starts_with("\x1b[48;2;"));
+        }
+    }
+}
+
+#[test]
+fn a_theme_name_reads_the_ground_only_when_it_pins_nothing() {
+    assert!(reads_ground(None));
+    assert!(reads_ground(Some("default")));
+    assert!(reads_ground(Some("anything else")));
+    assert!(!reads_ground(Some("dark")));
+    assert!(!reads_ground(Some("light")));
+    assert!(!reads_ground(Some("batman")));
+    assert!(!reads_ground(Some("Iced Coffee")));
+    assert!(!reads_ground(Some("creamery_station")));
+    assert_eq!(
+        THEMES.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+        ["default", "batman", "iced-coffee", "creamery-station"]
+    );
+    for (name, _) in THEMES.iter().skip(1) {
+        assert!(Theme::skin_named(name).is_some(), "{name} names a skin");
+    }
+}
+
+#[test]
 fn the_fixed_grounds_are_what_the_palette_derives_for_the_design_systems_own_ground() {
     let digits = |shade: &str| -> Vec<u8> {
         shade

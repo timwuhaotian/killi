@@ -22,7 +22,9 @@ use serde::Deserialize;
 
 pub use command::command_guide_if_first;
 pub(crate) use command::{confirm, read_line, read_secret};
-pub use edit::{remove_provider_key, set_backup_model, set_model_effort, set_search};
+pub use edit::{
+    remove_provider_key, set_backup_model, set_model_effort, set_search, set_ui_theme,
+};
 pub use guide::{guide_model, init, set_up_if_missing};
 pub use import::{import_kimi, import_omp, import_opencode, import_pi};
 pub use models::{Added, Additions, NewModel, add_models};
@@ -115,8 +117,10 @@ impl SearchConfig {
 /// `[ui]`: how the terminal UI looks.
 #[derive(Debug, Default, Deserialize)]
 pub struct UiConfig {
-    /// "dark" or "light", for the terminal's background. Without it killi reads `COLORFGBG`
-    /// and assumes dark when that isn't set.
+    /// The color theme, as `/theme` picks it: "default", "batman", "iced-coffee" or
+    /// "creamery-station", or "dark"/"light" to pin the default's shades to a terminal
+    /// background. Without it the default reads `COLORFGBG` and assumes dark when that isn't
+    /// set. The named themes are made for a dark terminal.
     pub theme: Option<String>,
     /// Take the whole screen: the prompt and status line stay on the bottom rows, only the
     /// conversation scrolls (wheel, PageUp, PageDown) and it is laid out again when the window

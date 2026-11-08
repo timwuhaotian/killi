@@ -253,6 +253,11 @@ impl Setup {
         self.config.backup_model = alias.map(String::from);
     }
 
+    /// Applies a `/theme` pick to the config this run holds, so it says what the file says.
+    pub fn set_ui_theme(&mut self, theme: &str) {
+        self.config.ui.theme = Some(theme.to_string());
+    }
+
     /// Gives `agent` the reloaded system prompt and skills.
     pub fn reload_agent(&self, agent: &mut Agent) -> Result<()> {
         agent.reload_system(&self.prompt.text, self.settings.clone())

@@ -171,7 +171,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     if terminal_gone(libc::STDIN_FILENO) {
         return Ok(ExitCode::SUCCESS);
     }
-    let ground = if config.ui.theme.is_none() {
+    let ground = if text::reads_ground(config.ui.theme.as_deref()) {
         query_ground()
     } else {
         None
@@ -367,6 +367,26 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                         }
                     }
                     Err(e) => app.error_report(&e),
+                }
+            }
+            Input::Theme(arg) => {
+                let name = arg.trim().to_lowercase().replace([' ', '_'], "-");
+                if !text::THEMES.iter().any(|(known, _)| *known == name) {
+                    app.error("Pick default, batman, iced-coffee or creamery-station; /theme alone lists them.");
+                } else if name == text::skin_name() {
+                    app.notice(&format!("Already on the {name} theme."));
+                } else {
+                    let path = crate::config::killi_home().join("config.toml");
+                    match crate::config::set_ui_theme(&path, &name) {
+                        Ok(()) => {
+                            text::set_theme(&name);
+                            session.set_ui_theme(&name);
+                            app.refresh_choices(session.config());
+                            app.redraw_banner(&agent, &session, &snapshots);
+                            app.notice(&format!("Theme: {name}, here and in new sessions. What's already on screen keeps the colors it was printed in."));
+                        }
+                        Err(e) => app.error_from("/theme", &e),
+                    }
                 }
             }
             Input::Search(provider, url, key) => {

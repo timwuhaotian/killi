@@ -84,6 +84,7 @@ pub(super) enum PickerChoice {
     Model(String),
     BackupModel(String),
     Effort(String),
+    Theme(String),
     Mcp(String),
     Prune(usize),
     Search(String),
@@ -179,6 +180,7 @@ impl App {
                         PickerChoice::Model(alias) => Idle::Input(Input::Model(alias)),
                         PickerChoice::BackupModel(alias) => Idle::Input(Input::BackupModel(alias)),
                         PickerChoice::Effort(effort) => Idle::Input(Input::Effort(effort)),
+                        PickerChoice::Theme(name) => Idle::Input(Input::Theme(name)),
                         PickerChoice::Mcp(name) => Idle::Input(Input::Mcp(name, true)),
                         PickerChoice::Prune(keep) => Idle::Input(Input::Prune(keep)),
                         PickerChoice::Search(provider) => {
@@ -280,6 +282,7 @@ impl App {
             |command| match command {
                 "model" => self.model_choices.clone(),
                 "effort" | "thinking" => self.effort_choices.clone(),
+                "theme" => self.theme_choices.clone(),
                 _ => Vec::new(),
             },
         )
@@ -292,8 +295,13 @@ impl App {
             return;
         }
         self.menu_text = self.editor.text().to_string();
-        let (model, thinking) = (self.status.model.clone(), self.status.thinking.clone());
-        let current = |item: &Item| item.value == model || item.value == thinking;
+        let (model, thinking, skin) = (
+            self.status.model.clone(),
+            self.status.thinking.clone(),
+            text::skin_name(),
+        );
+        let current =
+            |item: &Item| item.value == model || item.value == thinking || item.value == skin;
         self.menu_selected = self
             .suggestions()
             .filter(|m| m.fill == Fill::Argument)
@@ -678,6 +686,27 @@ impl App {
             flow.url,
             (!answer.is_empty()).then(|| answer.to_string()),
         ));
+    }
+
+    /// The /theme list: every color theme, what it looks like, and a mark on the one in use.
+    pub(super) fn open_theme_picker(&mut self) {
+        let current = text::skin_name();
+        let options: Vec<_> = text::THEMES
+            .iter()
+            .map(|(name, about)| {
+                let mark = if *name == current { " · current" } else { "" };
+                (
+                    name.to_string(),
+                    format!("{about}{mark}"),
+                    PickerChoice::Theme(name.to_string()),
+                )
+            })
+            .collect();
+        let selected = text::THEMES
+            .iter()
+            .position(|(name, _)| *name == current)
+            .unwrap_or(0);
+        self.picker = Some(Picker::new("Color theme".into(), options, selected));
     }
 
     pub(super) fn open_effort_picker(&mut self, config: &Config) {

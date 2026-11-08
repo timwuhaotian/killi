@@ -5,6 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.58 — 2026-11-08
+
+- `/theme` switches the color theme, picked from a list or named outright (`/theme batman`,
+  `/theme iced coffee`): `default` keeps killi's colors, following the terminal's dark or
+  light ground as before, while `batman`, `iced-coffee` and `creamery-station` paint every
+  role from their palettes — signal yellow and olive on slate, sky blue and coral, cream and
+  tan — each made for a dark terminal; the banner's gradient follows suit. The pick applies
+  at once and is written to `[ui] theme`, which still takes `dark` or `light` to pin the
+  default's shades.
+
 ## 0.6.57 — 2026-11-08
 
 - Command Code turns keep their reasoning summaries: the parser now stores streamed

@@ -294,6 +294,32 @@ fn storing_a_key_replaces_the_environment_line_and_keeps_the_rest() {
 }
 
 #[test]
+fn setting_the_ui_theme_replaces_the_line_adds_the_table_and_keeps_the_rest() {
+    let root = std::env::temp_dir().join(format!("killi-theme-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    std::fs::write(&path, "# my config\ndefault_model = \"test/model\"\n\n[ui]\ntheme = \"dark\"\nfullscreen = true\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n").unwrap();
+
+    super::set_ui_theme(&path, "batman").unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with("# my config"), "{text}");
+    assert!(text.contains("fullscreen = true"), "{text}");
+    assert!(!text.contains("\"dark\""), "{text}");
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.ui.theme.as_deref(), Some("batman"));
+
+    // No [ui] table yet: one is added at the end, and a dotted line gives way to it.
+    std::fs::write(&path, "ui.theme = \"light\"\ndefault_model = \"test/model\"\n").unwrap();
+    super::set_ui_theme(&path, "iced-coffee").unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.ui.theme.as_deref(), Some("iced-coffee"), "{text}");
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn setting_search_replaces_the_table_and_keeps_the_rest() {
     let root = std::env::temp_dir().join(format!("killi-search-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

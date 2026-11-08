@@ -300,6 +300,8 @@ pub(super) async fn handle_command(
         "backup-model" => app.next_input = Some(Input::BackupModel(arg.to_string())),
         "effort" | "thinking" if arg.is_empty() => app.open_effort_picker(session.config()),
         "effort" | "thinking" => app.next_input = Some(Input::Effort(arg.to_lowercase())),
+        "theme" if arg.is_empty() => app.open_theme_picker(),
+        "theme" => app.next_input = Some(Input::Theme(arg.to_string())),
         "reload" => match session.reload() {
             Ok(()) => {
                 session.reload_agent(agent)?;

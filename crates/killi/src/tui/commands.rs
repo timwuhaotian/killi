@@ -137,6 +137,12 @@ pub(super) const COMMANDS: &[Command] = &[
         about: "Switch thinking effort",
     },
     Command {
+        name: "theme",
+        aliases: &[],
+        args: "[name]",
+        about: "Switch color theme",
+    },
+    Command {
         name: "new",
         aliases: &["clear"],
         args: "",

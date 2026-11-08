@@ -1,7 +1,7 @@
 //! The start-up banner: killi in block letters with a sky-to-violet gradient, and a few lines
 //! about the session beside it.
 
-use super::text::{BOLD, DIM, FAINT, RESET, is_light, truecolor, width};
+use super::text::{self, BOLD, DIM, FAINT, RESET, is_light, truecolor, width};
 
 const LOGO: [&str; 6] = [
     "██╗  ██╗██╗██╗     ██╗     ██╗",
@@ -26,6 +26,24 @@ const STOPS_LIGHT: Stops = [
     (4.0, 121.0, 114.0),
     (1.0, 114.0, 159.0),
     (93.0, 83.0, 174.0),
+];
+/// Each skin's gradient, from its palette: batman's signal yellow through its olive to its
+/// slate, iced coffee's blue through its pale blue to its coral, creamery station's butter
+/// through its tans.
+const STOPS_BATMAN: Stops = [
+    (253.0, 255.0, 0.0),
+    (191.0, 168.0, 63.0),
+    (126.0, 147.0, 189.0),
+];
+const STOPS_ICED_COFFEE: Stops = [
+    (111.0, 168.0, 220.0),
+    (207.0, 226.0, 243.0),
+    (239.0, 104.0, 104.0),
+];
+const STOPS_CREAMERY: Stops = [
+    (252.0, 233.0, 178.0),
+    (222.0, 192.0, 146.0),
+    (202.0, 178.0, 151.0),
 ];
 
 /// Rows a terminal needs before the block-letter logo is worth its six; with fewer the banner
@@ -303,14 +321,14 @@ fn paint(row: &str, y: usize, truecolor: bool) -> String {
 }
 
 fn gradient(t: f32) -> (f32, f32, f32) {
-    blend(
-        if is_light() {
-            &STOPS_LIGHT
-        } else {
-            &STOPS_DARK
-        },
-        t,
-    )
+    let stops = match text::skin_name() {
+        "batman" => &STOPS_BATMAN,
+        "iced-coffee" => &STOPS_ICED_COFFEE,
+        "creamery-station" => &STOPS_CREAMERY,
+        _ if is_light() => &STOPS_LIGHT,
+        _ => &STOPS_DARK,
+    };
+    blend(stops, t)
 }
 
 /// The color `t` of the way, from 0 to 1, along `stops`.

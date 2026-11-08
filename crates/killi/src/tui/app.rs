@@ -43,6 +43,7 @@ impl App {
             skills,
             model_choices: Vec::new(),
             effort_choices: Vec::new(),
+            theme_choices: Vec::new(),
             menu_selected: 0,
             menu_text: String::new(),
             menu_closed: None,
@@ -287,6 +288,13 @@ impl App {
                     value: effort,
                     description,
                 }
+            })
+            .collect();
+        self.theme_choices = text::THEMES
+            .iter()
+            .map(|(name, about)| Item {
+                value: name.to_string(),
+                description: mark(about, *name == text::skin_name()),
             })
             .collect();
     }

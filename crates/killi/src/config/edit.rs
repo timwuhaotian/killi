@@ -374,6 +374,46 @@ fn is_model_table(name: &str, alias: &str) -> bool {
     })
 }
 
+/// Writes the `[ui]` table's `theme` line `/theme` picked: replaced in place (a dotted
+/// `ui.theme` line before the tables counts too), or the table is added at the end. The
+/// rest of the file, comments included, is left as it is.
+pub fn set_ui_theme(path: &Path, theme: &str) -> Result<()> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let line = format!("theme = {}", toml::Value::String(theme.to_string()));
+    let spans = table_spans(&text);
+    let first = spans
+        .iter()
+        .find(|(name, _)| name == "ui")
+        .map(|(_, span)| span.start);
+    let mut out: Vec<String> = Vec::new();
+    let mut header = None;
+    for (n, text_line) in text.lines().enumerate() {
+        if Some(n) == first {
+            header = Some(out.len());
+        }
+        let in_ui = table_of(&spans, n) == Some("ui") && text_line.trim().starts_with("theme");
+        let dotted = table_of(&spans, n).is_none() && text_line.trim().starts_with("ui.theme");
+        if in_ui || dotted {
+            continue;
+        }
+        out.push(text_line.to_string());
+    }
+    let at = match header {
+        Some(at) => at + 1,
+        None => {
+            out.push(String::new());
+            out.push("[ui]".to_string());
+            out.len()
+        }
+    };
+    out.insert(at, line);
+    let new = format!("{}\n", out.join("\n"));
+    toml::from_str::<Config>(&new).context("setting [ui] theme would break the config")?;
+    crate::fs_atomic::write(path, new.as_bytes(), None)
+        .with_context(|| format!("could not write {}", path.display()))
+}
+
 /// Writes the `[search]` table `/web-search-config` picked: its `provider`, `url`, `api_key`
 /// and `api_key_env` lines are replaced in place, or the table is added at the end. A key of
 /// `None` drops the key lines, so one set for another provider is never reused. The rest of
