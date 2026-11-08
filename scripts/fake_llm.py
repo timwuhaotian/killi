@@ -102,7 +102,7 @@ def text_of(message):
 
 def step_for(messages):
     if messages and "The user's turn is over" in text_of(messages[-1]):
-        return {"text": "add a test for the empty title"}
+        return {"text": "test the empty title"}
     if messages and "A question about your work from" in text_of(messages[-1]):
         return {"text": "Fixing `slugify` in `slug.py`, on master. The tests pass now; nothing is committed yet."}
     real = [i for i, m in enumerate(messages) if m.get("role") == "user" and not text_of(m).lstrip().startswith("<system-reminder>")]
@@ -168,7 +168,9 @@ class Handler(BaseHTTPRequestHandler):
             self.event(delta({"tool_calls": [{"index": n, "id": c["id"], "type": "function",
                                               "function": {"name": c["name"], "arguments": c["arguments"]}}]}))
         self.event(delta({}, "tool_calls" if step.get("calls") else "stop"))
-        prompt_tokens = 4200 + 1900 * len(messages)
+        # Near a real killi run's counts (the README's shots are drawn from these): a small
+        # fixed prefix, growing by what each step adds.
+        prompt_tokens = 2400 + 600 * len(messages)
         self.event({"choices": [], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 120 + len(text) // 4,
                                              "prompt_tokens_details": {"cached_tokens": int(prompt_tokens * 0.83)}}})
         self.event("[DONE]")

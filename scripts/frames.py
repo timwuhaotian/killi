@@ -17,7 +17,11 @@ with another session in the repository), sessions (`/sessions`) and peer (that s
 message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
 selection in reverse video), select-prompt (Shift+Alt+Left over the prompt's last words), held (a prompt waiting for its first token) and takeback (Esc before that
 token: the prompt back in the editor), suggest (the next-prompt suggestion the model gave, and
-Tab filling it into the prompt), and shell (a local command being typed).
+Tab filling it into the prompt), and shell (a local command being typed). Three scenes feed the
+README: readme (the slugify fix under its natural prompt, banner and all, at a tall inline size),
+skin (`/theme` just opened, previewing the session's own theme) and slash (the `/` menu narrowed
+by `/re`, a skill among the commands) — draw them with
+`--ui-theme iced-coffee --frame` so the shots carry that skin and a window bar.
 `--inline` runs killi as it runs outside
 Kil, in the terminal's scrollback; `--colors 256` hides COLORTERM; `--no-osc` never answers the
 color queries, like a terminal that doesn't know them; `--no-color` sets NO_COLOR.
@@ -67,7 +71,10 @@ SCENES = {
     "picker": dict(keys=["/model\r"]),
     "theme": dict(keys=["/theme\r"] + ["\x1b[B"] * 9),
     "conv": dict(keys=[FIX], until="fills it"),
-    "suggest": dict(keys=[FIX, "WAITFOR:fills it", "\t"], until="add a test for the e"),
+    "readme": dict(keys=["The slugify test fails. Fix it and run the tests.\r"], until="fills it"),
+    "skin": dict(keys=["/theme\r"]),
+    "slash": dict(keys=["/re"]),
+    "suggest": dict(keys=[FIX, "WAITFOR:fills it", "\t"], until="test the empty title"),
     "select": dict(keys=[FIX, "IDLE", "MOUSE:press:14:0", "MOUSE:drag:9:40", "MOUSE:wheel-up:9:40", "MOUSE:wheel-up:9:40", "MOUSE:up:9:40"]),
     "question": dict(keys=["QUESTION please\r"], until="Esc dismisses"),
     "plan": dict(keys=["\x1b[Z", "add a flag"]),
@@ -122,7 +129,7 @@ notify_after = 9999
 
 [ui]
 recap = false
-"""
+{theme}"""
 
 SKILLS = {
     "brainstorming": "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation.",
@@ -166,14 +173,15 @@ def free_port():
 class Scratch:
     """A HOME with a config that points at the scripted provider, skills, and a git project."""
 
-    def __init__(self, port):
+    def __init__(self, port, ui_theme=None):
         # Resolved, so the folder killi reports (the real path) starts with HOME and shows as `~/…`.
         self.dir = Path(tempfile.mkdtemp(prefix="killi-frames-")).resolve()
         self.home = self.dir / "home"
         self.project = self.home / "code" / "slug"
         (self.home / ".killi").mkdir(parents=True)
         (self.home / ".killi" / "command-guide.json").write_text('{"command":"killi"}\n')
-        (self.home / ".killi" / "config.toml").write_text(CONFIG.format(port=port))
+        theme = f'theme = "{ui_theme}"\n' if ui_theme else ""
+        (self.home / ".killi" / "config.toml").write_text(CONFIG.format(port=port, theme=theme))
         for name, description in SKILLS.items():
             folder = self.home / ".agents" / "skills" / name
             folder.mkdir(parents=True)
@@ -374,9 +382,11 @@ def hex_rgb(h):
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def svg(cells, theme):
+def svg(cells, theme, title=None):
     """The screen as an SVG on the theme's palette: box-drawing lines and blocks as rectangles,
-    so they join like a terminal's own, and dim as Kil dims, to two thirds of each channel."""
+    so they join like a terminal's own, and dim as Kil dims, to two thirds of each channel.
+    With a `title` the screen sits in a window frame (traffic lights and the title on a bar)
+    and runs of blank rows collapse to one, the way the README's tall inline shots read."""
     background, foreground, ansi = THEMES[theme]
     bg, fg = hex_rgb(background), hex_rgb(foreground)
     palette = [hex_rgb(c) for c in ansi.split()]
@@ -400,12 +410,23 @@ def svg(cells, theme):
     cols = len(cells[0])
     while cells and all(c[0] in (" ", "") and c[2] == "default" for c in cells[-1]):
         cells = cells[:-1]
-    width, height = round(cols * CELL + 2 * PAD), len(cells) * ROW + 2 * PAD
+    if title:
+        blank = lambda row: all(c[0] in (" ", "") and c[2] == "default" for c in row)
+        cells = [row for i, row in enumerate(cells) if not blank(row) or i == 0 or not blank(cells[i - 1])]
+    bar = 36 if title else 0
+    width, height = round(cols * CELL + 2 * PAD), bar + len(cells) * ROW + 2 * PAD
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
            f'font-family="JetBrains Mono, SF Mono, Menlo, Consolas, monospace" font-size="{FONT}">',
-           f'<rect width="{width}" height="{height}" fill="{hexed(bg)}"/>']
+           f'<rect width="{width}" height="{height}" rx="{12 if title else 0}" fill="{hexed(bg)}"/>']
+    if title:
+        mix = lambda a, b, t: tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+        shade = hexed(mix(bg, fg, 0.08))
+        shown = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        out += [f'<rect width="{width}" height="{bar}" rx="12" fill="{shade}"/><rect y="{bar - 12}" width="{width}" height="12" fill="{shade}"/>',
+                f'<circle cx="20" cy="{bar / 2}" r="6" fill="#ff5f57"/><circle cx="40" cy="{bar / 2}" r="6" fill="#febc2e"/><circle cx="60" cy="{bar / 2}" r="6" fill="#28c840"/>',
+                f'<text x="{width / 2}" y="{bar / 2 + 4.5}" text-anchor="middle" fill="{hexed(mix(bg, fg, 0.55))}" font-family="-apple-system, Helvetica Neue, Arial, sans-serif" font-size="13">{shown}</text>']
     for y, row in enumerate(cells):
-        top = PAD + y * ROW
+        top = bar + PAD + y * ROW
         x = 0
         while x < cols:
             ch, f, b, bold, dim = row[x]
@@ -469,6 +490,8 @@ def main():
     parser.add_argument("--colors", choices=["truecolor", "256"], default="truecolor")
     parser.add_argument("--no-osc", action="store_true")
     parser.add_argument("--no-color", action="store_true")
+    parser.add_argument("--ui-theme", help="a [ui] theme for the scratch config, e.g. iced-coffee")
+    parser.add_argument("--frame", nargs="?", const="~/code/slug \u2014 killi", metavar="TITLE", help="draw a window bar with this title (the slug project by default) and collapse blank runs")
     parser.add_argument("--png", action="store_true")
     args = parser.parse_args()
     if args.killi is None:
@@ -478,7 +501,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     port = free_port()
     server = subprocess.Popen([sys.executable, str(ROOT / "scripts" / "fake_llm.py"), str(port)])
-    scratch = Scratch(port)
+    scratch = Scratch(port, args.ui_theme)
     try:
         time.sleep(0.5)
         for size in args.sizes:
@@ -487,7 +510,7 @@ def main():
                 for name in args.scenes:
                     scratch.reset()
                     cells = run_scene(args, scratch, SCENES[name], cols, rows, theme)
-                    text, width, height = svg(cells, theme)
+                    text, width, height = svg(cells, theme, args.frame)
                     path = (args.out / f"{name}-{size}-{theme}.svg").resolve()
                     path.write_text(text)
                     if args.png:

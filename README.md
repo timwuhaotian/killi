@@ -19,7 +19,7 @@ the same way every time, so the provider's prompt cache keeps hitting. It is the
 [Kiled](https://github.com/timwuhaotian/kiled) editor.
 
 <p align="center">
-  <img src="docs/screenshot.svg" width="960" alt="killi's banner, then killi fixing a failing Rust test: it reads the project, runs the tests, thinks, edits src/lib.rs with a numbered line diff, reruns the tests and explains the fix; the status line shows the model, thinking effort, a context gauge, tokens with 80% cached and the git branch">
+  <img src="docs/screenshot.svg" width="960" alt="killi on the iced-coffee theme fixing a failing slugify test: the blue-to-coral banner, a read and the failing test run, a thought, an edit to slug.py with added and removed line stripes, the passing run and the explanation; below, the model's suggested next prompt sits in the empty prompt and the status line shows the model, swarm mode, a context gauge, tokens 83% cached and the git branch">
 </p>
 
 <p align="center">
@@ -229,10 +229,10 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | Shift+arrows, Shift+Home/End | select in the prompt, by words with Alt; typing replaces the selection, Ctrl+C copies it; in fullscreen mode a drag, double- or triple-click selects too |
 
 <p align="center">
-  <img src="docs/menu.svg" width="960" alt="The slash menu after typing /re: resume, reload and the refactor skill first, then the other commands and skills whose descriptions match, each with its description">
+  <img src="docs/menu.svg" width="960" alt="The slash menu narrowed by /re on the iced-coffee theme: resume, recap, reload and the refactor and code-review skills first, then the other commands whose descriptions match, each with its description">
 </p>
 
-Commands: `/provider [name]` (add a provider from a pasted key), `/model [alias]`,
+Commands: `/provider [name]` (add a provider from a pasted key), `/model [alias]`, `/theme [name]` (color theme),
 `/backup-model [alias]` (the fallback when the primary keeps failing), `/mcp [server]`
 (turn servers on or off), `/web-search-config`, `/effort [level]` (thinking effort),
 `/new` (or `/clear`), `/resume`, `/btw <question>` (a side question, never kept),
@@ -246,6 +246,14 @@ later in this folder), `/prune [keep]`
 `/help`, `/exit`, and
 `/<skill-name> [request]` for any skill. The menu matches loosely, the way Kimi Code's does:
 `/cr` finds `code-review`.
+
+Ten color themes: `/theme` previews each one live — its banner gradient, diff stripes and
+status colors — as the selection moves, before you pick. The screenshots here wear
+`iced-coffee` (sky blue, coral and amber on dark), the palette the icon is drawn from.
+
+<p align="center">
+  <img src="docs/theme.svg" width="960" alt="/theme previewing iced-coffee: a specimen with the banner in its blue-to-coral gradient, a swatch for every color's job, sample tool rows, a working row and a diff, above the prompt and the list of ten themes with iced-coffee current">
+</p>
 
 After a turn that used tools, killi prints a recap of the session in 100 characters or fewer
 under the turn's totals; `/recap` asks for one at any time, and `[ui] recap = false` turns the

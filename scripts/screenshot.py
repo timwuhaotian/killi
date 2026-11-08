@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Draws the README's screenshots by running killi in a pseudo-terminal.
+"""Draws a screenshot of a real model's run by running killi in a pseudo-terminal. (The
+README's own shots come from `frames.py`'s scripted provider instead; see the
+refresh-metrics skill.)
 
     scripts/screenshot.py --project ~/code/slug --model minimax/MiniMax-M3.1-Flash \
         --prompt "The slugify test fails. Fix it and run the tests." docs/screenshot.svg

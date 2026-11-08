@@ -5,6 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.61 — 2026-11-08
+
+- A new icon: a flat, rounded ice cube wearing the `>_` prompt as a face, drawn from the
+  `iced-coffee` palette (sky blue, pale blue, coral and amber on deep slate), with its
+  source kept as `docs/icon.svg`. The README's screenshots are redrawn on that theme —
+  the slugify fix, the `/re` menu and a new `/theme` preview shot — and now come from
+  `scripts/frames.py`'s scripted provider (`readme`, `slash` and `skin` scenes, with
+  `--ui-theme` and a window `--frame`), so they redraw the same every time with no model
+  configured. No change to the binary's behavior.
+
 ## 0.6.60 — 2026-11-08
 
 - Six more `/theme` themes, each painted role by role from its color-hex palette for a dark

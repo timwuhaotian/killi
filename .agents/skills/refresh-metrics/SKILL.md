@@ -81,21 +81,26 @@ Update by hand, from `docs/bench.json` and `docs/eval.json`:
 - "Size and memory": which models and versions each tool ran.
 - The image alt texts if the headline changed.
 
-`docs/screenshot.svg` and `docs/menu.svg` are drawn by `scripts/screenshot.py`, which runs
-killi in a pseudo-terminal (it needs `pyte` and `cargo build --release`). Redraw them when
-the UI changes, with a clean `--home` holding only a `.killi/config.toml` and a few skills.
-The clean home also needs `.killi/command-guide.json` (`{"command":"killi"}`), or the
-first-launch guide blocks the pty before the prompt appears:
+`docs/screenshot.svg`, `docs/menu.svg` and `docs/theme.svg` are drawn by `scripts/frames.py`
+(the `readme`, `slash` and `skin` scenes): a scripted provider answers, so no model, account
+or clean HOME is needed and the shots come out the same every time. They wear the
+`iced-coffee` theme — the palette `docs/icon.svg` is drawn from; `docs/icon.png` is that SVG
+rendered at 512 (`rsvg-convert -w 512`). Redraw the shots when the UI changes, against the
+release binary so the banner's version is the one being shipped: the hero and the menu run
+inline at a tall size, the theme preview fullscreen where its specimen fits whole:
 
 ```sh
-scripts/screenshot.py --project ~/code/slug --home /tmp/home --model minimax/MiniMax-M3.1-Flash \
-    --prompt "The slugify test fails. Fix it and run the tests." docs/screenshot.svg
-scripts/screenshot.py --project ~/code/slug --home /tmp/home --model minimax/MiniMax-M3.1-Flash \
-    --type /re docs/menu.svg
+scripts/frames.py /tmp/shots --killi releases/killi-arm64 --sizes 118x64 \
+    --scenes readme slash --inline --ui-theme iced-coffee --frame
+scripts/frames.py /tmp/shots --killi releases/killi-arm64 --sizes 118x36 \
+    --scenes skin --ui-theme iced-coffee --frame
+cp /tmp/shots/readme-118x64-night.svg docs/screenshot.svg
+cp /tmp/shots/slash-118x64-night.svg docs/menu.svg
+cp /tmp/shots/skin-118x36-night.svg docs/theme.svg
 ```
 
-The project is a one-file crate whose `slugify` only replaces spaces, with a test that
-expects punctuation dropped and runs of spaces collapsed.
+Look at PNGs of all three (`rsvg-convert -w 1000`) before committing. `scripts/screenshot.py`
+remains for shooting a real model's run.
 
 ## Another number people ask for
 

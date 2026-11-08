@@ -1,164 +1,336 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="952" height="1508" viewBox="0 0 952 1508" font-family="JetBrains Mono, SF Mono, Menlo, Consolas, Liberation Mono, monospace" font-size="13">
-<rect width="952" height="1508" rx="10" fill="#0b0f14"/>
-<rect width="952" height="36" rx="10" fill="#1a2129"/><rect y="26" width="952" height="10" fill="#1a2129"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="948" height="1324" viewBox="0 0 948 1324" font-family="JetBrains Mono, SF Mono, Menlo, Consolas, monospace" font-size="13">
+<rect width="948" height="1324" rx="12" fill="#111316"/>
+<rect width="948" height="36" rx="12" fill="#212326"/><rect y="24" width="948" height="12" fill="#212326"/>
 <circle cx="20" cy="18.0" r="6" fill="#ff5f57"/><circle cx="40" cy="18.0" r="6" fill="#febc2e"/><circle cx="60" cy="18.0" r="6" fill="#28c840"/>
-<text x="476.0" y="22.5" text-anchor="middle" fill="#8e9cab" font-family="-apple-system, Helvetica Neue, Arial, sans-serif" font-size="13">/Users/wuhaotian/code/slug — killi</text>
-<text x="16.0" y="86.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">██╗  ██╗██╗██╗     ██╗     ██╗                                                                                        </text>
-<text x="16.0" y="106.5" textLength="265.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">██║ ██╔╝██║██║     ██║     ██║    </text>
-<text x="281.2" y="106.5" textLength="39.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">killi</text>
-<text x="328.0" y="106.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">0.4.12</text>
-<text x="16.0" y="126.5" textLength="265.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">█████╔╝ ██║██║     ██║     ██║    </text>
-<text x="281.2" y="126.5" textLength="241.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">a coding agent for the terminal</text>
-<text x="16.0" y="146.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">██╔═██╗ ██║██║     ██║     ██║                                                                                        </text>
-<text x="16.0" y="166.5" textLength="265.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">██║  ██╗██║███████╗███████╗██║    </text>
-<text x="281.2" y="166.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">model </text>
-<text x="335.8" y="166.5" textLength="202.8" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">minimax/MiniMax-M3.1-Flash</text>
-<text x="546.4" y="166.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">· effort</text>
-<text x="608.8" y="166.5" textLength="327.6" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> high                                     </text>
-<text x="16.0" y="186.5" textLength="265.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚═╝    </text>
-<text x="281.2" y="186.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">folder</text>
-<text x="328.0" y="186.5" textLength="608.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> /Users/wuhaotian/code/slug                                                   </text>
-<text x="281.2" y="206.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">skills</text>
-<text x="328.0" y="206.5" textLength="608.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> 4                                                                            </text>
-<text x="281.2" y="226.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">prompt</text>
-<text x="328.0" y="226.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> custom </text>
-<text x="390.4" y="226.5" textLength="195.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">· [prompt] in config.toml</text>
-<text x="16.0" y="266.5" textLength="15.6" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">/ </text>
-<text x="31.6" y="266.5" textLength="148.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">commands and skills</text>
-<text x="187.6" y="266.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">·</text>
-<text x="195.4" y="266.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> @ </text>
-<text x="218.8" y="266.5" textLength="39.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">files</text>
-<text x="265.6" y="266.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">·</text>
-<text x="273.4" y="266.5" textLength="101.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> Shift+Enter </text>
-<text x="374.8" y="266.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">new line</text>
-<text x="445.0" y="266.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">·</text>
-<text x="452.8" y="266.5" textLength="85.8" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> Shift+Tab </text>
-<text x="538.6" y="266.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">plan mode</text>
-<text x="616.6" y="266.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">·</text>
-<text x="624.4" y="266.5" textLength="39.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> Esc </text>
-<text x="663.4" y="266.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">interrupts</text>
-<text x="23.8" y="306.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">❯</text>
-<text x="39.4" y="306.5" textLength="897.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">The slugify test fails. Fix it and run the tests.                                                                  </text>
-<text x="16.0" y="346.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">I'll look at the project and the failing test.                                                                        </text>
-<text x="16.0" y="386.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">✓</text>
-<text x="31.6" y="386.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">$</text>
-<text x="39.4" y="386.5" textLength="202.8" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> ls -la &amp;&amp; cat Cargo.toml </text>
-<text x="242.2" y="386.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">· 13 lines</text>
-<text x="31.6" y="406.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="406.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">total 24</text>
-<text x="31.6" y="426.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="426.5" textLength="405.6" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">drwxr-xr-x@  8 wuhaotian  staff   256 Oct 25 12:31 .</text>
-<text x="31.6" y="446.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="446.5" textLength="413.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">drwxr-xr-x@ 44 wuhaotian  staff  1408 Oct 25 12:26 ..</text>
-<text x="31.6" y="466.5" textLength="202.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│ … 10 more lines · Ctrl+O</text>
-<text x="16.0" y="486.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">✓</text>
-<text x="31.6" y="486.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">glob</text>
-<text x="62.8" y="486.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> **/*.rs </text>
-<text x="133.0" y="486.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">· 1 file</text>
-<text x="16.0" y="506.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">✓</text>
-<text x="31.6" y="506.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">read</text>
-<text x="70.6" y="506.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">src/</text>
-<text x="101.8" y="506.5" textLength="54.6" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">lib.rs </text>
-<text x="156.4" y="506.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">· 15 lines</text>
-<text x="16.0" y="526.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">✓</text>
-<text x="31.6" y="526.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">$</text>
-<text x="39.4" y="526.5" textLength="218.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> cargo test 2&gt;&amp;1 | tail -40 </text>
-<text x="257.8" y="526.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">· 23 lines</text>
-<text x="31.6" y="546.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="546.5" textLength="561.6" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s</text>
-<text x="31.6" y="566.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="566.5" textLength="585.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">     Running unittests src/lib.rs (target/debug/deps/slug-3bc8816f8ff1bb66)</text>
-<text x="31.6" y="586.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="586.5" textLength="109.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">running 1 test</text>
-<text x="31.6" y="606.5" textLength="132.6" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│ … 12 more lines</text>
-<text x="16.0" y="626.5" textLength="592.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">∴ Thought for 4s: The test expects punctuation removed and collapsed spaces.</text>
-<text x="16.0" y="666.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">The test expects punctuation dropped and whitespace collapsed; the implementation just lowercases and replaces each   </text>
-<text x="16.0" y="686.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">space with a dash. Fixing slugify:                                                                                    </text>
-<text x="16.0" y="726.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">✓</text>
-<text x="31.6" y="726.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">edit</text>
-<text x="70.6" y="726.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">src/</text>
-<text x="101.8" y="726.5" textLength="54.6" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">lib.rs </text>
-<text x="156.4" y="726.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">· +10 −1</text>
-<text x="31.6" y="746.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="746.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   1</text>
-<text x="86.2" y="746.5" textLength="546.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">  /// Turns a title into a URL slug: lowercase words joined by dashes.</text>
-<text x="31.6" y="766.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="766.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   2</text>
-<text x="78.4" y="766.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> + ///                                                                                                        </text>
-<text x="31.6" y="786.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="786.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   3</text>
-<text x="78.4" y="786.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> + /// Non-alphanumeric characters are dropped, runs of whitespace become a                                   </text>
-<text x="31.6" y="806.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="806.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   4</text>
-<text x="78.4" y="806.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> + /// single dash, and leading/trailing separators are trimmed.                                              </text>
-<text x="31.6" y="826.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="826.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   5</text>
-<text x="86.2" y="826.5" textLength="319.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">  pub fn slugify(title: &amp;str) -&gt; String {</text>
-<text x="31.6" y="846.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="846.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   3</text>
-<text x="78.4" y="846.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> -     title.to_lowercase().replace(' ', "-")                                                                 </text>
-<text x="31.6" y="866.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="866.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   6</text>
-<text x="78.4" y="866.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> +     title.to_lowercase()                                                                                   </text>
-<text x="31.6" y="886.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="886.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   7</text>
-<text x="78.4" y="886.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> +         .chars()                                                                                           </text>
-<text x="31.6" y="906.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="906.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   8</text>
-<text x="78.4" y="906.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> +         .map(|c| if c.is_alphanumeric() { c } else { ' ' })                                                </text>
-<text x="31.6" y="926.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="926.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   9</text>
-<text x="78.4" y="926.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> +         .collect::&lt;String&gt;()                                                                               </text>
-<text x="31.6" y="946.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="946.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">  10</text>
-<text x="78.4" y="946.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> +         .split_whitespace()                                                                                </text>
-<text x="31.6" y="966.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="966.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">  11</text>
-<text x="78.4" y="966.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> +         .collect::&lt;Vec&lt;_&gt;&gt;()                                                                               </text>
-<text x="31.6" y="986.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="986.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">  12</text>
-<text x="78.4" y="986.5" textLength="858.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> +         .join("-")                                                                                         </text>
-<text x="31.6" y="1006.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="1006.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">  13</text>
-<text x="86.2" y="1006.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">  }</text>
-<text x="16.0" y="1026.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">✓</text>
-<text x="31.6" y="1026.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">$</text>
-<text x="39.4" y="1026.5" textLength="218.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> cargo test 2&gt;&amp;1 | tail -20 </text>
-<text x="257.8" y="1026.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">· 14 lines</text>
-<text x="31.6" y="1046.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="1046.5" textLength="413.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">   Compiling slug v0.1.0 (/Users/wuhaotian/code/slug)</text>
-<text x="31.6" y="1066.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="1066.5" textLength="561.6" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s</text>
-<text x="31.6" y="1086.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│</text>
-<text x="47.2" y="1086.5" textLength="585.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">     Running unittests src/lib.rs (target/debug/deps/slug-3bc8816f8ff1bb66)</text>
-<text x="31.6" y="1106.5" textLength="124.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">│ … 6 more lines</text>
-<text x="16.0" y="1146.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">Fixed and green.                                                                                                      </text>
-<text x="16.0" y="1186.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">Cause:</text>
-<text x="62.8" y="1186.5" textLength="873.6" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> slugify only lowercased and swapped spaces for dashes, so "Hello,  World!" produced "hello,--world!" —         </text>
-<text x="16.0" y="1206.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">punctuation kept, double space doubled up.                                                                            </text>
-<text x="16.0" y="1246.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">Fix</text>
-<text x="39.4" y="1246.5" textLength="897.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> (src/lib.rs): lowercase → replace every non-alphanumeric char with a space → split on whitespace → join with -.   </text>
-<text x="16.0" y="1266.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">That drops punctuation, collapses runs of whitespace, and trims leading/trailing separators.                          </text>
-<text x="16.0" y="1286.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">cargo test: 1 passed, 0 failed.                                                                                       </text>
-<text x="16.0" y="1326.5" textLength="366.6" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">17s · 6 requests · 23k in · 80% cached · 1k out</text>
-<text x="16.0" y="1366.5" textLength="39.0" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" font-weight="700" xml:space="preserve">recap</text>
-<text x="55.0" y="1366.5" textLength="795.6" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve"> Goal was fixing the failing slugify test. I rewrote slugify to strip punctuation, collapse whitespa… </text>
-<text x="850.6" y="1366.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">· 5k in ·</text>
-<text x="62.8" y="1386.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">95% cached</text>
-<text x="16.0" y="1426.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
-<text x="16.0" y="1446.5" textLength="15.6" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">❯ </text>
-<text x="31.6" y="1446.5" textLength="335.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">ask, / for commands and skills, @ for files</text>
-<text x="16.0" y="1466.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
-<text x="16.0" y="1486.5" textLength="280.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">minimax/MiniMax-M3.1-Flash · effort </text>
-<text x="296.8" y="1486.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">high</text>
-<text x="328.0" y="1486.5" textLength="132.6" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">             ctx </text>
-<text x="460.6" y="1486.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">━</text>
-<text x="468.4" y="1486.5" textLength="156.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve">╌╌╌╌╌╌╌╌╌ 4.8k/1M   </text>
-<text x="624.4" y="1486.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">23k</text>
-<text x="647.8" y="1486.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve"> in · </text>
-<text x="694.6" y="1486.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">80%</text>
-<text x="718.0" y="1486.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve"> cached · </text>
-<text x="796.0" y="1486.5" textLength="15.6" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">1k</text>
-<text x="811.6" y="1486.5" textLength="54.6" lengthAdjust="spacingAndGlyphs" fill="#8e9cab" xml:space="preserve"> out   </text>
-<text x="866.2" y="1486.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#e8eef2" xml:space="preserve">⎇ master*</text>
+<text x="474.0" y="22.5" text-anchor="middle" fill="#7e8085" font-family="-apple-system, Helvetica Neue, Arial, sans-serif" font-size="13">~/code/slug — killi</text>
+<rect x="14.0" y="70" width="7.8" height="20" fill="#6fa8dc"/>
+<rect x="21.8" y="70" width="7.8" height="20" fill="#73aadd"/>
+<text x="29.6" y="84.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#3c566f" xml:space="preserve">╗  </text>
+<rect x="53.0" y="70" width="7.8" height="20" fill="#87b6e1"/>
+<rect x="60.8" y="70" width="7.8" height="20" fill="#8bb9e2"/>
+<text x="68.6" y="84.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#485e72" xml:space="preserve">╗</text>
+<rect x="76.4" y="70" width="7.8" height="20" fill="#95bfe5"/>
+<rect x="84.2" y="70" width="7.8" height="20" fill="#9ac2e6"/>
+<text x="92.0" y="84.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#4f6273" xml:space="preserve">╗</text>
+<rect x="99.8" y="70" width="7.8" height="20" fill="#a3c7e8"/>
+<rect x="107.6" y="70" width="7.8" height="20" fill="#a8cae9"/>
+<text x="115.4" y="84.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#566675" xml:space="preserve">╗     </text>
+<rect x="162.2" y="70" width="7.8" height="20" fill="#cadff1"/>
+<rect x="170.0" y="70" width="7.8" height="20" fill="#cfe2f3"/>
+<text x="177.8" y="84.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#686d76" xml:space="preserve">╗     </text>
+<rect x="224.6" y="70" width="7.8" height="20" fill="#dab7c2"/>
+<rect x="232.4" y="70" width="7.8" height="20" fill="#dbb1bb"/>
+<text x="240.2" y="84.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6e555a" xml:space="preserve">╗</text>
+<rect x="14.0" y="90" width="7.8" height="20" fill="#78adde"/>
+<rect x="21.8" y="90" width="7.8" height="20" fill="#7db0df"/>
+<text x="29.6" y="104.5" textLength="15.6" lengthAdjust="spacingAndGlyphs" fill="#415970" xml:space="preserve">║ </text>
+<rect x="45.2" y="90" width="7.8" height="20" fill="#8bb9e2"/>
+<rect x="53.0" y="90" width="7.8" height="20" fill="#90bce4"/>
+<text x="60.8" y="104.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#4a5f72" xml:space="preserve">╔</text>
+<text x="68.6" y="104.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#4d6173" xml:space="preserve">╝</text>
+<rect x="76.4" y="90" width="7.8" height="20" fill="#9fc5e7"/>
+<rect x="84.2" y="90" width="7.8" height="20" fill="#a3c7e8"/>
+<text x="92.0" y="104.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#546574" xml:space="preserve">║</text>
+<rect x="99.8" y="90" width="7.8" height="20" fill="#adcdea"/>
+<rect x="107.6" y="90" width="7.8" height="20" fill="#b2d0ec"/>
+<text x="115.4" y="104.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#5b6976" xml:space="preserve">║     </text>
+<rect x="162.2" y="90" width="7.8" height="20" fill="#d0dbec"/>
+<rect x="170.0" y="90" width="7.8" height="20" fill="#d2d5e5"/>
+<text x="177.8" y="104.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#69676f" xml:space="preserve">║     </text>
+<rect x="224.6" y="90" width="7.8" height="20" fill="#ddabb4"/>
+<rect x="232.4" y="90" width="7.8" height="20" fill="#dfa5ad"/>
+<text x="240.2" y="104.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#704f53" xml:space="preserve">║</text>
+<text x="279.2" y="104.5" textLength="39.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" font-weight="700" xml:space="preserve">killi</text>
+<text x="326.0" y="104.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">0.6.61</text>
+<rect x="14.0" y="110" width="7.8" height="20" fill="#82b3e0"/>
+<rect x="21.8" y="110" width="7.8" height="20" fill="#87b6e1"/>
+<rect x="29.6" y="110" width="7.8" height="20" fill="#8bb9e2"/>
+<rect x="37.4" y="110" width="7.8" height="20" fill="#90bce4"/>
+<rect x="45.2" y="110" width="7.8" height="20" fill="#95bfe5"/>
+<text x="53.0" y="124.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#4d6173" xml:space="preserve">╔</text>
+<text x="60.8" y="124.5" textLength="15.6" lengthAdjust="spacingAndGlyphs" fill="#4f6273" xml:space="preserve">╝ </text>
+<rect x="76.4" y="110" width="7.8" height="20" fill="#a8cae9"/>
+<rect x="84.2" y="110" width="7.8" height="20" fill="#adcdea"/>
+<text x="92.0" y="124.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#596876" xml:space="preserve">║</text>
+<rect x="99.8" y="110" width="7.8" height="20" fill="#b7d3ed"/>
+<rect x="107.6" y="110" width="7.8" height="20" fill="#bbd6ee"/>
+<text x="115.4" y="124.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#606c77" xml:space="preserve">║     </text>
+<rect x="162.2" y="110" width="7.8" height="20" fill="#d3cfde"/>
+<rect x="170.0" y="110" width="7.8" height="20" fill="#d5c9d7"/>
+<text x="177.8" y="124.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#6b6168" xml:space="preserve">║     </text>
+<rect x="224.6" y="110" width="7.8" height="20" fill="#e09ea6"/>
+<rect x="232.4" y="110" width="7.8" height="20" fill="#e2989f"/>
+<text x="240.2" y="124.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#71494c" xml:space="preserve">║</text>
+<text x="279.2" y="124.5" textLength="241.8" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">a coding agent for the terminal</text>
+<rect x="14.0" y="130" width="7.8" height="20" fill="#8bb9e2"/>
+<rect x="21.8" y="130" width="7.8" height="20" fill="#90bce4"/>
+<text x="29.6" y="144.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#4a5f72" xml:space="preserve">╔</text>
+<text x="37.4" y="144.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#4d6173" xml:space="preserve">═</text>
+<rect x="45.2" y="130" width="7.8" height="20" fill="#9fc5e7"/>
+<rect x="53.0" y="130" width="7.8" height="20" fill="#a3c7e8"/>
+<text x="60.8" y="144.5" textLength="15.6" lengthAdjust="spacingAndGlyphs" fill="#546574" xml:space="preserve">╗ </text>
+<rect x="76.4" y="130" width="7.8" height="20" fill="#b2d0ec"/>
+<rect x="84.2" y="130" width="7.8" height="20" fill="#b7d3ed"/>
+<text x="92.0" y="144.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5d6b77" xml:space="preserve">║</text>
+<rect x="99.8" y="130" width="7.8" height="20" fill="#c0d9ef"/>
+<rect x="107.6" y="130" width="7.8" height="20" fill="#c5dcf0"/>
+<text x="115.4" y="144.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#656f78" xml:space="preserve">║     </text>
+<rect x="162.2" y="130" width="7.8" height="20" fill="#d7c3d0"/>
+<rect x="170.0" y="130" width="7.8" height="20" fill="#d8bdc9"/>
+<text x="177.8" y="144.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#6d5b61" xml:space="preserve">║     </text>
+<rect x="224.6" y="130" width="7.8" height="20" fill="#e39298"/>
+<rect x="232.4" y="130" width="7.8" height="20" fill="#e58c91"/>
+<text x="240.2" y="144.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#734345" xml:space="preserve">║</text>
+<rect x="14.0" y="150" width="7.8" height="20" fill="#95bfe5"/>
+<rect x="21.8" y="150" width="7.8" height="20" fill="#9ac2e6"/>
+<text x="29.6" y="164.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#4f6273" xml:space="preserve">║  </text>
+<rect x="53.0" y="150" width="7.8" height="20" fill="#adcdea"/>
+<rect x="60.8" y="150" width="7.8" height="20" fill="#b2d0ec"/>
+<text x="68.6" y="164.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5b6976" xml:space="preserve">╗</text>
+<rect x="76.4" y="150" width="7.8" height="20" fill="#bbd6ee"/>
+<rect x="84.2" y="150" width="7.8" height="20" fill="#c0d9ef"/>
+<text x="92.0" y="164.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#626e78" xml:space="preserve">║</text>
+<rect x="99.8" y="150" width="7.8" height="20" fill="#cadff1"/>
+<rect x="107.6" y="150" width="7.8" height="20" fill="#cfe2f3"/>
+<rect x="115.4" y="150" width="7.8" height="20" fill="#d0dbec"/>
+<rect x="123.2" y="150" width="7.8" height="20" fill="#d2d5e5"/>
+<rect x="131.0" y="150" width="7.8" height="20" fill="#d3cfde"/>
+<rect x="138.8" y="150" width="7.8" height="20" fill="#d5c9d7"/>
+<rect x="146.6" y="150" width="7.8" height="20" fill="#d7c3d0"/>
+<text x="154.4" y="164.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6c5e64" xml:space="preserve">╗</text>
+<rect x="162.2" y="150" width="7.8" height="20" fill="#dab7c2"/>
+<rect x="170.0" y="150" width="7.8" height="20" fill="#dbb1bb"/>
+<rect x="177.8" y="150" width="7.8" height="20" fill="#ddabb4"/>
+<rect x="185.6" y="150" width="7.8" height="20" fill="#dfa5ad"/>
+<rect x="193.4" y="150" width="7.8" height="20" fill="#e09ea6"/>
+<rect x="201.2" y="150" width="7.8" height="20" fill="#e2989f"/>
+<rect x="209.0" y="150" width="7.8" height="20" fill="#e39298"/>
+<text x="216.8" y="164.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#724648" xml:space="preserve">╗</text>
+<rect x="224.6" y="150" width="7.8" height="20" fill="#e7868a"/>
+<rect x="232.4" y="150" width="7.8" height="20" fill="#e88083"/>
+<text x="240.2" y="164.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#753d3e" xml:space="preserve">║</text>
+<text x="279.2" y="164.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">model </text>
+<text x="333.8" y="164.5" textLength="202.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" font-weight="700" xml:space="preserve">minimax/MiniMax-M3.1-Flash</text>
+<text x="14.0" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#4f6273" xml:space="preserve">╚</text>
+<text x="21.8" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#516374" xml:space="preserve">═</text>
+<text x="29.6" y="184.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#546574" xml:space="preserve">╝  </text>
+<text x="53.0" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5b6976" xml:space="preserve">╚</text>
+<text x="60.8" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5d6b77" xml:space="preserve">═</text>
+<text x="68.6" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#606c77" xml:space="preserve">╝</text>
+<text x="76.4" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#626e78" xml:space="preserve">╚</text>
+<text x="84.2" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#656f78" xml:space="preserve">═</text>
+<text x="92.0" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#677179" xml:space="preserve">╝</text>
+<text x="99.8" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#686d76" xml:space="preserve">╚</text>
+<text x="107.6" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#696a72" xml:space="preserve">═</text>
+<text x="115.4" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#69676f" xml:space="preserve">═</text>
+<text x="123.2" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6a646b" xml:space="preserve">═</text>
+<text x="131.0" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6b6168" xml:space="preserve">═</text>
+<text x="138.8" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6c5e64" xml:space="preserve">═</text>
+<text x="146.6" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6d5b61" xml:space="preserve">═</text>
+<text x="154.4" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6d585d" xml:space="preserve">╝</text>
+<text x="162.2" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6e555a" xml:space="preserve">╚</text>
+<text x="170.0" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6f5256" xml:space="preserve">═</text>
+<text x="177.8" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#704f53" xml:space="preserve">═</text>
+<text x="185.6" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#714c4f" xml:space="preserve">═</text>
+<text x="193.4" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#71494c" xml:space="preserve">═</text>
+<text x="201.2" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#724648" xml:space="preserve">═</text>
+<text x="209.0" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#734345" xml:space="preserve">═</text>
+<text x="216.8" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#744041" xml:space="preserve">╝</text>
+<text x="224.6" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#753d3e" xml:space="preserve">╚</text>
+<text x="232.4" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#753a3a" xml:space="preserve">═</text>
+<text x="240.2" y="184.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#763737" xml:space="preserve">╝</text>
+<text x="279.2" y="184.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">folder</text>
+<text x="326.0" y="184.5" textLength="608.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> ~/code/slug                                                                  </text>
+<text x="279.2" y="204.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">skills</text>
+<text x="326.0" y="204.5" textLength="608.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> 6                                                                            </text>
+<text x="14.0" y="244.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">/</text>
+<text x="29.6" y="244.5" textLength="148.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">commands and skills</text>
+<text x="185.6" y="244.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5b7186" xml:space="preserve">·</text>
+<text x="201.2" y="244.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">@</text>
+<text x="216.8" y="244.5" textLength="39.0" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">files</text>
+<text x="263.6" y="244.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5b7186" xml:space="preserve">·</text>
+<text x="279.2" y="244.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">Ctrl+J</text>
+<text x="333.8" y="244.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">new line</text>
+<text x="404.0" y="244.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5b7186" xml:space="preserve">·</text>
+<text x="419.6" y="244.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">Shift+Tab</text>
+<text x="497.6" y="244.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">plan mode</text>
+<text x="575.6" y="244.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5b7186" xml:space="preserve">·</text>
+<text x="591.2" y="244.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">Esc</text>
+<text x="622.4" y="244.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">interrupts</text>
+<rect x="14.0" y="270" width="7.8" height="20" fill="#22303e"/>
+<rect x="21.8" y="270" width="7.8" height="20" fill="#22303e"/>
+<text x="21.8" y="284.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#f4cccc" font-weight="700" xml:space="preserve">❯</text>
+<rect x="29.6" y="270" width="904.8" height="20" fill="#22303e"/>
+<text x="29.6" y="284.5" textLength="904.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> The slugify test fails. Fix it and run the tests.                                                                  </text>
+<text x="14.0" y="324.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">✓</text>
+<text x="29.6" y="324.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" font-weight="700" xml:space="preserve">read</text>
+<text x="60.8" y="324.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> slug.py </text>
+<text x="131.0" y="324.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">· 6 lines</text>
+<text x="14.0" y="344.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#ef6868" font-weight="700" xml:space="preserve">✗</text>
+<text x="29.6" y="344.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">$</text>
+<text x="45.2" y="344.5" textLength="54.6" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" font-weight="700" xml:space="preserve">python3</text>
+<text x="99.8" y="344.5" textLength="109.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> test_slug.py </text>
+<text x="209.0" y="344.5" textLength="140.4" lengthAdjust="spacingAndGlyphs" fill="#ef6868" xml:space="preserve">exited with code 1</text>
+<rect x="33.0" y="350" width="1" height="20" fill="#5b7186"/>
+<text x="45.2" y="364.5" textLength="772.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">    assert slugify("  Rust: Fast &amp; Safe!  ") == "rust-fast-safe", slugify("  Rust: Fast &amp; Safe!  ")</text>
+<rect x="33.0" y="370" width="1" height="20" fill="#5b7186"/>
+<text x="45.2" y="384.5" textLength="499.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</text>
+<rect x="33.0" y="390" width="1" height="20" fill="#5b7186"/>
+<text x="45.2" y="404.5" textLength="296.4" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">AssertionError: --rust:-fast-&amp;-safe!--</text>
+<text x="29.6" y="424.5" textLength="218.4" lengthAdjust="spacingAndGlyphs" fill="#5b7186" xml:space="preserve">│ … 2 earlier lines · Ctrl+O</text>
+<text x="14.0" y="444.5" textLength="850.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">∴ Thought for 3s: The test expects punctuation removed, trimmed, and multiple spaces collapsed to one hyphen.</text>
+<text x="14.0" y="484.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">Now I'll implement a proper slugify. The current implementation only lowercases and replaces single spaces — it       </text>
+<text x="14.0" y="504.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">doesn't strip punctuation, collapse runs, or trim the edges.                                                          </text>
+<text x="14.0" y="544.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">✓</text>
+<text x="29.6" y="544.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" font-weight="700" xml:space="preserve">edit</text>
+<text x="60.8" y="544.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> slug.py </text>
+<text x="131.0" y="544.5" textLength="54.6" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">· +3 −1</text>
+<rect x="33.0" y="550" width="1" height="20" fill="#5b7186"/>
+<text x="45.2" y="564.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">   1</text>
+<text x="84.2" y="564.5" textLength="85.8" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">  import os</text>
+<rect x="33.0" y="570" width="1" height="20" fill="#5b7186"/>
+<rect x="37.4" y="570" width="7.8" height="20" fill="#2e4a5c"/>
+<rect x="45.2" y="570" width="31.2" height="20" fill="#2e4a5c"/>
+<text x="45.2" y="584.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">   2</text>
+<rect x="76.4" y="570" width="7.8" height="20" fill="#2e4a5c"/>
+<rect x="84.2" y="570" width="7.8" height="20" fill="#2e4a5c"/>
+<text x="84.2" y="584.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">+</text>
+<rect x="92.0" y="570" width="842.4" height="20" fill="#2e4a5c"/>
+<text x="92.0" y="584.5" textLength="842.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> import re                                                                                                  </text>
+<rect x="33.0" y="590" width="1" height="20" fill="#5b7186"/>
+<text x="45.2" y="604.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">⋮</text>
+<rect x="33.0" y="610" width="1" height="20" fill="#5b7186"/>
+<rect x="37.4" y="610" width="7.8" height="20" fill="#5f2f2c"/>
+<rect x="45.2" y="610" width="31.2" height="20" fill="#5f2f2c"/>
+<text x="45.2" y="624.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">   5</text>
+<rect x="76.4" y="610" width="7.8" height="20" fill="#5f2f2c"/>
+<rect x="84.2" y="610" width="7.8" height="20" fill="#5f2f2c"/>
+<text x="84.2" y="624.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#ef6868" xml:space="preserve">-</text>
+<rect x="92.0" y="610" width="842.4" height="20" fill="#5f2f2c"/>
+<text x="92.0" y="624.5" textLength="842.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> return title.lower().replace(" ", "-")                                                                     </text>
+<rect x="33.0" y="630" width="1" height="20" fill="#5b7186"/>
+<rect x="37.4" y="630" width="7.8" height="20" fill="#2e4a5c"/>
+<rect x="45.2" y="630" width="31.2" height="20" fill="#2e4a5c"/>
+<text x="45.2" y="644.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">   6</text>
+<rect x="76.4" y="630" width="7.8" height="20" fill="#2e4a5c"/>
+<rect x="84.2" y="630" width="7.8" height="20" fill="#2e4a5c"/>
+<text x="84.2" y="644.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">+</text>
+<rect x="92.0" y="630" width="842.4" height="20" fill="#2e4a5c"/>
+<text x="92.0" y="644.5" textLength="842.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> slug = re.sub(r"[^a-z0-9]+", "-", title.lower())                                                           </text>
+<rect x="33.0" y="650" width="1" height="20" fill="#5b7186"/>
+<rect x="37.4" y="650" width="7.8" height="20" fill="#2e4a5c"/>
+<rect x="45.2" y="650" width="31.2" height="20" fill="#2e4a5c"/>
+<text x="45.2" y="664.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">   7</text>
+<rect x="76.4" y="650" width="7.8" height="20" fill="#2e4a5c"/>
+<rect x="84.2" y="650" width="7.8" height="20" fill="#2e4a5c"/>
+<text x="84.2" y="664.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">+</text>
+<rect x="92.0" y="650" width="842.4" height="20" fill="#2e4a5c"/>
+<text x="92.0" y="664.5" textLength="842.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">     return slug.strip("-")                                                                                 </text>
+<text x="14.0" y="684.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">✓</text>
+<text x="29.6" y="684.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">$</text>
+<text x="45.2" y="684.5" textLength="54.6" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" font-weight="700" xml:space="preserve">python3</text>
+<text x="99.8" y="684.5" textLength="499.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> test_slug.py &amp;&amp; python3 -m py_compile slug.py &amp;&amp; echo compiled </text>
+<text x="599.0" y="684.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">· 2 lines</text>
+<rect x="33.0" y="690" width="1" height="20" fill="#5b7186"/>
+<text x="45.2" y="704.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">4 passed</text>
+<rect x="33.0" y="710" width="1" height="20" fill="#5b7186"/>
+<text x="45.2" y="724.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">compiled</text>
+<text x="14.0" y="764.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">Fixed and passing.                                                                                                    </text>
+<text x="14.0" y="804.5" textLength="85.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" font-weight="700" xml:space="preserve">Root cause:</text>
+<rect x="107.6" y="790" width="54.6" height="20" fill="#2b3844"/>
+<text x="107.6" y="804.5" textLength="54.6" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">slugify</text>
+<text x="162.2" y="804.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> only did </text>
+<rect x="240.2" y="790" width="241.8" height="20" fill="#2b3844"/>
+<text x="240.2" y="804.5" textLength="241.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">title.lower().replace(" ", "-")</text>
+<text x="482.0" y="804.5" textLength="452.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">, so it left punctuation in place, didn't collapse runs of</text>
+<text x="14.0" y="824.5" textLength="312.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">whitespace, and didn't trim the edges — </text>
+<rect x="326.0" y="810" width="187.2" height="20" fill="#2b3844"/>
+<text x="326.0" y="824.5" textLength="187.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">"  Rust: Fast &amp; Safe!  "</text>
+<text x="513.2" y="824.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> became </text>
+<rect x="575.6" y="810" width="187.2" height="20" fill="#2b3844"/>
+<text x="575.6" y="824.5" textLength="187.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">"--rust:-fast-&amp;-safe!--"</text>
+<text x="762.8" y="824.5" textLength="171.6" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">.                     </text>
+<text x="14.0" y="864.5" textLength="93.6" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" font-weight="700" xml:space="preserve">What changed</text>
+<rect x="14.0" y="890" width="54.6" height="20" fill="#2b3844"/>
+<text x="14.0" y="904.5" textLength="54.6" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">slug.py</text>
+<text x="68.6" y="904.5" textLength="429.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> now lowercases, turns every run of characters outside </text>
+<rect x="497.6" y="890" width="46.8" height="20" fill="#2b3844"/>
+<text x="497.6" y="904.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">a-z0-9</text>
+<text x="544.4" y="904.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> into one </text>
+<rect x="622.4" y="890" width="7.8" height="20" fill="#2b3844"/>
+<text x="622.4" y="904.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">-</text>
+<text x="630.2" y="904.5" textLength="304.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">, and strips leading and trailing      </text>
+<text x="14.0" y="924.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">hyphens:                                                                                                              </text>
+<text x="45.2" y="964.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">python</text>
+<text x="45.2" y="984.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">def</text>
+<text x="68.6" y="984.5" textLength="865.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> slugify(title: str) -&gt; str:                                                                                   </text>
+<text x="14.0" y="1004.5" textLength="179.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">        slug = re.sub(r</text>
+<text x="193.4" y="1004.5" textLength="93.6" lengthAdjust="spacingAndGlyphs" fill="#eeb3b3" xml:space="preserve">"[^a-z0-9]+"</text>
+<text x="287.0" y="1004.5" textLength="15.6" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">, </text>
+<text x="302.6" y="1004.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#eeb3b3" xml:space="preserve">"-"</text>
+<text x="326.0" y="1004.5" textLength="608.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">, title.lower())                                                              </text>
+<text x="76.4" y="1024.5" textLength="46.8" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">return</text>
+<text x="123.2" y="1024.5" textLength="93.6" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> slug.strip(</text>
+<text x="216.8" y="1024.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#eeb3b3" xml:space="preserve">"-"</text>
+<text x="240.2" y="1024.5" textLength="694.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">)                                                                                        </text>
+<text x="14.0" y="1064.5" textLength="920.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">Verified:                                                                                                             </text>
+<text x="14.0" y="1084.5" textLength="15.6" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">• </text>
+<rect x="29.6" y="1070" width="156.0" height="20" fill="#2b3844"/>
+<text x="29.6" y="1084.5" textLength="156.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">python3 test_slug.py</text>
+<text x="185.6" y="1084.5" textLength="748.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> — 4 passed                                                                                     </text>
+<text x="14.0" y="1104.5" textLength="15.6" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">• </text>
+<rect x="29.6" y="1090" width="78.0" height="20" fill="#2b3844"/>
+<text x="29.6" y="1104.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">py_compile</text>
+<text x="107.6" y="1104.5" textLength="826.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> — clean                                                                                                  </text>
+<text x="14.0" y="1144.5" textLength="608.4" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">One judgment call worth flagging: an apostrophe is treated as a separator, so </text>
+<rect x="622.4" y="1130" width="39.0" height="20" fill="#2b3844"/>
+<text x="622.4" y="1144.5" textLength="39.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">don't</text>
+<text x="661.4" y="1144.5" textLength="70.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> becomes </text>
+<rect x="731.6" y="1130" width="39.0" height="20" fill="#2b3844"/>
+<text x="731.6" y="1144.5" textLength="39.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">don-t</text>
+<text x="770.6" y="1144.5" textLength="163.8" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">. The tests don't    </text>
+<text x="14.0" y="1164.5" textLength="304.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">cover it; say the word if you'd prefer </text>
+<rect x="318.2" y="1150" width="31.2" height="20" fill="#2b3844"/>
+<text x="318.2" y="1164.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve">dont</text>
+<text x="349.4" y="1164.5" textLength="585.0" lengthAdjust="spacingAndGlyphs" fill="#d7dae0" xml:space="preserve"> and I'll add it.                                                          </text>
+<text x="14.0" y="1204.5" textLength="382.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">5s · 4 requests · 29.4k in · 83% cached · 716 out</text>
+<rect x="14.0" y="1240.0" width="920.4" height="1" fill="#3d4c5c"/>
+<text x="14.0" y="1264.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#f4cccc" xml:space="preserve">❯</text>
+<text x="29.6" y="1264.5" textLength="156.0" lengthAdjust="spacingAndGlyphs" fill="#5b7186" xml:space="preserve">test the empty title</text>
+<text x="185.6" y="1264.5" textLength="156.0" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve"> · Tab or → fills it</text>
+<rect x="14.0" y="1280.0" width="920.4" height="1" fill="#3d4c5c"/>
+<text x="14.0" y="1304.5" textLength="210.6" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">minimax/MiniMax-M3.1-Flash </text>
+<text x="224.6" y="1304.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5b7186" xml:space="preserve">·</text>
+<text x="240.2" y="1304.5" textLength="78.0" lengthAdjust="spacingAndGlyphs" fill="#6fa8dc" xml:space="preserve">swarm mode</text>
+<text x="318.2" y="1304.5" textLength="109.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve">          ctx </text>
+<rect x="427.4" y="1299.5" width="7.8" height="2" fill="#6fa8dc"/>
+<rect x="436.0" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="439.9" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="443.8" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="447.7" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="451.6" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="455.5" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="459.4" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="463.3" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="467.2" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="471.1" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="475.0" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="478.9" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="482.8" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="486.7" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="490.6" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="494.5" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="498.4" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<rect x="502.3" y="1300.0" width="2.3" height="1" fill="#5b7186"/>
+<text x="505.4" y="1304.5" textLength="93.6" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve"> 10.2k/1M   </text>
+<text x="599.0" y="1304.5" textLength="39.0" lengthAdjust="spacingAndGlyphs" fill="#8fc0e8" xml:space="preserve">29.4k</text>
+<text x="638.0" y="1304.5" textLength="31.2" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve"> in </text>
+<text x="669.2" y="1304.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5b7186" xml:space="preserve">·</text>
+<text x="684.8" y="1304.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#8fc0e8" xml:space="preserve">83%</text>
+<text x="708.2" y="1304.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve"> cached </text>
+<text x="770.6" y="1304.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#5b7186" xml:space="preserve">·</text>
+<text x="786.2" y="1304.5" textLength="23.4" lengthAdjust="spacingAndGlyphs" fill="#8fc0e8" xml:space="preserve">716</text>
+<text x="809.6" y="1304.5" textLength="54.6" lengthAdjust="spacingAndGlyphs" fill="#9db4c9" xml:space="preserve"> out   </text>
+<text x="864.2" y="1304.5" textLength="62.4" lengthAdjust="spacingAndGlyphs" fill="#f09a9a" xml:space="preserve">⎇ master</text>
+<text x="926.6" y="1304.5" textLength="7.8" lengthAdjust="spacingAndGlyphs" fill="#e09c26" xml:space="preserve">*</text>
 </svg>
