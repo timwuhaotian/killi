@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.59 — 2026-11-08
+
+- The `/theme` list previews as it moves: the highlighted theme's colors apply at once, so
+  each palette can be judged in place. Enter saves the previewed theme as before; Esc
+  closes the list and restores the theme it opened on.
+
 ## 0.6.58 — 2026-11-08
 
 - `/theme` switches the color theme, picked from a list or named outright (`/theme batman`,

@@ -173,6 +173,10 @@ pub(super) struct App {
     /// Corrections to answers already sent, delivered with the waiting question's answer.
     pub(super) ask_corrections: Vec<String>,
     pub(super) picker: Option<Picker>,
+    /// The theme in use when the /theme picker opened: moving its selection previews the
+    /// highlighted theme at once, closing without a pick restores this one, and a pick
+    /// saves the preview instead of reporting the previewed theme as already in use.
+    pub(super) theme_before_preview: Option<String>,
     /// A /web-search-config flow between its questions.
     pub(super) search: Option<SearchFlow>,
     /// A /provider flow between its questions: the preset being added.

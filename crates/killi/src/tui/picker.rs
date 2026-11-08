@@ -76,6 +76,15 @@ impl Picker {
     pub(super) fn choice(&self) -> Option<&PickerChoice> {
         self.shown.get(self.selected).map(|&i| &self.options[i].2)
     }
+
+    /// Applies the highlighted theme at once, so the /theme picker previews each theme's
+    /// colors as the selection moves over it. Nothing is saved: closing the picker without
+    /// a pick restores `App::theme_before_preview`, and a pick saves the previewed theme.
+    pub(super) fn preview_theme(&self) {
+        if let Some(PickerChoice::Theme(name)) = self.choice() {
+            text::set_theme(name);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -143,18 +152,37 @@ impl App {
     pub(super) fn on_key_picker(&mut self, key: KeyEvent) -> Idle {
         let picker = self.picker.as_mut().expect("picker is open");
         match key.code {
-            KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
-            KeyCode::Down => {
-                picker.selected = (picker.selected + 1).min(picker.shown.len().saturating_sub(1))
+            KeyCode::Up => {
+                picker.selected = picker.selected.saturating_sub(1);
+                if self.theme_before_preview.is_some() {
+                    picker.preview_theme();
+                }
             }
-            KeyCode::Esc => self.picker = None,
+            KeyCode::Down => {
+                picker.selected = (picker.selected + 1).min(picker.shown.len().saturating_sub(1));
+                if self.theme_before_preview.is_some() {
+                    picker.preview_theme();
+                }
+            }
+            KeyCode::Esc => {
+                self.picker = None;
+                if let Some(before) = self.theme_before_preview.take() {
+                    text::set_theme(&before);
+                }
+            }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.picker = None
+                self.picker = None;
+                if let Some(before) = self.theme_before_preview.take() {
+                    text::set_theme(&before);
+                }
             }
             KeyCode::Backspace => {
                 let mut query = picker.query.clone();
                 query.pop();
                 picker.filter(query);
+                if self.theme_before_preview.is_some() {
+                    picker.preview_theme();
+                }
             }
             KeyCode::Char(c)
                 if !key
@@ -163,6 +191,9 @@ impl App {
             {
                 let query = format!("{}{c}", picker.query);
                 picker.filter(query);
+                if self.theme_before_preview.is_some() {
+                    picker.preview_theme();
+                }
             }
             KeyCode::Enter | KeyCode::Tab => {
                 if let Some(choice) = picker.choice().cloned() {
@@ -689,8 +720,11 @@ impl App {
     }
 
     /// The /theme list: every color theme, what it looks like, and a mark on the one in use.
+    /// Moving the selection previews the highlighted theme until a pick saves it or the
+    /// picker closes, which restores the theme this one opened on.
     pub(super) fn open_theme_picker(&mut self) {
         let current = text::skin_name();
+        self.theme_before_preview = Some(current.to_string());
         let options: Vec<_> = text::THEMES
             .iter()
             .map(|(name, about)| {

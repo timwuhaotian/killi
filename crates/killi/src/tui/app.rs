@@ -34,6 +34,7 @@ impl App {
             ask_view: None,
             ask_corrections: Vec::new(),
             picker: None,
+            theme_before_preview: None,
             search: None,
             provider: None,
             searxng: None,

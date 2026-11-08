@@ -347,6 +347,40 @@ fn every_provider_preset_asks_its_key() {
 }
 
 #[test]
+fn moving_in_the_theme_picker_previews_it_and_esc_restores_it() {
+    let mut app = test_app();
+    let before = text::skin_name();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.open_theme_picker();
+    assert_eq!(app.theme_before_preview.as_deref(), Some(before));
+    // The picker opens on the theme in use; the next one down previews at once.
+    let at = app.picker.as_ref().expect("the list is open").selected;
+    let next = text::THEMES[(at + 1) % text::THEMES.len()].0;
+    app.on_key_picker(key(KeyCode::Down));
+    if at + 1 < text::THEMES.len() {
+        assert_eq!(text::skin_name(), next, "moving previews, without a pick");
+    }
+    assert!(app.picker.is_some(), "previewing keeps the list open");
+    app.on_key_picker(key(KeyCode::Esc));
+    assert!(app.picker.is_none());
+    assert_eq!(app.theme_before_preview, None);
+    assert_eq!(text::skin_name(), before, "closing without a pick restores");
+    // A pick keeps the preview showing and hands it over to be saved.
+    app.open_theme_picker();
+    app.on_key_picker(key(KeyCode::Down));
+    let picked = text::skin_name();
+    assert!(matches!(app.on_key_picker(key(KeyCode::Enter)), Idle::Input(Input::Theme(name)) if name == picked));
+    assert_eq!(text::skin_name(), picked, "the pick keeps the previewed theme");
+    assert_eq!(
+        app.theme_before_preview.as_deref(),
+        Some(before),
+        "the pick still knows the theme it previewed from"
+    );
+    text::set_theme(before);
+    app.theme_before_preview = None;
+}
+
+#[test]
 fn a_provider_key_applies_as_it_is_answered() {
     let mut app = test_app();
     app.provider_pick("muse-code");

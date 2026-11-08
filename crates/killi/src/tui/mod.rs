@@ -371,9 +371,14 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             }
             Input::Theme(arg) => {
                 let name = arg.trim().to_lowercase().replace([' ', '_'], "-");
+                // A pick the picker previewed is already showing; saving it is still a pick,
+                // not a switch to the theme already in use.
+                let previewed_from = app.theme_before_preview.take();
                 if !text::THEMES.iter().any(|(known, _)| *known == name) {
                     app.error("Pick default, batman, iced-coffee or creamery-station; /theme alone lists them.");
-                } else if name == text::skin_name() {
+                } else if name == text::skin_name()
+                    && previewed_from.as_deref().is_none_or(|before| before == name)
+                {
                     app.notice(&format!("Already on the {name} theme."));
                 } else {
                     let path = crate::config::killi_home().join("config.toml");
