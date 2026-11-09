@@ -5,6 +5,25 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.69 — 2026-11-09
+
+- A failed turn now earns its desktop notification. Failures used to share the
+  interrupted ending and stay silent; they notify whatever the duration, under a
+  `Failed` headline with the error's gist. A turn stopped by the output limit or the
+  repeat breaker still notifies as done, but its detail says so instead of quoting the
+  model's last line.
+- Every subagent ends its report with a `Status:` line — `ready`, `blocked`, `failed`
+  or `waiting`, each with its reason — so the parent tells a real result from a stuck
+  child without guessing from free text.
+- A spent budget fails at once. Bodies carrying `budget_exceeded` join the quota words
+  that skip the ten retries, like the usage-limit 429s before them.
+- The prompt learned when to stop: a change that breaks its caller's expectations,
+  needs a cross-module redesign, or makes no progress after repeated tries stays a
+  draft with its blocker stated, instead of being forced into a result. The final
+  message keeps only user-visible results with links and necessary next steps, the
+  agent forwards the original request to subagents instead of rewriting it into a
+  plan, and questions come one at a time.
+
 ## 0.6.68 — 2026-11-09
 
 - A model switch no longer replays the previous model's Responses reasoning. Encrypted

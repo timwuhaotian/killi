@@ -319,7 +319,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "ask_user_question",
-            "Ask the user a multiple-choice question and wait for the answer. Only when you can't decide from the code or the request.",
+            "Ask the user a multiple-choice question and wait for the answer. Only when you can't decide from the code or the request. Ask one concrete question at a time.",
             json!({"type": "object", "properties": {
                 "question": {"type": "string"},
                 "options": {"type": "array", "items": {"type": "string"}, "description": "2 to 4 choices; the user can also type their own"}
@@ -327,7 +327,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "agent",
-            "Run a subagent on a self-contained task and get its final report. It has your tools and model. Several calls in one reply run in parallel. fork: true gives it this whole conversation; otherwise it sees only the prompt, so make the prompt complete.",
+            "Run a subagent on a self-contained task and get its final report. It has your tools and model. Several calls in one reply run in parallel. fork: true gives it this whole conversation; otherwise it sees only the prompt, so make the prompt complete. Forward the original request with the facts it needs; don't rewrite it into your own plan.",
             json!({"type": "object", "properties": {
                 "description": {"type": "string", "description": "3-5 words"},
                 "prompt": {"type": "string"},

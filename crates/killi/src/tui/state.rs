@@ -91,6 +91,7 @@ pub(super) enum Input {
 
 pub(super) enum LastEnd {
     Done,
+    Failed,
     Interrupted,
 }
 

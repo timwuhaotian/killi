@@ -345,7 +345,7 @@ impl App {
                 }
             }
             Ended::Done(Err(e)) => {
-                self.last_end = Some(LastEnd::Interrupted);
+                self.last_end = Some(LastEnd::Failed);
                 let why = gist(&format!("{e:#}"));
                 notice_line = first_line(&why, 120);
                 self.error_report(&e);
@@ -354,8 +354,16 @@ impl App {
                 self.last_end = Some(LastEnd::Done);
                 notice_line = first_line(&text, 120);
                 match stop {
-                    Stop::MaxTokens => self.notice("The reply hit the output token limit."),
-                    Stop::RepeatBreaker => self.notice("Stopped: the agent kept repeating the same tool call. Tell it what to read or run instead, or pick another model with /model."),
+                    Stop::MaxTokens => {
+                        let note = "The reply hit the output token limit.";
+                        notice_line = note.into();
+                        self.notice(note);
+                    }
+                    Stop::RepeatBreaker => {
+                        let note = "Stopped: the agent kept repeating the same tool call. Tell it what to read or run instead, or pick another model with /model.";
+                        notice_line = first_line(note, 120);
+                        self.notice(note);
+                    }
                     Stop::Completed => {}
                 }
                 if !self.later_noted && leaves_something_for_later(&text) {
@@ -398,7 +406,11 @@ impl App {
         }
         self.last_kind = Kind::None;
         if self.wants_notify(elapsed) {
-            notify(&format!("Done · {}", clock(elapsed)), &notice_line);
+            let outcome = match self.last_end {
+                Some(LastEnd::Failed) => "Failed",
+                _ => "Done",
+            };
+            notify(&format!("{outcome} · {}", clock(elapsed)), &notice_line);
         }
     }
 
@@ -455,12 +467,13 @@ impl App {
         *snapshots = Snapshots::new(cwd);
     }
 
-    /// Whether the turn just ended earns a desktop notification: a completed turn that ran
-    /// long, not one the user ended themselves with Esc or Ctrl+S.
+    /// Whether the turn just ended earns a desktop notification: a failure always does, a
+    /// completed turn only when it ran long; not one the user ended with Esc or Ctrl+S.
     pub(super) fn wants_notify(&self, elapsed: Duration) -> bool {
-        matches!(self.last_end, Some(LastEnd::Done))
-            && elapsed >= self.notify_after
-            && !self.send_now
+        !self.send_now
+            && (matches!(self.last_end, Some(LastEnd::Failed))
+                || matches!(self.last_end, Some(LastEnd::Done))
+                    && elapsed >= self.notify_after)
     }
 
     /// Prints the streamed line still being held and lays out the table it held back, ending

@@ -15,6 +15,14 @@ fn a_spent_chatgpt_plan_is_not_retried() {
 }
 
 #[test]
+fn a_spent_budget_is_not_retried() {
+    let body = r#"{"error":{"type":"budget_exceeded","message":"Budget has been exceeded"}}"#;
+    let failure = classify(StatusCode::TOO_MANY_REQUESTS, None, body);
+    assert_eq!(failure.kind, ErrorKind::Quota);
+    assert!(!failure.retryable);
+}
+
+#[test]
 fn a_spent_chinese_token_plan_is_not_retried() {
     let body = r#"{"type":"error","error":{"type":"rate_limit_error","message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)"}}"#;
     let failure = classify(StatusCode::TOO_MANY_REQUESTS, None, body);

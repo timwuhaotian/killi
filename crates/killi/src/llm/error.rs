@@ -132,9 +132,11 @@ const LONGEST_WAIT: Duration = Duration::from_secs(60);
 
 /// Words in a 429 body that say a usage quota ran out, not that requests came too fast.
 /// The last two are the Chinese wording some gateways send for a spent plan.
-const QUOTA_WORDS: [&str; 7] = [
+const QUOTA_WORDS: [&str; 9] = [
     "usage limit",
     "quota",
+    "budget_exceeded",
+    "budget has been exceeded",
     "reset at",
     "exceeded your current",
     "usage_limit_exceeded",

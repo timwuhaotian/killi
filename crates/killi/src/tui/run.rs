@@ -542,7 +542,7 @@ pub(super) async fn prompt_turn(
     if !app.controls.peer_notes.borrow().is_empty() {
         app.notice("A message from another session came as the turn ended; the agent gets it with your next prompt.");
     }
-    if matches!(app.last_end, Some(LastEnd::Interrupted)) {
+    if !matches!(app.last_end, Some(LastEnd::Done)) {
         agent.recover()?;
     }
     if wants_recap(

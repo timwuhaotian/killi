@@ -61,7 +61,7 @@ use dispatch::{
 #[cfg(test)]
 use request::hides_reasoning;
 #[cfg(test)]
-use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm};
+use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm, subagent_prompt};
 #[cfg(test)]
 use turn::{
     STALE_TASKS_AFTER, ends_with_colon, ends_with_intent, ends_with_question, open_tasks_note,

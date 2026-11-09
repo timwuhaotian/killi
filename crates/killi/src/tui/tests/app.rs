@@ -205,6 +205,12 @@ fn no_notification_for_a_turn_the_user_ended() {
         !app.wants_notify(Duration::from_secs(30)),
         "a Ctrl+S turn stays quiet"
     );
+    app.send_now = false;
+    app.last_end = Some(LastEnd::Failed);
+    assert!(
+        app.wants_notify(Duration::from_secs(1)),
+        "a failed turn notifies even when quick"
+    );
 }
 
 #[test]

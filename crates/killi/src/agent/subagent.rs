@@ -212,7 +212,7 @@ impl Agent {
             Err(output) => return (index, output, None),
         };
         (agent.sink)(Event::Started);
-        let output = match agent.run(&prompt, &[]).await {
+        let output = match agent.run(&subagent_prompt(&prompt), &[]).await {
             Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => {
                 tools::Output::ok(text)
             }
@@ -327,6 +327,14 @@ impl Agent {
         }
         Ok(agent)
     }
+}
+
+/// The task prompt with its reporting convention: the parent tells a real result from a
+/// stuck subagent by the final line, without parsing free text in code.
+pub(super) fn subagent_prompt(prompt: &str) -> String {
+    format!(
+        "{prompt}\n\nEnd your final message with one line: `Status: ready` when the work is done, `blocked` (say what you need), `failed` (say what failed), or `waiting` (say what you wait on)."
+    )
 }
 
 pub(super) fn reserve_swarm(used: usize, requested: usize) -> Result<(), String> {

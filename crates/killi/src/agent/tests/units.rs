@@ -781,6 +781,15 @@ fn swarm_budget_is_total_per_turn_not_just_concurrency() {
 }
 
 #[test]
+fn a_subagent_prompt_ends_with_the_status_line_convention() {
+    let task = subagent_prompt("do it");
+    assert!(task.starts_with("do it\n\n"), "{task}");
+    for status in ["ready", "blocked", "failed", "waiting"] {
+        assert!(task.contains(status), "{task}");
+    }
+}
+
+#[test]
 fn a_side_question_is_told_what_the_running_call_waits_on() {
     let history = vec![json!({"role": "user", "content": "wait for ci"})];
     let request = side_request(
