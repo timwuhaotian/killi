@@ -9,14 +9,27 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![macOS · Apple silicon](https://img.shields.io/badge/macOS-Apple%20silicon-lightgrey)
 
-**killi is a fast, tiny AI coding agent for your terminal**, written in Rust (one small native
-binary, no runtime). Like Claude Code, Codex CLI, opencode or Kimi Code, it reads your code, runs
-commands and edits files, but it works with any OpenAI-compatible, Anthropic-compatible or
-OpenAI Responses LLM, and it supports MCP servers, subagents, plan mode, skills, hooks and
-`AGENTS.md`. It is built around one idea: send the model as little as possible, and send it
-the same way every time, so the provider's prompt cache keeps hitting. It is the sibling of the
-[Kil](https://github.com/timwuhaotian/kil) terminal and the
+**killi is a fast, tiny, free and open-source AI coding agent for your terminal**, written in
+Rust. It ships as one ~7 MB native binary for Apple silicon Macs — no runtime to install, starts
+in under 10 ms, and uses about 18 MB of memory while running a prompt. Like Claude Code, Codex
+CLI, opencode or Kimi Code, it reads your code, runs commands and edits files, but it works with
+any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, including ChatGPT
+subscriptions, and it supports MCP servers, subagents, plan mode, skills, hooks and `AGENTS.md`.
+It is built around one idea: send the model as little as possible, and send it the same way
+every time, so the provider's prompt cache keeps hitting (70–90% of input tokens come from the
+cache). It is the sibling of the [Kil](https://github.com/timwuhaotian/kil) terminal and the
 [Kiled](https://github.com/timwuhaotian/kiled) editor.
+
+**killi at a glance**
+
+| | killi |
+|---|---|
+| Installed size | ~7 MB single binary, no runtime |
+| Startup | under 10 ms |
+| Memory, one prompt | ~18 MB (Claude Code: 318 MB, Kimi Code: 408 MB, opencode 2: 332 MB) |
+| System prompt + all tools | ~2,600 tokens |
+| Input tokens, same evals | 5.6× fewer than Kimi Code |
+| Prompt-cache hits | 70–90% |
 
 <p align="center">
   <img src="docs/screenshot.svg" width="960" alt="killi on the iced-coffee theme fixing a failing slugify test: the blue-to-coral banner, a read and the failing test run, a thought, an edit to slug.py with added and removed line stripes, the passing run and the explanation; below, the model's suggested next prompt sits in the empty prompt and the status line shows the model, swarm mode, a context gauge, tokens 83% cached and the git branch">
@@ -31,7 +44,37 @@ the same way every time, so the provider's prompt cache keeps hitting. It is the
 
 How these were measured: [Size and memory](#size-and-memory) · [Capability tests](#capability-tests).
 
-> **Status: early.** Apple silicon Macs only. Used daily by its author; expect rough edges.
+> **Status: early but actively developed.** Apple silicon Macs only. Used daily by its author; see [Known limitations](#known-limitations).
+
+## Why killi
+
+- **Long sessions stay cheap.** The prompt and tool list never change mid-session, and history
+  is only appended to, so 70–90% of input tokens come from the provider's prompt cache.
+- **The same work, far fewer tokens.** About 2,600 tokens for the whole prompt and every tool;
+  every capability task Kimi Code passes, with 5.6× fewer input tokens.
+- **Almost invisible on your machine.** One ~7 MB binary with no runtime to install, starting in
+  under 10 ms and using about 18 MB of memory running a prompt.
+- **No model lock-in.** Any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, on
+  an API key or a ChatGPT subscription.
+- **The full agent kit.** Subagents and swarms, plan mode, MCP servers, skills, hooks,
+  `AGENTS.md` and undo — free and open source under MIT.
+
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh | sh
+```
+
+This puts `killi` in `~/.local/bin` after checking its SHA-256 against
+[`releases/latest.toml`](releases/latest.toml). Later, `killi update` does the same in place.
+
+## Build from source
+
+```sh
+cargo install --path crates/killi
+```
+
+Rust 1.94 or later.
 
 ## Features
 
@@ -74,6 +117,48 @@ How these were measured: [Size and memory](#size-and-memory) · [Capability test
   since your version and asks whether to install it now. `KILLI_NO_UPDATE_CHECK=1` turns the
   check off.
 
+## FAQ
+
+**What is killi?**
+killi is a fast, tiny, open-source AI coding agent for the terminal, written in Rust. It ships as one ~7 MB native binary for Apple silicon Macs with no runtime to install, starts in under 10 ms, and uses about 18 MB of memory while running a prompt. Like Claude Code, Codex CLI, opencode or Kimi Code, it reads your code, runs commands and edits files, but it is free (MIT), works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, and is built so the provider's prompt cache keeps hitting.
+
+**Is killi open source?**
+Yes. killi is open source under the MIT license, and the full source is on GitHub at github.com/timwuhaotian/killi. It is free to use and installs as a single ~7 MB binary.
+
+**How is killi different from Claude Code?**
+Claude Code is Anthropic's closed-source agent tied to Anthropic models. killi is open source, model-agnostic, and much lighter: in the same benchmark, killi used about 18 MB of memory while Claude Code used 318 MB, Kimi Code 408 MB and opencode 2 332 MB. In killi's capability tests, killi passed every task Kimi Code passed on the same model with 5.6× fewer input tokens. Because killi never changes the system prompt or the tool list during a session, 70–90% of its input tokens are served from the provider's prompt cache.
+
+**How much memory does killi use?**
+About 18 MB of peak memory while running a prompt, measured on 2026-11-07 on an M4 Pro with [`scripts/bench.py`](scripts/bench.py) (hooks disabled). For comparison, the same benchmark measured Kimi Code at 408 MB, Claude Code at 318 MB and opencode 2 at 332 MB. The installed binary itself is about 7 MB.
+
+**Does killi support ChatGPT?**
+Yes. `killi login chatgpt` signs in with a ChatGPT Plus or Pro account in the browser, through OpenAI's sign-in for open-source tools. Requests go to api.openai.com/v1/responses on your plan, count toward your ChatGPT usage, and can be monitored in ChatGPT settings → Usage. killi also works with OpenAI-compatible APIs, Claude (Anthropic), and many other providers.
+
+**Does killi support Claude / Anthropic models?**
+Yes. killi accepts an Anthropic API key and speaks the Anthropic Messages protocol, so Claude models work directly. Claude models behind an OpenAI-compatible gateway can be used with the Responses protocol, with `cache_control` support for prompt caching.
+
+**How many tokens does killi use?**
+The system prompt and every tool together come to about 2,600 tokens, plus your `AGENTS.md` files and about 4 tokens per installed skill. In the capability tests, killi used 5.6× fewer input tokens than Kimi Code on the same model while passing the same tasks.
+
+**What is prompt caching and why does killi care?**
+Providers cache the start of a prompt, so a request that begins exactly like the previous one is cheaper and faster. killi is built around this: the system prompt, the tool list and the history are fixed for the whole session and only appended to, so 70–90% of input tokens come from the cache, including in plan mode, subagents, swarms and resumed sessions.
+
+**How do I install killi?**
+Run `curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh | sh` to install the ~7 MB binary to `~/.local/bin` after a SHA-256 check, or build from source with `cargo install --path crates/killi` (Rust 1.94+). killi currently runs on Apple silicon Macs.
+
+**Does killi support MCP servers, subagents and plan mode?**
+Yes. killi supports MCP servers (stdio and HTTP) from `mcp.json`, subagents and swarms (up to 128 in parallel), plan mode that blocks edits until you approve, Claude Code-style hooks, `AGENTS.md` / `CLAUDE.md` instructions, skills, undo, background tasks and web search.
+
+## killi vs Claude Code, Kimi Code and opencode
+
+killi is an open-source, model-agnostic alternative to the big terminal coding agents, and it is much lighter. In the same benchmarks (measured with [`scripts/bench.py`](scripts/bench.py), see [Size and memory](#size-and-memory) and [Capability tests](#capability-tests)):
+
+- **Memory:** about 18 MB while running a prompt, where Claude Code uses 318 MB, Kimi Code 408 MB and opencode 2 332 MB.
+- **Tokens:** it passes every capability task Kimi Code passes on the same model, with 5.6× fewer input tokens.
+- **Cost:** 70–90% of input tokens come from the provider's prompt cache, so long sessions stay cheap.
+- **Vendor freedom:** works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM — not tied to one model.
+- **Open source:** MIT licensed, one ~7 MB native binary, no runtime.
+
 ## Size and memory
 
 The top half of the chart above. Measured with [`scripts/bench.py`](scripts/bench.py); the versions and models are in
@@ -101,23 +186,6 @@ killi's row is 0.6.55, measured on 2026-11-07; Kimi Code's (2.2.0) and Claude Co
 rows are from 2026-10-22. Each tool ran every task once, so a single task's token count can swing
 by a third or more. killi's times were taken on a busy machine and aren't comparable with the
 other two; tokens and memory are not affected by load.
-
-## Install
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh | sh
-```
-
-This puts `killi` in `~/.local/bin` after checking its SHA-256 against
-[`releases/latest.toml`](releases/latest.toml). Later, `killi update` does the same in place.
-
-## Build from source
-
-```sh
-cargo install --path crates/killi
-```
-
-Rust 1.94 or later.
 
 ## Using killi
 
@@ -380,7 +448,9 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
 ## How it works
 
 Providers cache the start of a prompt, so a request that begins exactly like the last one is
-cheaper and faster. killi keeps that start identical:
+cheaper and faster ([OpenAI](https://platform.openai.com/docs/guides/prompt-caching),
+[Anthropic](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)). killi keeps
+that start identical:
 
 - The system prompt, your `AGENTS.md` files and the tool definitions are built once when the
   session starts and never change. Plan mode blocks writes when a tool runs instead of removing
@@ -388,11 +458,17 @@ cheaper and faster. killi keeps that start identical:
 - Messages are stored exactly as sent, tool-call arguments and reasoning included, and nothing
   earlier is ever edited or merged. Notes from killi to the model go at the end. Only
   compaction rewrites history, and it keeps your requests word for word.
-- On MiMo, changing the tool list mid-session dropped a request's cached tokens to zero,
-  history included. That measurement shaped the rest.
+> On MiMo, changing the tool list mid-session dropped a request's cached tokens to zero,
+> history included. That measurement shaped the rest.
 
 The design, with the measurements behind each choice, is in
 [docs/decisions.md](docs/decisions.md).
+
+## Known limitations
+
+- **Apple silicon Macs only.** killi currently ships for macOS on Apple silicon; Intel Macs, Linux and Windows are not supported yet.
+- **Early software.** Used daily by its author, but expect rough edges; `/undo` and git are your safety nets.
+- **Small benchmark set.** The capability tests cover 14 tasks, and measurements were taken on a small number of machines and models — see [Size and memory](#size-and-memory) and [Capability tests](#capability-tests).
 
 ## Development
 
