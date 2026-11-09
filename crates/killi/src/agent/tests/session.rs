@@ -144,6 +144,35 @@ async fn a_rate_limited_primary_without_a_backup_fails_as_before() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn retries_are_recorded_in_the_session_log() {
+    let limited = failing(
+        "429 Too Many Requests",
+        "{\"error\":{\"message\":\"slow down\"}}",
+    );
+    let good = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{}",
+        sse("done", "stop")
+    );
+    let url = serve_raw(vec![limited, good]).await;
+    let mut agent = idle_agent("retry-log", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent
+        .push(json!({"role": "user", "content": "hi"}))
+        .unwrap();
+
+    let reply = agent.request().await.unwrap();
+    assert_eq!(reply.text, "done");
+    let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
+    assert!(log.contains("\"type\":\"retry\""), "{log}");
+    assert!(log.contains("\"attempt\":1"), "{log}");
+    assert!(log.contains("\"wait_ms\":0"), "{log}");
+    assert!(log.contains("slow down"), "{log}");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_rate_limited_swarm_member_finishes_its_work_on_the_backup() {
     let primary = rate_limited_stub(30).await;
     let backup = answering_stub_times("from backup", 4).await;

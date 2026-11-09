@@ -77,7 +77,7 @@ def analyze(path):
          "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0, "version": None,
          "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [],
          "tool_ms": [], "slept": [0, 0], "compactions": [], "per_model": collections.defaultdict(lambda: collections.Counter()),
-         "active": [], "peer_git": [], "peer_refusals": 0, "miss_streak": []}
+         "active": [], "peer_git": [], "peer_refusals": 0, "miss_streak": [], "retries": []}
     model, awaiting, calls, answered, sleeping, peers = None, None, {}, set(), set(), False
     cwd, moving = None, {}
     streak, grew_from = 0, None
@@ -197,6 +197,8 @@ def analyze(path):
         elif kind == "error":
             s["errors"].append(str(entry.get("message"))[:160])
             s["ended"] = "error"
+        elif kind == "retry":
+            s["retries"].append(entry)
         elif kind == "warn":
             s["warns"].append(str(entry.get("message"))[:160])
     if any(i not in answered for i in calls):
@@ -263,6 +265,10 @@ def findings(sessions, models, versions_of):
             found.append(f"{who}`{name}` hit an error: {error}")
         for warn in sorted(set(s["warns"])):
             found.append(f"{who}`{name}` logged a warning: {warn}")
+        if s["retries"]:
+            waits = sum(r.get("wait_ms", 0) for r in s["retries"])
+            reasons = "; ".join(sorted({str(r.get("reason"))[:140] for r in s["retries"]}))
+            found.append(f"{who}`{name}` retried {len(s['retries'])} time(s) ({waits / 1000:.0f}s of backoff): {reasons}")
         for command in s["peer_git"]:
             found.append(f"{who}`{name}` ran `{command}` after being told another session works in its repository, in the session's own folder, "
                          "and it was not refused; versions since 0.6.8 refuse these while a peer shares the tree.")

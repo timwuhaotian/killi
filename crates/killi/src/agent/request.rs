@@ -3,21 +3,36 @@ use super::*;
 impl Agent {
     pub(super) async fn request(&mut self) -> Result<Reply> {
         let sink = self.sink.clone();
+        // Every retry a provider answer demands is kept in the session log as it happens, so
+        // a session that seemed to hang on a rate limit can be traced from its log: when a
+        // retry eventually succeeds, the backoff would otherwise leave no trace at all.
+        // Entries are buffered here (the closure only forwards to the sink) and recorded
+        // when the request settles, before the usage or error entry that follows it.
+        let retries = Rc::new(RefCell::new(Vec::new()));
+        let logged = retries.clone();
         let mut on_delta = |delta: Delta| {
-            sink(match delta {
-                Delta::Text(text) => Event::Text(text.to_string()),
-                Delta::Reasoning(text) => Event::Reasoning(text.to_string()),
-                Delta::Tool(text) => Event::ToolDelta(text.len()),
+            match delta {
+                Delta::Text(text) => sink(Event::Text(text.to_string())),
+                Delta::Reasoning(text) => sink(Event::Reasoning(text.to_string())),
+                Delta::Tool(text) => sink(Event::ToolDelta(text.len())),
                 Delta::Retry {
                     attempt,
                     wait,
                     reason,
-                } => Event::Retry {
-                    attempt,
-                    wait,
-                    reason: reason.to_string(),
-                },
-            })
+                } => {
+                    logged.borrow_mut().push(json!({
+                        "type": "retry",
+                        "attempt": attempt,
+                        "wait_ms": wait.as_millis(),
+                        "reason": reason,
+                    }));
+                    sink(Event::Retry {
+                        attempt,
+                        wait,
+                        reason: reason.to_string(),
+                    })
+                }
+            }
         };
         let started = Instant::now();
         let reply = match self
@@ -57,17 +72,20 @@ impl Agent {
                     {
                         Ok(reply) => reply,
                         Err(error) => {
+                            self.record_retries(&retries)?;
                             self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
                             return Err(error);
                         }
                     }
                 }
                 None => {
+                    self.record_retries(&retries)?;
                     self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
                     return Err(error);
                 }
             },
         };
+        self.record_retries(&retries)?;
         let took = started.elapsed();
         self.stats.requests += 1;
         self.account(
@@ -79,6 +97,16 @@ impl Agent {
         )?;
         self.note_hidden_reasoning(&reply)?;
         Ok(reply)
+    }
+
+    /// Writes the retry backoffs this request's attempts answered, beside the message and
+    /// usage records — never into the history. Old logs have no `retry` entries and read
+    /// unchanged.
+    fn record_retries(&mut self, retries: &RefCell<Vec<Value>>) -> Result<()> {
+        for retry in retries.borrow().iter() {
+            self.session.record(retry)?;
+        }
+        Ok(())
     }
 
     /// The provider rejected the conversation's media: replace every image part with a
