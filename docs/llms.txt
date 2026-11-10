@@ -1,0 +1,16 @@
+# killi
+
+> killi is a fast, tiny, open-source AI coding agent for the terminal, written in Rust. It is a
+> single ~7 MB native binary for Apple silicon Macs, starts in under 10 ms, uses about 18 MB of
+> RAM while running a prompt, and is designed so 70–90% of input tokens hit the provider's prompt
+> cache. It works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM —
+> including ChatGPT subscriptions — and supports MCP servers, subagents, plan mode, skills, hooks
+> and AGENTS.md. It is an open-source (MIT), lightweight alternative to Claude Code, Codex CLI,
+> opencode and Kimi Code.
+
+- [GitHub repository](https://github.com/timwuhaotian/killi): source, install command and full README
+- [README](https://github.com/timwuhaotian/killi/blob/main/README.md): features, benchmarks and usage
+- [Install](https://github.com/timwuhaotian/killi#install): `curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh | sh`
+- [Size and memory benchmarks](https://github.com/timwuhaotian/killi#size-and-memory): killi ~18 MB vs Claude Code 318 MB, Kimi Code 408 MB, opencode 2 332 MB
+- [Capability tests](https://github.com/timwuhaotian/killi#capability-tests): 14 tasks; 5.6× fewer input tokens than Kimi Code
+- [docs/decisions.md](https://github.com/timwuhaotian/killi/blob/main/docs/decisions.md): design rationale

@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>killi — fast, tiny, open-source AI coding agent for the terminal (Rust)</title>
+<meta name="description" content="killi is an open-source AI coding agent for the terminal, written in Rust. One 7 MB binary, ~18 MB memory, 70–90% prompt-cache hits. Works with ChatGPT, Claude and any OpenAI/Anthropic-compatible LLM. MCP servers, subagents, plan mode.">
+<meta property="og:title" content="killi — the 7 MB AI coding agent">
+<meta property="og:description" content="18 MB RAM · 2,600-token system prompt · 70–90% prompt-cache hits. Open source (MIT). Works with ChatGPT and Claude.">
+<meta property="og:url" content="https://timwuhaotian.github.io/killi/">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://raw.githubusercontent.com/timwuhaotian/killi/main/docs/icon.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="killi — the 7 MB AI coding agent">
+<meta name="twitter:description" content="18 MB RAM · 2,600-token system prompt · 70–90% prompt-cache hits. Open source (MIT). Works with ChatGPT and Claude.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is killi?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "killi is a fast, tiny, open-source AI coding agent for the terminal, written in Rust. It ships as one ~7 MB native binary for Apple silicon Macs with no runtime to install, starts in under 10 ms, and uses about 18 MB of memory while running a prompt. It reads your code, runs commands and edits files like Claude Code or opencode, and works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, including ChatGPT subscriptions."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How is killi different from Claude Code?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Claude Code is Anthropic's closed-source agent tied to Anthropic models. killi is open source, model-agnostic, and much lighter: in the same benchmark, killi used about 18 MB of memory while Claude Code used 318 MB, Kimi Code 408 MB and opencode 2 332 MB. killi passed every capability task Kimi Code passed on the same model with 5.6x fewer input tokens, and 70-90% of its input tokens are served from the provider's prompt cache."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How much memory does killi use?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "About 18 MB of peak memory while running a prompt, measured with scripts/bench.py on an M4 Pro. In the same benchmark, Kimi Code used 408 MB, Claude Code 318 MB and opencode 2 332 MB. The installed binary is about 7 MB."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does killi support ChatGPT?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. killi login chatgpt signs in with a ChatGPT Plus or Pro account in the browser through OpenAI's official sign-in for open-source tools. Requests go to api.openai.com/v1/responses on your plan and count toward your ChatGPT usage. killi also supports Anthropic Claude and any OpenAI-compatible or Anthropic-compatible LLM."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is killi open source?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. killi is open source under the MIT license at github.com/timwuhaotian/killi, free to use, and installs as a single ~7 MB native binary for Apple silicon Macs."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Why is killi cache-friendly?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Providers cache the start of a prompt, so a request that begins exactly like the last one is cheaper and faster. killi keeps the system prompt, tool list and history fixed and append-only for the whole session, so 70-90% of input tokens come from the cache, including in plan mode, subagents and resumed sessions."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I install killi?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Run curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh | sh to install the ~7 MB binary to ~/.local/bin after a SHA-256 check, or build from source with cargo install --path crates/killi (Rust 1.94+). killi currently runs on Apple silicon Macs."
+      }
+    }
+  ]
+}
+</script>
+<style>
+:root {
+  --bg: #0b0f14;
+  --bg-raised: #121a22;
+  --bg-sunken: #070a0e;
+  --rule: #2a2f34;
+  --fg: #e8eef2;
+  --fg-muted: #8e9cab;
+  --fg-faint: #5c6b7a;
+  --lagoon: #4fd1c5;
+  --fin: #ff8c5a;
+  --warn: #f2c14e;
+  --tokens: #81bce5;
+  --branch: #d7a0ca;
+  --effort: #aaa9eb;
+  --diff-add: #152325;
+  --diff-del: #291e23;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.6;
+}
+a { color: var(--lagoon); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+header { text-align: center; padding: 3rem 1rem 1rem; }
+header img { width: 96px; height: 96px; }
+header h1 { margin: 0.5rem 0 0.25rem; font-size: 2.5rem; }
+header p { color: var(--fg-muted); margin: 0; }
+.badges { margin-top: 1rem; }
+.badges img { vertical-align: middle; }
+.hero {
+  background: var(--bg-raised);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  padding: 2rem;
+  margin: 2rem 0;
+  text-align: center;
+}
+.hero h2 { margin: 0 0 0.75rem; font-size: 1.4rem; }
+.hero .tagline { color: var(--fg-muted); margin: 0 0 1.25rem; }
+.install {
+  background: var(--bg-sunken);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+  overflow-x: auto;
+  text-align: left;
+  color: var(--lagoon);
+  font-size: 0.9rem;
+}
+.install .prompt { color: var(--fg-faint); }
+.benchmarks { margin: 2.5rem 0; }
+.benchmarks h2 { border-bottom: 1px solid var(--rule); padding-bottom: 0.5rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1rem; margin: 1.25rem 0; }
+.card { background: var(--bg-raised); border: 1px solid var(--rule); border-radius: 10px; padding: 1.1rem 1.25rem; }
+.card .num { font-size: 1.8rem; font-weight: 700; }
+.card .num.killi { color: var(--lagoon); }
+.card .num.claude { color: var(--fin); }
+.card .num.kimi { color: var(--warn); }
+.card .num.opencode { color: var(--tokens); }
+.card .label { color: var(--fg-muted); font-size: 0.8rem; }
+table { width: 100%; border-collapse: collapse; margin: 1.25rem 0; font-size: 0.85rem; }
+th, td { border: 1px solid var(--rule); padding: 0.55rem 0.75rem; text-align: left; }
+th { background: var(--bg-raised); }
+td.killi { color: var(--lagoon); font-weight: 700; }
+.note { color: var(--fg-faint); font-size: 0.8rem; }
+.features ul { padding-left: 1.25rem; }
+.features li { margin: 0.5rem 0; }
+.features b { color: var(--fg); }
+.faq details { background: var(--bg-raised); border: 1px solid var(--rule); border-radius: 10px; padding: 1rem 1.25rem; margin: 0.75rem 0; }
+.faq summary { cursor: pointer; font-weight: 700; }
+.faq p { margin: 0.75rem 0 0; color: var(--fg-muted); }
+footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--rule); color: var(--fg-faint); font-size: 0.85rem; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <img src="icon.png" alt="killi icon">
+  <h1>killi</h1>
+  <p>fast, tiny, open-source AI coding agent for your terminal</p>
+  <p class="badges">
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT">
+    <img src="https://img.shields.io/badge/macOS-Apple%20silicon-lightgrey" alt="macOS Apple silicon">
+    <img src="https://img.shields.io/github/v/release/timwuhaotian/killi" alt="release">
+  </p>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <h2>killi — a fast, tiny AI coding agent for your terminal</h2>
+    <p class="tagline">Written in Rust · one ~7 MB native binary · ~18 MB RAM · 70–90% prompt-cache hits<br>
+    Works with ChatGPT, Claude and any OpenAI/Anthropic-compatible LLM · MCP, subagents, plan mode, skills, hooks, AGENTS.md</p>
+    <div class="install"><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh | sh</div>
+    <p class="note">Apple silicon Macs · MIT licensed · <a href="https://github.com/timwuhaotian/killi">GitHub</a></p>
+  </section>
+
+  <section class="benchmarks" id="benchmarks">
+    <h2>Benchmarks</h2>
+    <p>Measured with <a href="https://github.com/timwuhaotian/killi/blob/main/scripts/bench.py">scripts/bench.py</a>
+    on an M4 Pro (killi 0.6.56, Claude Code 2.1.319, 2026-11-07; Kimi Code 2.3.0 and opencode 2.1.3, October 2026).
+    Details in <a href="https://github.com/timwuhaotian/killi/blob/main/docs/bench.json">docs/bench.json</a>.</p>
+    <div class="cards">
+      <div class="card"><div class="num killi">18 MB</div><div class="label">killi memory, one prompt</div></div>
+      <div class="card"><div class="num claude">318 MB</div><div class="label">Claude Code</div></div>
+      <div class="card"><div class="num kimi">408 MB</div><div class="label">Kimi Code</div></div>
+      <div class="card"><div class="num opencode">332 MB</div><div class="label">opencode 2</div></div>
+    </div>
+    <table>
+      <thead><tr><th></th><th>killi</th><th>Claude Code</th><th>Kimi Code</th><th>opencode 2</th></tr></thead>
+      <tbody>
+        <tr><td>Installed size</td><td class="killi">~7 MB</td><td>307 MB</td><td>188 MB</td><td>204 MB</td></tr>
+        <tr><td>Startup</td><td class="killi">&lt; 10 ms</td><td>72 ms</td><td>369 ms</td><td>77 ms</td></tr>
+        <tr><td>Memory, one prompt</td><td class="killi">~18 MB</td><td>318 MB</td><td>408 MB</td><td>332 MB</td></tr>
+        <tr><td>System prompt + tools</td><td class="killi">~2,600 tokens</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>Input tokens, same 14 evals</td><td class="killi">1×</td><td>—</td><td>5.6×</td><td>—</td></tr>
+        <tr><td>Prompt-cache hits</td><td class="killi">70–90%</td><td>—</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <p class="note">killi passed every capability task Kimi Code passed on the same model, with 5.6× fewer input tokens.
+    See <a href="https://github.com/timwuhaotian/killi/blob/main/docs/eval.md">docs/eval.md</a>.</p>
+  </section>
+
+  <section class="features" id="features">
+    <h2>Features</h2>
+    <ul>
+      <li><b>Small and quick.</b> One 7 MB binary, no runtime; starts in under 10 ms.</li>
+      <li><b>Few tokens.</b> ~2,600-token system prompt and tools; 5.6× fewer input tokens than Kimi Code on the same evals.</li>
+      <li><b>Cache-friendly by design.</b> Fixed system prompt and tool list, append-only history: 70–90% of input tokens come from the provider's prompt cache.</li>
+      <li><b>Any LLM.</b> OpenAI-compatible, Anthropic-compatible or OpenAI Responses; ChatGPT, OpenCode Go, Muse Code and Command Code subscriptions.</li>
+      <li><b>Your setup, carried over.</b> <code>killi import-kimi</code>, skills, MCP servers, Claude Code-style hooks and AGENTS.md.</li>
+      <li><b>MCP, subagents, plan mode, undo.</b> Up to 128 parallel subagents, plan mode, background tasks, /undo.</li>
+    </ul>
+  </section>
+
+  <section class="faq" id="faq">
+    <h2>FAQ</h2>
+    <details open>
+      <summary>What is killi?</summary>
+      <p>killi is a fast, tiny, open-source AI coding agent for the terminal, written in Rust. It ships as one ~7 MB native binary for Apple silicon Macs with no runtime to install, starts in under 10 ms, and uses about 18 MB of memory while running a prompt. Like Claude Code, Codex CLI, opencode or Kimi Code, it reads your code, runs commands and edits files, but it is free (MIT), works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, and is built so the provider's prompt cache keeps hitting.</p>
+    </details>
+    <details>
+      <summary>Is killi open source?</summary>
+      <p>Yes. killi is open source under the MIT license, and the full source is on GitHub at github.com/timwuhaotian/killi. It is free to use and installs as a single ~7 MB binary.</p>
+    </details>
+    <details>
+      <summary>How is killi different from Claude Code?</summary>
+      <p>Claude Code is Anthropic's closed-source agent tied to Anthropic models. killi is open source, model-agnostic, and much lighter: in the same benchmark, killi used about 18 MB of memory while Claude Code used 318 MB, Kimi Code 408 MB and opencode 2 332 MB. killi passed every capability task Kimi Code passed on the same model with 5.6× fewer input tokens, and 70–90% of its input tokens are served from the provider's prompt cache.</p>
+    </details>
+    <details>
+      <summary>How much memory does killi use?</summary>
+      <p>About 18 MB of peak memory while running a prompt, measured on 2026-11-07 on an M4 Pro with scripts/bench.py (hooks disabled). For comparison, the same benchmark measured Kimi Code at 408 MB, Claude Code at 318 MB and opencode 2 at 332 MB. The installed binary itself is about 7 MB.</p>
+    </details>
+    <details>
+      <summary>Does killi support ChatGPT?</summary>
+      <p>Yes. <code>killi login chatgpt</code> signs in with a ChatGPT Plus or Pro account in the browser, through OpenAI's official sign-in for open-source tools. Requests go to api.openai.com/v1/responses on your plan, count toward your ChatGPT usage, and can be monitored in ChatGPT settings → Usage. killi also works with OpenAI-compatible APIs, Claude (Anthropic), and many other providers.</p>
+    </details>
+    <details>
+      <summary>Does killi support Claude / Anthropic models?</summary>
+      <p>Yes. killi accepts an Anthropic API key and speaks the Anthropic Messages protocol, so Claude models work directly. Claude models behind an OpenAI-compatible gateway can be used with the Responses protocol, with cache_control support for prompt caching.</p>
+    </details>
+    <details>
+      <summary>What is prompt caching and why does killi care?</summary>
+      <p>Providers cache the start of a prompt, so a request that begins exactly like the previous one is cheaper and faster. killi is built around this: the system prompt, the tool list and the history are fixed for the whole session and only appended to, so 70–90% of input tokens come from the cache, including in plan mode, subagents, swarms and resumed sessions.</p>
+    </details>
+    <details>
+      <summary>Does killi support MCP servers, subagents and plan mode?</summary>
+      <p>Yes. killi supports MCP servers (stdio and HTTP) from mcp.json, subagents and swarms (up to 128 in parallel), plan mode that blocks edits until you approve, Claude Code-style hooks, AGENTS.md / CLAUDE.md instructions, skills, undo, background tasks and web search.</p>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  <p>killi is open source (MIT) · <a href="https://github.com/timwuhaotian/killi">GitHub</a> ·
+  <a href="https://github.com/timwuhaotian/killi/blob/main/README.md">README</a> ·
+  <a href="llms.txt">llms.txt</a></p>
+</footer>
+</body>
+</html>
