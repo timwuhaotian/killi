@@ -5,6 +5,17 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.70 — 2026-11-10
+
+- Friendlier first run for users of other coding agents. Without a config, killi lists
+every agent it finds on the machine and copies one's providers, models, API keys,
+default model, thinking level and MCP servers on one choice, instead of asking about
+each in turn. `killi import [tool] [--force]` does the same later (`--list` shows what
+killi reads from and found), and `killi import-kimi` still works as an alias. Imports
+now also cover Codex CLI's custom providers, Claude Code's API-key setup, and Gemini
+CLI behind an OpenAI-compatible endpoint; subscription and OAuth logins are never
+imported, as before.
+
 - Linux support: killi now runs on macOS (arm64) and Linux (x64/arm64).
   `install.sh`, `scripts/release.sh` and `killi update` pick the host's binary
   (`killi-arm64`, `killi-linux-x64`, `killi-linux-arm64`), with per-platform

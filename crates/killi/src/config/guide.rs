@@ -45,7 +45,7 @@ max_output_size = 128000
 capabilities = ["image_in", "thinking", "tool_use"]
 "#;
 
-/// The `[prompt]` table with the built-in guidance, as `init` and `import-kimi` write it.
+/// The `[prompt]` table with the built-in guidance, as `init` and the importers write it.
 pub(super) fn prompt_section() -> String {
     format!(
         "\n# The system prompt's guidance, sent first in every session. Edit it here, then /reload or\n\
@@ -97,56 +97,42 @@ pub fn init() -> Result<()> {
     Ok(())
 }
 
-/// A coding agent whose config killi can import: its name, the config that shows it is
-/// set up on this machine, and the importer for it.
-type ImportSource = (&'static str, PathBuf, fn(bool) -> Result<()>);
-
-/// The other coding agents whose config killi can import, that are set up on this machine.
-fn import_sources() -> Vec<ImportSource> {
-    let mut sources: Vec<ImportSource> = Vec::new();
-    let kimi = home().join(".kimi-code/config.toml");
-    if kimi.exists() {
-        sources.push(("Kimi Code", kimi, import_kimi));
-    }
-    let pi = home().join(".pi/agent/models.json");
-    if pi.exists() {
-        sources.push(("pi", pi, import_pi));
-    }
-    let omp_dir = home().join(".omp/agent");
-    if let Some(omp) = ["models.yml", "models.yaml", "models.json"]
-        .into_iter()
-        .map(|name| omp_dir.join(name))
-        .find(|path| path.exists())
-    {
-        sources.push(("omp", omp, import_omp));
-    }
-    let opencode = home().join(".config/opencode/opencode.json");
-    if opencode.exists() {
-        sources.push(("opencode", opencode, import_opencode));
-    }
-    sources
-}
-
-/// When killi starts in a terminal without a config, offers to make one from another coding
-/// agent's — whichever are set up on this machine — or from the starting template. The start
-/// then goes on to `guide_model`, which gives the new config a key; declining every offer
-/// leaves `load` to explain that there is no config.
+/// When killi starts in a terminal without a config, offers to make one from another
+/// coding agent it finds on the machine — one list, one choice — or from the starting
+/// template. After a failed import the rest are offered again. The start then goes on to
+/// `guide_model`, which gives the new config a key; declining every offer leaves `load`
+/// to explain that there is no config.
 pub fn set_up_if_missing() -> Result<()> {
     let path = killi_home().join("config.toml");
     if path.exists() || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Ok(());
     }
     eprintln!("killi has no config yet at {}.", path.display());
-    for (name, source, import) in import_sources() {
-        if confirm(&format!(
-            "Import providers, models and MCP servers from {name} ({})?",
-            source.display()
-        ))? {
-            if let Err(error) = import(false) {
-                eprintln!("killi: {error:#}");
-                continue;
+    let mut found: Vec<(Source, PathBuf)> = sources()
+        .into_iter()
+        .filter_map(|source| (source.detect)().map(|found| (source, found)))
+        .collect();
+    while !found.is_empty() {
+        eprintln!(
+            "These agents are set up on this machine; killi can copy one's providers, models and MCP servers:"
+        );
+        for (index, (source, path)) in found.iter().enumerate() {
+            eprintln!("  {}. {} ({})", index + 1, source.name, path.display());
+        }
+        let answer =
+            read_line("Import from which (number), or press Enter for a fresh config? ")?;
+        if answer.trim().is_empty() {
+            break;
+        }
+        match answer.trim().parse::<usize>() {
+            Ok(choice) if (1..=found.len()).contains(&choice) => {
+                let (source, _) = found.remove(choice - 1);
+                match (source.import)(false) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => eprintln!("killi: {error:#}"),
+                }
             }
-            return Ok(());
+            _ => eprintln!("Pick 1-{} or press Enter.", found.len()),
         }
     }
     if confirm("Write a starting config to edit?")? {

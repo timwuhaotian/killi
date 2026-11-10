@@ -45,7 +45,7 @@ Usage:
   killi -r | --resume [<log>]                  Pick an earlier session (or open a log) and continue it
   killi -p <prompt> [-m <model>] [-c] [--json] Run one task, print the answer and exit
   killi init                                   Write a starting ~/.killi/config.toml, or add [prompt] to yours
-  killi import-kimi [--force]                  Copy providers, models and MCP servers from Kimi Code
+  killi import [tool] [--force]                Copy providers, models and MCP servers from another agent
   killi login [<service>]                      Sign in to chatgpt, opencode-go, muse-code or command-code, adding its models
   killi logout [<service>]                     Sign out of one
   killi update                                 Install the latest published version
@@ -83,8 +83,12 @@ fn main() -> ExitCode {
 async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
     match args.first().map(String::as_str) {
         Some("init") => config::init().map(|()| ExitCode::SUCCESS),
+        Some("import") => config::import_command(&args[1..]).map(|()| ExitCode::SUCCESS),
+        // The original import command, kept as an alias.
         Some("import-kimi") => {
-            config::import_kimi(args.iter().any(|a| a == "--force")).map(|()| ExitCode::SUCCESS)
+            let mut owned = vec!["kimi".to_string()];
+            owned.extend(args.iter().skip(1).cloned());
+            config::import_command(&owned).map(|()| ExitCode::SUCCESS)
         }
         Some("update") => update::update().await.map(|()| ExitCode::SUCCESS),
         Some("login") => login::login(args.get(1).map(String::as_str))

@@ -114,7 +114,7 @@ Rust 1.94 or later, on macOS (arm64) or Linux (x64/arm64).
   others work and what they are doing. The agent is told when another session works in its
   repository, to leave that session's changes alone, and how to ask it about its work or leave
   it a message. Nothing is added to the system prompt or the tool list.
-- **Your setup, carried over.** Kimi Code's config layout (`killi import-kimi` copies it),
+- **Your setup, carried over.** Kimi Code's config layout (`killi import` copies another agent's),
   skills from `~/.agents/skills`, MCP servers from `mcp.json`, Claude Code-style hooks, and
   `AGENTS.md` (or `CLAUDE.md`) files, including ones in subfolders.
 - **Every session on disk**, exactly as sent, so `killi -c` continues where you left off with
@@ -198,20 +198,22 @@ other two; tokens and memory are not affected by load.
 
 ### Models
 
-killi reads `~/.killi/config.toml`. Run without a config, `killi` offers to make one
-from another coding agent it finds on the machine — Kimi Code, pi, omp or opencode — carrying over
-their providers, models, API keys, default model, thinking level and MCP servers into killi's
-layout; providers those tools only reach through an account login are skipped. Otherwise it
+killi reads `~/.killi/config.toml`. Run without a config, `killi` lists the other coding
+agents it finds on the machine — Kimi Code, pi, omp, opencode, Codex, Claude Code or
+Gemini CLI — and copies one's providers, models, API keys, default model, thinking level
+and MCP servers into killi's layout on one choice; providers those tools only reach
+through an account login are skipped. Otherwise it
 writes a starting config to edit — and then keeps going. When the model it would start on has
 no key — `$OPENAI_API_KEY` isn't set, say — it offers to paste the key (stored under
 `[providers.*]` in the config, read with echo off) or to start on another configured model,
 so a first run ends on a session instead of an error. On the first interactive launch a short
 guide also offers to add another start command beside the binary (such as `dw` -> `killi`);
-press Enter to keep starting it as `killi`. To write the config yourself: if you use Kimi
-Code, copy its providers, models and MCP servers:
+press Enter to keep starting it as `killi`. To write the config yourself: if you use
+another coding agent, copy its providers, models and MCP servers (`killi import --list`
+shows what killi found):
 
 ```sh
-killi import-kimi
+killi import
 ```
 
 Otherwise `killi init` writes a starting config to edit. One with two providers looks like this:

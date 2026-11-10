@@ -26,7 +26,8 @@ pub use edit::{
     remove_provider_key, set_backup_model, set_model_effort, set_search, set_ui_theme,
 };
 pub use guide::{guide_model, init, set_up_if_missing};
-pub use import::{import_kimi, import_omp, import_opencode, import_pi};
+pub use import::import_command;
+pub(crate) use import::{Source, sources};
 pub use models::{Added, Additions, NewModel, add_models};
 pub use anthropic::{ABOUT as ANTHROPIC_ABOUT, add as add_anthropic, ours as anthropic_ours};
 pub use kimi::{ABOUT as KIMI_ABOUT, add as add_kimi, ours as kimi_ours};
@@ -48,7 +49,10 @@ use command::{agree, create_command_link, valid_command_name};
 #[cfg(test)]
 use guide::TEMPLATE;
 #[cfg(test)]
-use import::{import_omp_from, import_opencode_from, import_pi_from};
+use import::{
+    import_claude_from, import_codex_from, import_gemini_from, import_omp_from,
+    import_opencode_from, import_pi_from,
+};
 #[cfg(test)]
 use models::{with_additions, with_models};
 

@@ -44,4 +44,4 @@ case ":$PATH:" in
   esac
   echo "Add it to your PATH: echo 'export PATH=\"$dest:\$PATH\"' >> $rc" ;;
 esac
-[ -f "$HOME/.killi/config.toml" ] || echo "Next: run \`killi init\` to write ~/.killi/config.toml and add your API keys, or \`killi import-kimi\` to copy Kimi Code's"
+[ -f "$HOME/.killi/config.toml" ] || echo "Next: run \`killi init\` to write ~/.killi/config.toml and add your API keys, or \`killi import\` to copy another agent's"
