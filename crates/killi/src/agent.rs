@@ -43,7 +43,7 @@ pub use types::{
 
 use compact::CompactMode;
 use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
-use request::{is_media, is_overflow, reasoning_evidence};
+use request::{is_media, is_overflow, provider_limit, reasoning_evidence};
 use types::{PartialSwarm, PendingPrompt, Repeat, last_plan_state, unanswered};
 
 #[cfg(test)]

@@ -46,6 +46,11 @@ const TRANSPORT_ATTEMPTS: u32 = 3;
 /// members of a swarm, so peers pushing the cooldown back can't keep it alive forever.
 const HARD_ATTEMPTS: u32 = 2 * MAX_ATTEMPTS;
 
+/// The longest one request may spend waiting between attempts in all, every backoff and every
+/// shared 429 cooldown together. A limit that hasn't cleared by then isn't going to, and a
+/// swarm's members share one client, so their waits add up to a session that looks stopped.
+const MAX_WAIT: Duration = Duration::from_secs(180);
+
 /// Body bytes kept from a response, enough for an error message's excerpt.
 const EXCERPT_BYTES: usize = 8_192;
 
@@ -59,6 +64,8 @@ pub struct Client {
     /// Set by a 429 any clone of this client hit: subagents share one client, so a rate
     /// limit paces them together instead of each burning its own retries on the same cap.
     cooldown: Rc<Cell<Option<Instant>>>,
+    /// How long one request may wait between attempts in all; `MAX_WAIT`, or less in a test.
+    wait_budget: Duration,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -249,12 +256,14 @@ impl Client {
             http,
             model,
             cooldown: Rc::new(Cell::new(None)),
+            wait_budget: MAX_WAIT,
         })
     }
 
     /// Sends one request, retrying transient failures. A failed attempt's partial output is
     /// discarded, so history only ever holds complete replies. Every attempt first waits out
-    /// a 429 cooldown shared with the other members of a swarm.
+    /// a 429 cooldown shared with the other members of a swarm, and the retries stop once the
+    /// request has waited out its budget in all, however many of those waits were shared.
     pub async fn complete(
         &self,
         messages: &[Value],
@@ -275,8 +284,10 @@ impl Client {
         let mut renewed = false;
         let mut burns = 0;
         let mut mine = None;
+        let mut waited = Duration::ZERO;
         loop {
-            let waited_peer = self.wait_cooldown(mine).await;
+            let (slept, waited_peer) = self.wait_cooldown(mine).await;
+            waited += slept;
             let failure = match self.attempt(&prepared, &mut renewed, on_delta).await {
                 Ok(reply) => return Ok(reply),
                 Err(failure) => failure,
@@ -290,7 +301,11 @@ impl Client {
             } else {
                 burns
             };
-            if !failure.retryable || spent >= cap || attempt >= HARD_ATTEMPTS {
+            if !failure.retryable
+                || spent >= cap
+                || attempt >= HARD_ATTEMPTS
+                || waited >= self.wait_budget
+            {
                 // Even a final 429 paces the next call on this client: the server just
                 // named a wait, and a clone starting now should observe it.
                 if failure.status == Some(429) {
@@ -332,19 +347,21 @@ impl Client {
         }
     }
 
-    /// Sleeps until the shared 429 cooldown passes. Returns whether this call actually waited
-    /// out a deadline another member set; such an attempt doesn't burn this call's budget.
-    async fn wait_cooldown(&self, mine: Option<Instant>) -> bool {
+    /// Sleeps until the shared 429 cooldown passes. Returns how long it waited, and whether
+    /// this call actually waited out a deadline another member set; such an attempt doesn't
+    /// burn this call's budget.
+    async fn wait_cooldown(&self, mine: Option<Instant>) -> (Duration, bool) {
         let Some(shared) = self.cooldown.get() else {
-            return false;
+            return (Duration::ZERO, false);
         };
         let deadline = mine.filter(|mine| *mine > shared).unwrap_or(shared);
         let now = Instant::now();
         if deadline <= now {
-            return false;
+            return (Duration::ZERO, false);
         }
-        tokio::time::sleep(deadline - now).await;
-        mine.is_none_or(|mine| deadline > mine)
+        let wait = deadline - now;
+        tokio::time::sleep(wait).await;
+        (wait, mine.is_none_or(|mine| deadline > mine))
     }
 
     /// One request. On a ChatGPT plan it carries the current token, and the first 401 of a

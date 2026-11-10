@@ -263,6 +263,15 @@ pub(super) fn reasoning_evidence(reply: &Reply) -> Option<Value> {
     }))
 }
 
+/// Whether a provider error says the provider is limiting this session's requests: a rate
+/// limit, or a quota that ran out. A swarm stops starting new members on one, since every
+/// item after it would fail the same way.
+pub(super) fn provider_limit(error: &anyhow::Error) -> Option<ErrorKind> {
+    error.downcast_ref::<ProviderError>().and_then(|provider| {
+        matches!(provider.kind, ErrorKind::RateLimited | ErrorKind::Quota).then_some(provider.kind)
+    })
+}
+
 /// Whether a provider error says the conversation no longer fits the context window. A
 /// typed failure decides it; only an untyped error still falls back to matching words.
 pub(super) fn is_overflow(error: &anyhow::Error) -> bool {

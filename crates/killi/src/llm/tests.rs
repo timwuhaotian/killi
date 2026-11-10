@@ -507,3 +507,28 @@ async fn a_shared_cooldown_paces_concurrent_completes() {
         "the second waits out the cooldown"
     );
 }
+
+#[tokio::test]
+async fn a_request_gives_up_once_it_has_waited_out_its_budget() {
+    let limited = "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 1\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"slow down\"}}".to_string();
+    let (url, arrivals) = serve(vec![limited.clone(), limited.clone(), limited, sse_ok()]).await;
+    let mut client = Client::new(test_model(&url)).unwrap();
+    client.wait_budget = Duration::from_millis(1_500);
+    let error = client
+        .complete(
+            &[serde_json::json!({"role": "user", "content": "hi"})],
+            &[],
+            "k",
+            &mut |_| {},
+        )
+        .await
+        .unwrap_err();
+    let provider = error.downcast_ref::<ProviderError>().unwrap();
+    assert_eq!(provider.kind, ErrorKind::RateLimited);
+    assert_eq!(provider.attempts, 3, "the waits, not the retries, ran out");
+    assert_eq!(
+        arrivals.lock().unwrap().len(),
+        3,
+        "the answer that came later is never asked for"
+    );
+}

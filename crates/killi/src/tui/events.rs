@@ -264,6 +264,28 @@ impl App {
             }
             Event::Usage(usage) => self.add_usage(&usage, false),
             Event::Notice(text) => self.notice(&format!("{label}: {text}")),
+            // A swarm's panel shows what a waiting member waits on; anywhere else the retry
+            // is a dim line under the subagent's label.
+            Event::Retry {
+                attempt,
+                wait,
+                reason,
+            } => match member {
+                Some(index) => {
+                    if let Some(swarm) = &mut self.swarm {
+                        swarm.retry(index, attempt, wait, &reason);
+                    }
+                }
+                None => {
+                    let line = format!(
+                        "{DIM}↳ {label}: {WARN}⚠ retry {attempt} in {}{RESET}{DIM} · {}{RESET}",
+                        clock(wait),
+                        clip(&gist(&reason), 40)
+                    );
+                    self.begin(Kind::Tool);
+                    self.emit(Line::Fit(line));
+                }
+            },
             Event::Ask(question) => {
                 let _ = question.reply.send(String::new());
             }

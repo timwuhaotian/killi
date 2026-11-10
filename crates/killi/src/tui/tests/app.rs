@@ -125,6 +125,51 @@ fn ctrl_s_during_a_swarm_queues_first_and_interrupts_on_the_second_press() {
 }
 
 #[test]
+fn a_rate_limited_swarm_member_shows_what_it_waits_on() {
+    let mut app = test_app();
+    app.busy = Some(Instant::now());
+    app.width = 80;
+    app.swarm = Some(swarm::Swarm::new(
+        "call_1".into(),
+        "Review".into(),
+        vec!["a".into(), "b".into()],
+    ));
+    app.running.push(Running {
+        id: "call_1".into(),
+        summary: "agent_swarm Review".into(),
+        label: None,
+        started: Instant::now(),
+    });
+    let slot = Slot {
+        swarm: "call_1".into(),
+        index: 0,
+    };
+    app.on_agent(Event::Sub {
+        label: "Review #1".into(),
+        slot: Some(slot.clone()),
+        event: Box::new(Event::Started),
+    });
+    app.on_agent(Event::Sub {
+        label: "Review #1".into(),
+        slot: Some(slot),
+        event: Box::new(Event::Retry {
+            attempt: 2,
+            wait: Duration::from_secs(32),
+            reason: "HTTP 429 Too Many Requests: slow down".into(),
+        }),
+    });
+    let (rows, _, _) = app.live();
+    let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
+    assert!(
+        shown
+            .iter()
+            .any(|row| row.contains("⚠ retry 2 in 32s") && row.contains('a')),
+        "{shown:?}"
+    );
+    assert!(rows.iter().all(|row| text::width(row) <= 80), "{shown:?}");
+}
+
+#[test]
 fn a_new_or_resumed_session_starts_with_a_clean_slate() {
     let mut app = test_app();
     app.controls

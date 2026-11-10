@@ -3,8 +3,37 @@ use super::*;
 /// A subagent with its prompt, or the result of a call that couldn't start one.
 type Job = std::result::Result<(Agent, String), tools::Output>;
 
+/// How one subagent ended: its report, its counts, and the provider limit that ended it when
+/// one did. `stats` is `None` for a subagent that never started.
+struct ChildDone {
+    index: usize,
+    output: tools::Output,
+    stats: Option<Stats>,
+    limited: Option<ErrorKind>,
+}
+
+/// How a group of subagents ended: every report in order, and the items a provider limit kept
+/// from ever starting.
+struct Children {
+    outputs: Vec<tools::Output>,
+    unrun: Vec<usize>,
+}
+
 const MAX_PARALLEL_AGENTS: usize = 4;
 pub(super) const MAX_SWARM_AGENTS_PER_TURN: usize = swarm::MAX_ITEMS;
+
+/// What an item that never started is told: the provider limited one of the group's members,
+/// and every one after it would fail the same way.
+fn not_run_note(hit: usize, kind: ErrorKind) -> String {
+    let limit = match kind {
+        ErrorKind::Quota => "has spent its quota",
+        _ => "is rate-limiting requests",
+    };
+    format!(
+        "Not run: the provider {limit} (subagent #{} failed on it), so the rest of this group was not run into the same limit. Run the remaining work again once it clears.",
+        hit + 1
+    )
+}
 
 impl Agent {
     /// Runs a group of `agent` calls in parallel and returns each one's result as a tool output.
@@ -59,7 +88,9 @@ impl Agent {
                 ));
             }
         }
-        let mut outputs = self.run_children(jobs, MAX_PARALLEL_AGENTS).await;
+        let mut outputs = self.run_children(jobs, MAX_PARALLEL_AGENTS)
+            .await
+            .outputs;
         for (args, output) in hooked.into_iter().zip(outputs.iter_mut()) {
             let Some(args) = args else { continue };
             self.post_hook("agent", &args, output).await;
@@ -144,15 +175,29 @@ impl Agent {
             description: description.into(),
             items: items.clone(),
         });
-        let outputs = self.run_children(jobs, self.settings.swarm_parallel).await;
-        let mut report = swarm::report(&self.ctx, &items, &outputs, &logs, MAX_RESULT_BYTES);
+        let children = self.run_children(jobs, self.settings.swarm_parallel).await;
+        // An item that never started has an empty log, so the report doesn't point at one.
+        let logs: Vec<String> = logs
+            .into_iter()
+            .enumerate()
+            .map(|(n, log)| {
+                if children.unrun.contains(&n) {
+                    String::new()
+                } else {
+                    log
+                }
+            })
+            .collect();
+        let mut report = swarm::report(&self.ctx, &items, &children.outputs, &logs, MAX_RESULT_BYTES);
         self.post_hook("agent_swarm", &args, &mut report).await;
         report
     }
 
     /// Runs subagents, at most `limit` at once, the next starting as soon as one finishes, and
     /// returns each one's result as a tool output, in order. One that couldn't start reports why.
-    async fn run_children(&mut self, jobs: Vec<Job>, limit: usize) -> Vec<tools::Output> {
+    /// A member the provider rate-limits or whose quota is spent stops the queue: the items after
+    /// it would fail the same way, so they report that they were never run.
+    async fn run_children(&mut self, jobs: Vec<Job>, limit: usize) -> Children {
         let count = jobs.len();
         let mut jobs = jobs.into_iter().enumerate();
         let mut running = FuturesUnordered::new();
@@ -161,31 +206,34 @@ impl Agent {
         }
         let mut outputs: Vec<Option<tools::Output>> = Vec::new();
         outputs.resize_with(count, || None);
-        while let Some((index, output, stats)) = running.next().await {
-            if let Some((next_index, next_job)) = jobs.next() {
+        let mut limited: Option<(usize, ErrorKind)> = None;
+        while let Some(done) = running.next().await {
+            if limited.is_none() && let Some(kind) = done.limited {
+                limited = Some((done.index, kind));
+            }
+            if limited.is_none()
+                && let Some((next_index, next_job)) = jobs.next()
+            {
                 running.push(Self::run_child(next_index, next_job));
             }
-            let output = match stats {
-                Some(stats) => {
-                    let usage = &stats.usage;
-                    let total = &mut self.stats.usage;
-                    total.prompt += usage.prompt;
-                    total.cached += usage.cached;
-                    total.completion += usage.completion;
-                    total.reasoning += usage.reasoning;
-                    self.stats.requests += stats.requests;
-                    self.stats.tool_calls += stats.tool_calls;
-                    if output.is_error {
-                        output
-                    } else {
-                        output.brief(format!(
-                            "{} requests, {} tool calls",
-                            stats.requests, stats.tool_calls
-                        ))
-                    }
+            let index = done.index;
+            let mut output = done.output;
+            if let Some(stats) = done.stats {
+                let usage = &stats.usage;
+                let total = &mut self.stats.usage;
+                total.prompt += usage.prompt;
+                total.cached += usage.cached;
+                total.completion += usage.completion;
+                total.reasoning += usage.reasoning;
+                self.stats.requests += stats.requests;
+                self.stats.tool_calls += stats.tool_calls;
+                if !output.is_error {
+                    output = output.brief(format!(
+                        "{} requests, {} tool calls",
+                        stats.requests, stats.tool_calls
+                    ));
                 }
-                None => output,
-            };
+            }
             if let Some(partial) = &mut self.partial_swarm
                 && let Some(result) = partial.results.get_mut(index)
             {
@@ -200,33 +248,64 @@ impl Agent {
             }
             outputs[index] = Some(output);
         }
-        outputs
-            .into_iter()
-            .map(|output| output.expect("every child finished"))
-            .collect()
+        let mut unrun = Vec::new();
+        if let Some((hit, kind)) = limited {
+            let note = not_run_note(hit, kind);
+            for (index, slot) in outputs.iter_mut().enumerate() {
+                if slot.is_none() {
+                    unrun.push(index);
+                    *slot = Some(tools::Output::error(note.clone()));
+                }
+            }
+        }
+        Children {
+            outputs: outputs
+                .into_iter()
+                .map(|output| output.expect("every child finished"))
+                .collect(),
+            unrun,
+        }
     }
 
-    async fn run_child(index: usize, job: Job) -> (usize, tools::Output, Option<Stats>) {
+    async fn run_child(index: usize, job: Job) -> ChildDone {
         let (mut agent, prompt) = match job {
             Ok(job) => job,
-            Err(output) => return (index, output, None),
+            Err(output) => {
+                return ChildDone {
+                    index,
+                    output,
+                    stats: None,
+                    limited: None,
+                };
+            }
         };
         (agent.sink)(Event::Started);
-        let output = match agent.run(&subagent_prompt(&prompt), &[]).await {
+        let (output, limited) = match agent.run(&subagent_prompt(&prompt), &[]).await {
             Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => {
-                tools::Output::ok(text)
+                (tools::Output::ok(text), None)
             }
-            Ok((_, stop)) => tools::Output::error(format!(
-                "The subagent stopped without a final report ({stop:?})."
-            )),
-            Err(e) => tools::Output::error(format!("The subagent failed: {e:#}")),
+            Ok((_, stop)) => (
+                tools::Output::error(format!(
+                    "The subagent stopped without a final report ({stop:?})."
+                )),
+                None,
+            ),
+            Err(e) => (
+                tools::Output::error(format!("The subagent failed: {e:#}")),
+                provider_limit(&e),
+            ),
         };
         (agent.sink)(Event::Finished {
             is_error: output.is_error,
         });
         // Only its counts outlive it: its conversation and log file are freed here, not
         // when the slowest sibling of a swarm finishes.
-        (index, output, Some(std::mem::take(&mut agent.stats)))
+        ChildDone {
+            index,
+            output,
+            stats: Some(std::mem::take(&mut agent.stats)),
+            limited,
+        }
     }
 
     /// A subagent ready to run `prompt`, or why it couldn't start.

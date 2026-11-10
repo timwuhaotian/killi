@@ -142,10 +142,12 @@ fn idle_agent(name: &str, controls: Controls, sink: Sink) -> Agent {
     agent
 }
 
-/// A stub that answers every request with a 429 and no wait, so `complete` burns its whole
-/// retry budget on it at once.
-async fn rate_limited_stub(attempts: usize) -> String {
-    let limited = "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 0\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"slow down\"}}".to_string();
+/// A stub that answers every request with a 429 carrying `body` and no wait, so `complete`
+/// burns its whole retry budget on it at once.
+async fn rate_limited_stub(attempts: usize, body: &str) -> String {
+    let limited = format!(
+        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 0\r\nconnection: close\r\n\r\n{{\"error\":{{\"message\":\"{body}\"}}}}"
+    );
     serve_raw(vec![limited; attempts]).await
 }
 

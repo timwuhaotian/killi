@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::banner;
 use super::text::{self, BOLD, DANGER, DIM, FAINT, LAGOON, RESET};
-use super::{QUARTER, clip, clock, fit, tool_text};
+use super::{QUARTER, clip, clock, fit, gist, tool_text};
 
 /// The longest a subagent's name takes in the panel.
 const NAME_MAX: usize = 24;
@@ -81,6 +81,19 @@ impl Swarm {
         if let Some(member) = self.members.get_mut(index) {
             member.calls += 1;
             member.doing = tool_text(summary);
+        }
+    }
+
+    /// Subagent `index` is waiting out a provider retry, such as a rate limit's backoff: what
+    /// it shows instead of a call until one comes or it ends.
+    pub fn retry(&mut self, index: usize, attempt: u32, wait: Duration, reason: &str) {
+        self.start(index);
+        if let Some(member) = self.members.get_mut(index) {
+            member.doing = format!(
+                "⚠ retry {attempt} in {} · {}",
+                clock(wait),
+                clip(&gist(reason), 32)
+            );
         }
     }
 
@@ -388,6 +401,33 @@ mod tests {
             "{}",
             rows[3]
         );
+    }
+
+    #[test]
+    fn a_waiting_member_shows_the_retry_it_waits_on() {
+        let mut s = swarm(3);
+        s.call(0, "read src/lib.rs");
+        s.retry(
+            0,
+            2,
+            Duration::from_secs(32),
+            "HTTP 429 Too Many Requests: {\"error\":{\"message\":\"slow down\"}}",
+        );
+        for width in [118, 80, 60] {
+            let rows: Vec<String> = s.rows(width, 0, 12).iter().map(|r| unstyled(r)).collect();
+            assert!(rows[1].contains("⚠ retry 2 in 32s"), "{width}: {}", rows[1]);
+            assert!(text::width(&rows[1]) <= width, "{width}: {}", rows[1]);
+        }
+        // Where it fits, the reason is there too.
+        let row = unstyled(&s.rows(118, 0, 12)[1]);
+        assert!(
+            row.contains("⚠ retry 2 in 32s · HTTP 429: slow down"),
+            "{row}"
+        );
+        // The call that follows the retry takes the row back.
+        s.call(0, "bash make");
+        let row = unstyled(&s.rows(100, 0, 12)[1]);
+        assert!(row.contains("$ make") && !row.contains("retry"), "{row}");
     }
 
     #[test]

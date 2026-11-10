@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.71 — 2026-11-10
+
+- A swarm the provider limits stops instead of running every item into the same wall.
+  When a member is rate-limited or its quota is spent, the items after it report
+  `Not run: the provider … (subagent #N failed on it)` instead of each burning the full
+  retry budget; a request also gives up once it has waited three minutes in all, and a
+  subagent's retry now shows in the swarm panel and in `killi ask`.
+
 ## 0.6.70 — 2026-11-10
 
 - Friendlier first run for users of other coding agents. Without a config, killi lists

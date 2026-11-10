@@ -528,6 +528,17 @@ impl Printer {
                         brief,
                         ..
                     } => eprintln!("  {}↳ {label}: ✗ {brief}{}", self.red, self.reset),
+                    Event::Retry {
+                        attempt,
+                        wait,
+                        reason,
+                    } => eprintln!(
+                        "  {}↳ {label}: retry {attempt} in {:.1}s: {}{}",
+                        self.dim,
+                        wait.as_secs_f32(),
+                        llm::truncate(&reason, 300),
+                        self.reset
+                    ),
                     Event::Finished { is_error } => eprintln!(
                         "  {}↳ {label}: {}{}",
                         self.dim,

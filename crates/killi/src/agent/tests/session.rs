@@ -12,7 +12,7 @@ fn a_new_agent_starts_without_a_backup() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_rate_limited_primary_switches_to_the_backup() {
-    let primary = rate_limited_stub(10).await;
+    let primary = rate_limited_stub(10, "slow down").await;
     let backup = answering_stub("from backup").await;
     let mut agent = idle_agent("backup-switch", Controls::default(), Rc::new(|_| {}));
     agent
@@ -125,7 +125,7 @@ async fn an_overflow_keeps_the_primary_and_the_backup() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_rate_limited_primary_without_a_backup_fails_as_before() {
-    let primary = rate_limited_stub(10).await;
+    let primary = rate_limited_stub(10, "slow down").await;
     let mut agent = idle_agent("backup-absent", Controls::default(), Rc::new(|_| {}));
     agent
         .push(json!({"role": "system", "content": "sys"}))
@@ -174,7 +174,7 @@ async fn retries_are_recorded_in_the_session_log() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_rate_limited_swarm_member_finishes_its_work_on_the_backup() {
-    let primary = rate_limited_stub(30).await;
+    let primary = rate_limited_stub(30, "slow down").await;
     let backup = answering_stub_times("from backup", 4).await;
     let mut agent = idle_agent("swarm-backup", Controls::default(), Rc::new(|_| {}));
     agent
@@ -211,6 +211,58 @@ async fn a_rate_limited_swarm_member_finishes_its_work_on_the_backup() {
         Some("backup"),
         "the session keeps its backup for the next rate limit"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_limited_swarm_stops_instead_of_running_every_item_into_the_same_limit() {
+    for (name, body, why) in [
+        ("swarm-limited", "slow down", "is rate-limiting requests"),
+        ("swarm-quota", "usage limit reached", "has spent its quota"),
+    ] {
+        let primary = rate_limited_stub(10, body).await;
+        let mut agent = idle_agent(name, Controls::default(), Rc::new(|_| {}));
+        agent
+            .push(json!({"role": "system", "content": "sys"}))
+            .unwrap();
+        agent.client = Rc::new(test_client_at("primary", &primary));
+
+        let call = ToolCall {
+            id: "s1".into(),
+            name: "agent_swarm".into(),
+            arguments: json!({"prompt_template": "Do {{item}}.", "items": ["a", "b", "c"]})
+                .to_string(),
+        };
+        let output = agent.run_swarm("s1", &call).await;
+        assert!(output.is_error, "{name}: {}", output.text);
+        assert!(
+            output
+                .text
+                .contains("<summary>completed: 0, failed: 3</summary>"),
+            "{name}: {}",
+            output.text
+        );
+        assert!(output.text.contains(body), "{name}: {}", output.text);
+        assert!(
+            output
+                .text
+                .contains(&format!("Not run: the provider {why} (subagent #1 failed on it)")),
+            "{name}: {}",
+            output.text
+        );
+        assert!(
+            output
+                .text
+                .contains("Run the remaining work again once it clears"),
+            "{name}: {}",
+            output.text
+        );
+        assert_eq!(
+            output.text.matches("Partial log:").count(),
+            1,
+            "only the member that ran has a log: {}",
+            output.text
+        );
+    }
 }
 
 #[test]
