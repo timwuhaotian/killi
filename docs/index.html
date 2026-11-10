@@ -114,8 +114,13 @@ header { text-align: center; padding: 3rem 1rem 1rem; }
 header img { width: 96px; height: 96px; }
 header h1 { margin: 0.5rem 0 0.25rem; font-size: 2.5rem; }
 header p { color: var(--fg-muted); margin: 0; }
-.badges { margin-top: 1rem; }
-.badges img { vertical-align: middle; }
+.badges { margin-top: 1rem; display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; }
+.badge { display: inline-flex; height: 20px; border-radius: 3px; overflow: hidden; font-size: 11px; line-height: 20px; }
+.badge > span { padding: 0 6px; color: #fff; white-space: nowrap; }
+.badge > span:first-child { background: #2f3942; color: var(--fg); }
+.badge .v-blue { background: #007ec6; }
+.badge .v-grey { background: #5f6b7a; }
+.badge .v-orange { background: #e05d44; }
 .hero {
   background: var(--bg-raised);
   border: 1px solid var(--rule);
@@ -167,9 +172,9 @@ footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--rule
   <h1>killi</h1>
   <p>fast, tiny, open-source AI coding agent for your terminal</p>
   <p class="badges">
-    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT">
-    <img src="https://img.shields.io/badge/macOS-Apple%20silicon-lightgrey" alt="macOS Apple silicon">
-    <img src="https://img.shields.io/github/v/release/timwuhaotian/killi" alt="release">
+    <span class="badge"><span>license</span><span class="v-blue">MIT</span></span>
+    <span class="badge"><span>macOS</span><span class="v-grey">Apple silicon</span></span>
+    <span class="badge"><span>release</span><span class="v-orange">v0.6.29</span></span>
   </p>
 </header>
 
