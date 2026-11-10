@@ -19,6 +19,15 @@ fn logged_cwd(log: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Makes `session`'s log the one a crash is noted in. Only a session the user runs calls this:
+/// a subagent or a task another session sent would otherwise take the crash record of the
+/// session it runs in.
+fn note_crash_log(session: &Session) {
+    if let Ok(mut crash_log) = CRASH_LOG.lock() {
+        *crash_log = Some(session.log_path.clone());
+    }
+}
+
 impl Agent {
     pub fn new(
         client: Client,
@@ -32,6 +41,23 @@ impl Agent {
         let session = Session::create(cwd)?;
         // A new session never inherits another session's queued messages through shared controls.
         controls.steer.borrow_mut().clear();
+        note_crash_log(&session);
+        Self::begin(client, cwd, system, tools, settings, controls, sink, session)
+    }
+
+    /// Starts a conversation in `session`: its `session` entry, then the system prompt. A new
+    /// session's log is one it just created; a task another session sent brings its own.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn begin(
+        client: Client,
+        cwd: &Path,
+        system: &str,
+        tools: Vec<Value>,
+        settings: Settings,
+        controls: Controls,
+        sink: Sink,
+        session: Session,
+    ) -> Result<Self> {
         let mut agent = Self::assemble(client, cwd, tools, settings, controls, sink, session);
         agent.session.record(&json!({
             "type": "session",
@@ -75,6 +101,7 @@ impl Agent {
         }
         // A resumed session doesn't pick up messages typed during another session's turn.
         controls.steer.borrow_mut().clear();
+        note_crash_log(&session);
         let mut agent = Self::assemble(client, cwd, tools, settings, controls, sink, session);
         agent.backup = backup.map(Rc::new);
         agent.plan_announced = last_plan_state(&loaded.messages);
@@ -140,9 +167,6 @@ impl Agent {
     ) -> Self {
         let settings_files = settings.instruction_files.clone();
         let ctx = tools::Context::new(cwd.to_path_buf(), session.dir.clone());
-        if let Ok(mut crash_log) = CRASH_LOG.lock() {
-            *crash_log = Some(session.log_path.clone());
-        }
         ctx.images.set(client.model.images);
         *ctx.search.borrow_mut() = settings.search.clone();
         Self {
@@ -267,11 +291,14 @@ impl Agent {
         self.record_model()
     }
 
-    /// Lets /btw see the conversation and model as they are now.
+    /// Lets /btw see the conversation and model as they are now, and a task another session
+    /// sent build an agent of this session's own.
     pub(super) fn share(&self) {
         *self.controls.aside.borrow_mut() = Aside {
             client: Some(self.client.clone()),
+            backup: self.backup.clone(),
             tools: self.tools.clone(),
+            settings: Some(self.settings.clone()),
             messages: Rc::downgrade(&self.messages),
             ctx: Rc::downgrade(&self.ctx),
             cache_key: self.session.id.clone(),

@@ -409,8 +409,9 @@ impl Agent {
 }
 
 /// The task prompt with its reporting convention: the parent tells a real result from a
-/// stuck subagent by the final line, without parsing free text in code.
-pub(super) fn subagent_prompt(prompt: &str) -> String {
+/// stuck subagent by the final line, without parsing free text in code. A task another session
+/// sent reports the same way.
+pub(crate) fn subagent_prompt(prompt: &str) -> String {
     format!(
         "{prompt}\n\nEnd your final message with one line: `Status: ready` when the work is done, `blocked` (say what you need), `failed` (say what failed), or `waiting` (say what you wait on)."
     )

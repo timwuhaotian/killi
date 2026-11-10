@@ -52,6 +52,11 @@ Usage:
   killi sessions [<pid>] [--json]              The killi sessions running on this machine, or what one is doing
   killi ask <pid> <question>                   Ask another session about its work; its model answers
   killi tell <pid> <message>                   Leave another session a message for its next step
+  killi card <pid> [--json]                    What another session can be asked to do, and what it is doing now
+  killi send <pid> <task> [--async] [--timeout <s>] [--after <id>] Hand another session a task; it answers with a report
+  killi tasks [<pid>] [--json]       The tasks the sessions have taken
+  killi task <id> [--json] [--follow]  What a task is doing, and its report once it ends
+  killi cancel <id>                  Stop a task that is still running
   killi --version
 
 Config: ~/.killi/config.toml";
@@ -100,7 +105,9 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
         Some("mcp-serve") => broker::serve(&broker::socket_path())
             .await
             .map(|()| ExitCode::SUCCESS),
-        Some("sessions" | "ask" | "tell") => live::command(&args).await,
+        Some("sessions" | "ask" | "tell" | "card" | "send" | "tasks" | "task" | "cancel") => {
+            live::command(&args).await
+        }
         Some("-V" | "--version") => {
             println!("killi {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)

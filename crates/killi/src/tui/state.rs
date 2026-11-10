@@ -31,8 +31,29 @@ pub(super) struct PeerAnswer {
     pub(super) from: Option<u32>,
     pub(super) question: String,
     pub(super) answer: Result<(String, Usage)>,
-    pub(super) reply: oneshot::Sender<Value>,
+    pub(super) reply: live::Reply,
 }
+
+/// A task another session sent: what it asked, where it stands, and where its answer goes.
+pub(super) struct PeerTask {
+    /// What the task is and where it stands, shared with the agent running it: the state and
+    /// the step it is on change while it runs.
+    pub(super) view: Rc<RefCell<live::TaskView>>,
+    /// A blocking `killi send` waiting for the report.
+    pub(super) waiting: Option<oneshot::Sender<Value>>,
+    /// The `killi task --follow` streams reading its events.
+    pub(super) watchers: Rc<RefCell<Vec<mpsc::UnboundedSender<String>>>>,
+    /// Set by `killi cancel`; the task's agent stops at its next step.
+    pub(super) cancel: Option<oneshot::Sender<()>>,
+    /// `killi cancel` took this task, so its agent's end is not news.
+    pub(super) stopped: bool,
+    /// When it ended, in ms since the epoch; none while it runs. `/undo` warns about a task
+    /// that worked since the snapshot it goes back to.
+    pub(super) ended: Option<u64>,
+}
+
+/// A task's agent, running to its report while this session does whatever it is doing.
+pub(super) type PendingPeerTask = Pin<Box<dyn Future<Output = String>>>;
 
 /// What `run_turn` ended with.
 pub(super) enum Ended {
@@ -309,6 +330,13 @@ pub(super) struct App {
     pub(super) peer_ask_id: u64,
     /// Messages from other sessions taken since the last prompt.
     pub(super) peer_tells: usize,
+    /// Tasks other sessions sent, oldest first: the ones running now and the finished ones this
+    /// session can still be asked about.
+    pub(super) peer_tasks: Vec<PeerTask>,
+    /// Their agents, running while this session goes on with whatever it is doing.
+    pub(super) peer_running: FuturesUnordered<PendingPeerTask>,
+    /// The number of the last task taken, so each task's id is this session's own.
+    pub(super) peer_task_id: u64,
     /// /undo said it would undo another session's work too; the next /undo goes ahead.
     pub(super) undo_warned: bool,
 }

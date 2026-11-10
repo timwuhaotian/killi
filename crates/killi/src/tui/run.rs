@@ -16,7 +16,8 @@ pub(super) fn peer_label(from: Option<u32>) -> String {
 }
 
 /// The other live sessions in `tree` that worked since `since` (ms since the epoch), or still
-/// do: an undo back to then would undo their changes too.
+/// do, on a turn of their own or on a task another session sent them: an undo back to then
+/// would undo their changes too.
 fn worked_since(tree: &Path, since: Option<u64>) -> Vec<live::Entry> {
     let Some(since) = since else {
         return Vec::new();
@@ -24,7 +25,7 @@ fn worked_since(tree: &Path, since: Option<u64>) -> Vec<live::Entry> {
     let me = std::process::id();
     live::list()
         .into_iter()
-        .filter(|e| e.pid != me && e.tree == tree && (e.working || e.since >= since))
+        .filter(|e| e.pid != me && e.tree == tree && e.worked_since(since))
         .collect()
 }
 
@@ -66,6 +67,7 @@ where
             result = &mut future, if done.is_none() => done = Some(result),
             Some(incoming) = next_incoming(&mut app.peers) => app.on_peer(incoming),
             Some(answered) = app.peer_asks.next(), if !app.peer_asks.is_empty() => app.on_peer_answer(answered),
+            Some(done) = app.peer_running.next(), if !app.peer_running.is_empty() => app.on_peer_task_done(done),
             answer = async { aside.as_mut().expect("a question is asked").1.as_mut().await }, if aside.is_some() => {
                 let (question, _) = aside.take().expect("a question is asked");
                 app.show_aside(&question, answer);
@@ -176,17 +178,20 @@ pub(super) async fn handle_command(
         }
         "undo" => {
             // Said once: the next /undo goes ahead.
-            let others = if app.undo_warned {
+            // Other sessions, and the tasks this one ran for them: both change the tree
+            // outside this session's turns.
+            let who: Vec<String> = if app.undo_warned {
                 Vec::new()
             } else {
-                worked_since(snapshots.work_tree(), snapshots.last_taken())
-            };
-            app.undo_warned = !others.is_empty();
-            if !others.is_empty() {
-                let who: Vec<String> = others
+                let since = snapshots.last_taken();
+                worked_since(snapshots.work_tree(), since)
                     .iter()
                     .map(|e| format!("session {}", e.pid))
-                    .collect();
+                    .chain(app.tasks_since(since))
+                    .collect()
+            };
+            app.undo_warned = !who.is_empty();
+            if !who.is_empty() {
                 app.notice(&format!(
                     "{} also worked in this repository since the last turn began. Undo puts every file back as it was then, so those changes go too. /undo again to undo anyway.",
                     who.join(" and ")

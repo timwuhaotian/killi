@@ -86,15 +86,28 @@ impl Session {
     /// from `n` on, so a resumed session whose children count restarted at 0 doesn't fail
     /// against the logs its earlier subagents left. Returns the log and the N it used.
     pub fn child(&self, n: usize) -> Result<(Self, usize)> {
-        create_private_dir(&self.dir)?;
+        Self::numbered(&self.dir, "agent", n)
+    }
+
+    /// The log of a task another session sent, kept in `dir` — the folder of the session
+    /// running it — as the next free `task-N.jsonl` from `n` on. It sits beside that session's
+    /// subagent logs, not among the project's sessions: a task is not a conversation the user
+    /// had, so `killi -c` and `/resume` never offer it.
+    pub fn task(dir: &Path, n: usize) -> Result<Self> {
+        Self::numbered(dir, "task", n).map(|(session, _)| session)
+    }
+
+    /// The next free `<stem>-N.jsonl` in `dir` from `n` on, and the N it used.
+    fn numbered(dir: &Path, stem: &str, n: usize) -> Result<(Self, usize)> {
+        create_private_dir(dir)?;
         for used in n..n + 100 {
-            match Self::open_new(self.dir.join(format!("agent-{used}.jsonl"))) {
+            match Self::open_new(dir.join(format!("{stem}-{used}.jsonl"))) {
                 Ok(session) => return Ok((session, used)),
                 Err(err) if used + 1 < n + 100 && name_taken(&err) => continue,
                 Err(err) => return Err(err),
             }
         }
-        bail!("every subagent log name from agent-{n} is already taken")
+        bail!("every log name from {stem}-{n} is already taken")
     }
 
     fn open_new(log_path: PathBuf) -> Result<Self> {

@@ -33,6 +33,7 @@ mod start;
 mod state;
 mod suggest;
 mod swarm;
+mod tasks;
 pub(crate) mod text;
 mod theme;
 mod turn;
@@ -108,8 +109,8 @@ use start::{
 };
 pub use start::{install_crash_hook, restore_terminal};
 use state::{
-    App, Asking, Ended, Idle, Input, Kind, LastEnd, PastAsk, PeerAnswer, PendingAside, Running,
-    SinceBanner, Status, Totals,
+    App, Asking, Ended, Idle, Input, Kind, LastEnd, PastAsk, PeerAnswer, PeerTask, PendingAside,
+    Running, SinceBanner, Status, Totals,
 };
 use undo::{restore_steered, undo_empty, undo_note, undo_paths};
 use update::Updates;

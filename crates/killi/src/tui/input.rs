@@ -53,6 +53,11 @@ impl App {
                     self.draw()?;
                     continue;
                 }
+                Some(done) = self.peer_running.next(), if !self.peer_running.is_empty() => {
+                    self.on_peer_task_done(done);
+                    self.draw()?;
+                    continue;
+                }
                 // Keeps the clock on a question from another session moving while idle.
                 () = tokio::time::sleep(Duration::from_secs(1)), if !self.peer_asking.is_empty() => {
                     self.spinner += 1;

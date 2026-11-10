@@ -111,9 +111,13 @@ Rust 1.94 or later, on macOS (arm64) or Linux (x64/arm64).
   `[agent] swarm` or `/swarm`, tells the agent to split its work that way. **Background tasks** keep servers and slow builds running. **Undo** puts
   your files back as they were before a turn, including what commands changed.
 - **Sessions that know about each other.** Run several killi at once and each knows where the
-  others work and what they are doing. The agent is told when another session works in its
-  repository, to leave that session's changes alone, and how to ask it about its work or leave
-  it a message. Nothing is added to the system prompt or the tool list.
+  others work and what they are doing. `killi card <pid>` says what a session can be asked to
+  do, as text or JSON; `killi send <pid> <task>` hands one a task, which it runs on an agent of
+  its own and answers with a report (`--async` only takes its id back), `killi tasks` and
+  `killi task <id> [--follow]` show where the tasks stand, and `killi cancel <id>` stops one.
+  The agent is told when another session works in its repository, to leave that session's
+  changes alone, and how to ask it about its work or leave it a message. Nothing is added to the
+  system prompt or the tool list.
 - **Your setup, carried over.** Kimi Code's config layout (`killi import` copies another agent's),
   skills from `~/.agents/skills`, MCP servers from `mcp.json`, Claude Code-style hooks, and
   `AGENTS.md` (or `CLAUDE.md`) files, including ones in subfolders.

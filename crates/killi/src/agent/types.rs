@@ -108,10 +108,14 @@ pub struct Controls {
 
 /// What a side question needs: the model, the tools (sent unchanged so the cached prefix
 /// hits) and the conversation. It holds the history weakly, so appending to it never copies it.
+/// A task another session sent needs the same, plus the settings it runs under and the backup
+/// model it falls back on.
 #[derive(Clone, Default)]
 pub struct Aside {
     pub(super) client: Option<Rc<Client>>,
+    pub(super) backup: Option<Rc<Client>>,
     pub(super) tools: Rc<Vec<Value>>,
+    pub(super) settings: Option<Rc<Settings>>,
     pub(super) messages: Weak<Vec<Value>>,
     /// What the tools are waiting on, for the question to mention.
     pub(super) ctx: Weak<tools::Context>,

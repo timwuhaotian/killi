@@ -1011,3 +1011,27 @@ async fn session_end_runs_hooks_only_for_started_sessions() {
     );
     let _ = std::fs::remove_file(&marker);
 }
+
+#[test]
+fn a_task_agent_logs_in_the_session_folder_and_leaves_the_crash_log_alone() {
+    let controls = Controls::default();
+    let mut agent = idle_agent("task-agent", controls.clone(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent.share();
+    let task = task_agent(&controls.aside.borrow(), None, Rc::new(|_| {}), 1).unwrap();
+    assert_eq!(
+        task.session.log_path,
+        agent.session.dir.join("task-1.jsonl"),
+        "beside the session's subagent logs, so no list of sessions offers it"
+    );
+    assert_eq!(task.messages[0]["content"], "sys");
+    assert_ne!(
+        crash_log(),
+        Some(task.session.log_path.clone()),
+        "a crash belongs in the session's log, not in a task's"
+    );
+    let next = task_agent(&controls.aside.borrow(), None, Rc::new(|_| {}), 1).unwrap();
+    assert!(next.session.log_path.ends_with("task-2.jsonl"));
+}

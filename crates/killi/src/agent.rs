@@ -9,6 +9,7 @@ mod lifecycle;
 mod peer_guard;
 mod request;
 mod subagent;
+mod task;
 mod turn;
 mod types;
 
@@ -41,6 +42,9 @@ pub use types::{
     Aside, Controls, Event, Image, Question, Settings, Sink, Slot, Stats, Steered, Stop, Todo,
 };
 
+pub(crate) use subagent::subagent_prompt;
+pub(crate) use task::task_agent;
+
 use compact::CompactMode;
 use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
 use request::{is_media, is_overflow, provider_limit, reasoning_evidence};
@@ -61,7 +65,7 @@ use dispatch::{
 #[cfg(test)]
 use request::hides_reasoning;
 #[cfg(test)]
-use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm, subagent_prompt};
+use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm};
 #[cfg(test)]
 use turn::{
     STALE_TASKS_AFTER, ends_with_colon, ends_with_intent, ends_with_question, open_tasks_note,
@@ -79,7 +83,7 @@ use types::{
 const MAX_RESULT_BYTES: usize = tools::MAX_BYTES + 8_192;
 
 /// The session log, set when a session starts, so a panic can note the crash in it.
-/// Latest wins: only main sessions are assembled, and `/new` or `/resume` in the same
+/// Latest wins: only `Agent::new` and a resume set it, and `/new` or `/resume` in the same
 /// process replaces the log a crash belongs in.
 static CRASH_LOG: Mutex<Option<PathBuf>> = Mutex::new(None);
 

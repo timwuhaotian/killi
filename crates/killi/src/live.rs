@@ -1,8 +1,10 @@
 //! Live sessions: every top-level killi says where it works and what it is doing in
 //! `~/.killi/live/<pid>.json`, so the sessions on this machine know about each other, and an
 //! interactive one listens on a socket of its own, so another session or the user's shell can
-//! see what it is doing (`killi sessions <pid>`), ask it about its work (`killi ask`) or leave
-//! it a message (`killi tell`).
+//! see what it is doing and what it can be asked to do (`killi sessions <pid>`, `killi card
+//! <pid>`), ask it about its work (`killi ask`), leave it a message (`killi tell`) or hand it a
+//! task (`killi send`). The requests and the socket are in `wire`, a task's states and events
+//! in `task`, and the commands with the text they print in `command`.
 //!
 //! A session holds an exclusive `flock` on its file for as long as it runs. The kernel lets go
 //! of it when the process ends, however it ends, so a file nobody holds belongs to a session
@@ -11,23 +13,36 @@
 //! its name: sessions on different releases still see each other, and unknown fields are
 //! ignored.
 
+mod card;
+mod command;
 mod note;
+mod task;
+mod wire;
 
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{Read, Seek};
 use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
+pub use card::{card, card_text};
+pub use command::command;
 pub use note::{ask_note, tell_note, tree_note};
+pub use task::{
+    MAX_TASK_TIMEOUT, TASK_TIMEOUT, TaskState, TaskView, event_line, task_owner, view_line,
+};
+pub use wire::{Incoming, Reply, Request, follow, listen, send};
+
+use wire::status_of;
+
+#[cfg(test)]
+use command::{event_text, list_text, next_event, send_args, status_text};
+#[cfg(test)]
+use wire::Envelope;
 
 /// Set on every command killi runs to the pid of the session running it, so `killi ask` and
 /// `killi tell` say who is asking and refuse to talk to their own session.
@@ -35,15 +50,6 @@ pub const PID_VAR: &str = "KILLI_PID";
 
 /// The longest question or message, in bytes.
 pub const MAX_TEXT: usize = 8 * 1024;
-
-/// The longest request line a session reads.
-const MAX_REQUEST: u64 = 16 * 1024;
-
-/// How long `killi ask` waits: the other session's model reads its whole conversation first.
-const ASK_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// How long a status or a message waits for the other session to take it.
-const QUICK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What a session says about itself in its file.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -67,6 +73,19 @@ pub struct Entry {
     pub prompt: String,
     /// The socket it answers on; none for a `-p` run, which takes no questions or messages.
     pub socket: Option<PathBuf>,
+    /// The tasks other sessions sent that it is running now: their agents change files in its
+    /// tree while its own turn may sit idle.
+    pub tasks: usize,
+    /// When one of those tasks last started or ended, in ms since the epoch.
+    pub task_since: u64,
+}
+
+impl Entry {
+    /// Whether it worked since `since` (ms since the epoch) or still does, on a turn of its own
+    /// or on a task another session sent it.
+    pub fn worked_since(&self, since: u64) -> bool {
+        self.working || self.tasks > 0 || self.since.max(self.task_since) >= since
+    }
 }
 
 /// Milliseconds since the epoch.
@@ -297,281 +316,6 @@ fn read_entry(file: &mut File) -> Option<Entry> {
         }
     }
     None
-}
-
-/// What one session asks of another.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum Request {
-    /// What it is doing, answered without the model.
-    Status,
-    /// A question its model answers from its conversation, without keeping it.
-    Ask {
-        #[serde(default)]
-        from: Option<u32>,
-        text: String,
-    },
-    /// A message for its model's next step, or its user's next prompt.
-    Tell {
-        #[serde(default)]
-        from: Option<u32>,
-        text: String,
-    },
-}
-
-#[derive(Serialize, Deserialize)]
-struct Envelope {
-    #[serde(default)]
-    v: u32,
-    #[serde(flatten)]
-    request: Request,
-}
-
-/// A request from another session and where its reply goes: `{"ok": true, …}`, or
-/// `{"error": "…"}` to say why not.
-pub struct Incoming {
-    pub request: Request,
-    pub reply: oneshot::Sender<Value>,
-}
-
-/// Listens on `socket` for other sessions of this user and hands each request to the
-/// receiver; the connection waits for the reply.
-pub fn listen(socket: &Path) -> Result<mpsc::UnboundedReceiver<Incoming>> {
-    if let Some(dir) = socket.parent() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .with_context(|| format!("could not create {}", dir.display()))?;
-    }
-    let _ = fs::remove_file(socket);
-    let listener = UnixListener::bind(socket)
-        .with_context(|| format!("could not listen on {}", socket.display()))?;
-    let (tx, rx) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                let _ = serve(stream, tx).await;
-            });
-        }
-    });
-    Ok(rx)
-}
-
-async fn serve(stream: UnixStream, session: mpsc::UnboundedSender<Incoming>) -> Result<()> {
-    // SAFETY: getuid has no preconditions and can't fail.
-    if stream.peer_cred()?.uid() != unsafe { libc::getuid() } {
-        bail!("a process of another user connected");
-    }
-    let (reader, mut writer) = stream.into_split();
-    let mut line = String::new();
-    BufReader::new(reader.take(MAX_REQUEST))
-        .read_line(&mut line)
-        .await?;
-    let reply = match serde_json::from_str::<Envelope>(&line) {
-        Ok(envelope) => {
-            let (reply, answer) = oneshot::channel();
-            match session.send(Incoming {
-                request: envelope.request,
-                reply,
-            }) {
-                Ok(()) => answer
-                    .await
-                    .unwrap_or_else(|_| json!({"error": "the session ended before it answered"})),
-                Err(_) => json!({"error": "the session is ending"}),
-            }
-        }
-        Err(e) => {
-            json!({"error": format!("killi {} doesn't understand this request: {e}", env!("CARGO_PKG_VERSION"))})
-        }
-    };
-    writer.write_all(format!("{reply}\n").as_bytes()).await?;
-    Ok(())
-}
-
-/// Sends `request` to the session `to` and gives back its reply.
-pub async fn send(to: &Entry, request: Request) -> Result<Value> {
-    let socket = to.socket.as_ref().ok_or_else(|| {
-        anyhow!(
-            "session {} runs headless (-p) and takes no questions or messages",
-            to.pid
-        )
-    })?;
-    let wait = if matches!(request, Request::Ask { .. }) {
-        ASK_TIMEOUT
-    } else {
-        QUICK_TIMEOUT
-    };
-    let exchange = async {
-        let mut stream = UnixStream::connect(socket)
-            .await
-            .with_context(|| format!("could not reach session {}", to.pid))?;
-        stream
-            .write_all(
-                format!("{}\n", serde_json::to_string(&Envelope { v: 1, request })?).as_bytes(),
-            )
-            .await?;
-        let mut line = String::new();
-        BufReader::new(stream).read_line(&mut line).await?;
-        serde_json::from_str::<Value>(&line)
-            .context("the session closed the connection without answering")
-    };
-    let reply = tokio::time::timeout(wait, exchange).await.map_err(|_| {
-        anyhow!(
-            "session {} didn't answer within {} s",
-            to.pid,
-            wait.as_secs()
-        )
-    })??;
-    if let Some(error) = reply["error"].as_str() {
-        bail!("{error}");
-    }
-    Ok(reply)
-}
-
-/// `killi sessions [<pid>] [--json]`, `killi ask <pid> <question>` and `killi tell <pid> <message>`.
-pub async fn command(args: &[String]) -> Result<ExitCode> {
-    let me = std::env::var(PID_VAR)
-        .ok()
-        .and_then(|pid| pid.parse::<u32>().ok());
-    let sessions = list();
-    let find = |pid: Option<&String>| -> Result<Entry> {
-        let pid: u32 = pid
-            .and_then(|p| p.parse().ok())
-            .ok_or_else(|| anyhow!("say which session, by its pid; `killi sessions` lists them"))?;
-        if Some(pid) == me && args[0] != "sessions" {
-            bail!("session {pid} is this session");
-        }
-        sessions
-            .iter()
-            .find(|e| e.pid == pid)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow!("no killi session with pid {pid} is running; `killi sessions` lists them")
-            })
-    };
-    let text = || -> Result<String> {
-        let text = args
-            .get(2..)
-            .unwrap_or_default()
-            .join(" ")
-            .trim()
-            .to_string();
-        if text.is_empty() {
-            bail!("say what to send: killi {} <pid> \"…\"", args[0]);
-        }
-        if text.len() > MAX_TEXT {
-            bail!("that is {} bytes; the limit is {MAX_TEXT}", text.len());
-        }
-        Ok(text)
-    };
-    match args[0].as_str() {
-        "sessions" => {
-            let json_mode = args.iter().any(|a| a == "--json");
-            let pid = args.iter().skip(1).find(|a| !a.starts_with('-'));
-            match pid {
-                Some(pid) => {
-                    let entry = find(Some(pid))?;
-                    let status = if entry.socket.is_some() {
-                        Some(send(&entry, Request::Status).await?)
-                    } else {
-                        None
-                    };
-                    if json_mode {
-                        println!("{}", json!({"session": entry, "status": status}));
-                    } else {
-                        println!("{}", status_text(&entry, status.as_ref(), now()));
-                    }
-                }
-                None if json_mode => println!("{}", serde_json::to_string(&sessions)?),
-                None => println!("{}", list_text(&sessions, me, now())),
-            }
-        }
-        "ask" => {
-            let to = find(args.get(1))?;
-            let reply = send(
-                &to,
-                Request::Ask {
-                    from: me,
-                    text: text()?,
-                },
-            )
-            .await?;
-            println!("{}", reply["answer"].as_str().unwrap_or_default());
-        }
-        "tell" => {
-            let to = find(args.get(1))?;
-            let reply = send(
-                &to,
-                Request::Tell {
-                    from: me,
-                    text: text()?,
-                },
-            )
-            .await?;
-            println!("{}", reply["delivered"].as_str().unwrap_or("Delivered."));
-        }
-        other => bail!("unknown command `{other}`"),
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
-/// `killi sessions`: one line for each session, this one marked.
-fn list_text(sessions: &[Entry], me: Option<u32>, now: u64) -> String {
-    if sessions.is_empty() {
-        return "No killi session is running.".into();
-    }
-    sessions
-        .iter()
-        .map(|e| {
-            let mut line = describe(e, now);
-            if e.socket.is_none() {
-                line.push_str(" · headless (-p)");
-            }
-            if Some(e.pid) == me {
-                line.push_str(" · this session");
-            }
-            line
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// `killi sessions <pid>`: the line from the list, then what it is doing now.
-fn status_text(entry: &Entry, status: Option<&Value>, now: u64) -> String {
-    let mut text = format!(
-        "{} · {} · killi {}",
-        describe(entry, now),
-        entry.model,
-        entry.version
-    );
-    let Some(status) = status else {
-        return text + "\nIt runs headless (-p) and can't say more.";
-    };
-    if status["plan"].as_bool() == Some(true) {
-        text.push_str("\nIn plan mode.");
-    }
-    let todos = status["todos"].as_array().cloned().unwrap_or_default();
-    if !todos.is_empty() {
-        let done = todos.iter().filter(|t| t["status"] == "completed").count();
-        text.push_str(&format!("\nTasks {done}/{}:", todos.len()));
-        for todo in &todos {
-            let mark = match todo["status"].as_str() {
-                Some("completed") => "✓",
-                Some("in_progress") => "◐",
-                _ => "○",
-            };
-            text.push_str(&format!(
-                "\n  {mark} {}",
-                todo["content"].as_str().unwrap_or_default()
-            ));
-        }
-    }
-    if let Some(waiting) = status["waiting"].as_str() {
-        text.push_str(&format!("\nWaiting on:\n{waiting}"));
-    }
-    text
 }
 
 /// A session in a line: pid, state, folder and branch, and its prompt.

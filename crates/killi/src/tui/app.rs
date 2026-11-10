@@ -107,6 +107,9 @@ impl App {
             peer_asking: Vec::new(),
             peer_ask_id: 0,
             peer_tells: 0,
+            peer_tasks: Vec::new(),
+            peer_running: FuturesUnordered::new(),
+            peer_task_id: 0,
             undo_warned: false,
         };
         app.refresh_branch();

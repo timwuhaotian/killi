@@ -1,3 +1,5 @@
+use serde_json::json;
+
 use super::*;
 
 fn scratch(name: &str) -> PathBuf {
@@ -105,13 +107,18 @@ async fn a_request_reaches_the_session_and_its_reply_comes_back() {
     let mut incoming = listen(&socket).unwrap();
     tokio::spawn(async move {
         while let Some(Incoming { request, reply }) = incoming.recv().await {
-            let _ = reply.send(match request {
+            let answer = match request {
                 Request::Status => json!({"ok": true, "working": true}),
                 Request::Ask { from, text } => {
                     json!({"ok": true, "answer": format!("{from:?} asked {text}")})
                 }
                 Request::Tell { .. } => json!({"error": "too many messages"}),
-            });
+                _ => json!({"error": "this test session answers no tasks"}),
+            };
+            let _ = match reply {
+                Reply::Once(reply) => reply.send(answer).map_err(|value| value.to_string()),
+                Reply::Stream(events) => events.send(answer.to_string()).map_err(|line| line.to_string()),
+            };
         }
     });
     let to = Entry {
@@ -233,4 +240,174 @@ fn the_list_marks_this_session_and_headless_ones() {
     );
     assert_eq!(span(59_999), "59s");
     assert_eq!(span(7_500_000), "2h05m");
+}
+
+#[test]
+fn a_task_request_keeps_its_shape_on_the_wire() {
+    let line = serde_json::to_string(&Envelope {
+        v: 2,
+        request: Request::Send {
+            from: Some(5),
+            text: "do it".into(),
+            timeout: None,
+            after: None,
+            quick: false,
+        },
+    })
+    .unwrap();
+    assert_eq!(
+        line,
+        r#"{"v":2,"type":"send","from":5,"text":"do it","timeout":null,"after":null,"async":false}"#
+    );
+    let back: Envelope = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        back.request,
+        Request::Send {
+            from: Some(5),
+            text: "do it".into(),
+            timeout: None,
+            after: None,
+            quick: false,
+        }
+    );
+    assert_eq!(
+        serde_json::to_string(&Envelope {
+            v: 2,
+            request: Request::Follow { id: "5-1".into() },
+        })
+        .unwrap(),
+        r#"{"v":2,"type":"follow","id":"5-1"}"#
+    );
+    // A release that doesn't know tasks reads the request as one it can't answer, with the
+    // fields it does know left alone.
+    let old: Envelope = serde_json::from_str(r#"{"type":"ask","text":"x","later_field":1}"#).unwrap();
+    assert_eq!(
+        old.request,
+        Request::Ask {
+            from: None,
+            text: "x".into()
+        }
+    );
+}
+
+#[test]
+fn a_task_state_names_itself_and_says_when_it_is_over() {
+    assert_eq!(TaskState::Submitted.as_str(), "submitted");
+    assert_eq!(TaskState::InputRequired.as_str(), "input-required");
+    // The wire spells every state as `as_str` does, `input-required` included.
+    for state in [
+        TaskState::Submitted,
+        TaskState::Working,
+        TaskState::InputRequired,
+        TaskState::Completed,
+        TaskState::Failed,
+        TaskState::Canceled,
+        TaskState::Rejected,
+    ] {
+        assert_eq!(json!(state), state.as_str(), "{state:?}");
+        assert_eq!(
+            serde_json::from_value::<TaskState>(json!(state.as_str())).unwrap(),
+            state
+        );
+    }
+    assert!(!TaskState::Working.terminal() && !TaskState::Submitted.terminal());
+    for over in [
+        TaskState::Completed,
+        TaskState::Failed,
+        TaskState::Canceled,
+        TaskState::Rejected,
+        TaskState::InputRequired,
+    ] {
+        assert!(over.terminal(), "{over:?}");
+    }
+    assert_eq!(task_owner("4242-7"), Some(4242));
+    assert_eq!(task_owner("nope"), None);
+}
+
+#[test]
+fn send_refuses_a_timeout_it_can_not_keep() {
+    let args = |words: &[&str]| -> Vec<String> {
+        ["send", "7"]
+            .iter()
+            .chain(words)
+            .map(|word| word.to_string())
+            .collect()
+    };
+    let (text, quick, timeout, after) =
+        send_args(&args(&["fix", "it", "--timeout", "90", "--async", "--after", "7-1"])).unwrap();
+    assert_eq!(
+        (text.as_str(), quick, timeout, after.as_deref()),
+        ("fix it", true, Some(90), Some("7-1"))
+    );
+    assert_eq!(send_args(&args(&["fix it"])).unwrap().2, None);
+    // A value that is not a number of seconds the task can have is said, not replaced by the
+    // default.
+    for bad in [
+        &["fix it", "--timeout", "30m"][..],
+        &["fix it", "--timeout", "0"],
+        &["fix it", "--timeout", "18446744073709551615"],
+        &["fix it", "--timeout"],
+    ] {
+        let why = send_args(&args(bad)).unwrap_err().to_string();
+        assert!(why.contains("--timeout takes a number of seconds"), "{why}");
+    }
+    let why = send_args(&args(&["fix it", "--after"])).unwrap_err().to_string();
+    assert!(why.contains("--after takes the id"), "{why}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_followed_task_shows_its_report_and_an_error_is_not_an_event() {
+    assert_eq!(
+        event_text(&json!({"state": "working", "message": "read src/main.rs"})),
+        "working: read src/main.rs"
+    );
+    assert_eq!(event_text(&json!({"state": "submitted"})), "submitted");
+    assert_eq!(
+        event_text(&json!({"state": "completed", "report": "Done."})),
+        "completed\nDone."
+    );
+    // A task that failed with a report keeps both: why it failed, and what it wrote.
+    assert_eq!(
+        event_text(&json!({"state": "failed", "message": "the build broke", "report": "I tried."})),
+        "failed: the build broke\nI tried."
+    );
+
+    let (lines, mut read) = mpsc::unbounded_channel::<String>();
+    lines.send(r#"{"state":"working"}"#.into()).unwrap();
+    lines
+        .send(r#"{"error":"killi 0.6.71 doesn't understand this request"}"#.into())
+        .unwrap();
+    drop(lines);
+    assert_eq!(
+        next_event(&mut read).await.unwrap(),
+        Some(json!({"state": "working"}))
+    );
+    let why = next_event(&mut read).await.unwrap_err().to_string();
+    assert!(why.contains("doesn't understand this request"), "{why}");
+    assert_eq!(next_event(&mut read).await.unwrap(), None);
+}
+
+#[test]
+fn a_session_running_a_task_worked_since_then() {
+    let idle = Entry {
+        since: 100,
+        ..Entry::default()
+    };
+    assert!(!idle.worked_since(200));
+    assert!(idle.worked_since(100));
+    // Its own turn sits idle while a task another session sent changes files.
+    let tasked = Entry {
+        tasks: 1,
+        ..idle.clone()
+    };
+    assert!(tasked.worked_since(200));
+    let finished = Entry {
+        task_since: 250,
+        ..idle.clone()
+    };
+    assert!(finished.worked_since(200));
+    assert!(!finished.worked_since(300));
+    // A file from a release before tasks reads as a session that runs none.
+    let old: Entry = serde_json::from_str(r#"{"pid":7,"since":100}"#).unwrap();
+    assert_eq!((old.tasks, old.task_since), (0, 0));
 }

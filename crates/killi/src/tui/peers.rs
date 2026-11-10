@@ -1,9 +1,10 @@
 use super::*;
+use tasks::{answer, refuse};
 
 impl App {
     /// Answers another session: what this one is doing at once, a question from this
-    /// conversation through a side request that keeps nothing, and a message by queueing it
-    /// for the model's next step, or for the next prompt while idle.
+    /// conversation through a side request that keeps nothing, a message by queueing it for the
+    /// model's next step, and a task by running it to a report while the session goes on.
     pub(super) fn on_peer(&mut self, incoming: live::Incoming) {
         let live::Incoming { request, reply } = incoming;
         let working = self.live.as_ref().is_some_and(|l| l.entry.working);
@@ -15,11 +16,13 @@ impl App {
                     .map(|t| json!({"content": t.content, "status": t.status}))
                     .collect();
                 let waiting = self.controls.aside.borrow().waiting();
-                let _ = reply.send(json!({"ok": true, "working": working, "plan": self.controls.plan.get(), "todos": todos, "waiting": waiting}));
+                // `tasks` also tells a card that this session takes tasks at all: a release
+                // that doesn't never says it.
+                answer(reply, json!({"ok": true, "working": working, "plan": self.controls.plan.get(), "todos": todos, "waiting": waiting, "tasks": self.tasks_running()}));
             }
             live::Request::Ask { from, text } => {
                 if self.peer_asking.len() >= MAX_PEER_ASKS {
-                    let _ = reply.send(json!({"error": "it is answering other sessions' questions; ask again in a minute"}));
+                    refuse(reply, "it is answering other sessions' questions; ask again in a minute");
                     return;
                 }
                 let ask = self
@@ -48,7 +51,7 @@ impl App {
             }
             live::Request::Tell { from, text } => {
                 if self.peer_tells >= MAX_PEER_TELLS {
-                    let _ = reply.send(json!({"error": format!("it has taken {MAX_PEER_TELLS} messages since its user's last prompt; send this one after the next")}));
+                    refuse(reply, &format!("it has taken {MAX_PEER_TELLS} messages since its user's last prompt; send this one after the next"));
                     return;
                 }
                 self.peer_tells += 1;
@@ -67,7 +70,7 @@ impl App {
                         "For the agent, with your next prompt",
                     )
                 };
-                let _ = reply.send(json!({"ok": true, "delivered": delivered}));
+                answer(reply, json!({"ok": true, "delivered": delivered}));
                 let who = peer_label(from);
                 let shown = text::sanitize(&text).into_owned();
                 if !working {
@@ -79,6 +82,23 @@ impl App {
                 }));
                 self.release_asides(!working);
             }
+            live::Request::Send {
+                from,
+                text,
+                timeout,
+                after,
+                quick,
+            } => self.on_task_send(from, text, timeout, after, quick, reply),
+            live::Request::Get { id } => self.on_task_get(&id, reply),
+            live::Request::List => self.on_task_list(reply),
+            live::Request::Cancel { id } => self.on_task_cancel(&id, reply),
+            live::Request::Follow { id } => match reply {
+                live::Reply::Stream(events) => self.on_task_follow(&id, events),
+                live::Reply::Once(answer) => {
+                    let _ = answer
+                        .send(json!({"error": "a task's events come with `killi task --follow`"}));
+                }
+            },
         }
     }
 
@@ -88,14 +108,14 @@ impl App {
             id,
             from,
             question,
-            answer,
+            answer: answered,
             reply,
         } = answered;
         self.peer_asking.retain(|(asked, ..)| *asked != id);
         let tag = format!("{} asks", peer_label(from));
-        match answer {
+        match answered {
             Ok((text, usage)) => {
-                let _ = reply.send(json!({"ok": true, "answer": text}));
+                answer(reply, json!({"ok": true, "answer": text}));
                 let cached = usage.cached * 100 / usage.prompt.max(1);
                 let note = format!(
                     "Answered from this conversation, not kept · {} in · {cached}% cached",
@@ -113,7 +133,7 @@ impl App {
                     "{tag} “{}”; no answer: {why}",
                     first_line(&question, 80)
                 ));
-                let _ = reply.send(json!({"error": why}));
+                refuse(reply, &why);
             }
         }
     }

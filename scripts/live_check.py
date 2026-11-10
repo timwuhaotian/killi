@@ -8,10 +8,12 @@ pseudo-terminal under a scratch HOME, a scripted provider that logs every reques
 
 Prints PASS or FAIL for each check and exits non-zero if any failed. What it covers: the list
 and its liveness (a session that exits, crashes or loses its terminal drops out), that the banner stays quiet about them,
+a session's card in text and JSON,
 the reminder the model gets when the sessions in its tree change (again after a compaction, as
 are plan and swarm mode),
 a question answered from the other conversation without being kept, a message for an idle and
-for a working session, the undo warning, `/sessions`, and the peer guard: a peer's tree-moving
+for a working session, a task handed over and run to a report, followed while it works, canceled,
+refused when two already run and continued from one that ended, the undo warning, `/sessions`, and the peer guard: a peer's tree-moving
 git is refused while a linked worktree and `peers = false` are not.
 
 A session's terminal must be read while another process talks to it, as a real terminal is:
@@ -56,6 +58,19 @@ def text_of(message):
     return content or ""
 
 
+def prompt_of(message):
+    """What a message asks for: killi's own leading <system-reminder> block is a note to the
+    model, not the prompt, and a task another session sent carries one."""
+    text = text_of(message).lstrip()
+    while text.startswith("<system-reminder>"):
+        end = text.find("</system-reminder>")
+        if end < 0:
+            break
+        text = text[end + len("</system-reminder>"):].lstrip()
+    return text
+
+
+
 def provider(log):
     """A /chat/completions server that appends each request's messages to `log` and answers:
     another session's question with a line about the work, a prompt with SLEEP with a slow
@@ -82,7 +97,7 @@ def provider(log):
             prompt, steps = "", 0
             for m in reversed(messages):
                 if m.get("role") == "user" and not text_of(m).lstrip().startswith("<system-reminder>"):
-                    prompt = text_of(m)
+                    prompt = prompt_of(m)
                     break
                 steps += m.get("role") == "assistant"
             calls, text = [], ""
@@ -90,6 +105,8 @@ def provider(log):
                 text = "I'm fixing slugify in slug.py on master; nothing committed yet."
             elif "SLEEP" in prompt and steps == 0:
                 calls = [{"index": 0, "id": "c1", "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": "sleep 6; echo slept"})}}]
+            elif "BLOCKED" in prompt:
+                text = "I can't tell which branch you mean.\n\n`Status: blocked` which branch?\n"
             elif "STASH" in prompt and steps == 0:
                 calls = [{"index": 0, "id": "c1", "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": "git stash"})}}]
             elif "RESTORE" in prompt and steps == 0:
@@ -254,6 +271,17 @@ recap = false
         status = cli("sessions", str(a.pid))
         check("a status needs no model", status.startswith(f"{a.pid} · idle") and "fake/m" in status, status)
 
+        card = cli("card", str(a.pid), pid=b.pid)
+        check("a card names the session and what it can be asked to do",
+              card.startswith(f"{a.pid} · idle") and "killi-live/2" in card and "Others can: ask it about its work" in card
+              and "hand it a task (`killi send" in card and "Skills: Change code" in card, card)
+        shown = json.loads(cli("card", str(a.pid), "--json", pid=b.pid))
+        check("the card's json says the same",
+              shown["name"] == f"killi {a.pid}" and shown["protocol"] == "killi-live/2"
+              and shown["capabilities"]["ask"] is True and shown["capabilities"]["tasks"] is True
+              and shown["capabilities"]["streaming"] is True and shown["state"] in ("idle", "working")
+              and len(shown["skills"]) == 3 and shown["endpoint"] and shown["description"], shown)
+
         a.type("hello there\r", 0.5)
         a.until("Done: hello there")
         told = [u for u in contents(turn_request()) if f"Another killi session works in this repository too: {b.pid}" in u]
@@ -324,6 +352,53 @@ recap = false
         check("a second undo goes ahead", "Undone" in b.text(), b.text()[-400:])
         b.type("/sessions\r", 1.0)
         check("/sessions lists the other session", f"● {a.pid} · idle" in b.text(), b.text()[-600:])
+
+        # Tasks: one session hands another a task, which runs it on an agent of its own.
+        b.type("before the tasks\r", 0.5)
+        b.until("Done: before the tasks")
+        report = cli("send", str(b.pid), "count the sessions in live/", pid=a.pid)
+        check("send runs the task and answers with its report", report.startswith("Done: count the sessions"), report)
+        b.pump(1)
+        check("the session taking the task says so", "sent a task" in b.text(), b.text()[-600:])
+        tasks = json.loads(cli("tasks", "--json"))
+        check("tasks lists what the sessions have taken",
+              any(t["id"] == f"{b.pid}-1" and t["state"] == "completed" and t["report"].startswith("Done:") for t in tasks), tasks)
+        one = cli("task", f"{b.pid}-1", pid=a.pid)
+        check("task shows where one stands", f"{b.pid}-1 · completed" in one and "Done: count the sessions" in one, one)
+        task_log = Path(next((line[5:] for line in one.splitlines() if line.startswith("Log: ")), "/"))
+        check("a task's log sits in its session's folder, not among the sessions",
+              task_log.name == "task-1.jsonl" and task_log.parent.with_suffix(".jsonl").exists(), one)
+
+        cli("send", str(b.pid), "SLEEP a long task", "--async", pid=a.pid)
+        cli("send", str(b.pid), "SLEEP another long task", "--async", pid=a.pid)
+        busy = json.loads(cli("task", f"{b.pid}-2", "--json", pid=a.pid))
+        check("an async send only takes the id and the task runs", busy["id"] == f"{b.pid}-2" and busy["state"] in ("submitted", "working"), busy)
+        third = cli("send", str(b.pid), "one more task", pid=a.pid)
+        check("a third task at once is refused", "running 2 tasks already" in third, third)
+        stopped = cli("cancel", f"{b.pid}-3", pid=a.pid)
+        check("cancel stops a task that is running", f"{b.pid}-3 canceled" in stopped, stopped)
+        gone = json.loads(cli("task", f"{b.pid}-3", "--json", pid=a.pid))
+        check("a canceled task stays canceled", gone["state"] == "canceled" and "killi cancel" in gone["message"], gone)
+        events = cli("task", f"{b.pid}-2", "--follow", pid=a.pid)
+        check("following a task shows its steps and its end",
+              "working:" in events and "Done: SLEEP a long task" in events, events)
+        again = cli("send", str(b.pid), "and again", "--after", f"{b.pid}-1", pid=a.pid)
+        check("a task can continue one that ended", again.startswith("Done: and again"), again)
+        stuck = cli("send", str(b.pid), "BLOCKED on purpose", pid=a.pid)
+        check("a blocked task ends input-required, however its status line is dressed",
+              "input-required: which branch?" in stuck, stuck)
+        state = json.loads(cli("task", f"{b.pid}-5", "--json", pid=a.pid))["state"]
+        check("…and the wire spells the state the same way", state == "input-required", state)
+        nothing = cli("task", f"{b.pid}-99", "--follow", pid=a.pid)
+        check("following a task that isn't there says so", "rejected: no task" in nothing, nothing)
+        bad = cli("send", str(b.pid), "soon", "--timeout", "30m", pid=a.pid)
+        check("a timeout that isn't seconds is refused", "--timeout takes a number of seconds" in bad, bad)
+        mine = cli("tasks", str(b.pid), "--json")
+        check("tasks can name one session", len(json.loads(mine)) == 5, mine)
+        b.type("/undo\r", 1.0)
+        warned = " ".join(b.text().split())
+        check("undo warns about the tasks' work too",
+              f"task {b.pid}-1" in warned and "also worked in this repository" in warned, b.text()[-600:])
 
         a.type("STASH please\r", 0.5)
         check("a peer's tree refuses git stash", a.until("Not run: another killi session", 15), a.text()[-600:])

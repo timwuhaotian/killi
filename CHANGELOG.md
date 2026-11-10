@@ -3,7 +3,28 @@
 Notable changes to killi. `install.sh` and `killi update` always install the latest release
 from [`releases/`](releases); the versions below match `Cargo.toml`.
 
-## Unreleased
+## 0.6.72 — 2026-11-10
+
+- `killi card <pid>` prints what a session is and what it can be asked to do: its name,
+  version, protocol, state, model, folder and branch, its skills, its input and output
+  modes, and its prompt. `--json` gives the same as JSON for a script or another session
+  to read. It says a session takes tasks only when that session's own status does, so a
+  session on an older release isn't promised one; a headless (`-p`) session says it takes
+  no questions, messages or tasks.
+- Sessions can hand each other tasks. `killi send <pid> <task>` runs the task on a fresh
+  agent of that session's own — its model, tools and system prompt, in a log of its own
+  in that session's folder, so `killi -c` and `/resume` never offer it — and answers with
+  its report; `--async` only takes the task's id back, `--after <id>`
+  continues a task that ended, and `--timeout <s>` bounds it (10 minutes by default).
+  `killi tasks [<pid>]` lists what the sessions have taken, `killi task <id>` shows where
+  one stands and its report once it ends, `killi task <id> --follow` streams its steps as
+  they happen, and `killi cancel <id>` stops one. A task that stops on something only its
+  asker can answer ends `input-required`; the answer comes as a new task with `--after`.
+  Two tasks run at once per session, a third is refused, and a session's tree-moving git
+  stays refused while another session works in the tree. `/undo` warns before it takes a
+  task's changes back with the turn's, in the session that ran the task and in any other
+  session in the tree. `killi task --follow` exits non-zero when the task ends any other
+  way than completed, like `killi send`, and `--timeout` takes 1 to 86400 seconds.
 
 ## 0.6.71 — 2026-11-10
 
