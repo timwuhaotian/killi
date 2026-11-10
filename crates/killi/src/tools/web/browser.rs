@@ -34,7 +34,7 @@ fn chrome() -> Option<PathBuf> {
     {
         return Some(path);
     }
-    [
+    if let Some(path) = [
         "Google Chrome",
         "Chromium",
         "Microsoft Edge",
@@ -43,6 +43,39 @@ fn chrome() -> Option<PathBuf> {
     .iter()
     .map(|name| PathBuf::from(format!("/Applications/{name}.app/Contents/MacOS/{name}")))
     .find(|path| path.exists())
+    {
+        return Some(path);
+    }
+    const NAMES: [&str; 6] = [
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+        "microsoft-edge",
+        "brave-browser",
+    ];
+    if let Some(paths) = std::env::var_os("PATH") {
+        for name in NAMES {
+            if let Some(found) = std::env::split_paths(&paths)
+                .map(|dir| dir.join(name))
+                .find(|p| p.exists())
+            {
+                return Some(found);
+            }
+        }
+    }
+    [
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/microsoft-edge",
+        "/usr/bin/brave-browser",
+        "/snap/bin/chromium",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| path.exists())
 }
 
 /// Headless Chrome on `url` with a throwaway profile, so a running Chrome is left alone, and
@@ -50,7 +83,7 @@ fn chrome() -> Option<PathBuf> {
 fn browser(url: &str, extra: &[String]) -> Result<(Command, PathBuf), String> {
     let Some(chrome) = chrome() else {
         return Err(
-            "No Chrome, Chromium, Edge or Brave found in /Applications (or KILLI_CHROME).".into(),
+            "No Chrome, Chromium, Edge or Brave found on PATH (or KILLI_CHROME).".into(),
         );
     };
     let nanos = std::time::SystemTime::now()

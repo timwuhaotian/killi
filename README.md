@@ -7,10 +7,10 @@
 [![CI](https://github.com/timwuhaotian/killi/actions/workflows/ci.yml/badge.svg)](https://github.com/timwuhaotian/killi/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/timwuhaotian/killi)](https://github.com/timwuhaotian/killi/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![macOS · Apple silicon](https://img.shields.io/badge/macOS-Apple%20silicon-lightgrey)
+![macOS · Linux](https://img.shields.io/badge/macOS-Linux-lightgrey)
 
 **killi is a fast, tiny, free and open-source AI coding agent for your terminal**, written in
-Rust. It ships as one ~7 MB native binary for Apple silicon Macs — no runtime to install, starts
+Rust. It ships as one ~7 MB native binary for Apple silicon Macs and Linux (x64 and arm64) — no runtime to install, starts
 in under 10 ms, and uses about 18 MB of memory while running a prompt. Like Claude Code, Codex
 CLI, opencode or Kimi Code, it reads your code, runs commands and edits files, but it works with
 any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, including ChatGPT
@@ -44,7 +44,7 @@ cache). It is the sibling of the [Kil](https://github.com/timwuhaotian/kil) term
 
 How these were measured: [Size and memory](#size-and-memory) · [Capability tests](#capability-tests).
 
-> **Status: early but actively developed.** Apple silicon Macs only. Used daily by its author; see [Known limitations](#known-limitations).
+> **Status: early but actively developed.** macOS (arm64) and Linux (x64/arm64). Used daily by its author; see [Known limitations](#known-limitations).
 
 ## Why killi
 
@@ -67,6 +67,13 @@ curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh 
 
 This puts `killi` in `~/.local/bin` after checking its SHA-256 against
 [`releases/latest.toml`](releases/latest.toml). Later, `killi update` does the same in place.
+It installs `releases/killi-arm64` on macOS, `releases/killi-linux-x64` or
+`releases/killi-linux-arm64` on Linux. On Linux, four optional tools complete the picture:
+`wl-copy`/`wl-paste` (Wayland) or `xclip`/`xsel` (X11) for clipboard copy and image paste,
+`notify-send` for desktop notifications, ImageMagick (`convert`/`magick`) or `ffmpeg` for
+shrinking large images before they are sent, and a Chrome-family browser on `PATH` for pages
+that need JavaScript. Without them killi still works: copying falls back to the terminal's
+OSC 52, notifications to OSC 9 terminals, and large images are sent as-is.
 
 ## Build from source
 
@@ -74,7 +81,7 @@ This puts `killi` in `~/.local/bin` after checking its SHA-256 against
 cargo install --path crates/killi
 ```
 
-Rust 1.94 or later.
+Rust 1.94 or later, on macOS (arm64) or Linux (x64/arm64).
 
 ## Features
 
@@ -120,7 +127,7 @@ Rust 1.94 or later.
 ## FAQ
 
 **What is killi?**
-killi is a fast, tiny, open-source AI coding agent for the terminal, written in Rust. It ships as one ~7 MB native binary for Apple silicon Macs with no runtime to install, starts in under 10 ms, and uses about 18 MB of memory while running a prompt. Like Claude Code, Codex CLI, opencode or Kimi Code, it reads your code, runs commands and edits files, but it is free (MIT), works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, and is built so the provider's prompt cache keeps hitting.
+killi is a fast, tiny, open-source AI coding agent for the terminal, written in Rust. It ships as one ~7 MB native binary for Apple silicon Macs and Linux (x64 and arm64) with no runtime to install, starts in under 10 ms, and uses about 18 MB of memory while running a prompt. Like Claude Code, Codex CLI, opencode or Kimi Code, it reads your code, runs commands and edits files, but it is free (MIT), works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, and is built so the provider's prompt cache keeps hitting.
 
 **Is killi open source?**
 Yes. killi is open source under the MIT license, and the full source is on GitHub at github.com/timwuhaotian/killi. It is free to use and installs as a single ~7 MB binary.
@@ -144,7 +151,7 @@ The system prompt and every tool together come to about 2,600 tokens, plus your 
 Providers cache the start of a prompt, so a request that begins exactly like the previous one is cheaper and faster. killi is built around this: the system prompt, the tool list and the history are fixed for the whole session and only appended to, so 70–90% of input tokens come from the cache, including in plan mode, subagents, swarms and resumed sessions.
 
 **How do I install killi?**
-Run `curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh | sh` to install the ~7 MB binary to `~/.local/bin` after a SHA-256 check, or build from source with `cargo install --path crates/killi` (Rust 1.94+). killi currently runs on Apple silicon Macs.
+Run `curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh | sh` to install the ~7 MB binary to `~/.local/bin` after a SHA-256 check, or build from source with `cargo install --path crates/killi` (Rust 1.94+). killi runs on Apple silicon Macs and Linux (x64/arm64).
 
 **Does killi support MCP servers, subagents and plan mode?**
 Yes. killi supports MCP servers (stdio and HTTP) from `mcp.json`, subagents and swarms (up to 128 in parallel), plan mode that blocks edits until you approve, Claude Code-style hooks, `AGENTS.md` / `CLAUDE.md` instructions, skills, undo, background tasks and web search.
@@ -442,7 +449,8 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
   `fetch_url` also renders pages that need JavaScript, takes screenshots of them (`screenshot`,
   for checking a local dev server's UI) and fetches raw bodies (`raw`), all through Moli when
   it is installed (`KILLI_MOLI`, `~/.local/bin/moli`, or `moli` on `PATH`), else the Chrome,
-  Chromium, Edge or Brave in `/Applications` (or `KILLI_CHROME`) run headless with a throwaway
+  Chromium, Edge or Brave in `/Applications` on macOS or on `PATH` on Linux (or `KILLI_CHROME`)
+  run headless with a throwaway
   profile. A page whose static HTML has no readable text is rendered automatically.
 
 ## How it works
@@ -466,7 +474,7 @@ The design, with the measurements behind each choice, is in
 
 ## Known limitations
 
-- **Apple silicon Macs only.** killi currently ships for macOS on Apple silicon; Intel Macs, Linux and Windows are not supported yet.
+- **macOS (arm64) and Linux (x64/arm64) only.** killi ships for Apple silicon Macs and Linux; Intel Macs and Windows are not supported yet.
 - **Early software.** Used daily by its author, but expect rough edges; `/undo` and git are your safety nets.
 - **Small benchmark set.** The capability tests cover 14 tasks, and measurements were taken on a small number of machines and models — see [Size and memory](#size-and-memory) and [Capability tests](#capability-tests).
 

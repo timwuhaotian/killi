@@ -440,6 +440,14 @@ Seen in testing, left as they are:
 
 61. **The prompt is completed after a pause or a taken suggestion, as one suggestion (2026-11-08).** The next-prompt suggestion (one line for the empty prompt, a side request after each answered turn) grew into completion of any draft rather than gaining a second mechanism. `suggestion` holds the whole prompt the model proposes; `ghost()` is whatever of it is still ahead of the typed text with the cursor at the end, drawn faint by `Editor::render` (wrapping with the text, cursor where the text ends), so the empty prompt's placeholder, a draft's continuation and type-through are one rule. Any edit drops the request in flight (it answers text that is gone); an edit that leaves the ghost standing asks nothing, taking the whole suggestion asks at once, any other edit asks after `COMPLETE_PAUSE` (1 s). The request is `Aside::suggest(typed)` under `COMPLETE_NOTE`, the draft in `<draft>` tags so the model doesn't answer it, and the reply is the draft's *last line repeated and continued*: asking for the continuation alone left it ambiguous whether `fix the bu` + `g` or ` bug` was meant, and repeating only the last line keeps the output cost bounded for long drafts. `fit_completion` keeps what follows that line (at most 30 characters, cut at a word end) and drops a reply that changed it, as that is a different prompt. Probed on Qwen3.8 Flash and K3.1 Pro: all eight English and Chinese drafts, a half-typed word among them, came back in this form. Not done: completion while the agent works (a side request would compete with the turn, and steering text is short), accepting a word at a time, and a switch to turn it off; each pause costs one request over the cached prefix.
 
+72. **Linux support (2026-11-10).** killi runs on Apple silicon Macs and Linux (x64/arm64).
+    - Platforms: macOS arm64 plus Linux x64/arm64; Intel Macs and Windows stay unsupported.
+    - Releases are built natively per host as `releases/killi-arm64`, `releases/killi-linux-x64` and `releases/killi-linux-arm64`; `releases/latest.toml` keeps `version` and carries one SHA-256 per binary, and install/update pick the host's file.
+    - CI runs clippy and the tests on macos-15 and ubuntu-latest, and the release build on both.
+    - README, RELEASING.md, AGENTS.md and the refresh-metrics skill name the per-host binaries instead of mac-only.
+    - `scripts/frames.py` shims `pbcopy` on macOS and `wl-copy`/`xclip`/`xsel` on Linux, and `--png` falls back to Chrome/Chromium on `PATH` when `/Applications` is missing.
+    - The system prompt and tool list are unchanged; platform differences stay in code and scripts.
+
 ## Open
 
 None. All design branches were settled on 2026-10-22.

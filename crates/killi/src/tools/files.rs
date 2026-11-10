@@ -110,8 +110,64 @@ pub fn image_type(path: &Path) -> Option<&'static str> {
     }
 }
 
-/// Large images are shrunk with macOS's `sips` to at most 1568 pixels on the long side.
+/// Large images are shrunk to at most 1568 pixels on the long side.
 const SHRINK_ABOVE: u64 = 500 * 1024;
+
+/// ImageMagick arguments to shrink into an 80-quality JPEG at most 1568px on the long side.
+#[cfg(any(test, not(target_os = "macos")))]
+fn imagemagick_args() -> [&'static str; 4] {
+    ["-resize", "1568x1568>", "-quality", "80"]
+}
+
+/// An ffmpeg filter that shrinks the width to at most 1568px, keeping the aspect ratio.
+#[cfg(any(test, not(target_os = "macos")))]
+fn ffmpeg_filter() -> &'static str {
+    "scale=min(1568,iw):-1"
+}
+
+/// A large image shrunk into `out` as a JPEG; false when no shrinker could do it.
+#[cfg(target_os = "macos")]
+fn shrink(full: &Path, out: &Path) -> bool {
+    Command::new("/usr/bin/sips")
+        .args([
+            "-Z",
+            "1568",
+            "-s",
+            "format",
+            "jpeg",
+            "-s",
+            "formatOptions",
+            "80",
+        ])
+        .arg(full)
+        .arg("--out")
+        .arg(out)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// A large image shrunk into `out` as a JPEG; false when no shrinker could do it.
+#[cfg(not(target_os = "macos"))]
+fn shrink(full: &Path, out: &Path) -> bool {
+    for tool in ["convert", "magick"] {
+        if Command::new(tool)
+            .arg(full)
+            .args(imagemagick_args())
+            .arg(out)
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            return true;
+        }
+    }
+    Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(full)
+        .args(["-vf", ffmpeg_filter(), "-q:v", "4"])
+        .arg(out)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
 
 pub(super) fn read_image(ctx: &Context, path: &str, full: &Path, media_type: &str) -> Output {
     if !ctx.images.get() {
@@ -190,7 +246,7 @@ fn check_magic(name: &str, full: &Path, media_type: &str) -> Result<(), String> 
 }
 
 /// An image file as a data URL for the model, and how many bytes it holds; a large one is
-/// sent as a JPEG that `sips` made. `name` is how errors refer to it.
+/// shrunk to a JPEG when a shrinker is around. `name` is how errors refer to it.
 pub fn image_url(name: &str, full: &Path, media_type: &str) -> Result<(String, usize), String> {
     check_magic(name, full, media_type)?;
     let size = fs::metadata(full)
@@ -198,32 +254,23 @@ pub fn image_url(name: &str, full: &Path, media_type: &str) -> Result<(String, u
         .len();
     let (bytes, media_type) = if size > SHRINK_ABOVE {
         let out = std::env::temp_dir().join(format!("killi-image-{}.jpg", std::process::id()));
-        let shrunk = Command::new("/usr/bin/sips")
-            .args([
-                "-Z",
-                "1568",
-                "-s",
-                "format",
-                "jpeg",
-                "-s",
-                "formatOptions",
-                "80",
-            ])
-            .arg(full)
-            .arg("--out")
-            .arg(&out)
-            .output()
-            .is_ok_and(|o| o.status.success());
+        let shrunk = shrink(full, &out);
         let bytes = if shrunk { fs::read(&out).ok() } else { None };
         let _ = fs::remove_file(&out);
         match bytes {
             Some(bytes) => (bytes, "image/jpeg"),
+            #[cfg(target_os = "macos")]
             None => {
                 return Err(format!(
                     "Could not shrink {name} ({} KB) to send it.",
                     size / 1024
                 ));
             }
+            #[cfg(not(target_os = "macos"))]
+            None => (
+                fs::read(full).map_err(|e| format!("Could not read {name}: {e}"))?,
+                media_type,
+            ),
         }
     } else {
         (
@@ -394,6 +441,26 @@ mod tests {
         fs::write(&text, "just some words").unwrap();
         let err = image_url("d.png", &text, "image/png").unwrap_err();
         assert!(err.contains("text"), "{err}");
+    }
+
+    #[test]
+    fn shrink_args_stay_stable() {
+        assert_eq!(
+            imagemagick_args(),
+            ["-resize", "1568x1568>", "-quality", "80"]
+        );
+        assert_eq!(ffmpeg_filter(), "scale=min(1568,iw):-1");
+    }
+
+    #[test]
+    fn small_images_pass_through_unshrunk() {
+        let dir = crate::test_temp::TempDir::new("killi-smallimg");
+        let path = dir.join("s.png");
+        let bytes = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02];
+        fs::write(&path, bytes).unwrap();
+        let (url, len) = image_url("s.png", &path, "image/png").unwrap();
+        assert_eq!(len, bytes.len());
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
     }
 
     #[test]

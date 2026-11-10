@@ -22,16 +22,17 @@ The README quotes numbers from all of them, so it is the last thing to edit.
   real process's memory). `bench.py` builds its config from killi's provider, runs it with
   `--standalone` (one process, no background service) and reads tokens from its sqlite database,
   because `--format json` carries no usage.
-- Measure the binary people install: `releases/killi-arm64`, built by `scripts/release.sh`
-  (or `cargo build --release`). `~/.local/bin/killi` can be a release behind. Pass it as
-  `KILLI_BIN="$PWD/releases/killi-arm64"`.
+- Measure the binary people install on your host: `releases/killi-arm64` (macOS arm64) or
+  `releases/killi-linux-x64` / `releases/killi-linux-arm64` (Linux), built by
+  `scripts/release.sh` (or `cargo build --release`). `~/.local/bin/killi` can be a release
+  behind. Pass it as `KILLI_BIN="$PWD/releases/killi-arm64"` (the `killi-linux-*` file on Linux).
 - Look at `uptime`. Other agents and test suites on the machine raise the load; startup time
   jitters with it (0.2.16 measured 38, 13 and 17 ms in three runs, and 8 ms when timed directly).
 
 ## 1. Benchmark
 
 ```sh
-KILLI_BIN="$PWD/releases/killi-arm64" python3 scripts/bench.py
+KILLI_BIN="$PWD/releases/killi-arm64" python3 scripts/bench.py  # or killi-linux-* on Linux
 ```
 
 `--tools killi,opencode` measures only those and keeps the other rows (each row records the date
@@ -64,7 +65,7 @@ machine that measured.
 
 - `python3 scripts/eval.py verify` checks every task fails as given and passes with its solution.
 - killi alone, about 10 minutes and about 28k input tokens per task on MiMo:
-  `KILLI_BIN="$PWD/releases/killi-arm64" python3 scripts/eval.py run --tools killi`
+  `KILLI_BIN="$PWD/releases/killi-arm64" python3 scripts/eval.py run --tools killi` (the `killi-linux-*` file on Linux)
 - Kimi Code and Claude Code too: about 207k and 279k input tokens per task, so roughly 3M
   tokens of the MiMo plan for Kimi Code and a day's worth of Claude usage. Ask first.
 - `python3 scripts/eval.py report` merges the **latest run of each tool**. After a killi-only run
@@ -86,8 +87,9 @@ Update by hand, from `docs/bench.json` and `docs/eval.json`:
 or clean HOME is needed and the shots come out the same every time. They wear the
 `iced-coffee` theme — the palette `docs/icon.svg` is drawn from; `docs/icon.png` is that SVG
 rendered at 512 (`rsvg-convert -w 512`). Redraw the shots when the UI changes, against the
-release binary so the banner's version is the one being shipped: the hero and the menu run
-inline at a tall size, the theme preview fullscreen where its specimen fits whole:
+release binary for your host so the banner's version is the one being shipped (`killi-linux-*` on
+Linux): the hero and the menu run inline at a tall size, the theme preview fullscreen where its
+specimen fits whole:
 
 ```sh
 scripts/frames.py /tmp/shots --killi releases/killi-arm64 --sizes 118x64 \

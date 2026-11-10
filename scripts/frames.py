@@ -196,13 +196,15 @@ class Scratch:
         (self.project / "slug.py").write_text(SLUG)
         (self.project / "test_slug.py").write_text(TEST)
         (self.project / "shot.png").write_bytes(PNG)
-        # killi copies a selection through pbcopy, which here writes to a file instead, so a
-        # scene never touches the real clipboard.
+        # killi copies a selection through pbcopy (macOS) or wl-copy/xclip (Linux), which here
+        # writes to a file instead, so a scene never touches the real clipboard.
         self.bin = self.dir / "bin"
         self.bin.mkdir()
         self.clipboard = self.dir / "clipboard.txt"
-        (self.bin / "pbcopy").write_text(f'#!/bin/sh\ncat > "{self.clipboard}"\n')
-        (self.bin / "pbcopy").chmod(0o755)
+        names = ["pbcopy"] if sys.platform == "darwin" else ["wl-copy", "xclip", "xsel"]
+        for name in names:
+            (self.bin / name).write_text(f'#!/bin/sh\ncat > "{self.clipboard}"\n')
+            (self.bin / name).chmod(0o755)
         git = ["git", "-c", "user.email=a@b", "-c", "user.name=a"]
         subprocess.run(["git", "init", "-q", "-b", "master"], cwd=self.project, check=True)
         subprocess.run([*git, "add", "-A"], cwd=self.project, check=True)
@@ -519,7 +521,12 @@ def svg(cells, theme, title=None):
 def png(svg_path, width, height):
     chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     if not os.path.exists(chrome):
-        sys.exit("--png needs Google Chrome in /Applications")
+        for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"):
+            if found := shutil.which(name):
+                chrome = found
+                break
+        else:
+            sys.exit("--png needs Google Chrome in /Applications or on PATH")
     target = svg_path.with_suffix(".png")
     subprocess.run([chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=2",
                     f"--window-size={width},{height}", f"--screenshot={target}", f"file://{svg_path}"],

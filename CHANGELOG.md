@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- Linux support: killi now runs on macOS (arm64) and Linux (x64/arm64).
+  `install.sh`, `scripts/release.sh` and `killi update` pick the host's binary
+  (`killi-arm64`, `killi-linux-x64`, `killi-linux-arm64`), with per-platform
+  SHA-256 keys in `releases/latest.toml` while the old single `sha256` keeps
+  working for existing Mac clients. Clipboard, notifications, image paste and
+  shrinking, and browser lookup use the Linux tools (`wl-copy`/`xclip`/`xsel`,
+  `notify-send`, ImageMagick/`ffmpeg`, Chrome on `PATH`) with graceful
+  fallbacks, and CI now checks clippy, tests and the release build on Ubuntu
+  too. The macOS binary is unchanged in size (+16 bytes).
 ## 0.6.69 — 2026-11-09
 
 - A failed turn now earns its desktop notification. Failures used to share the

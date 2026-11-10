@@ -21,7 +21,29 @@ pub(crate) mod notes;
 /// The raw host directly: `github.com/.../raw/...` only redirects here, and that hop is the
 /// one that answers 504 when GitHub's front door is having a bad minute.
 const RELEASES_URL: &str = "https://raw.githubusercontent.com/timwuhaotian/killi/main/releases";
+/// The release binary and its checksum key for this host.
+#[cfg(target_os = "macos")]
 const BINARY: &str = "killi-arm64";
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BINARY: &str = "killi-linux-x64";
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const BINARY: &str = "killi-linux-arm64";
+#[cfg(not(any(
+    target_os = "macos",
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))
+)))]
+const BINARY: &str = "killi-linux-x64";
+#[cfg(target_os = "macos")]
+const SHA_KEY: &str = "sha256-arm64";
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SHA_KEY: &str = "sha256-linux-x64";
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const SHA_KEY: &str = "sha256-linux-arm64";
+#[cfg(not(any(
+    target_os = "macos",
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))
+)))]
+const SHA_KEY: &str = "sha256-linux-x64";
 
 /// How long a connection may take to start, and how long the body may stall between
 /// reads: without them a stuck server hangs the update for a minute or more.
@@ -228,8 +250,11 @@ async fn latest(http: &reqwest::Client, base: &str) -> Result<(String, String)> 
             .and_then(toml::Value::as_str)
             .map(str::to_string)
     };
-    let (Some(version), Some(sha256)) = (field("version"), field("sha256")) else {
-        bail!("latest.toml needs `version` and `sha256`");
+    let (Some(version), Some(sha256)) = (
+        field("version"),
+        field(SHA_KEY).or_else(|| field("sha256")),
+    ) else {
+        bail!("latest.toml needs `version` and `{SHA_KEY}`");
     };
     Ok((version, sha256))
 }
@@ -314,11 +339,12 @@ fn verify_and_install(
     version: &str,
     exe: &std::path::Path,
 ) -> Result<()> {
-    let output = Command::new("/usr/bin/shasum")
+    let output = Command::new("shasum")
         .arg("-a")
         .arg("256")
         .arg(staging)
-        .output()?;
+        .output()
+        .or_else(|_| Command::new("sha256sum").arg(staging).output())?;
     let actual = String::from_utf8_lossy(&output.stdout);
     let actual = actual.split_whitespace().next().unwrap_or_default();
     if !actual.eq_ignore_ascii_case(sha256) {

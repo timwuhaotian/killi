@@ -106,7 +106,7 @@ async fn a_504_download_is_retried_from_the_start() {
     .await;
     let http = super::http_client().unwrap();
     let mut status = super::Status::new();
-    let bytes = super::download(&mut status, &http, &format!("{base}/killi-arm64"), "9.9.9")
+    let bytes = super::download(&mut status, &http, &format!("{base}/{}", super::BINARY), "9.9.9")
         .await
         .unwrap();
     assert_eq!(bytes, b"bin");
@@ -163,6 +163,49 @@ async fn a_newer_release_comes_with_the_changelog_above_the_releases_folder() {
 fn versions_compare_numerically() {
     assert!(super::parse("0.10.0") > super::parse("0.9.3"));
     assert!(super::parse("0.1.0") == super::parse("0.1.0"));
+}
+
+#[test]
+fn the_binary_name_matches_the_host() {
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(super::BINARY, "killi-arm64");
+        assert_eq!(super::SHA_KEY, "sha256-arm64");
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        assert_eq!(super::BINARY, "killi-linux-x64");
+        assert_eq!(super::SHA_KEY, "sha256-linux-x64");
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        assert_eq!(super::BINARY, "killi-linux-arm64");
+        assert_eq!(super::SHA_KEY, "sha256-linux-arm64");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn latest_prefers_the_per_binary_checksum() {
+    let body = format!(
+        "version = \"9.9.9\"\n{} = \"per-binary\"\nsha256 = \"legacy\"\n",
+        super::SHA_KEY
+    );
+    let base = serve(vec![respond("200 OK", &body)]).await;
+    let http = super::http_client().unwrap();
+    assert_eq!(
+        super::latest(&http, &base).await.unwrap(),
+        ("9.9.9".to_string(), "per-binary".to_string())
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn latest_falls_back_to_the_legacy_checksum() {
+    let base = serve(vec![respond("200 OK", "version = \"9.9.9\"\nsha256 = \"legacy\"\n")]).await;
+    let http = super::http_client().unwrap();
+    assert_eq!(
+        super::latest(&http, &base).await.unwrap(),
+        ("9.9.9".to_string(), "legacy".to_string())
+    );
 }
 
 fn transfer(done: u64, total: Option<u64>) -> Option<Transfer> {
