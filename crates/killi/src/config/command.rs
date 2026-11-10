@@ -3,7 +3,12 @@ use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use crossterm::cursor::{RestorePosition, SavePosition};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::queue;
+use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor};
+use crossterm::terminal::{self, Clear, ClearType};
 
 /// The first-launch guide: on the first interactive start, offers to add another command
 /// beside the `killi` binary (a symlink such as `dw` -> `killi`). Pressing Enter, or typing
@@ -169,6 +174,97 @@ fn read_line_opt(prompt: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     Ok(Some(answer.trim().to_string()))
+}
+
+/// An inline list picked with ↑/↓ and Enter, starting at `selected`. Esc and Ctrl+C cancel.
+/// Saving the cursor instead of counting rows keeps redraws correct when an option wraps.
+pub(crate) fn select(question: &str, options: &[String], selected: usize) -> Result<usize> {
+    if options.is_empty() {
+        bail!("nothing to pick from");
+    }
+    terminal::enable_raw_mode()?;
+    let _raw = RawMode;
+    let mut out = std::io::stderr();
+    queue!(out, SavePosition)?;
+    let mut selected = selected.min(options.len() - 1);
+    let chosen = loop {
+        draw_options(&mut out, options, question, selected)?;
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        match key.code {
+            KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Down => selected = (selected + 1).min(options.len() - 1),
+            KeyCode::Enter => break selected,
+            KeyCode::Esc => bail!("cancelled"),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                bail!("cancelled")
+            }
+            _ => {}
+        }
+    };
+    queue!(out, RestorePosition, Clear(ClearType::FromCursorDown))?;
+    out.flush()?;
+    Ok(chosen)
+}
+
+/// Restores cooked mode even when drawing or reading a key fails.
+struct RawMode;
+
+impl Drop for RawMode {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+fn draw_options(
+    out: &mut impl Write,
+    options: &[String],
+    question: &str,
+    selected: usize,
+) -> Result<()> {
+    queue!(out, RestorePosition, Clear(ClearType::FromCursorDown))?;
+    queue!(
+        out,
+        Print("\r\n  "),
+        SetForegroundColor(Color::Cyan),
+        SetAttribute(Attribute::Bold),
+        Print("◆ killi"),
+        SetAttribute(Attribute::Reset),
+        ResetColor,
+        Print(format!("  {question}\r\n")),
+        SetForegroundColor(Color::DarkGrey),
+        Print("  Choose an option\r\n\r\n"),
+        ResetColor,
+    )?;
+    for (index, option) in options.iter().enumerate() {
+        if index == selected {
+            queue!(
+                out,
+                SetForegroundColor(Color::Cyan),
+                Print("  ❯ "),
+                SetAttribute(Attribute::Bold),
+                Print(option),
+                SetAttribute(Attribute::Reset),
+                ResetColor,
+            )?;
+        } else {
+            queue!(out, Print(format!("    {option}\r\n")))?;
+            continue;
+        }
+        queue!(out, Print("\r\n"))?;
+    }
+    queue!(
+        out,
+        SetForegroundColor(Color::DarkGrey),
+        Print("\r\n  ↑ ↓ choose  ·  Enter confirm  ·  Esc cancel\r\n\r\n"),
+        ResetColor,
+    )?;
+    out.flush()?;
+    Ok(())
 }
 
 /// Reads one line with the terminal's echo off, so a pasted key stays out of the scrollback.

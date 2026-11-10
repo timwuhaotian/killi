@@ -113,26 +113,20 @@ pub fn set_up_if_missing() -> Result<()> {
         .filter_map(|source| (source.detect)().map(|found| (source, found)))
         .collect();
     while !found.is_empty() {
-        eprintln!(
-            "These agents are set up on this machine; killi can copy one's providers, models and MCP servers:"
-        );
-        for (index, (source, path)) in found.iter().enumerate() {
-            eprintln!("  {}. {} ({})", index + 1, source.name, path.display());
-        }
-        let answer =
-            read_line("Import from which (number), or press Enter for a fresh config? ")?;
-        if answer.trim().is_empty() {
+        let fresh = found.len();
+        let options: Vec<String> = found
+            .iter()
+            .map(|(source, path)| format!("{} ({})", source.name, path.display()))
+            .chain(["Start with a fresh config".to_string()])
+            .collect();
+        let choice = select("Import configuration", &options, fresh)?;
+        if choice == fresh {
             break;
         }
-        match answer.trim().parse::<usize>() {
-            Ok(choice) if (1..=found.len()).contains(&choice) => {
-                let (source, _) = found.remove(choice - 1);
-                match (source.import)(false) {
-                    Ok(()) => return Ok(()),
-                    Err(error) => eprintln!("killi: {error:#}"),
-                }
-            }
-            _ => eprintln!("Pick 1-{} or press Enter.", found.len()),
+        let (source, _) = found.remove(choice);
+        match (source.import)(false) {
+            Ok(()) => return Ok(()),
+            Err(error) => eprintln!("killi: {error:#}"),
         }
     }
     if confirm("Write a starting config to edit?")? {

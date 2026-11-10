@@ -99,8 +99,8 @@ pub async fn logout(name: Option<&str>) -> Result<()> {
     }
 }
 
-/// The service `name` names, or the one picked from a numbered list of `listed`, where Enter
-/// takes the first. Without a terminal to ask on, the name has to be given.
+/// The service `name` names, or the one picked with the arrow keys from `listed`. Without a
+/// terminal to ask on, the name has to be given.
 fn pick(name: Option<&str>, listed: &[Service], question: &str) -> Result<Service> {
     let names = Service::ALL.map(Service::name).join(", ");
     if let Some(name) = name {
@@ -110,26 +110,24 @@ fn pick(name: Option<&str>, listed: &[Service], question: &str) -> Result<Servic
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         bail!("name the service, one of: {names}");
     }
-    eprintln!("{question}:");
-    for (number, service) in listed.iter().enumerate() {
-        eprintln!("  {}. {}", number + 1, service.about());
+    if listed.is_empty() {
+        bail!("no services to pick from");
     }
-    let answer = crate::config::read_line("Which? [1] ")?;
-    choose(&answer, listed).ok_or_else(|| anyhow!("`{answer}` isn't one of them"))
+    let options: Vec<String> = listed
+        .iter()
+        .map(|service| service.about().to_string())
+        .collect();
+    let chosen = listed[crate::config::select(question, &options, 0)?];
+    eprintln!(
+        "  \x1b[32m✓\x1b[0m {question} \x1b[1m{}\x1b[0m\n",
+        chosen.name()
+    );
+    Ok(chosen)
 }
 
-/// The service an answer picks from `listed`: the first for no answer, else by number or name.
+/// The service in `listed` with this name, case-insensitively.
 fn choose(answer: &str, listed: &[Service]) -> Option<Service> {
     let answer = answer.trim();
-    if answer.is_empty() {
-        return listed.first().copied();
-    }
-    if let Ok(number) = answer.parse::<usize>() {
-        return number
-            .checked_sub(1)
-            .and_then(|index| listed.get(index))
-            .copied();
-    }
     listed
         .iter()
         .copied()
@@ -164,29 +162,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_answer_picks_by_number_or_name_and_enter_takes_the_first() {
-        assert_eq!(choose("", &Service::ALL), Some(Service::ChatGpt));
-        assert_eq!(choose("2", &Service::ALL), Some(Service::OpencodeGo));
+    fn a_name_picks_a_service_case_insensitively() {
         assert_eq!(
             choose(" OpenCode-Go ", &Service::ALL),
             Some(Service::OpencodeGo)
         );
-        assert_eq!(choose("3", &Service::ALL), Some(Service::MuseCode));
         assert_eq!(choose("muse-code", &Service::ALL), Some(Service::MuseCode));
-        assert_eq!(choose("4", &Service::ALL), Some(Service::CommandCode));
         assert_eq!(
             choose("Command-Code", &Service::ALL),
             Some(Service::CommandCode)
         );
-        assert_eq!(choose("5", &Service::ALL), None);
-        assert_eq!(choose("0", &Service::ALL), None);
+        assert_eq!(choose("2", &Service::ALL), None);
         assert_eq!(choose("zen", &Service::ALL), None);
         let one = [Service::OpencodeGo];
-        assert_eq!(
-            choose("", &one),
-            Some(Service::OpencodeGo),
-            "Enter takes the only one listed"
-        );
         assert_eq!(
             choose("chatgpt", &one),
             None,

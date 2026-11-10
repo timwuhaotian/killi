@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 pub use command::command_guide_if_first;
-pub(crate) use command::{confirm, read_line, read_secret};
+pub(crate) use command::{confirm, read_line, read_secret, select};
 pub use edit::{
     remove_provider_key, set_backup_model, set_model_effort, set_search, set_ui_theme,
 };
