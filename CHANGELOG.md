@@ -3,6 +3,12 @@
 Notable changes to killi. `install.sh` and `killi update` always install the latest release
 from [`releases/`](releases); the versions below match `Cargo.toml`.
 
+## 0.6.73 — 2026-11-10
+
+- `killi login`, `killi logout` and the first-run configuration import list now use a
+  colored ↑/↓ picker instead of numbered input. Enter confirms the highlighted choice;
+  the first-run default remains a fresh config, and Esc or Ctrl+C cancels.
+
 ## 0.6.72 — 2026-11-10
 
 - `killi card <pid>` prints what a session is and what it can be asked to do: its name,
