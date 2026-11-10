@@ -382,6 +382,23 @@ pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<Vec
     if stale.is_empty() {
         return Ok(stale);
     }
+    let default_stale = config
+        .default_model
+        .as_ref()
+        .is_some_and(|alias| stale.iter().any(|stale| stale == alias));
+    let backup_stale = config
+        .backup_model
+        .as_ref()
+        .is_some_and(|alias| stale.iter().any(|stale| stale == alias));
+    let replacement = keep
+        .iter()
+        .find(|alias| config.models.contains_key(*alias))
+        .cloned();
+    if default_stale && replacement.is_none() {
+        bail!(
+            "removing these models would leave default_model pointing at a model that is gone; keep one or change default_model"
+        );
+    }
     let spans = table_spans(&text);
     let mut drop = vec![false; text.lines().count()];
     for (name, span) in &spans {
@@ -404,6 +421,14 @@ pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<Vec
     toml::from_str::<Config>(&new).context("removing models would break the config")?;
     crate::fs_atomic::write(path, new.as_bytes(), None)
         .with_context(|| format!("could not write {}", path.display()))?;
+    if default_stale
+        && let Some(replacement) = &replacement
+    {
+        set_default_model(path, replacement)?;
+    }
+    if backup_stale {
+        set_backup_model(path, replacement.as_deref())?;
+    }
     Ok(stale)
 }
 

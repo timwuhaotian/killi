@@ -291,9 +291,9 @@ impl App {
             ("help" | "h" | "?", _) => self.help(),
             ("btw", "") => self.error("Ask with /btw <question>."),
             ("plan", _) => self.toggle_plan(),
-            ("swarm", "") => self.set_swarm(!self.controls.swarm.get()),
-            ("swarm", "on") => self.set_swarm(true),
-            ("swarm", "off") => self.set_swarm(false),
+            ("swarm", "") => self.set_swarm(!self.controls.swarm.get(), false),
+            ("swarm", "on") => self.set_swarm(true, true),
+            ("swarm", "off") => self.set_swarm(false, true),
             ("later", "") => self.show_later(),
             ("sessions", _) => self.show_sessions(),
             ("later", arg) => match arg

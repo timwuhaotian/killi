@@ -834,7 +834,7 @@ mod wrap;
 pub use markdown::{Lang, Markdown, Part, highlight as highlight_code, render_table};
 pub use wrap::{
     Sanitizer, ellipsize, hanging_indent, sanitize, sanitize_row, width, wrap, wrap_code,
-    wrap_words,
+    wrap_words, wrap_words_help,
 };
 
 #[cfg(test)]

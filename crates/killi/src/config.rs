@@ -425,14 +425,17 @@ pub async fn sync_models(only: Option<&str>) -> Result<Vec<String>> {
         let Some(base) = provider.base_url.as_deref() else {
             continue;
         };
-        let inline = provider.api_key.is_some();
+        let inline = provider.api_key.is_some() && provider.api_key_env.is_none();
         let synced = if base.starts_with("https://opencode.ai/inference/go/") {
-            crate::login::opencode_go_add(if inline { Some(&key) } else { None })
-                .await
-                .map(|outcome| {
-                    out.extend(outcome.notes);
-                    outcome.added
-                })
+            let result = match (inline, provider.api_key_env.as_deref()) {
+                (true, _) => crate::login::opencode_go_add(Some(&key)).await,
+                (false, Some(env)) => crate::login::opencode_go_add_env(env, &key).await,
+                (false, None) => crate::login::opencode_go_add(None).await,
+            };
+            result.map(|outcome| {
+                out.extend(outcome.notes);
+                outcome.added
+            })
         } else if base.starts_with("https://api.z.ai") {
             match (inline, provider.api_key_env.as_deref()) {
                 (true, _) => zai::add(&key).await,

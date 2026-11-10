@@ -49,13 +49,27 @@ pub(crate) struct Outcome {
 /// names for it. `key` is the pasted key; `None` reads `$OPENCODE_API_KEY` at request time
 /// (`api_key_env` in the config).
 pub(crate) async fn add(key: Option<&str>) -> Result<Outcome> {
+    add_with(key, None).await
+}
+
+/// The same, for a provider whose key is kept in `env` rather than inline: the list is
+/// fetched with the resolved key, but the provider keeps the variable's name.
+pub(crate) async fn add_env(env: &str, key: &str) -> Result<Outcome> {
+    add_with(None, Some((env, key))).await
+}
+
+async fn add_with(key: Option<&str>, env: Option<(&str, &str)>) -> Result<Outcome> {
     let http = super::http_client()?;
     let mut notes = Vec::new();
     let inline = key.is_some();
-    let key = match key {
-        Some(key) => key.to_string(),
-        None => std::env::var(KEY_ENV)
-            .with_context(|| format!("no OpenCode Go key: pass one or set ${KEY_ENV}"))?,
+    let (key, env_name) = match (key, env) {
+        (Some(key), _) => (key.to_string(), None),
+        (None, Some((env, key))) => (key.to_string(), Some(env.to_string())),
+        (None, None) => (
+            std::env::var(KEY_ENV)
+                .with_context(|| format!("no OpenCode Go key: pass one or set ${KEY_ENV}"))?,
+            Some(KEY_ENV.to_string()),
+        ),
     };
     // The served list is the account's own: the models it didn't enable are not in it.
     // The request must carry the key; without it the endpoint lists every model Go has.
@@ -87,7 +101,10 @@ pub(crate) async fn add(key: Option<&str>) -> Result<Outcome> {
     if inline {
         provider.insert("api_key".into(), key.into());
     } else {
-        provider.insert("api_key_env".into(), KEY_ENV.into());
+        provider.insert(
+            "api_key_env".into(),
+            env_name.unwrap_or_else(|| KEY_ENV.to_string()).into(),
+        );
     }
     let ids: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
     let mut added = crate::config::add_models(&Additions {

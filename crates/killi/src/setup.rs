@@ -439,12 +439,10 @@ fn requested_model(
     let requested = model
         .or(known(config, last))
         .or(config.default_model.as_deref());
-    if defer_key
-        && model.is_none()
-        && requested.is_none_or(|alias| {
-            config.missing_key(Some(alias)) || !config.model_allowed(alias)
-        })
-    {
+    let blocked = requested.is_none_or(|alias| {
+        !config.model_allowed(alias) || (defer_key && config.missing_key(Some(alias)))
+    });
+    if model.is_none() && blocked {
         config
             .first_keyed()
             .map(String::from)

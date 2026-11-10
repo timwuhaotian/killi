@@ -481,7 +481,9 @@ pub(super) async fn provider_add(
                     .models
                     .iter()
                     .find(|(name, model)| {
-                        model.provider == added.provider && !session.config().missing_key(Some(name))
+                        model.provider == added.provider
+                            && session.config().model_allowed(name)
+                            && !session.config().missing_key(Some(name))
                     })
                     .map(|(name, _)| name.clone());
                 if let Some(first) = first {

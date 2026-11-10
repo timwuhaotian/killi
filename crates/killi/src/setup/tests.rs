@@ -64,6 +64,18 @@ fn a_keyless_default_falls_to_the_first_keyed_model() {
     );
 }
 
+#[test]
+fn a_filtered_default_is_not_used_by_a_headless_start() {
+    let config: Config = toml::from_str(
+        "default_model = \"zai/glm-4.5\"\n\n[providers.zai]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"zai/glm-4.5\"]\nprovider = \"zai\"\nmodel = \"glm-4.5\"\n\n[models.\"zai/glm-5.3\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n\n[models_filter.zai]\ninclude = [\"glm-5.3\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        requested_model(&config, None, &Choice::default(), false).as_deref(),
+        Some("zai/glm-5.3")
+    );
+}
+
 #[tokio::test]
 async fn an_interactive_start_defers_only_a_missing_key() {
     let root = std::env::temp_dir().join(format!("killi-start-{}", std::process::id()));

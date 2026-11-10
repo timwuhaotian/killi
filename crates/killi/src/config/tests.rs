@@ -393,6 +393,38 @@ fn removing_models_drops_only_that_providers_stale_ones() {
 }
 
 #[test]
+fn removing_the_default_model_moves_it_to_a_kept_one() {
+    let root = std::env::temp_dir().join(format!("killi-default-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    std::fs::write(
+        &path,
+        "default_model = \"go/gone\"\n\n[providers.go]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"go/gone\"]\nprovider = \"go\"\nmodel = \"gone\"\n\n[models.\"go/kept\"]\nprovider = \"go\"\nmodel = \"kept\"\n",
+    )
+    .unwrap();
+    let dropped = super::remove_models(&path, "go", &["go/kept".to_string()]).unwrap();
+    assert_eq!(dropped, vec!["go/gone".to_string()]);
+    let config: super::Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(config.default_model.as_deref(), Some("go/kept"));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn removing_every_model_of_the_default_refuses() {
+    let root = std::env::temp_dir().join(format!("killi-default-gone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    let text = "default_model = \"go/gone\"\n\n[providers.go]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"go/gone\"]\nprovider = \"go\"\nmodel = \"gone\"\n";
+    std::fs::write(&path, text).unwrap();
+    let error = super::remove_models(&path, "go", &[]).unwrap_err();
+    assert!(error.to_string().contains("default_model"), "{error}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn setting_the_ui_theme_replaces_the_line_adds_the_table_and_keeps_the_rest() {
     let root = std::env::temp_dir().join(format!("killi-theme-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
