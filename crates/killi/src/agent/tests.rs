@@ -24,7 +24,7 @@ fn test_client_at(alias: &str, base_url: &str) -> Client {
         model: "test".into(),
         protocol: crate::config::Protocol::OpenAi,
         base_url: base_url.into(),
-        api_key: String::new(),
+        api_key: "test-key".into(),
         headers: Default::default(),
         tool_names: Default::default(),
         session_header: None,

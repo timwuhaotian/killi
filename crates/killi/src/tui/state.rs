@@ -251,6 +251,9 @@ pub(super) struct App {
     /// The first row that left output out has said how to read it; the rest don't repeat it.
     pub(super) ctrl_o_taught: bool,
     pub(super) status: Status,
+    /// The starting model has no provider key yet, so the banner and status line say no model
+    /// is set instead of naming the template's placeholder.
+    pub(super) needs_provider: bool,
     /// The session's completion total when this busy spell began: the working island's
     /// output count starts from it, so it reads as this turn's output.
     pub(super) turn_out_base: u64,

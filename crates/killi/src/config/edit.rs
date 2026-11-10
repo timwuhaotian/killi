@@ -119,19 +119,6 @@ fn table_of(spans: &[(String, Range<usize>)], line: usize) -> Option<&str> {
 /// replaces both.
 pub(super) const KEY_FIELDS: [&str; 2] = ["api_key", "api_key_env"];
 
-/// Stores `key` as the `api_key` of `provider` in the config file, in place of the
-/// `api_key` or `api_key_env` line in its section, so `resolve` reads the key from the file.
-/// The rest of the file, comments included, is left as it is.
-pub(super) fn set_provider_key(path: &Path, provider: &str, key: &str) -> Result<()> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
-    let fields = toml::Table::from_iter([("api_key".to_string(), toml::Value::from(key))]);
-    let (new, _) = with_provider_fields(&text, provider, &fields)
-        .with_context(|| format!("could not store the key in {}", path.display()))?;
-    crate::fs_atomic::write(path, new.as_bytes(), Some(0o600))
-        .with_context(|| format!("could not write {}", path.display()))
-}
-
 /// The config text with `fields` set in `[providers.<provider>]`, and the names of the fields
 /// that changed. Each changed field goes on one line under the table's header, replacing
 /// the line, dotted keys or `[providers.<provider>.<field>]` sub-table that set it before.
@@ -362,16 +349,127 @@ pub fn set_model_effort(path: &Path, alias: &str, effort: &str) -> Result<()> {
         .with_context(|| format!("could not write {}", path.display()))
 }
 
-/// Whether `name`, as `table_spans` read it from a header, is `alias`'s `[models]` table:
-/// the key may be quoted with either of TOML's quote characters, or bare.
-fn is_model_table(name: &str, alias: &str) -> bool {
-    name.strip_prefix("models.").is_some_and(|key| {
+/// The alias in a `models.<alias>` table header, as `table_spans` reads it: the key may be
+/// quoted with either of TOML's quote characters, or bare.
+fn model_alias(name: &str) -> Option<&str> {
+    let key = name.strip_prefix("models.")?;
+    Some(
         key.strip_prefix('"')
             .and_then(|k| k.strip_suffix('"'))
             .or_else(|| key.strip_prefix('\'').and_then(|k| k.strip_suffix('\'')))
-            .unwrap_or(key)
-            == alias
+            .unwrap_or(key),
+    )
+}
+
+/// Whether `name`, as `table_spans` read it from a header, is `alias`'s `[models]` table.
+fn is_model_table(name: &str, alias: &str) -> bool {
+    model_alias(name) == Some(alias)
+}
+
+/// Removes the `[models."<provider>/<id>"]` tables of `provider` whose alias isn't in
+/// `keep`, so a provider whose served list shrank stops offering retired models. The rest
+/// of the file, comments included, is left as it is.
+pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<()> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let config: Config = toml::from_str(&text).context("invalid config")?;
+    let stale: Vec<&str> = config
+        .models
+        .iter()
+        .filter(|(alias, model)| model.provider == provider && !keep.contains(alias))
+        .map(|(alias, _)| alias.as_str())
+        .collect();
+    if stale.is_empty() {
+        return Ok(());
+    }
+    let spans = table_spans(&text);
+    let mut drop = vec![false; text.lines().count()];
+    for (name, span) in &spans {
+        let Some(alias) = model_alias(name) else {
+            continue;
+        };
+        if stale.contains(&alias) {
+            for line in span.clone() {
+                drop[line] = true;
+            }
+        }
+    }
+    let out: Vec<&str> = text
+        .lines()
+        .enumerate()
+        .filter(|(n, _)| !drop[*n])
+        .map(|(_, line)| line)
+        .collect();
+    let new = format!("{}\n", out.join("\n"));
+    toml::from_str::<Config>(&new).context("removing models would break the config")?;
+    crate::fs_atomic::write(path, new.as_bytes(), None)
+        .with_context(|| format!("could not write {}", path.display()))
+}
+
+/// Whether a TOML line sets `key`, and not a longer key that starts with it: `swarm = true`
+/// counts for `swarm`, `swarm_parallel = 8` does not.
+fn sets_key(line: &str, key: &str) -> bool {
+    line.strip_prefix(key).is_some_and(|rest| {
+        rest.is_empty()
+            || rest.starts_with('=')
+            || rest.chars().next().is_some_and(char::is_whitespace)
     })
+}
+
+/// Writes `line` as `key` in the `[agent]` table, replacing the line that set it (a dotted
+/// `agent.<key>` line before the tables counts too), or adding the table at the end. The rest
+/// of the file, comments included, is left as it is.
+fn set_agent_line(path: &Path, key: &str, line: String) -> Result<()> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let spans = table_spans(&text);
+    let first = spans
+        .iter()
+        .find(|(name, _)| name == "agent")
+        .map(|(_, span)| span.start);
+    let dotted = format!("agent.{key}");
+    let mut out: Vec<String> = Vec::new();
+    let mut header = None;
+    for (n, text_line) in text.lines().enumerate() {
+        if Some(n) == first {
+            header = Some(out.len());
+        }
+        let trimmed = text_line.trim();
+        let in_agent = table_of(&spans, n) == Some("agent") && sets_key(trimmed, key);
+        let dotted_line = table_of(&spans, n).is_none() && sets_key(trimmed, &dotted);
+        if in_agent || dotted_line {
+            continue;
+        }
+        out.push(text_line.to_string());
+    }
+    let at = match header {
+        Some(at) => at + 1,
+        None => {
+            out.push(String::new());
+            out.push("[agent]".to_string());
+            out.len()
+        }
+    };
+    out.insert(at, line);
+    let new = format!("{}\n", out.join("\n"));
+    toml::from_str::<Config>(&new).context("setting [agent] would break the config")?;
+    crate::fs_atomic::write(path, new.as_bytes(), None)
+        .with_context(|| format!("could not write {}", path.display()))
+}
+
+/// Stores `[agent] swarm`, so `/swarm on` and `/swarm off` decide the default for every
+/// later session too.
+pub fn set_swarm(path: &Path, on: bool) -> Result<()> {
+    set_agent_line(path, "swarm", format!("swarm = {on}"))
+}
+
+/// Stores `[agent] swarm_parallel`, the subagents a swarm runs at once.
+pub fn set_swarm_parallel(path: &Path, parallel: usize) -> Result<()> {
+    set_agent_line(
+        path,
+        "swarm_parallel",
+        format!("swarm_parallel = {}", parallel.max(1)),
+    )
 }
 
 /// Writes the `[ui]` table's `theme` line `/theme` picked: replaced in place (a dotted

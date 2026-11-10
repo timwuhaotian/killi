@@ -18,16 +18,17 @@ mod zai;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use anyhow::Result;
 use serde::Deserialize;
 
 pub use command::command_guide_if_first;
 pub(crate) use command::{confirm, read_line, read_secret, select};
 pub use edit::{
-    remove_provider_key, set_backup_model, set_model_effort, set_search, set_ui_theme,
+    remove_models, remove_provider_key, set_backup_model, set_model_effort, set_search, set_swarm,
+    set_swarm_parallel, set_ui_theme,
 };
-pub use guide::{guide_model, init, set_up_if_missing};
+pub use guide::{init, start_if_missing};
 pub use import::import_command;
-pub(crate) use import::{Source, sources};
 pub use models::{Added, Additions, NewModel, add_models};
 pub use anthropic::{ABOUT as ANTHROPIC_ABOUT, add as add_anthropic, ours as anthropic_ours};
 pub use kimi::{ABOUT as KIMI_ABOUT, add as add_kimi, ours as kimi_ours};
@@ -39,7 +40,7 @@ pub use stepfun::{ABOUT as STEPFUN_ABOUT, add as add_stepfun, ours as stepfun_ou
 pub use unisound::{ABOUT as UNISOUND_ABOUT, add as add_unisound, ours as unisound_ours};
 pub use zai::{ABOUT as ZAI_ABOUT, add as add_zai, ours as zai_ours};
 
-use edit::{KEY_FIELDS, set_default_model, set_provider_key, with_provider_fields};
+use edit::{KEY_FIELDS, set_default_model, with_provider_fields};
 use guide::prompt_section;
 use models::toml_int;
 use yaml::read_yaml;
@@ -82,6 +83,41 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default)]
     pub search: SearchConfig,
+    /// `[models_filter.<provider>]`: which of a provider's models are listed, synced and
+    /// started. A provider without an entry keeps every model.
+    #[serde(default)]
+    pub models_filter: ModelsFilter,
+}
+
+/// The per-provider model filters, keyed by the provider part of an alias.
+pub type ModelsFilter = BTreeMap<String, ProviderFilter>;
+
+/// One provider's `include`/`exclude` patterns: a full alias or a model id, and a trailing
+/// `*` matches a prefix. An empty `include` keeps every model; `exclude` always wins.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct ProviderFilter {
+    #[serde(default)]
+    pub include: Vec<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+impl ProviderFilter {
+    /// Whether a model alias passes: not excluded, and included when `include` names any.
+    pub fn allows(&self, alias: &str) -> bool {
+        let id = alias.split_once('/').map_or(alias, |(_, id)| id);
+        !self.exclude.iter().any(|pattern| matches(pattern, alias, id))
+            && (self.include.is_empty()
+                || self.include.iter().any(|pattern| matches(pattern, alias, id)))
+    }
+}
+
+/// Whether `pattern` names `alias` or its model id; a trailing `*` matches a prefix.
+fn matches(pattern: &str, alias: &str, id: &str) -> bool {
+    [alias, id].iter().any(|value| match pattern.strip_suffix('*') {
+        Some(prefix) => value.starts_with(prefix),
+        None => pattern == *value,
+    })
 }
 
 /// `[search]`: the service behind `web_search`. `web_search` tries that service first,
@@ -277,6 +313,29 @@ pub struct ResolvedModel {
     pub chatgpt: bool,
 }
 
+impl ResolvedModel {
+    /// A session with no model yet: an interactive start opens on `/provider`, and the first
+    /// request says so.
+    pub fn unconfigured() -> Self {
+        Self {
+            alias: String::new(),
+            model: String::new(),
+            protocol: Protocol::OpenAi,
+            base_url: String::new(),
+            api_key: String::new(),
+            headers: Default::default(),
+            tool_names: Default::default(),
+            session_header: None,
+            max_output: None,
+            context_window: None,
+            images: false,
+            thinking: Thinking::Off,
+            cache_control: false,
+            chatgpt: false,
+        }
+    }
+}
+
 /// The key stays out of logs and error reports: presence and length only, never the value.
 impl std::fmt::Debug for ResolvedModel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -316,14 +375,6 @@ pub enum Protocol {
     CommandCode,
 }
 
-/// The model killi would start on when its provider has no key.
-pub struct MissingKey {
-    /// The model alias that can't start.
-    pub alias: String,
-    /// The provider that names no usable key.
-    pub provider: String,
-}
-
 /// Why a provider has no key: "$VAR isn't set", "api_key is blank" or "no api_key or api_key_env".
 fn key_reason(provider: &Provider) -> String {
     match (&provider.api_key, &provider.api_key_env) {
@@ -356,6 +407,52 @@ pub enum Thinking {
     /// On at the provider's default effort.
     On,
     Effort(String),
+}
+
+/// Refreshes the model lists that come from a provider's own API, using the keys the config
+/// already has: OpenCode Go's account list and Z.ai's `/models`. With `only`, just the
+/// provider of that name. Each line reports what changed, or why it couldn't.
+pub async fn sync_models(only: Option<&str>) -> Result<Vec<String>> {
+    let config = Config::load()?;
+    let mut out = Vec::new();
+    for (name, provider) in &config.providers {
+        if only.is_some_and(|want| want != name) {
+            continue;
+        }
+        let Some(key) = provider.key() else {
+            continue;
+        };
+        let Some(base) = provider.base_url.as_deref() else {
+            continue;
+        };
+        let synced = if base.starts_with("https://opencode.ai/inference/go/") {
+            crate::login::opencode_go_add(Some(&key))
+                .await
+                .map(|outcome| {
+                    out.extend(outcome.notes);
+                    outcome.added.provider
+                })
+        } else if base.starts_with("https://api.z.ai") {
+            zai::add(&key).await.map(|added| added.provider)
+        } else {
+            continue;
+        };
+        match synced {
+            Ok(provider) => {
+                let count = Config::load()?
+                    .models
+                    .values()
+                    .filter(|model| model.provider == provider)
+                    .count();
+                out.push(format!("{provider}: {count} models"));
+            }
+            Err(error) => out.push(format!("{name}: {error:#}")),
+        }
+    }
+    if out.is_empty() {
+        out.push("No OpenCode Go or Z.ai provider with a key to sync.".to_string());
+    }
+    Ok(out)
 }
 
 pub fn killi_home() -> PathBuf {

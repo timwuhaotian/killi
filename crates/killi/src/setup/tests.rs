@@ -29,6 +29,7 @@ fn setup(root: &Path, tools: Vec<Value>) -> Setup {
         settings,
         skills,
         notes: Vec::new(),
+        defer_key: false,
     }
 }
 
@@ -228,6 +229,7 @@ fn resume_runs_on_the_logs_model_with_its_conversation() {
         settings,
         skills,
         notes: Vec::new(),
+        defer_key: false,
     };
     let agent = setup
         .resume(&log, Controls::default(), Rc::new(|_| {}))
@@ -280,6 +282,7 @@ fn every_session_gets_the_configured_backup_model() {
         settings,
         skills,
         notes: Vec::new(),
+        defer_key: false,
     };
     let agent = setup
         .resume(&log, Controls::default(), Rc::new(|_| {}))

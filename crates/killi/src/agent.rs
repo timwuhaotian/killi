@@ -105,6 +105,9 @@ pub struct Agent {
     pub stats: Stats,
     pub controls: Controls,
     settings: Rc<Settings>,
+    /// Subagents one `agent_swarm` call runs at once; `/swarm concurrent <n>` changes it for
+    /// this session.
+    swarm_parallel: Cell<usize>,
     sink: Sink,
     ids: HashSet<String>,
     /// Identical tool calls made in the current turn, by a hash of the call.

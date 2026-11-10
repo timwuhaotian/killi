@@ -49,6 +49,7 @@ Usage:
   killi login [<service>]                      Sign in to chatgpt, opencode-go, muse-code or command-code, adding its models
   killi logout [<service>]                     Sign out of one
   killi update                                 Install the latest published version
+  killi models sync [<provider>]               Refresh OpenCode Go and Z.ai model lists
   killi sessions [<pid>] [--json]              The killi sessions running on this machine, or what one is doing
   killi ask <pid> <question>                   Ask another session about its work; its model answers
   killi tell <pid> <message>                   Leave another session a message for its next step
@@ -96,6 +97,19 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
             config::import_command(&owned).map(|()| ExitCode::SUCCESS)
         }
         Some("update") => update::update().await.map(|()| ExitCode::SUCCESS),
+        Some("models") => {
+            let only = match args.get(1).map(String::as_str) {
+                Some("sync") => args.get(2).map(String::as_str),
+                Some(name) => Some(name),
+                None => None,
+            };
+            config::sync_models(only).await.map(|lines| {
+                for line in lines {
+                    println!("{line}");
+                }
+                ExitCode::SUCCESS
+            })
+        }
         Some("login") => login::login(args.get(1).map(String::as_str))
             .await
             .map(|()| ExitCode::SUCCESS),
@@ -121,8 +135,7 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
             // The first-run guides read stdin with the terminal's own Ctrl+C and end of
             // input, before the signal handlers below replace them.
             if options.prompt.is_none() {
-                config::set_up_if_missing()?;
-                config::guide_model(options.model.as_deref())?;
+                config::start_if_missing()?;
                 login::chatgpt::offer(options.model.as_deref()).await?;
                 login::commandcode_offer(options.model.as_deref()).await?;
             }
@@ -280,7 +293,7 @@ async fn run_once(
     // A panic under `-p` has no TUI to install the crash hook: install it here.
     tui::install_crash_hook();
     let cwd = std::env::current_dir()?;
-    let setup = Setup::new(config, &cwd, model.as_deref()).await?;
+    let setup = Setup::new(config, &cwd, model.as_deref(), false).await?;
     let printer = Rc::new(RefCell::new(Printer::new(&cwd)));
     let sink: Sink = if json_mode {
         Rc::new(|_| {})

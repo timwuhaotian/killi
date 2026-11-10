@@ -599,5 +599,10 @@ impl App {
         } else {
             "Swarm mode off."
         });
+        let path = crate::config::killi_home().join("config.toml");
+        match crate::config::set_swarm(&path, on) {
+            Ok(()) => self.notice(&format!("Saved to {}.", path.display())),
+            Err(e) => self.error_report(&e),
+        }
     }
 }

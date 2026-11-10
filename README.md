@@ -108,7 +108,8 @@ Rust 1.94 or later, on macOS (arm64) or Linux (x64/arm64).
 - **Subagents** run in parallel on the same model and cached prompt. **Swarms** run one subagent
   per item of a prompt template, up to 128, several at a time, shown as one live panel (how many,
   which are working on what, how long each has run); swarm mode, on by default and set with
-  `[agent] swarm` or `/swarm`, tells the agent to split its work that way. **Background tasks** keep servers and slow builds running. **Undo** puts
+  `[agent] swarm` or `/swarm`, tells the agent to split its work that way, and
+  `[agent] swarm_parallel` (default 8) sets how many run at once. **Background tasks** keep servers and slow builds running. **Undo** puts
   your files back as they were before a turn, including what commands changed.
 - **Sessions that know about each other.** Run several killi at once and each knows where the
   others work and what they are doing. `killi card <pid>` says what a session can be asked to
@@ -202,19 +203,21 @@ other two; tokens and memory are not affected by load.
 
 ### Models
 
-killi reads `~/.killi/config.toml`. Run without a config, `killi` lists the other coding
-agents it finds on the machine — Kimi Code, pi, omp, opencode, Codex, Claude Code or
-Gemini CLI — and copies one's providers, models, API keys, default model, thinking level
-and MCP servers into killi's layout on one choice; providers those tools only reach
-through an account login are skipped. Otherwise it
-writes a starting config to edit — and then keeps going. When the model it would start on has
-no key — `$OPENAI_API_KEY` isn't set, say — it offers to paste the key (stored under
-`[providers.*]` in the config, read with echo off) or to start on another configured model,
-so a first run ends on a session instead of an error. On the first interactive launch a short
-guide also offers to add another start command beside the binary (such as `dw` -> `killi`);
-press Enter to keep starting it as `killi`. To write the config yourself: if you use
-another coding agent, copy its providers, models and MCP servers (`killi import --list`
-shows what killi found):
+killi reads `~/.killi/config.toml`. Without one, an interactive start writes the starting
+template and opens the session. When a key for one of the template's providers is already in
+the environment (`$OPENAI_API_KEY` or `$ANTHROPIC_API_KEY`), that model becomes the default,
+so a machine that is already set up starts configured. With no key at all the session still
+opens and its first rows are the steps: `/provider` adds a provider and its API key from
+inside the session, `/model` picks a model it added, and `killi login` signs in to a
+subscription instead. Once a model is configured, the first interactive launch also offers
+to add another start command beside the binary (such as `dw` -> `killi`); press Enter to
+keep starting it as `killi`.
+
+To copy another agent's setup instead, `killi import` lists the other coding agents it finds
+on the machine — Kimi Code, pi, omp, opencode, Codex, Claude Code or Gemini CLI — and copies
+one's providers, models, API keys, default model, thinking level and MCP servers into killi's
+layout on one choice; providers those tools only reach through an account login are skipped
+(`killi import --list` shows what killi found):
 
 ```sh
 killi import
@@ -259,6 +262,20 @@ opencode-go, muse-code and command-code, plus anthropic, kimi, mimo, minimax, qw
 unisound and zai. (ChatGPT and the browser sign-ins stay in `killi login`.) Run on a provider
 the config already has, it also brings that provider's key, API and URL up to date (and the
 tool names for muse-code) and keeps the rest.
+
+To keep a provider to some of its models — OpenCode Go already follows the account's own
+enabled list — add `[models_filter.<provider>]` with `include` and `exclude` patterns. Each
+pattern is a full alias or a model id, and a trailing `*` matches a prefix; `exclude` wins, and
+a provider without the table keeps every model. The filter decides what `/model` lists, what
+`/provider` syncs, and which model a session starts on:
+
+```toml
+[models_filter.zai]
+include = ["glm-5.3", "glm-5.3-flash"]
+```
+
+`killi models sync [<provider>]` refreshes OpenCode Go's account list and Z.ai's `/models`
+with the keys already in the config, and applies the filter; it needs no sign-in.
 
 - **ChatGPT** (Plus or Pro) signs in in the browser, through OpenAI's [sign-in for open-source
   tools](https://developers.openai.com/siwc/token-sharing-open-source), and keeps the credentials
@@ -320,7 +337,7 @@ Commands: `/provider [name]` (add a provider from a pasted key), `/model [alias]
 `/backup-model [alias]` (the fallback when the primary keeps failing), `/mcp [server]`
 (turn servers on or off), `/web-search-config`, `/effort [level]` (thinking effort),
 `/new` (or `/clear`), `/resume`, `/btw <question>` (a side question, never kept),
-`/compact [focus]`, `/recap`, `/undo`, `/plan`, `/swarm [task|on|off]`,
+`/compact [focus]`, `/recap`, `/undo`, `/plan`, `/swarm [task|on|off|parallel <n>]`,
 `/goal [<text>|done|clear]` (a session goal: `/exit`, `/new` and `/resume` wait until it is
 `/goal done`, or `/goal clear` when it is truly impossible or no longer wanted), `/usage`, `/session`
 (copies the session's id, log path and summary for another agent to read), `/sessions` (the

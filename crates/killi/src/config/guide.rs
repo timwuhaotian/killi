@@ -6,8 +6,39 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-pub(super) const TEMPLATE: &str = r#"# killi's config. Models are named "<provider>/<model>"; pick one with -m or default_model.
-default_model = "openai/gpt-5.5"
+pub(super) const TEMPLATE: &str = r#"# killi's config. Models are named "<provider>/<model>". Add one from inside a session
+# with /provider, or copy another agent's setup with `killi import`; /model picks one.
+#
+# To write one by hand, uncomment a block below and set default_model.
+#
+# default_model = "openai/gpt-5.5"
+#
+# [providers.openai]
+# type = "openai"                 # OpenAI chat completions, and compatible APIs
+# base_url = "https://api.openai.com/v1"
+# api_key_env = "OPENAI_API_KEY"  # or: api_key = "..."
+#
+# [providers.anthropic]
+# type = "anthropic"              # Anthropic Messages, and compatible APIs
+# api_key_env = "ANTHROPIC_API_KEY"
+#
+# [models."openai/gpt-5.5"]
+# provider = "openai"
+# model = "gpt-5.5"
+# protocol = "openai_responses"   # use the Responses API for this model
+# max_context_size = 400000
+# max_output_size = 128000
+# capabilities = ["image_in", "thinking", "tool_use"]
+#
+# [models."anthropic/claude-sonnet-5-5"]
+# provider = "anthropic"
+# model = "claude-sonnet-5-5"
+# max_context_size = 1000000
+# max_output_size = 128000
+# capabilities = ["image_in", "thinking", "tool_use"]
+#
+# To use your ChatGPT plan, or an OpenCode Go, Muse Code or Command Code subscription, run
+# `killi login`: it signs in and adds that provider with its models here.
 
 # [thinking]
 # enabled = false              # turns reasoning off everywhere; each model's default_effort
@@ -15,27 +46,37 @@ default_model = "openai/gpt-5.5"
 
 [agent]
 swarm = true                    # start in swarm mode: split work across subagents; false turns it off
+swarm_parallel = 8              # subagents a swarm runs at once
 peers = true                    # other killi sessions here can see this one, ask it and message it
 
+# Keep a provider to the models you want. A provider without an entry keeps every model.
+# [models_filter.zai]
+# include = ["glm-5.3", "glm-5.3-flash"]   # aliases or model ids; a trailing * is a prefix
+# exclude = ["*-preview"]
+"#;
+
+/// The OpenAI provider and model, added to a new config when its key is already in the
+/// environment; without one the block stays a commented example in `TEMPLATE`.
+const OPENAI: &str = r#"
 [providers.openai]
-type = "openai"                 # OpenAI chat completions, and compatible APIs
+type = "openai"
 base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"  # or: api_key = "..."
-
-[providers.anthropic]
-type = "anthropic"              # Anthropic Messages, and compatible APIs
-api_key_env = "ANTHROPIC_API_KEY"
-
-# To use your ChatGPT plan, or an OpenCode Go, Muse Code or Command Code subscription, run
-# `killi login`: it signs in and adds that provider with its models here.
+api_key_env = "OPENAI_API_KEY"
 
 [models."openai/gpt-5.5"]
 provider = "openai"
 model = "gpt-5.5"
-protocol = "openai_responses"   # use the Responses API for this model
+protocol = "openai_responses"
 max_context_size = 400000
 max_output_size = 128000
 capabilities = ["image_in", "thinking", "tool_use"]
+"#;
+
+/// The Anthropic provider and model, added the same way as `OPENAI`.
+const ANTHROPIC: &str = r#"
+[providers.anthropic]
+type = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"
 
 [models."anthropic/claude-sonnet-5-5"]
 provider = "anthropic"
@@ -79,121 +120,78 @@ pub fn init() -> Result<()> {
         );
         return Ok(());
     }
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&dir)?;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)?;
-    file.write_all(TEMPLATE.as_bytes())?;
-    file.write_all(prompt_section().as_bytes())?;
+    write_template(&path)?;
     println!(
-        "Wrote {}. Set your providers' keys and models there.",
+        "Wrote {}. Add a provider with /provider in a session, or edit it here.",
         path.display()
     );
     Ok(())
 }
 
-/// When killi starts in a terminal without a config, offers to make one from another
-/// coding agent it finds on the machine — one list, one choice — or from the starting
-/// template. After a failed import the rest are offered again. The start then goes on to
-/// `guide_model`, which gives the new config a key; declining every offer leaves `load`
-/// to explain that there is no config.
-pub fn set_up_if_missing() -> Result<()> {
+/// The config a new file starts with: the examples in `TEMPLATE`, plus an active provider
+/// and model for each API key already in the environment, so a machine that is set up starts
+/// configured. With no key, no provider or model is written at all.
+fn starting_config() -> String {
+    let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    let (openai, anthropic) = (set("OPENAI_API_KEY"), set("ANTHROPIC_API_KEY"));
+    let mut text = String::new();
+    if openai {
+        text.push_str("default_model = \"openai/gpt-5.5\"\n");
+    } else if anthropic {
+        text.push_str("default_model = \"anthropic/claude-sonnet-5-5\"\n");
+    }
+    text.push_str(TEMPLATE);
+    if openai {
+        text.push_str(OPENAI);
+    }
+    if anthropic {
+        text.push_str(ANTHROPIC);
+    }
+    text
+}
+
+/// Writes the starting config and its `[prompt]` table, making `~/.killi` owner-only.
+fn write_template(path: &Path) -> Result<()> {
+    let dir = path.parent().expect("the config path has a folder");
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(starting_config().as_bytes())?;
+    file.write_all(prompt_section().as_bytes())?;
+    Ok(())
+}
+
+/// An interactive start without a config writes the starting config and goes on: the session
+/// opens, and `/provider` adds a provider and its key from inside it. A provider whose key is
+/// already in the environment is written and is the default.
+pub fn start_if_missing() -> Result<()> {
     let path = killi_home().join("config.toml");
     if path.exists() || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Ok(());
     }
-    eprintln!("killi has no config yet at {}.", path.display());
-    let mut found: Vec<(Source, PathBuf)> = sources()
-        .into_iter()
-        .filter_map(|source| (source.detect)().map(|found| (source, found)))
-        .collect();
-    while !found.is_empty() {
-        let fresh = found.len();
-        let options: Vec<String> = found
-            .iter()
-            .map(|(source, path)| format!("{} ({})", source.name, path.display()))
-            .chain(["Start with a fresh config".to_string()])
-            .collect();
-        let choice = select("Import configuration", &options, fresh)?;
-        if choice == fresh {
-            break;
-        }
-        let (source, _) = found.remove(choice);
-        match (source.import)(false) {
-            Ok(()) => return Ok(()),
-            Err(error) => eprintln!("killi: {error:#}"),
-        }
+    write_template(&path)?;
+    let config = Config::load()?;
+    let mut configured = config.resolve(None).is_ok();
+    if !configured
+        && let Some(alias) = config.first_keyed()
+    {
+        set_default_model(&path, alias)?;
+        configured = true;
     }
-    if confirm("Write a starting config to edit?")? {
-        init()?;
-    }
-    Ok(())
-}
-
-/// The first-run model guide: when the model killi would start on has no key, offers to
-/// paste one — stored in the config file, read with echo off — or to start on another
-/// configured model. Interactive starts only: `-p` and piped runs keep failing with the
-/// reason from `resolve`, and so does a start where every offer is declined.
-pub fn guide_model(model: Option<&str>) -> Result<()> {
-    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
-        return Ok(());
-    }
-    let path = killi_home().join("config.toml");
-    loop {
-        let config = Config::load()?;
-        let Some(missing) = config.missing_key(model) else {
-            return Ok(());
-        };
-        let Some(provider) = config.providers.get(&missing.provider) else {
-            return Ok(());
-        };
-        eprintln!("{}", no_key_yet(&missing.alias, provider));
-        let otherwise = if model.is_some() {
-            "press Enter to quit"
+    eprintln!(
+        "✻ Wrote a starting config to {}.{}",
+        path.display(),
+        if configured {
+            ""
         } else {
-            "press Enter to choose another model"
-        };
-        let key = read_secret(&format!(
-            "Paste the key to store it in ~/.killi/config.toml, or {otherwise}: "
-        ))?;
-        if !key.is_empty() {
-            set_provider_key(&path, &missing.provider, &key)?;
-            continue;
+            " Add a provider from the session with /provider."
         }
-        if model.is_some() || !pick_model(&config, &path)? {
-            return Ok(());
-        }
-    }
-}
-
-/// Lists the configured models with whether their key is there, and makes the chosen one the
-/// default. False when the user keeps the model they have.
-fn pick_model(config: &Config, path: &Path) -> Result<bool> {
-    let aliases: Vec<&str> = config.models.keys().map(String::as_str).collect();
-    eprintln!("Models in ~/.killi/config.toml:");
-    for (index, alias) in aliases.iter().enumerate() {
-        let note = match config.missing_key(Some(alias)) {
-            Some(missing) => key_reason(&config.providers[&missing.provider]),
-            None if config.chatgpt_model(Some(alias)).is_some()
-                && !crate::login::chatgpt::signed_in() =>
-            {
-                "needs `killi login chatgpt`".to_string()
-            }
-            None => "ready".to_string(),
-        };
-        eprintln!("  {}. {alias} — {note}", index + 1);
-    }
-    let answer = read_line("Start with which? ")?;
-    match answer.parse::<usize>() {
-        Ok(choice) if (1..=aliases.len()).contains(&choice) => {
-            set_default_model(path, aliases[choice - 1])?;
-            Ok(true)
-        }
-        _ => Ok(false),
-    }
+    );
+    Ok(())
 }

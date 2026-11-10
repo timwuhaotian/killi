@@ -322,6 +322,70 @@ fn a_failed_command_shows_its_gist_and_the_hint_its_kind_earns() {
 }
 
 #[test]
+fn the_model_picker_lists_only_models_whose_provider_has_a_key() {
+    let mut app = test_app();
+    let config: Config = toml::from_str(
+        "default_model = \"a/model\"\n\n[providers.a]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[providers.b]\ntype = \"openai\"\napi_key = \"sk-b\"\n\n[models.\"a/model\"]\nprovider = \"a\"\nmodel = \"model\"\n\n[models.\"b/model\"]\nprovider = \"b\"\nmodel = \"model\"\n",
+    )
+    .unwrap();
+    app.refresh_choices(&config);
+    let values: Vec<&str> = app
+        .model_choices
+        .iter()
+        .map(|item| item.value.as_str())
+        .collect();
+    assert_eq!(values, ["b/model"]);
+}
+
+#[test]
+fn the_model_picker_hides_models_the_filter_excludes() {
+    let mut app = test_app();
+    let config: Config = toml::from_str(
+        "default_model = \"b/keep\"\n\n[providers.b]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"b/keep\"]\nprovider = \"b\"\nmodel = \"keep\"\n\n[models.\"b/hide\"]\nprovider = \"b\"\nmodel = \"hide\"\n\n[models_filter.b]\nexclude = [\"b/hide\"]\n",
+    )
+    .unwrap();
+    app.open_model_picker(&config, false);
+    let picker = app.picker.as_ref().expect("a picker");
+    let values: Vec<&str> = picker
+        .options
+        .iter()
+        .map(|(name, _, _)| name.as_str())
+        .collect();
+    assert_eq!(values, ["b/keep"]);
+}
+
+#[test]
+fn the_swarm_argument_menu_offers_modes_and_parallel_counts() {
+    let mut app = test_app();
+    app.editor.insert("/swarm ");
+    let menu = app.suggestions().expect("swarm arguments");
+    let values: Vec<&str> = menu
+        .items
+        .iter()
+        .map(|item| item.value.as_str())
+        .collect();
+    assert!(values.contains(&"on") && values.contains(&"off"));
+    assert!(values.contains(&"parallel 8"), "{values:?}");
+}
+
+#[test]
+fn the_model_picker_skips_models_whose_provider_has_no_key() {
+    let mut app = test_app();
+    let config: Config = toml::from_str(
+        "default_model = \"a/model\"\n\n[providers.a]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[providers.b]\ntype = \"openai\"\napi_key = \"sk-b\"\n\n[models.\"a/model\"]\nprovider = \"a\"\nmodel = \"model\"\n\n[models.\"b/model\"]\nprovider = \"b\"\nmodel = \"model\"\n",
+    )
+    .unwrap();
+    app.open_model_picker(&config, false);
+    let picker = app.picker.as_ref().expect("a picker");
+    let values: Vec<&str> = picker
+        .options
+        .iter()
+        .map(|(name, _, _)| name.as_str())
+        .collect();
+    assert_eq!(values, ["b/model"]);
+}
+
+#[test]
 fn the_status_line_keeps_the_context_figure_before_swarm_mode() {
     let mut app = test_app();
     app.controls.swarm.set(true);

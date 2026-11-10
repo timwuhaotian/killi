@@ -334,7 +334,7 @@ fn test_model(base_url: &str) -> ResolvedModel {
         model: "gpt-test".into(),
         protocol: Protocol::OpenAi,
         base_url: base_url.into(),
-        api_key: String::new(),
+        api_key: "test-key".into(),
         headers: Default::default(),
         tool_names: Default::default(),
         session_header: None,
@@ -352,6 +352,21 @@ fn sse_ok() -> String {
          data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n\
      data: [DONE]\n\n"
         .into()
+}
+
+#[tokio::test]
+async fn a_client_without_a_key_names_the_commands_that_add_one() {
+    let mut model = test_model("http://127.0.0.1:1");
+    model.api_key.clear();
+    let client = Client::new(model).unwrap();
+    let error = client
+        .complete(&[], &[], "k", &mut |_| {})
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("model `m`"), "{error}");
+    assert!(error.contains("/provider"), "{error}");
+    assert!(error.contains("killi login"), "{error}");
 }
 
 #[tokio::test]

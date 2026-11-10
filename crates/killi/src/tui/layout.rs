@@ -573,6 +573,16 @@ impl App {
     /// the context figure, so the model and mode stay on screen at any width. `swarm mode`
     /// yields before the context figure does.
     pub(super) fn status_line(&self, width: usize) -> String {
+        if self.needs_provider {
+            let mut head = vec!["no provider".to_string()];
+            if self.controls.plan.get() {
+                head.push(format!("{LAGOON}plan mode{RESET}{DIM}"));
+            }
+            if self.controls.swarm.get() {
+                head.push(format!("{LAGOON}swarm mode{RESET}{DIM}"));
+            }
+            return format!("{DIM}{}{RESET}", fit(&head.join(&dot()), width));
+        }
         let mut head = vec![self.status.model.clone()];
         if let Some((word, value)) = thinking_parts(&self.status.thinking) {
             head.push(format!("{word} {}", tint(EFFORT, value)));

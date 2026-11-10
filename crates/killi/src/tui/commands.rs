@@ -188,7 +188,7 @@ pub(super) const COMMANDS: &[Command] = &[
         name: "swarm",
         aliases: &[],
         args: "[task|on|off]",
-        about: "Swarm mode: split work across many subagents",
+        about: "Swarm mode: split work across many subagents; parallel <n> sets how many at once",
     },
     Command {
         name: "goal",

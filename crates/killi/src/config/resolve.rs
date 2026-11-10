@@ -17,6 +17,17 @@ impl Config {
     }
 
     pub fn resolve(&self, requested: Option<&str>) -> Result<ResolvedModel> {
+        self.resolve_with(requested, true)
+    }
+
+    /// `resolve` without insisting on the provider's key: an interactive start still opens
+    /// on a model whose key isn't there so `/provider` can add one, and the first request
+    /// names what is missing.
+    pub fn resolve_without_key(&self, requested: Option<&str>) -> Result<ResolvedModel> {
+        self.resolve_with(requested, false)
+    }
+
+    fn resolve_with(&self, requested: Option<&str>, key_required: bool) -> Result<ResolvedModel> {
         let Some(alias) = requested.or(self.default_model.as_deref()) else {
             bail!(
                 "no model chosen: pass -m <provider/model> or set default_model in ~/.killi/config.toml"
@@ -59,9 +70,10 @@ impl Config {
         };
         let api_key = match chatgpt {
             true => String::new(),
-            false => provider
+            false if key_required => provider
                 .key()
                 .ok_or_else(|| anyhow::anyhow!("{}", no_key(alias, &model.provider, provider)))?,
+            false => provider.key().unwrap_or_default(),
         };
         Ok(ResolvedModel {
             alias: alias.to_string(),
@@ -81,17 +93,46 @@ impl Config {
         })
     }
 
-    /// The model killi would start on when its provider has no key: the alias and the
-    /// provider's name. `None` when that model has a key, or when something else is wrong
-    /// with it, which `resolve` reports.
-    pub fn missing_key(&self, requested: Option<&str>) -> Option<MissingKey> {
-        let alias = requested.or(self.default_model.as_deref())?;
-        let model = self.models.get(alias)?;
-        let provider = self.providers.get(&model.provider)?;
-        (provider.kind != "chatgpt" && provider.key().is_none()).then(|| MissingKey {
-            alias: alias.to_string(),
-            provider: model.provider.clone(),
-        })
+    /// The first configured model whose provider has an API key and that
+    /// `[models_filter]` keeps, in alias order: an interactive start prefers it over a
+    /// default model whose key is missing.
+    pub fn first_keyed(&self) -> Option<&str> {
+        self.models
+            .iter()
+            .find(|(alias, model)| {
+                self.model_allowed(alias)
+                    && self
+                        .providers
+                        .get(&model.provider)
+                        .is_some_and(|provider| {
+                            provider.kind != "chatgpt" && provider.key().is_some()
+                        })
+            })
+            .map(|(alias, _)| alias.as_str())
+    }
+
+    /// Whether `[models_filter.<provider>]` keeps `alias`; a provider without an entry
+    /// keeps every model.
+    pub fn model_allowed(&self, alias: &str) -> bool {
+        let provider = alias.split_once('/').map_or(alias, |(provider, _)| provider);
+        self.models_filter
+            .get(provider)
+            .is_none_or(|filter| filter.allows(alias))
+    }
+
+    /// Whether the model killi would start on has no usable key. False when it has one, and
+    /// when something else is wrong with it, which `resolve` reports.
+    pub fn missing_key(&self, requested: Option<&str>) -> bool {
+        let Some(alias) = requested.or(self.default_model.as_deref()) else {
+            return false;
+        };
+        let Some(model) = self.models.get(alias) else {
+            return false;
+        };
+        let Some(provider) = self.providers.get(&model.provider) else {
+            return false;
+        };
+        provider.kind != "chatgpt" && provider.key().is_none()
     }
 
     /// The configured provider `ours` picks out: its name, and whether it has a key.

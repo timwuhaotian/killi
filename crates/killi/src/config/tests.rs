@@ -7,19 +7,15 @@ use super::{
 };
 
 #[test]
-fn template_parses_and_resolves() {
+fn template_parses_without_a_model() {
     let config: super::Config = toml::from_str(super::TEMPLATE).unwrap();
-    assert_eq!(config.models.len(), 2);
-    assert_eq!(config.agent.swarm, Some(true));
-    // SAFETY: tests that read this variable don't run concurrently with one that changes it.
-    unsafe { std::env::set_var("OPENAI_API_KEY", "test-key") };
-    let model = config.resolve(None).unwrap();
-    assert_eq!(model.protocol, super::Protocol::Responses);
-    assert_eq!(
-        model.thinking,
-        super::Thinking::On,
-        "no global effort any more: the model's own, else the provider's default"
+    assert!(
+        config.models.is_empty() && config.providers.is_empty(),
+        "providers are added by /provider or an API key already in the environment"
     );
+    assert_eq!(config.default_model, None);
+    assert_eq!(config.agent.swarm, Some(true));
+    assert_eq!(config.agent.swarm_parallel, Some(8));
 }
 
 #[test]
@@ -69,8 +65,8 @@ fn a_chatgpt_model_needs_no_key_and_speaks_responses() {
     assert!(model.chatgpt && model.api_key.is_empty());
     assert_eq!(model.base_url, "https://api.openai.com/v1");
     assert!(
-        config.missing_key(Some("plan/gpt-a")).is_none(),
-        "the first-run guide doesn't ask for a key"
+        !config.missing_key(Some("plan/gpt-a")),
+        "a ChatGPT plan needs no key"
     );
     assert_eq!(config.chatgpt_model(Some("plan/gpt-a")), Some("plan/gpt-a"));
 
@@ -255,44 +251,143 @@ fn an_empty_key_variable_counts_as_missing() {
 }
 
 #[test]
-fn missing_key_names_the_model_and_provider_that_cant_start() {
+fn a_missing_key_still_resolves_for_an_interactive_start() {
+    let config: super::Config = toml::from_str(
+        "default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n",
+    )
+    .unwrap();
+    assert!(config.resolve(None).is_err(), "the strict resolve refuses");
+    let model = config.resolve_without_key(None).unwrap();
+    assert_eq!(model.alias, "test/model");
+    assert!(model.api_key.is_empty());
+}
+
+#[test]
+fn models_filter_keeps_only_the_providers_included_models() {
+    let config: super::Config = toml::from_str(
+        "default_model = \"zai/glm-5.3\"\n\n[providers.zai]\ntype = \"openai\"\napi_key = \"k\"\n\n[providers.other]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"zai/glm-5.3\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n\n[models.\"zai/glm-5.3-flash\"]\nprovider = \"zai\"\nmodel = \"glm-5.3-flash\"\n\n[models.\"zai/glm-4.5\"]\nprovider = \"zai\"\nmodel = \"glm-4.5\"\n\n[models.\"other/x\"]\nprovider = \"other\"\nmodel = \"x\"\n\n[models_filter.zai]\ninclude = [\"glm-5.3\", \"glm-5.3-flash\"]\nexclude = [\"*-preview\"]\n",
+    )
+    .unwrap();
+    assert!(config.model_allowed("zai/glm-5.3"));
+    assert!(config.model_allowed("zai/glm-5.3-flash"));
+    assert!(!config.model_allowed("zai/glm-4.5"));
+    assert!(
+        config.model_allowed("other/x"),
+        "a provider without an entry keeps every model"
+    );
+
+    let only_zai: super::Config = toml::from_str(
+        "default_model = \"zai/glm-4.5\"\n\n[providers.zai]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"zai/glm-4.5\"]\nprovider = \"zai\"\nmodel = \"glm-4.5\"\n\n[models.\"zai/glm-5.3\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n\n[models_filter.zai]\ninclude = [\"glm-5.3*\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        only_zai.first_keyed(),
+        Some("zai/glm-5.3"),
+        "the filtered default falls to the first kept model"
+    );
+}
+
+#[test]
+fn first_keyed_skips_models_whose_provider_has_no_key() {
+    let config: super::Config = toml::from_str(
+        "default_model = \"a/model\"\n\n[providers.a]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[providers.b]\ntype = \"openai\"\napi_key = \"sk-b\"\n\n[providers.plan]\ntype = \"chatgpt\"\n\n[models.\"a/model\"]\nprovider = \"a\"\nmodel = \"model\"\n\n[models.\"b/model\"]\nprovider = \"b\"\nmodel = \"model\"\n\n[models.\"plan/gpt\"]\nprovider = \"plan\"\nmodel = \"gpt\"\n",
+    )
+    .unwrap();
+    assert!(config.missing_key(None), "the default model has no key");
+    assert_eq!(config.first_keyed(), Some("b/model"));
+
+    let plan: super::Config = toml::from_str(
+        "default_model = \"plan/gpt\"\n\n[providers.plan]\ntype = \"chatgpt\"\n\n[models.\"plan/gpt\"]\nprovider = \"plan\"\nmodel = \"gpt\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        plan.first_keyed(),
+        None,
+        "a ChatGPT plan has no API key to rank by"
+    );
+}
+
+#[test]
+fn missing_key_is_only_for_a_model_whose_provider_has_none() {
     let source = "[providers.test]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[providers.inline]\ntype = \"openai\"\napi_key = \"sk-inline\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n\n[models.\"inline/model\"]\nprovider = \"inline\"\nmodel = \"model\"\n";
     let config: super::Config =
         toml::from_str(&format!("default_model = \"test/model\"\n{source}")).unwrap();
-    let missing = config.missing_key(None).unwrap();
-    assert_eq!(missing.alias, "test/model");
-    assert_eq!(missing.provider, "test");
+    assert!(config.missing_key(None), "the default model has no key");
     assert!(
-        config.missing_key(Some("inline/model")).is_none(),
+        !config.missing_key(Some("inline/model")),
         "an inline key is a key"
     );
     assert!(
-        config.missing_key(Some("unknown/model")).is_none(),
+        !config.missing_key(Some("unknown/model")),
         "resolve reports those"
     );
 
     let blank: super::Config = toml::from_str("default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n").unwrap();
-    assert!(blank.missing_key(None).is_some(), "a blank key is no key");
+    assert!(blank.missing_key(None), "a blank key is no key");
 }
 
 #[test]
-fn storing_a_key_replaces_the_environment_line_and_keeps_the_rest() {
-    let root = std::env::temp_dir().join(format!("killi-key-{}", std::process::id()));
+fn swarm_settings_are_replaced_in_place_and_kept_apart() {
+    let root = std::env::temp_dir().join(format!("killi-swarm-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("config.toml");
-    std::fs::write(&path, "# my config\ndefault_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n").unwrap();
+    std::fs::write(
+        &path,
+        "# my config\n\n[agent]\nswarm = true\npeers = false # keep\n",
+    )
+    .unwrap();
 
-    super::set_provider_key(&path, "test", "sk-pasted").unwrap();
+    super::set_swarm(&path, false).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("# my config"), "{text}");
-    assert!(!text.contains("api_key_env"), "{text}");
+    assert!(text.contains("swarm = false"), "{text}");
+    assert!(text.contains("peers = false # keep"), "{text}");
     let config: super::Config = toml::from_str(&text).unwrap();
-    assert_eq!(
-        config.providers["test"].api_key.as_deref(),
-        Some("sk-pasted")
-    );
-    assert!(config.missing_key(None).is_none());
+    assert_eq!(config.agent.swarm, Some(false));
+
+    super::set_swarm_parallel(&path, 16).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.agent.swarm_parallel, Some(16));
+    assert_eq!(config.agent.swarm, Some(false), "swarm stays as it was");
+
+    super::set_swarm(&path, true).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("swarm_parallel = 16"), "{text}");
+    assert!(text.contains("swarm = true"), "{text}");
+
+    let bare = root.join("bare.toml");
+    std::fs::write(&bare, "default_model = \"test/model\"\n").unwrap();
+    super::set_swarm(&bare, false).unwrap();
+    let text = std::fs::read_to_string(&bare).unwrap();
+    assert!(text.contains("[agent]\nswarm = false"), "{text}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn removing_models_drops_only_that_providers_stale_ones() {
+    let root = std::env::temp_dir().join(format!("killi-models-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    std::fs::write(
+        &path,
+        "# my config\ndefault_model = \"zai/glm-5.3\"\n\n\
+         [providers.zai]\ntype = \"openai\"\napi_key = \"k\"\n\n\
+         [providers.go]\ntype = \"openai\"\napi_key = \"k\"\n\n\
+         # keep\n[models.\"zai/glm-5.3\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n\n\
+         # stale\n[models.\"go/gone\"]\nprovider = \"go\"\nmodel = \"gone\"\n\n\
+         # served\n[models.\"go/kept\"]\nprovider = \"go\"\nmodel = \"kept\"\n",
+    )
+    .unwrap();
+    super::remove_models(&path, "go", &["go/kept".to_string()]).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert!(config.models.contains_key("go/kept"), "{text}");
+    assert!(!config.models.contains_key("go/gone"), "{text}");
+    assert!(config.models.contains_key("zai/glm-5.3"), "{text}");
+    assert!(text.contains("# keep"), "{text}");
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -554,7 +649,7 @@ fn importing_pi_carries_over_providers_models_and_the_default() {
         std::fs::read_to_string(src.join("mcp.json")).unwrap()
     );
     assert!(
-        config.missing_key(None).is_none(),
+        !config.missing_key(None),
         "the imported config starts as it is"
     );
     std::fs::remove_dir_all(&root).unwrap();
@@ -663,7 +758,7 @@ fn confirm_on_empty_stdin_is_no() {
         let saved = libc::dup(libc::STDIN_FILENO);
         assert!(saved >= 0);
         assert_eq!(libc::dup2(null, libc::STDIN_FILENO), libc::STDIN_FILENO);
-        let answer = super::confirm("Write a starting config to edit?");
+        let answer = super::confirm("Trust and run these?");
         libc::dup2(saved, libc::STDIN_FILENO);
         libc::close(saved);
         libc::close(null);
@@ -731,8 +826,10 @@ fn edits_keep_neighbours_and_reparse() {
     );
     std::fs::write(&path, &text).unwrap();
 
-    super::set_provider_key(&path, "test", "sk-pasted").unwrap();
-    let edited = std::fs::read_to_string(&path).unwrap();
+    let fields = toml::Table::from_iter([("api_key".to_string(), toml::Value::from("sk-pasted"))]);
+    let (edited, changed) = super::with_provider_fields(&text, "test", &fields).unwrap();
+    assert_eq!(changed, ["api_key"]);
+    std::fs::write(&path, &edited).unwrap();
     let config: super::Config = toml::from_str(&edited).unwrap();
     assert_eq!(
         config.providers["test"].api_key.as_deref(),

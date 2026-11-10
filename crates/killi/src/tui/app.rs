@@ -63,6 +63,7 @@ impl App {
                 context: agent.stats.context,
                 ..Status::default()
             },
+            needs_provider: false,
             turn_out_base: 0,
             streamed_bytes: 0,
             controls,
@@ -132,16 +133,20 @@ impl App {
     ) {
         self.banner_resumed = resumed;
         let cwd = tilde(&self.cwd);
-        let thinking = match thinking_parts(agent.thinking().label()) {
-            Some((word, value)) => format!(" {DIM}· {word}{RESET} {EFFORT}{value}{RESET}"),
-            None => String::new(),
-        };
         let overview = session.overview();
-        let model = format!(
-            "{}{BOLD}{}{RESET}{thinking}",
-            label("model"),
-            agent.model_alias()
-        );
+        let model = if self.needs_provider {
+            format!("{}{BOLD}none yet{RESET}", label("model"))
+        } else {
+            let thinking = match thinking_parts(agent.thinking().label()) {
+                Some((word, value)) => format!(" {DIM}· {word}{RESET} {EFFORT}{value}{RESET}"),
+                None => String::new(),
+            };
+            format!(
+                "{}{BOLD}{}{RESET}{thinking}",
+                label("model"),
+                agent.model_alias()
+            )
+        };
         let setup = overview_rows(&overview);
         self.since_banner = self.pending.is_empty().then(|| SinceBanner {
             resumed,
@@ -303,6 +308,8 @@ impl App {
         self.status.backup = agent.backup_alias().map(String::from);
         self.status.thinking = agent.thinking().label().to_string();
         self.status.window = agent.context_window();
+        self.needs_provider =
+            agent.model_alias().is_empty() || config.missing_key(Some(agent.model_alias()));
         self.refresh_choices(config);
     }
 
@@ -327,6 +334,7 @@ impl App {
         self.model_choices = config
             .models
             .iter()
+            .filter(|(alias, _)| config.model_allowed(alias) && !config.missing_key(Some(alias)))
             .map(|(alias, model)| Item {
                 value: alias.clone(),
                 description: mark(&model.provider, *alias == self.status.model),

@@ -3,6 +3,37 @@
 Notable changes to killi. `install.sh` and `killi update` always install the latest release
 from [`releases/`](releases); the versions below match `Cargo.toml`.
 
+## Unreleased
+
+- `/swarm` now saves what it changes: `/swarm on` and `/swarm off` write `[agent] swarm`, and
+  `/swarm parallel <n>` writes `swarm_parallel` and applies it to this session's next swarm,
+  so the choice survives restarts instead of only lasting until killi exits.
+
+- `/provider zai` now asks Z.ai's `/models` endpoint and writes every GLM model it lists,
+  including `glm-5.3-flash` and `glm-5.3-flashx`, instead of only `glm-5.3`; if the list call
+  fails it falls back to `glm-5.3`.
+
+- OpenCode Go's model list is now fetched with the key, so a sign-in writes the models the
+  account enabled, not every model Go has, and removes models the account no longer serves;
+  a failed list call fails the sign-in instead of falling back to models.dev's full catalog.
+
+- `[models_filter.<provider>]` keeps a provider to the models you want: `include`/`exclude`
+  patterns (a full alias or a model id; a trailing `*` is a prefix) decide what `/model` lists,
+  what `/provider` syncs and which model a session starts on. A provider without the table
+  keeps every model.
+
+- `killi models sync [<provider>]` refreshes OpenCode Go's account list and Z.ai's `/models`
+  with the keys already in the config, so a stale list is fixed without signing in again.
+
+- The first run opens the session instead of asking about providers on the terminal. Without
+  a config, killi writes the starting template and starts; if a provider's key is already in
+  the environment, that model is the default. With no key the session opens anyway and shows
+  the steps — `/provider` adds a provider and its key, `/model` picks it, `killi login` signs
+  in to a subscription — and the first request repeats the fix instead of failing before the
+  UI opens. The paste-a-key and import prompts at startup are gone, and the short-command-name
+  guide waits until a model is configured; `killi import` still copies another agent's setup
+  when asked.
+
 ## 0.6.73 — 2026-11-10
 
 - `killi login`, `killi logout` and the first-run configuration import list now use a

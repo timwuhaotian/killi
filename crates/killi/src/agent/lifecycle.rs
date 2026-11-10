@@ -169,6 +169,7 @@ impl Agent {
         let ctx = tools::Context::new(cwd.to_path_buf(), session.dir.clone());
         ctx.images.set(client.model.images);
         *ctx.search.borrow_mut() = settings.search.clone();
+        let swarm_parallel = Cell::new(settings.swarm_parallel.max(1));
         Self {
             client: Rc::new(client),
             backup: None,
@@ -179,6 +180,7 @@ impl Agent {
             stats: Stats::default(),
             controls,
             settings: Rc::new(settings),
+            swarm_parallel,
             sink,
             ids: HashSet::new(),
             repeats: HashMap::new(),
@@ -216,6 +218,11 @@ impl Agent {
     #[allow(dead_code)]
     pub fn set_snapshot_wait(&mut self, wait: oneshot::Receiver<()>) {
         self.snapshot_wait = Some(wait);
+    }
+
+    /// Applies `/swarm concurrent <n>` to this session's next swarm.
+    pub fn set_swarm_parallel(&mut self, parallel: usize) {
+        self.swarm_parallel.set(parallel.max(1));
     }
 
     /// Continues the conversation on another model; the next request starts the cache over,

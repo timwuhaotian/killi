@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::agent::{Agent, Controls, Settings, Sink};
-use crate::config::{Config, Thinking};
+use crate::config::{Config, ResolvedModel, Thinking};
 use crate::llm::Client;
 use crate::mcp::Mcp;
 use crate::prompt::{self, SystemPrompt};
@@ -51,16 +51,59 @@ pub struct Setup {
     skills: Skills,
     /// Things worth telling the user at start, such as an MCP server that didn't start.
     notes: Vec<String>,
+    /// The start opens without the model's key, for an interactive session whose `/provider`
+    /// can add one; a headless run fails on the reason instead.
+    defer_key: bool,
 }
 
 impl Setup {
-    pub async fn new(config: Config, cwd: &Path, model: Option<&str>) -> Result<Self> {
-        let last = if model.is_none() {
+    pub async fn new(
+        config: Config,
+        cwd: &Path,
+        model: Option<&str>,
+        defer_key: bool,
+    ) -> Result<Self> {
+        let mut last = if model.is_none() {
             session::last_choice()
         } else {
             Choice::default()
         };
-        config.resolve(model.or(known(&config, &last)))?;
+        // An interactive new session prefers a model that can run over a default whose key
+        // is missing; -m and a resume keep their own choice. A missing key is not fatal when
+        // the session can fix it from inside. Any other problem ends the start here.
+        let requested = model.or(known(&config, &last));
+        let requested = if defer_key
+            && model.is_none()
+            && requested.is_none_or(|alias| {
+                config.missing_key(Some(alias)) || !config.model_allowed(alias)
+            })
+        {
+            config
+                .first_keyed()
+                .map(String::from)
+                .or_else(|| requested.map(String::from))
+        } else {
+            requested.map(String::from)
+        };
+        if defer_key
+            && model.is_none()
+            && let Some(alias) = &requested
+        {
+            last.model = Some(alias.clone());
+        }
+        match requested.as_deref() {
+            Some(alias) => {
+                if let Err(error) = config.resolve(Some(alias))
+                    && (!defer_key || config.resolve_without_key(Some(alias)).is_err())
+                {
+                    return Err(error);
+                }
+            }
+            None if !defer_key => {
+                config.resolve(None)?;
+            }
+            None => {}
+        }
         let skills = Skills::discover(cwd, &config.skills.dirs);
         let prompt = prompt::build(cwd, &skills, config.guidance());
         let mut tools = tools::definitions();
@@ -123,6 +166,7 @@ impl Setup {
             settings,
             skills,
             notes,
+            defer_key,
         })
     }
 
@@ -197,7 +241,22 @@ impl Setup {
     /// default model.
     fn client(&self, choice: &Choice) -> Result<Client> {
         let chosen = known(&self.config, choice).filter(|_| self.model.is_none());
-        let mut model = self.config.resolve(self.model.as_deref().or(chosen))?;
+        let requested = self.model.as_deref().or(chosen);
+        let mut model = match requested {
+            Some(alias) => match self.config.resolve(Some(alias)) {
+                Ok(model) => model,
+                Err(error) if self.defer_key => self
+                    .config
+                    .resolve_without_key(Some(alias))
+                    .map_err(|_| error)?,
+                Err(error) => return Err(error),
+            },
+            None => match self.config.resolve(None) {
+                Ok(model) => model,
+                Err(_) if self.defer_key => return Client::new(ResolvedModel::unconfigured()),
+                Err(error) => return Err(error),
+            },
+        };
         if let Some(effort) = choice
             .effort
             .as_ref()
@@ -236,7 +295,17 @@ impl Setup {
         self.settings.skills = self.skills.clone();
         self.settings.instruction_files = self.prompt.instruction_files.clone();
         self.settings.search = config.search.settings();
+        self.settings.swarm_parallel = config
+            .agent
+            .swarm_parallel
+            .unwrap_or(DEFAULT_SWARM_PARALLEL)
+            .max(1);
         self.config = config;
+    }
+
+    /// Applies `/swarm concurrent <n>` to the sessions started later in this run.
+    pub fn set_swarm_parallel(&mut self, parallel: usize) {
+        self.settings.swarm_parallel = parallel.max(1);
     }
 
     /// Applies a `[search]` pick from /web-search-config: the settings stay the single
