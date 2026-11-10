@@ -40,6 +40,69 @@ fn fresh_config() -> Config {
 }
 
 #[test]
+fn a_keyed_default_is_kept_over_the_first_keyed_model() {
+    let config: Config = toml::from_str(
+        "default_model = \"openai/gpt\"\n\n[providers.openai]\ntype = \"openai\"\napi_key = \"k\"\n\n[providers.anthropic]\ntype = \"anthropic\"\napi_key = \"k\"\n\n[models.\"openai/gpt\"]\nprovider = \"openai\"\nmodel = \"gpt\"\n\n[models.\"anthropic/claude\"]\nprovider = \"anthropic\"\nmodel = \"claude\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        requested_model(&config, None, &Choice::default(), true).as_deref(),
+        Some("openai/gpt"),
+        "a keyed default wins over the alphabetically first keyed model"
+    );
+}
+
+#[test]
+fn a_keyless_default_falls_to_the_first_keyed_model() {
+    let config: Config = toml::from_str(
+        "default_model = \"openai/gpt\"\n\n[providers.openai]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[providers.anthropic]\ntype = \"anthropic\"\napi_key = \"k\"\n\n[models.\"openai/gpt\"]\nprovider = \"openai\"\nmodel = \"gpt\"\n\n[models.\"anthropic/claude\"]\nprovider = \"anthropic\"\nmodel = \"claude\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        requested_model(&config, None, &Choice::default(), true).as_deref(),
+        Some("anthropic/claude")
+    );
+}
+
+#[tokio::test]
+async fn an_interactive_start_defers_only_a_missing_key() {
+    let root = std::env::temp_dir().join(format!("killi-start-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let source = "default_model = \"t/model\"\n\n[providers.t]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[models.\"t/model\"]\nprovider = \"t\"\nmodel = \"model\"\n";
+    let config: Config = toml::from_str(source).unwrap();
+    let Err(error) = Setup::new(config, &root, Some("t/model"), false).await else {
+        panic!("a missing key must end a headless start");
+    };
+    assert!(error.to_string().contains("KILLI_TEST_ABSENT_KEY"), "{error}");
+    let config: Config = toml::from_str(source).unwrap();
+    let setup = Setup::new(config, &root, Some("t/model"), true)
+        .await
+        .unwrap();
+    let agent = setup
+        .start(Controls::default(), Rc::new(|_| {}))
+        .unwrap();
+    assert_eq!(agent.model_alias(), "t/model");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn a_broken_default_is_reported_not_an_unconfigured_session() {
+    let root = std::env::temp_dir().join(format!("killi-start-broken-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let config: Config = toml::from_str(
+        "default_model = \"t/unknown\"\n\n[providers.t]\ntype = \"openai\"\napi_key = \"k\"\n",
+    )
+    .unwrap();
+    let Err(error) = Setup::new(config, &root, None, true).await else {
+        panic!("a broken default must not open an unconfigured session");
+    };
+    assert!(error.to_string().contains("unknown model"), "{error}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn reload_picks_up_skills_and_instructions_added_mid_session() {
     let root = std::env::temp_dir().join(format!("killi-setup-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

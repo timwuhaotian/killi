@@ -39,8 +39,12 @@ fn help_wraps_descriptions_under_their_column() {
     assert!(rows.iter().all(|r| text::width(r) <= 60));
     let recap = rows.iter().position(|r| r.starts_with("  /recap")).unwrap();
     let column = rows[recap].find("Recap").unwrap();
+    // A very wide command column would leave too little room for the description, so
+    // `wrap_words` caps the hanging indent at half the width; the continuation follows
+    // the column up to that cap.
+    let indent = column.min(60 / 2);
     assert!(
-        rows[recap + 1].starts_with(&" ".repeat(column)),
+        rows[recap + 1].starts_with(&" ".repeat(indent)),
         "{:?}",
         rows[recap + 1]
     );

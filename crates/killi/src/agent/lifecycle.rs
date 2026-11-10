@@ -220,7 +220,7 @@ impl Agent {
         self.snapshot_wait = Some(wait);
     }
 
-    /// Applies `/swarm concurrent <n>` to this session's next swarm.
+    /// Applies `/swarm parallel <n>` to this session's next swarm.
     pub fn set_swarm_parallel(&mut self, parallel: usize) {
         self.swarm_parallel.set(parallel.max(1));
     }

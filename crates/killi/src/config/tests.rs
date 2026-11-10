@@ -381,7 +381,8 @@ fn removing_models_drops_only_that_providers_stale_ones() {
          # served\n[models.\"go/kept\"]\nprovider = \"go\"\nmodel = \"kept\"\n",
     )
     .unwrap();
-    super::remove_models(&path, "go", &["go/kept".to_string()]).unwrap();
+    let dropped = super::remove_models(&path, "go", &["go/kept".to_string()]).unwrap();
+    assert_eq!(dropped, vec!["go/gone".to_string()]);
     let text = std::fs::read_to_string(&path).unwrap();
     let config: super::Config = toml::from_str(&text).unwrap();
     assert!(config.models.contains_key("go/kept"), "{text}");

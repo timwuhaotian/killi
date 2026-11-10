@@ -440,6 +440,15 @@ pub(super) async fn provider_add(
             if let Some(note) = added.repair_note() {
                 app.notice(&note);
             }
+            if !added.dropped.is_empty() {
+                app.notice(&format!(
+                    "Removed models no longer served: {}.",
+                    added.dropped.join(", ")
+                ));
+            }
+            for note in &added.notes {
+                app.notice(note);
+            }
             for note in &notes {
                 app.notice(note);
             }

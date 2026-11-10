@@ -68,23 +68,7 @@ impl Setup {
         } else {
             Choice::default()
         };
-        // An interactive new session prefers a model that can run over a default whose key
-        // is missing; -m and a resume keep their own choice. A missing key is not fatal when
-        // the session can fix it from inside. Any other problem ends the start here.
-        let requested = model.or(known(&config, &last));
-        let requested = if defer_key
-            && model.is_none()
-            && requested.is_none_or(|alias| {
-                config.missing_key(Some(alias)) || !config.model_allowed(alias)
-            })
-        {
-            config
-                .first_keyed()
-                .map(String::from)
-                .or_else(|| requested.map(String::from))
-        } else {
-            requested.map(String::from)
-        };
+        let requested = requested_model(&config, model, &last, defer_key);
         if defer_key
             && model.is_none()
             && let Some(alias) = &requested
@@ -253,7 +237,17 @@ impl Setup {
             },
             None => match self.config.resolve(None) {
                 Ok(model) => model,
-                Err(_) if self.defer_key => return Client::new(ResolvedModel::unconfigured()),
+                Err(_) if self.defer_key => {
+                    // Only a missing key may open unconfigured: a `default_model` that
+                    // doesn't resolve at all is a config error, and the user needs its
+                    // reason, not an empty session.
+                    if self.config.default_model.is_some()
+                        && let Err(broken) = self.config.resolve_without_key(None)
+                    {
+                        return Err(broken);
+                    }
+                    return Client::new(ResolvedModel::unconfigured());
+                }
                 Err(error) => return Err(error),
             },
         };
@@ -303,7 +297,7 @@ impl Setup {
         self.config = config;
     }
 
-    /// Applies `/swarm concurrent <n>` to the sessions started later in this run.
+    /// Applies `/swarm parallel <n>` to the sessions started later in this run.
     pub fn set_swarm_parallel(&mut self, parallel: usize) {
         self.settings.swarm_parallel = parallel.max(1);
     }
@@ -429,6 +423,35 @@ fn known<'a>(config: &Config, choice: &'a Choice) -> Option<&'a str> {
         .model
         .as_deref()
         .filter(|alias| config.models.contains_key(*alias))
+}
+
+/// The model a new session starts on: `-m`, else the last `/model` pick, else the config's
+/// default. When that model can't run and an interactive start may fix it — its key is
+/// missing, or `[models_filter]` hides it — the first keyed model the filter keeps is used
+/// instead. A keyed default is kept over the first keyed model. `None` when no model is
+/// configured at all.
+fn requested_model(
+    config: &Config,
+    model: Option<&str>,
+    last: &Choice,
+    defer_key: bool,
+) -> Option<String> {
+    let requested = model
+        .or(known(config, last))
+        .or(config.default_model.as_deref());
+    if defer_key
+        && model.is_none()
+        && requested.is_none_or(|alias| {
+            config.missing_key(Some(alias)) || !config.model_allowed(alias)
+        })
+    {
+        config
+            .first_keyed()
+            .map(String::from)
+            .or_else(|| requested.map(String::from))
+    } else {
+        requested.map(String::from)
+    }
 }
 
 /// The project killi runs in: the nearest folder with `.git`, else the working directory.

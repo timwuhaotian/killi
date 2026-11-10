@@ -369,18 +369,18 @@ fn is_model_table(name: &str, alias: &str) -> bool {
 /// Removes the `[models."<provider>/<id>"]` tables of `provider` whose alias isn't in
 /// `keep`, so a provider whose served list shrank stops offering retired models. The rest
 /// of the file, comments included, is left as it is.
-pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<()> {
+pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<Vec<String>> {
     let text =
         fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
     let config: Config = toml::from_str(&text).context("invalid config")?;
-    let stale: Vec<&str> = config
+    let stale: Vec<String> = config
         .models
         .iter()
         .filter(|(alias, model)| model.provider == provider && !keep.contains(alias))
-        .map(|(alias, _)| alias.as_str())
+        .map(|(alias, _)| alias.clone())
         .collect();
     if stale.is_empty() {
-        return Ok(());
+        return Ok(stale);
     }
     let spans = table_spans(&text);
     let mut drop = vec![false; text.lines().count()];
@@ -388,7 +388,7 @@ pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<()>
         let Some(alias) = model_alias(name) else {
             continue;
         };
-        if stale.contains(&alias) {
+        if stale.iter().any(|stale| stale == alias) {
             for line in span.clone() {
                 drop[line] = true;
             }
@@ -403,7 +403,8 @@ pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<()>
     let new = format!("{}\n", out.join("\n"));
     toml::from_str::<Config>(&new).context("removing models would break the config")?;
     crate::fs_atomic::write(path, new.as_bytes(), None)
-        .with_context(|| format!("could not write {}", path.display()))
+        .with_context(|| format!("could not write {}", path.display()))?;
+    Ok(stale)
 }
 
 /// Whether a TOML line sets `key`, and not a longer key that starts with it: `swarm = true`

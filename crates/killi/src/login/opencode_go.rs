@@ -90,7 +90,7 @@ pub(crate) async fn add(key: Option<&str>) -> Result<Outcome> {
         provider.insert("api_key_env".into(), KEY_ENV.into());
     }
     let ids: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
-    let added = crate::config::add_models(&Additions {
+    let mut added = crate::config::add_models(&Additions {
         name: "opencode-go",
         ours,
         provider,
@@ -107,7 +107,7 @@ pub(crate) async fn add(key: Option<&str>) -> Result<Outcome> {
                 .is_none_or(|config| config.model_allowed(alias))
         })
         .collect();
-    crate::config::remove_models(&added.path, &added.provider, &keep)?;
+    added.dropped = crate::config::remove_models(&added.path, &added.provider, &keep)?;
     Ok(Outcome { added, notes })
 }
 

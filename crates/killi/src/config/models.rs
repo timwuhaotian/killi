@@ -48,6 +48,10 @@ pub struct Added {
     pub aliases: Vec<String>,
     pub repaired: Vec<String>,
     pub starts_on: Option<String>,
+    /// Models of this provider the config had and the API no longer serves.
+    pub dropped: Vec<String>,
+    /// What to tell the user besides the added models, such as a list call that failed.
+    pub notes: Vec<String>,
 }
 
 impl Added {
@@ -62,6 +66,15 @@ impl Added {
             ),
         };
         if let Some(note) = self.repair_note() {
+            out.push_str(&format!("\n{note}"));
+        }
+        if !self.dropped.is_empty() {
+            out.push_str(&format!(
+                "\nNo longer served, removed: {}.",
+                self.dropped.join(", ")
+            ));
+        }
+        for note in &self.notes {
             out.push_str(&format!("\n{note}"));
         }
         match &self.starts_on {
@@ -134,6 +147,8 @@ pub fn add_models(additions: &Additions) -> Result<Added> {
         aliases: added,
         repaired,
         starts_on,
+        dropped: Vec::new(),
+        notes: Vec::new(),
     })
 }
 

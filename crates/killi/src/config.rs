@@ -425,26 +425,32 @@ pub async fn sync_models(only: Option<&str>) -> Result<Vec<String>> {
         let Some(base) = provider.base_url.as_deref() else {
             continue;
         };
+        let inline = provider.api_key.is_some();
         let synced = if base.starts_with("https://opencode.ai/inference/go/") {
-            crate::login::opencode_go_add(Some(&key))
+            crate::login::opencode_go_add(if inline { Some(&key) } else { None })
                 .await
                 .map(|outcome| {
                     out.extend(outcome.notes);
-                    outcome.added.provider
+                    outcome.added
                 })
         } else if base.starts_with("https://api.z.ai") {
-            zai::add(&key).await.map(|added| added.provider)
+            match (inline, provider.api_key_env.as_deref()) {
+                (true, _) => zai::add(&key).await,
+                (false, Some(env)) => zai::add_env(env, &key).await,
+                (false, None) => continue,
+            }
         } else {
             continue;
         };
         match synced {
-            Ok(provider) => {
+            Ok(added) => {
                 let count = Config::load()?
                     .models
                     .values()
-                    .filter(|model| model.provider == provider)
+                    .filter(|model| model.provider == added.provider)
                     .count();
-                out.push(format!("{provider}: {count} models"));
+                out.push(added.report());
+                out.push(format!("{}: {count} models", added.provider));
             }
             Err(error) => out.push(format!("{name}: {error:#}")),
         }

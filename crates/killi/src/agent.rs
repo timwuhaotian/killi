@@ -105,7 +105,7 @@ pub struct Agent {
     pub stats: Stats,
     pub controls: Controls,
     settings: Rc<Settings>,
-    /// Subagents one `agent_swarm` call runs at once; `/swarm concurrent <n>` changes it for
+    /// Subagents one `agent_swarm` call runs at once; `/swarm parallel <n>` changes it for
     /// this session.
     swarm_parallel: Cell<usize>,
     sink: Sink,
