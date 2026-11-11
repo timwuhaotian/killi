@@ -188,4 +188,3 @@ async fn revoke(http: &reqwest::Client, credentials: &Credentials) -> Result<()>
         .error_for_status()?;
     Ok(())
 }
-

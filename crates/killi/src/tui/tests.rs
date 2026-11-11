@@ -2,6 +2,7 @@ use super::*;
 
 mod app;
 mod helpers;
+mod pair;
 mod rows;
 
 /// `line` without escape codes, whatever colors the theme picked.
@@ -164,5 +165,10 @@ pub(super) fn test_app() -> App {
         peer_running: FuturesUnordered::new(),
         peer_task_id: 0,
         undo_warned: false,
+        pair_ctl: None,
+        pair_cfg: PairConfig::default(),
+        pair_setup: None,
+        pair_driving: false,
+        pair_interrupt: false,
     }
 }

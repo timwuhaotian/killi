@@ -74,7 +74,7 @@ impl App {
             if let Idle::Input(Input::Command(name, arg, _)) = idle {
                 self.command_while_busy(&name, &arg);
             }
-            return false;
+            return self.take_pair_interrupt();
         }
         match key.code {
             KeyCode::Esc => return true,
@@ -84,9 +84,15 @@ impl App {
             }
             KeyCode::Char('c') if ctrl && !self.editor.is_empty() => self.editor.clear(),
             KeyCode::Char('c') if ctrl => return true,
-            KeyCode::Enter if !newline_key(&key) => self.send_busy(),
+            KeyCode::Enter if !newline_key(&key) => {
+                self.send_busy();
+                return self.take_pair_interrupt();
+            }
             KeyCode::Char('s') if ctrl => {
                 self.send_busy();
+                if self.take_pair_interrupt() {
+                    return true;
+                }
                 if self.swarm.is_some()
                     && !self.controls.steer.borrow().is_empty()
                     && !self.swarm_send_armed
@@ -103,9 +109,30 @@ impl App {
         false
     }
 
+    /// An interrupt a typed message or /pair stop armed for the driving pair, if one drives.
+    /// Anywhere else the arm is dropped: the interjection waits for the pair's resume.
+    pub(super) fn take_pair_interrupt(&mut self) -> bool {
+        std::mem::take(&mut self.pair_interrupt) && self.pair_driving
+    }
+
+    /// Hands `sent` to the driving pair's mentor as an interjection, shown as `shown` and
+    /// interrupting the turn in flight so the replan starts at once. Shown directly, not
+    /// through the queue: the queue pairs each entry with a message the session's own
+    /// agent takes, and the pair takes these instead.
+    fn pair_interject(&mut self, sent: String, images: Vec<Image>, shown: &str) {
+        if let Some(ctl) = self.pair_ctl.clone() {
+            ctl.interject.borrow_mut().push_back((sent, images));
+        }
+        self.pair_interrupt = true;
+        self.flush_partial();
+        self.end_thinking();
+        self.commit_prompt(shown);
+    }
+
     /// Enter while the agent works: a /btw question or a command runs now, a `!` shell
     /// command runs now, a skill queues its expanded prompt, anything else is queued for
-    /// the agent's next step.
+    /// the agent's next step. While a pair drives, a typed message or a skill interjects to
+    /// the mentor instead, and interrupts the turn in flight so the replan starts at once.
     pub(super) fn send_busy(&mut self) {
         if self.shell_while_busy() {
             return;
@@ -131,10 +158,15 @@ impl App {
                 };
                 let (text, images) = self.editor.take_with_images();
                 let shown = text.trim().to_string();
-                if !shown.is_empty() {
-                    self.controls.steer.borrow_mut().push_back((sent, images));
-                    self.queued.push(shown);
+                if shown.is_empty() {
+                    return;
                 }
+                if self.pair_ctl.is_some() && self.pair_driving {
+                    self.pair_interject(sent, images, &shown);
+                    return;
+                }
+                self.controls.steer.borrow_mut().push_back((sent, images));
+                self.queued.push(shown);
                 return;
             }
             if self.command_while_busy(&name, &arg) {
@@ -143,13 +175,18 @@ impl App {
             return;
         }
         let (text, images) = self.editor.take_with_images();
-        if !text.trim().is_empty() {
-            self.controls
-                .steer
-                .borrow_mut()
-                .push_back((mention::expand(&self.cwd, &text), images));
-            self.queued.push(text);
+        if text.trim().is_empty() {
+            return;
         }
+        if self.pair_ctl.is_some() && self.pair_driving {
+            self.pair_interject(mention::expand(&self.cwd, &text), images, &text);
+            return;
+        }
+        self.controls
+            .steer
+            .borrow_mut()
+            .push_back((mention::expand(&self.cwd, &text), images));
+        self.queued.push(text);
     }
 
     /// The queued messages Ctrl+S sends now, as the next prompt: the typed text with the images
@@ -464,6 +501,11 @@ impl App {
         self.drop_suggestion();
         self.recap = None;
         self.recap_unsaved = None;
+        // The pair belonged to the conversation being left; its remembered models stay.
+        self.pair_ctl = None;
+        self.pair_setup = None;
+        self.pair_driving = false;
+        self.pair_interrupt = false;
         *snapshots = Snapshots::new(cwd);
     }
 

@@ -2,8 +2,7 @@ mod import;
 mod provider;
 
 use super::{
-    Config, import_claude_from, import_codex_from, import_gemini_from, import_omp_from,
-    read_yaml,
+    Config, import_claude_from, import_codex_from, import_gemini_from, import_omp_from, read_yaml,
 };
 
 #[test]
@@ -441,7 +440,11 @@ fn setting_the_ui_theme_replaces_the_line_adds_the_table_and_keeps_the_rest() {
     assert_eq!(config.ui.theme.as_deref(), Some("batman"));
 
     // No [ui] table yet: one is added at the end, and a dotted line gives way to it.
-    std::fs::write(&path, "ui.theme = \"light\"\ndefault_model = \"test/model\"\n").unwrap();
+    std::fs::write(
+        &path,
+        "ui.theme = \"light\"\ndefault_model = \"test/model\"\n",
+    )
+    .unwrap();
     super::set_ui_theme(&path, "iced-coffee").unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     let config: super::Config = toml::from_str(&text).unwrap();

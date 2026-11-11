@@ -5,6 +5,25 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 
 use crate::broker::Launch;
 
+/// A server's error reply, kept as an error with its code so a caller can tell a reply that
+/// rejected the arguments it was sent (invalid params) from a tool that failed to run.
+#[derive(Debug)]
+pub(super) struct RpcError {
+    pub code: Option<i64>,
+    pub message: String,
+}
+
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self.code {
+            Some(code) => write!(f, "MCP error {code}: {}", self.message),
+            None => write!(f, "{}", self.message),
+        }
+    }
+}
+
+impl std::error::Error for RpcError {}
+
 impl Connection {
     pub(super) async fn open(config: &ServerConfig, broker: Option<&Path>) -> Result<Self> {
         let timeout = config
@@ -135,10 +154,14 @@ impl Connection {
             Transport::Http { .. } => self.post(&message, Some(id)).await?,
         };
         if let Some(error) = reply.get("error") {
-            bail!(
-                "{}",
-                error["message"].as_str().unwrap_or(&error.to_string())
-            );
+            return Err(RpcError {
+                code: error["code"].as_i64(),
+                message: error["message"]
+                    .as_str()
+                    .unwrap_or(&error.to_string())
+                    .to_string(),
+            }
+            .into());
         }
         Ok(reply["result"].clone())
     }

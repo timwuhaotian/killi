@@ -129,7 +129,10 @@ mod tests {
         assert_eq!((name.as_str(), repaired.len()), ("minimax-2", 0));
         assert!(out.contains(other), "{out}");
         let config: Config = toml::from_str(&out).unwrap();
-        assert_eq!(config.providers["minimax"].api_key.as_deref(), Some("other"));
+        assert_eq!(
+            config.providers["minimax"].api_key.as_deref(),
+            Some("other")
+        );
         assert_eq!(config.providers["minimax"].kind, "openai");
         assert_eq!(config.providers["minimax-2"].kind, "anthropic");
         assert_eq!(

@@ -112,6 +112,11 @@ impl App {
             peer_running: FuturesUnordered::new(),
             peer_task_id: 0,
             undo_warned: false,
+            pair_ctl: None,
+            pair_cfg: PairConfig::default(),
+            pair_setup: None,
+            pair_driving: false,
+            pair_interrupt: false,
         };
         app.refresh_branch();
         app

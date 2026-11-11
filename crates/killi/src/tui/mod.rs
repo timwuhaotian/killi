@@ -21,6 +21,7 @@ mod layout;
 mod mention;
 mod menu;
 mod notify;
+mod pair;
 mod palette;
 mod paste;
 mod peers;
@@ -66,7 +67,10 @@ use futures_util::stream::FuturesUnordered;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::agent::{Agent, Controls, Event, Image, Question, Sink, Slot, Steered, Stop, Todo};
+use crate::agent::{
+    Agent, Controls, DONE_MARK, Event, Image, MAX_ROUNDS, Outcome, PairConfig, PairControls,
+    Question, Role, RoleCounts, Sink, Slot, Steered, Stop, Todo,
+};
 use crate::config::{Config, Thinking};
 use crate::live;
 use crate::llm::{Client, ErrorKind, ProviderError, Usage};
@@ -101,7 +105,10 @@ use rows::{
     question_rows, queued_row, recap_rows, rule, shorten_path, snapshot_rows, tilde, title_rule,
     tool_summary, tool_text, working_rows, wrap_items,
 };
-use run::{flush_recap, handle_command, next_incoming, peer_label, prompt_turn, provider_add};
+use pair::{pair_kickoff, pair_pick, pair_turn};
+use run::{
+    flush_recap, handle_command, next_incoming, peer_label, prompt_turn, provider_add, run_turn,
+};
 use select::{InputRows, Selection, Spot};
 use start::{
     CURSOR_ROW, ENHANCED, RESUMED, TerminalGuard, leave_fullscreen, query_ground, resume_command,
@@ -109,8 +116,8 @@ use start::{
 };
 pub use start::{install_crash_hook, restore_terminal};
 use state::{
-    App, Asking, Ended, Idle, Input, Kind, LastEnd, PastAsk, PeerAnswer, PeerTask, PendingAside,
-    Running, SinceBanner, Status, Totals,
+    App, Asking, Ended, Idle, Input, Kind, LastEnd, PairSetup, PairStep, PastAsk, PeerAnswer,
+    PeerTask, PendingAside, Running, SinceBanner, Status, Totals,
 };
 use undo::{restore_steered, undo_empty, undo_note, undo_paths};
 use update::Updates;
@@ -244,20 +251,71 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         // An auto recap shown while idle belongs to this log, not to the session an
         // input below may switch to.
         flush_recap(&mut app, &mut agent);
+        // A /pair setup waits for its next pick; a prompt sent before the task step means
+        // the user moved on, so the setup is cancelled and the prompt goes to the session.
+        // Anything else leaves the setup alone: a later prompt either kicks the pair off
+        // or cancels it, and /pair itself manages it.
+        let setup_dropped = app.pair_setup.as_ref().is_some_and(|setup| {
+            matches!(&input, Input::Prompt(..)) && setup.step != PairStep::Task
+        });
+        if setup_dropped {
+            app.pair_setup = None;
+            app.notice("Pair setup cancelled.");
+        }
         match input {
             Input::Prompt(prompt, images) => {
-                let sent = mention::expand(&cwd, &prompt);
-                prompt_turn(
-                    &mut app,
-                    &mut agent,
-                    &mut snapshots,
-                    &mut keys,
-                    &mut rx,
-                    &prompt,
-                    &sent,
-                    &images,
-                )
-                .await?;
+                let task_pending = app
+                    .pair_setup
+                    .as_ref()
+                    .is_some_and(|setup| setup.step == PairStep::Task);
+                if task_pending {
+                    let sent = mention::expand(&cwd, &prompt);
+                    pair_kickoff(
+                        &mut app,
+                        &mut agent,
+                        &session,
+                        &mut snapshots,
+                        &mut keys,
+                        &mut rx,
+                        &prompt,
+                        &sent,
+                        &images,
+                    )
+                    .await?;
+                } else if agent.pair_active() {
+                    // The pair is paused: interject and drive on.
+                    if let Some(ctl) = agent.pair_ctl() {
+                        ctl.interject.borrow_mut().push_back((
+                            mention::expand(&cwd, &prompt),
+                            images.clone(),
+                        ));
+                        app.pair_ctl = Some(ctl);
+                    }
+                    agent.pair_interject();
+                    pair_turn(
+                        &mut app,
+                        &mut agent,
+                        &mut snapshots,
+                        &mut keys,
+                        &mut rx,
+                        Some((prompt, images)),
+                        false,
+                    )
+                    .await?;
+                } else {
+                    let sent = mention::expand(&cwd, &prompt);
+                    prompt_turn(
+                        &mut app,
+                        &mut agent,
+                        &mut snapshots,
+                        &mut keys,
+                        &mut rx,
+                        &prompt,
+                        &sent,
+                        &images,
+                    )
+                    .await?;
+                }
             }
             Input::Command(command, arg, images) => {
                 if !handle_command(
@@ -288,6 +346,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             }
             Input::Resume(path) if crate::session::is_locked(&path) => {
                 app.notice("that session is still running; continue it there, or start /new");
+            }
+            Input::Resume(_) if agent.pair_active() => {
+                app.notice("A pair is still running; /pair stop ends it before a resume.");
             }
             Input::Resume(path) => match crate::session::load_reported(&path) {
                 Err(e) => app.error_report(&e),
@@ -452,6 +513,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     }
                     Err(e) => app.error_from("/web-search-config", &e),
                 }
+            }
+            Input::PairModel(role, alias) => {
+                pair_pick(&mut app, session.config(), role, &alias, false)
+            }
+            Input::PairEffort(role, effort) => {
+                pair_pick(&mut app, session.config(), role, &effort, true)
             }
             Input::Provider(preset, key) => {
                 provider_add(

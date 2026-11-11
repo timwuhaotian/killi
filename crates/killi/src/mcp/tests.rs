@@ -10,6 +10,27 @@ const SERVER: &str = r#"while IFS= read -r line; do
   esac
 done"#;
 
+/// A server whose one tool needs an argument: for what a model is told when it can't
+/// say what the tool takes.
+const NEEDS: &str = r#"while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+    *'"tools/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"greet","description":"Greet someone","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"loud":{"type":"boolean"}},"required":["name"]}}]}}\n' "$id" ;;
+    *'"tools/call"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"greeted"}]}}\n' "$id" ;;
+  esac
+done"#;
+
+/// A server that rejects every call as invalid params, whatever arguments it was sent.
+const STRICT: &str = r#"while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+    *'"tools/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"greet","description":"Greet someone","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"loud":{"type":"boolean"}},"required":["name"]}}]}}\n' "$id" ;;
+    *'"tools/call"'*) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Invalid arguments for tool greet: expected string, received undefined at name"}}\n' "$id" ;;
+  esac
+done"#;
+
 fn mcp() -> Mcp {
     let config = ServerConfig {
         command: Some("/bin/bash".into()),
@@ -117,28 +138,139 @@ fn command_line_names_what_a_server_would_run() {
 
 #[test]
 fn arguments_accept_an_object_or_a_string_holding_one() {
-    assert_eq!(Mcp::tool_arguments(&json!({})).unwrap(), json!({}));
     assert_eq!(
-        Mcp::tool_arguments(&json!({"arguments": {"text": "hi"}})).unwrap(),
-        json!({"text": "hi"})
+        Mcp::sent_arguments(&json!({})).unwrap(),
+        None,
+        "missing is no arguments"
     );
     assert_eq!(
-        Mcp::tool_arguments(&json!({"arguments": "{\"text\": \"hi\"}"})).unwrap(),
-        json!({"text": "hi"})
+        Mcp::sent_arguments(&json!({"arguments": {"text": "hi"}})).unwrap(),
+        Some(json!({"text": "hi"}))
+    );
+    assert_eq!(
+        Mcp::sent_arguments(&json!({"arguments": "{\"text\": \"hi\"}"})).unwrap(),
+        Some(json!({"text": "hi"}))
+    );
+    assert_eq!(
+        Mcp::sent_arguments(&json!({"arguments": ""})).unwrap(),
+        None,
+        "an empty string is no arguments, not a parse failure"
+    );
+    assert_eq!(
+        Mcp::sent_arguments(&json!({"arguments": 3})).unwrap(),
+        None,
+        "a value no tool takes is no arguments"
     );
     assert!(
-        Mcp::tool_arguments(&json!({"arguments": "[1]"}))
+        Mcp::sent_arguments(&json!({"arguments": "[1]"}))
             .unwrap_err()
             .contains("not a JSON object")
     );
     assert!(
-        Mcp::tool_arguments(&json!({"arguments": "{oops"}))
+        Mcp::sent_arguments(&json!({"arguments": "{oops"}))
             .unwrap_err()
             .contains("not JSON")
     );
+}
+
+/// Servers for the argument shape: `n` runs a tool that needs one, `s` rejects every
+/// call as invalid params, and `t` runs a tool that needs none.
+fn needs() -> Mcp {
+    Mcp {
+        servers: BTreeMap::from([
+            (
+                "n".to_string(),
+                server(Some("/bin/bash"), &["-c", NEEDS], None),
+            ),
+            (
+                "t".to_string(),
+                server(Some("/bin/bash"), &["-c", SERVER], None),
+            ),
+        ]),
+        ..Mcp::default()
+    }
+}
+
+fn strict() -> Mcp {
+    Mcp {
+        servers: BTreeMap::from([(
+            "s".to_string(),
+            server(Some("/bin/bash"), &["-c", STRICT], None),
+        )]),
+        ..Mcp::default()
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_call_without_arguments_names_what_the_tool_takes() {
+    let mcp = needs();
+    for sent in [
+        json!({"server": "n", "tool": "greet"}),
+        json!({"server": "n", "tool": "greet", "arguments": ""}),
+    ] {
+        let refused = mcp.run(&sent, false).await;
+        assert!(refused.is_error, "{}", refused.text);
+        assert!(
+            refused
+                .text
+                .contains("name (string, required), loud (boolean)"),
+            "{}",
+            refused.text
+        );
+        assert!(
+            refused.text.contains("{\"name\": \"<string>\"}"),
+            "{}",
+            refused.text
+        );
+    }
+    let malformed = mcp
+        .run(
+            &json!({"server": "n", "tool": "greet", "arguments": "{oops"}),
+            false,
+        )
+        .await;
+    assert!(
+        malformed.text.contains("not JSON") && malformed.text.contains("name (string"),
+        "{}",
+        malformed.text
+    );
+    // A well-formed call still runs, and a tool that takes nothing needs no arguments.
     assert_eq!(
-        Mcp::tool_arguments(&json!({"arguments": 3})).unwrap(),
-        json!({})
+        mcp.run(
+            &json!({"server": "n", "tool": "greet", "arguments": {"name": "kil"}}),
+            false
+        )
+        .await
+        .text,
+        "greeted"
+    );
+    assert!(
+        mcp.run(&json!({"server": "t", "tool": "echo"}), false)
+            .await
+            .text
+            .starts_with("echoed by ")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_server_that_rejects_the_arguments_is_told_what_the_tool_takes() {
+    let mcp = strict();
+    let refused = mcp
+        .run(
+            &json!({"server": "s", "tool": "greet", "arguments": {"loud": true}}),
+            false,
+        )
+        .await;
+    assert!(refused.is_error, "{}", refused.text);
+    assert!(
+        refused.text.contains("MCP error -32602"),
+        "{}",
+        refused.text
+    );
+    assert!(
+        refused.text.contains("name (string, required)"),
+        "{}",
+        refused.text
     );
 }
 

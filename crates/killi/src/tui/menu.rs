@@ -1,6 +1,6 @@
 //! The slash menu: what `/` offers as you type, at the start of a word anywhere in the prompt. Commands and skills are ranked with pi-tui's
 //! fuzzy matcher, as in Kimi Code, then entries whose description mentions what you typed
-//! follow; after `/model ` or `/effort ` it offers that command's choices. `@` at the start of
+//! follow; after a command and space it offers its available choices or subcommands. `@` at the start of
 //! a word offers the workspace's files the same way.
 
 /// One row of the menu.
@@ -72,7 +72,13 @@ pub fn suggest(
     if argument.contains(char::is_whitespace) {
         return None;
     }
-    let choices = arguments(name);
+    let mut choices = arguments(name);
+    if entries.iter().any(|entry| entry.name == name) {
+        choices.extend(subcommands(name).iter().map(|(value, description)| Item {
+            value: (*value).to_string(),
+            description: (*description).to_string(),
+        }));
+    }
     let mut items = fuzzy_filter(&choices, argument, |item| &item.value);
     if items.len() == 1 && items[0].value == argument {
         items.clear();
@@ -82,6 +88,22 @@ pub fn suggest(
         start: 1 + space + space_char.len_utf8(),
         fill: Fill::Argument,
     })
+}
+
+fn subcommands(name: &str) -> &'static [(&'static str, &'static str)] {
+    match name {
+        "pair" => &[
+            ("mentor", "Configure the mentor model"),
+            ("executor", "Configure the executor model"),
+            ("stop", "Stop the pair"),
+            ("resume", "Resume the pair"),
+            ("status", "Show pair status"),
+        ],
+        "swarm" => &[("on", "Enable swarm mode"), ("off", "Disable swarm mode")],
+        "goal" => &[("done", "Complete the goal"), ("clear", "Clear the goal")],
+        "later" => &[("done", "Cross off an item by number")],
+        _ => &[],
+    }
 }
 
 /// The file menu for `before`: the `files` of the workspace that fuzzy-match the word at the
@@ -408,6 +430,38 @@ mod tests {
         assert!(suggest("/effort high", &entries(), efforts).is_none());
         assert!(suggest("/model x", &entries(), efforts).is_none());
         assert!(suggest("/effort high now", &entries(), efforts).is_none());
+    }
+
+    #[test]
+    fn subcommands_are_discoverable_and_fuzzy_complete_without_blocking_arguments() {
+        let entries = ["pair", "swarm", "goal", "later"].map(|name| entry(name, &[], ""));
+        let none = |_: &str| Vec::new();
+        let s = suggest("/pair ", &entries, none).unwrap();
+        assert_eq!(
+            values(&s),
+            ["mentor", "executor", "stop", "resume", "status"]
+        );
+        assert_eq!((s.start, s.fill), (6, Fill::Argument));
+        assert_eq!(
+            values(&suggest("/pair rsm", &entries, none).unwrap()),
+            ["resume"]
+        );
+        assert!(suggest("/pair resume", &entries, none).is_none());
+        assert_eq!(
+            values(&suggest("/swarm ", &entries, none).unwrap()),
+            ["on", "off"]
+        );
+        assert_eq!(
+            values(&suggest("/goal ", &entries, none).unwrap()),
+            ["done", "clear"]
+        );
+        assert_eq!(
+            values(&suggest("/later ", &entries, none).unwrap()),
+            ["done"]
+        );
+        assert!(suggest("/later done 3", &entries, none).is_none());
+        assert!(suggest("/goal write documentation", &entries, none).is_none());
+        assert!(suggest("/pair ", &[], none).is_none());
     }
 
     #[test]

@@ -28,8 +28,7 @@ pub(crate) fn import_claude_from(
     };
     let env = settings.get("env").cloned().unwrap_or_default();
 
-    let base_url =
-        live_env("ANTHROPIC_BASE_URL").or_else(|| json_str(&env, "ANTHROPIC_BASE_URL"));
+    let base_url = live_env("ANTHROPIC_BASE_URL").or_else(|| json_str(&env, "ANTHROPIC_BASE_URL"));
     let Some((key_field, api_key)) = claude_key(&env) else {
         bail!("claude code has no API key to import (it signs in with a subscription)")
     };

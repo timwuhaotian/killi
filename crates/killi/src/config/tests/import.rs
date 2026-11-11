@@ -219,15 +219,9 @@ enabled = false
         gateway.base_url.as_deref(),
         Some("https://gw.example.com/v1")
     );
+    assert_eq!(gateway.api_key_env.as_deref(), Some("KILLI_TEST_CODEX_KEY"));
     assert_eq!(
-        gateway.api_key_env.as_deref(),
-        Some("KILLI_TEST_CODEX_KEY")
-    );
-    assert_eq!(
-        gateway
-            .custom_headers
-            .get("X-Team")
-            .map(String::as_str),
+        gateway.custom_headers.get("X-Team").map(String::as_str),
         Some("platform")
     );
     let model = &config.models["gateway/gpt-5.3-codex"];
@@ -316,10 +310,11 @@ fn importing_claude_reads_the_key_endpoint_model_and_servers() {
     let dst = root.join("killi");
     std::fs::create_dir_all(&src).unwrap();
     // Only this test touches these variables; their values come back at the end.
-    let saved: Vec<(&str, Option<String>)> = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"]
-        .into_iter()
-        .map(|name| (name, std::env::var(name).ok()))
-        .collect();
+    let saved: Vec<(&str, Option<String>)> =
+        ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"]
+            .into_iter()
+            .map(|name| (name, std::env::var(name).ok()))
+            .collect();
     // SAFETY: as above.
     unsafe {
         std::env::remove_var("ANTHROPIC_API_KEY");
@@ -489,10 +484,7 @@ fn importing_gemini_needs_an_endpoint_and_reads_the_rest_from_files_or_env() {
     import_gemini_from(&src, &dst, false).unwrap();
     let text = std::fs::read_to_string(dst.join("config.toml")).unwrap();
     let config: Config = toml::from_str(&text).unwrap();
-    assert_eq!(
-        config.default_model.as_deref(),
-        Some("gemini/gemini-3-pro")
-    );
+    assert_eq!(config.default_model.as_deref(), Some("gemini/gemini-3-pro"));
     let provider = &config.providers["gemini"];
     assert_eq!(provider.kind, "openai");
     assert_eq!(
@@ -506,12 +498,7 @@ fn importing_gemini_needs_an_endpoint_and_reads_the_rest_from_files_or_env() {
     );
     let mcp: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dst.join("mcp.json")).unwrap()).unwrap();
-    assert!(
-        mcp.get("mcpServers")
-            .unwrap()
-            .get("files")
-            .is_some()
-    );
+    assert!(mcp.get("mcpServers").unwrap().get("files").is_some());
 
     // Live variables win over the file and stay references.
     // SAFETY: as above.

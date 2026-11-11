@@ -393,6 +393,8 @@ impl Agent {
             interrupted: false,
             depth: self.depth + 1,
             children: 0,
+            pair: None,
+            pair_exec: false,
             current_reply: 0,
             session_started: true,
             snapshot_wait: None,

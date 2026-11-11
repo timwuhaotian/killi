@@ -11,11 +11,7 @@ pub fn import_codex(force: bool) -> Result<()> {
     import_codex_from(&home().join(".codex/config.toml"), &killi_home(), force)
 }
 
-pub(crate) fn import_codex_from(
-    config_path: &Path,
-    dst_dir: &Path,
-    force: bool,
-) -> Result<()> {
+pub(crate) fn import_codex_from(config_path: &Path, dst_dir: &Path, force: bool) -> Result<()> {
     let Some(config) = read_toml(config_path)? else {
         bail!("no codex config at {} to import", config_path.display())
     };
@@ -163,11 +159,7 @@ fn copy_codex_mcp(config: &toml::Table, dst_dir: &Path, force: bool) -> Result<(
             let args: Vec<&str> = server
                 .get("args")
                 .and_then(toml::Value::as_array)
-                .map(|args| {
-                    args.iter()
-                        .filter_map(toml::Value::as_str)
-                        .collect()
-                })
+                .map(|args| args.iter().filter_map(toml::Value::as_str).collect())
                 .unwrap_or_default();
             if !args.is_empty() {
                 entry.insert("args".into(), args.into());

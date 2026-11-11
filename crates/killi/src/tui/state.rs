@@ -108,6 +108,10 @@ pub(super) enum Input {
     Search(String, Option<String>, Option<String>),
     /// Applies a /provider pick: the preset's name and its pasted API key.
     Provider(String, String),
+    /// A /pair setup's model pick for a role.
+    PairModel(Role, String),
+    /// A /pair setup's effort pick for a role.
+    PairEffort(Role, String),
 }
 
 pub(super) enum LastEnd {
@@ -342,6 +346,37 @@ pub(super) struct App {
     pub(super) peer_task_id: u64,
     /// /undo said it would undo another session's work too; the next /undo goes ahead.
     pub(super) undo_warned: bool,
+    /// The pair's handles while one stands: driving now, or paused.
+    pub(super) pair_ctl: Option<PairControls>,
+    /// The pair's remembered models and efforts, preselected by the next /pair.
+    pub(super) pair_cfg: PairConfig,
+    /// A /pair setup between its pickers.
+    pub(super) pair_setup: Option<PairSetup>,
+    /// A pair_drive future runs inside run_turn: typed text interjects to the mentor.
+    pub(super) pair_driving: bool,
+    /// Typed text or /pair stop armed an interrupt of the driving pair.
+    pub(super) pair_interrupt: bool,
+}
+
+/// A /pair setup between its pickers: each pick advances a step, and the task step waits
+/// for the next prompt to kick the pair off.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum PairStep {
+    MentorModel,
+    MentorEffort,
+    ExecutorModel,
+    ExecutorEffort,
+    Task,
+}
+
+pub(super) struct PairSetup {
+    pub(super) step: PairStep,
+    pub(super) mentor_model: String,
+    pub(super) mentor_effort: String,
+    pub(super) executor_model: String,
+    pub(super) executor_effort: String,
+    /// `/pair mentor|executor`: only reconfigures this role, never kicks off.
+    pub(super) config_only: Option<Role>,
 }
 
 /// The lines printed from the banner on, so it can be drawn again in place.

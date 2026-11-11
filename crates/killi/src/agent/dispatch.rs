@@ -66,7 +66,7 @@ impl Agent {
                 i = end;
                 continue;
             }
-            if calls[i].1.name == "agent" && self.depth == 0 {
+            if calls[i].1.name == "agent" && (self.depth == 0 || self.pair_exec) {
                 let end = calls[i..]
                     .iter()
                     .position(|(_, c)| c.name != "agent")
@@ -81,7 +81,7 @@ impl Agent {
                 continue;
             }
             let (id, call) = &calls[i];
-            if call.name == "agent_swarm" && self.depth == 0 {
+            if call.name == "agent_swarm" && (self.depth == 0 || self.pair_exec) {
                 let started = Instant::now();
                 let output = self.run_swarm(id, call).await;
                 stop |= self.finish_call(id, call, output, started.elapsed(), None)?;

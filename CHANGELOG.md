@@ -34,6 +34,37 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
   guide waits until a model is configured; `killi import` still copies another agent's setup
   when asked.
 
+## 0.6.76 — 2026-11-11
+
+- An `mcp` call that names a tool but can't say what it takes is now answered with what the
+  tool takes: its properties, which of them are required, and an object to copy. A model
+  that omitted `arguments`, sent an empty string or malformed JSON was previously handed
+  either a server error naming one missing field or a JSON parse error, with no way to tell
+  what a good call looked like. A server that rejects the arguments it was sent (`-32602`)
+  gets the same description appended to its error. Tools that take no arguments still run
+  without them.
+
+## 0.6.75 — 2026-11-11
+
+- After a slash command and a space, the `/` menu now offers that command's subcommands and
+  choices as it already offered `/model`'s and `/effort`'s: `/pair` suggests `mentor`,
+  `executor`, `stop`, `resume` and `status`; `/swarm` suggests `on` and `off`; `/goal`
+  suggests `done` and `clear`; `/later` suggests `done`. Typing part of one fuzzy-completes
+  it, and the menu closes once the subcommand (or something else) is typed, so an argument
+  after it is never blocked.
+
+## 0.6.74 — 2026-11-11
+
+- `/pair` runs one task with two roles: a mentor model that plans and reviews, and an
+  executor model that does the work. The setup asks for each role's model and effort
+  (remembered for the next pair), and the next prompt is the task. The pair works in
+  rounds — the mentor's plan, the executor's turn, the mentor's review — until the
+  mentor puts `TASK_COMPLETE` in a review, 100 executor turns run, or you stop it.
+  Each role keeps its own history and log under the session's, and the usage line after
+  it ends splits Mentor and Executor requests and tokens. While it runs, typing sends
+  an interjection to the mentor, `/pair status` says where it stands, `/pair resume`
+  drives on after one, and `/pair stop` ends it; `/undo`, `/new` and `/resume` wait
+  until the pair is over.
 ## 0.6.73 — 2026-11-10
 
 - `killi login`, `killi logout` and the first-run configuration import list now use a

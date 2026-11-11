@@ -127,7 +127,10 @@ mod tests {
         assert_eq!((name.as_str(), repaired.len()), ("unisound-2", 0));
         assert!(out.contains(other), "{out}");
         let config: Config = toml::from_str(&out).unwrap();
-        assert_eq!(config.providers["unisound"].api_key.as_deref(), Some("other"));
+        assert_eq!(
+            config.providers["unisound"].api_key.as_deref(),
+            Some("other")
+        );
         assert_eq!(
             config.providers["unisound-2"].base_url.as_deref(),
             Some(BASE_URL)
@@ -143,7 +146,10 @@ mod tests {
         );
         let config: Config = toml::from_str(&out).unwrap();
         let model = &config.models["unisound/u2-flash"];
-        assert_eq!(model.capabilities, ["thinking", "tool_use", "always_thinking"]);
+        assert_eq!(
+            model.capabilities,
+            ["thinking", "tool_use", "always_thinking"]
+        );
         assert_eq!(model.default_effort.as_deref(), Some("high"));
     }
 }
