@@ -3,6 +3,19 @@
 Notable changes to killi. `install.sh` and `killi update` always install the latest release
 from [`releases/`](releases); the versions below match `Cargo.toml`.
 
+## 0.6.74 — 2026-11-11
+
+- `/pair` runs one task with two roles: a mentor model that plans and reviews, and an
+  executor model that does the work. The setup asks for each role's model and effort
+  (remembered for the next pair), and the next prompt is the task. The pair works in
+  rounds — the mentor's plan, the executor's turn, the mentor's review — until the
+  mentor puts `TASK_COMPLETE` in a review, 100 executor turns run, or you stop it.
+  Each role keeps its own history and log under the session's, and the usage line after
+  it ends splits Mentor and Executor requests and tokens. While it runs, typing sends
+  an interjection to the mentor, `/pair status` says where it stands, `/pair resume`
+  drives on after one, and `/pair stop` ends it; `/undo`, `/new` and `/resume` wait
+  until the pair is over.
+
 ## 0.6.73 — 2026-11-10
 
 - `killi login`, `killi logout` and the first-run configuration import list now use a
