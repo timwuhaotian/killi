@@ -6,6 +6,7 @@ mod ask;
 mod compact;
 mod dispatch;
 mod lifecycle;
+mod pair;
 mod peer_guard;
 mod request;
 mod subagent;
@@ -40,6 +41,9 @@ use crate::{goal, live, plan, swarm, tools};
 
 pub use types::{
     Aside, Controls, Event, Image, Question, Settings, Sink, Slot, Stats, Steered, Stop, Todo,
+};
+pub use pair::{
+    DONE_MARK, MAX_ROUNDS, Outcome, Pair, PairConfig, PairControls, Role, RoleCounts,
 };
 
 pub(crate) use subagent::subagent_prompt;
@@ -142,6 +146,10 @@ pub struct Agent {
     hook_notified: RefCell<HashSet<String>>,
     depth: u8,
     children: usize,
+    /// The pair this session runs (`/pair`), if one stands: the mentor and executor agents.
+    pair: Option<Pair>,
+    /// A pair's executor: below the main agent, but still allowed its own subagents.
+    pair_exec: bool,
     /// Index of the assistant message whose tool calls are running.
     current_reply: usize,
     session_started: bool,

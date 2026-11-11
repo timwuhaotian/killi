@@ -42,7 +42,9 @@ impl Agent {
         // A new session never inherits another session's queued messages through shared controls.
         controls.steer.borrow_mut().clear();
         note_crash_log(&session);
-        Self::begin(client, cwd, system, tools, settings, controls, sink, session)
+        Self::begin(
+            client, cwd, system, tools, settings, controls, sink, session,
+        )
     }
 
     /// Starts a conversation in `session`: its `session` entry, then the system prompt. A new
@@ -199,6 +201,8 @@ impl Agent {
             hook_notified: RefCell::default(),
             depth: 0,
             children: 0,
+            pair: None,
+            pair_exec: false,
             current_reply: 0,
             session_started: false,
             snapshot_wait: None,
@@ -377,8 +381,12 @@ impl Agent {
 
     /// Deletes this session's log if nothing was ever said in it, so opening killi and leaving
     /// doesn't leave a file behind. Reminders alone don't count: a prompt taken back with Esc
-    /// leaves the ones sent after it.
+    /// leaves the ones sent after it. A pair counts as use: its note in the log points at the
+    /// children's logs, which would be orphaned otherwise.
     pub fn discard_if_unused(&self) {
+        if self.pair.is_some() {
+            return;
+        }
         let said = self.messages.iter().skip(1).any(|m| {
             m["role"] != "user"
                 || !m["content"]
@@ -386,7 +394,13 @@ impl Agent {
                     .is_some_and(|text| text.starts_with("<system-reminder>"))
         });
         if !said {
-            self.session.discard();
+            // A pair that ended lives on only as a `pair` note pointing at its children's
+            // logs, and a resumed session has no `pair` agent to guard them.
+            let pair_noted = std::fs::read_to_string(&self.session.log_path)
+                .is_ok_and(|log| log.contains("\"type\":\"pair\""));
+            if !pair_noted {
+                self.session.discard();
+            }
         }
     }
 

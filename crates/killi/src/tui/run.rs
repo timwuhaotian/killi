@@ -157,6 +157,9 @@ pub(super) async fn handle_command(
             }
         }
         "goal" => goal_command(app, agent, arg),
+        "pair" => {
+            pair::pair_command(app, agent, session, snapshots, keys, rx, arg).await?;
+        }
         "swarm" => {
             let was_on = app.controls.swarm.replace(true);
             let result = prompt_turn(
@@ -177,6 +180,10 @@ pub(super) async fn handle_command(
             result?;
         }
         "undo" => {
+            if agent.pair_active() {
+                app.notice("Undo waits for the pair: /pair stop ends it first.");
+                return Ok(true);
+            }
             // Said once: the next /undo goes ahead.
             // Other sessions, and the tasks this one ran for them: both change the tree
             // outside this session's turns.
@@ -246,6 +253,10 @@ pub(super) async fn handle_command(
                 app.notice(&note);
                 return Ok(true);
             }
+            if agent.pair_active() {
+                app.notice("A pair is still running; /pair stop ends it before a new session.");
+                return Ok(true);
+            }
             match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
                 Ok(fresh) => {
                     app.reset_conversation(snapshots, cwd);
@@ -271,6 +282,10 @@ pub(super) async fn handle_command(
         "resume" => {
             if let Some(note) = crate::goal::blocks("Resuming another session", agent.goal()) {
                 app.notice(&note);
+                return Ok(true);
+            }
+            if agent.pair_active() {
+                app.notice("A pair is still running; /pair stop ends it before a resume.");
                 return Ok(true);
             }
             app.open_session_picker(cwd)

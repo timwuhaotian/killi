@@ -79,9 +79,7 @@ mod tests {
         assert!(repaired.is_empty(), "nothing was there to repair");
         assert!(out.starts_with(mine), "{out}");
         let config: Config = toml::from_str(&out).unwrap();
-        let model = config
-            .resolve(Some("anthropic/claude-sonnet-5-5"))
-            .unwrap();
+        let model = config.resolve(Some("anthropic/claude-sonnet-5-5")).unwrap();
         assert_eq!(model.protocol, Protocol::Anthropic);
         assert_eq!(model.base_url, "https://api.anthropic.com");
         assert_eq!(model.api_key, "sk-ant-k");
@@ -93,16 +91,23 @@ mod tests {
         let broken = "default_model = \"anthropic/claude-sonnet-5-5\"\n\n\
             # mine\n[providers.anthropic]\ntype = \"anthropic\"\napi_key_env = \"ANTHROPIC_KEY\"\ncustom_headers = { x-team = \"a\" }\n\n\
             # my model\n[models.\"anthropic/claude-sonnet-5-5\"]\nprovider = \"anthropic\"\nmodel = \"claude-sonnet-5-5\"\ndefault_effort = \"high\"\n";
-        let (out, name, added, repaired) = with_additions(broken, &additions("sk-ant-new")).unwrap();
+        let (out, name, added, repaired) =
+            with_additions(broken, &additions("sk-ant-new")).unwrap();
         assert_eq!(name, "anthropic");
         assert!(added.is_empty(), "the model was already there: {added:?}");
-        assert!(repaired.is_empty(), "the key isn't listed as repaired: {out}");
+        assert!(
+            repaired.is_empty(),
+            "the key isn't listed as repaired: {out}"
+        );
         assert!(out.contains("# mine\n[providers.anthropic]\n"), "{out}");
         assert!(out.contains("# my model\n"), "{out}");
         let config: Config = toml::from_str(&out).unwrap();
         let anthropic = &config.providers["anthropic"];
         assert_eq!(
-            (anthropic.api_key.as_deref(), anthropic.api_key_env.as_deref()),
+            (
+                anthropic.api_key.as_deref(),
+                anthropic.api_key_env.as_deref()
+            ),
             (Some("sk-ant-new"), None)
         );
         assert_eq!(anthropic.custom_headers["x-team"], "a");
@@ -139,7 +144,10 @@ mod tests {
     #[test]
     fn the_model_keeps_its_capabilities_and_display_name() {
         let out = written();
-        assert!(out.contains("display_name = \"Claude Sonnet 5.5\""), "{out}");
+        assert!(
+            out.contains("display_name = \"Claude Sonnet 5.5\""),
+            "{out}"
+        );
         let config: Config = toml::from_str(&out).unwrap();
         let model = &config.models["anthropic/claude-sonnet-5-5"];
         assert_eq!(model.capabilities, ["image_in", "thinking", "tool_use"]);

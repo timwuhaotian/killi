@@ -129,7 +129,9 @@ pub(super) async fn login() -> Result<()> {
     let (key, name) = match callback {
         Some(callback) => (callback.api_key, callback.user_name),
         None => {
-            let pasted = crate::config::read_secret("Paste your Command Code API key instead (empty changes nothing): ")?;
+            let pasted = crate::config::read_secret(
+                "Paste your Command Code API key instead (empty changes nothing): ",
+            )?;
             if pasted.is_empty() {
                 bail!("no key given, so nothing changed");
             }
@@ -244,8 +246,8 @@ async fn wait_for_callback(listener: &TcpListener, state: &str) -> Result<Callba
             })
         };
         let origin = header("origin").unwrap_or_default();
-        let private = header("access-control-request-private-network")
-            .is_some_and(|value| value == "true");
+        let private =
+            header("access-control-request-private-network").is_some_and(|value| value == "true");
         let over_cap = method == "POST"
             && header("content-length")
                 .and_then(|len| len.parse::<usize>().ok())
@@ -356,7 +358,9 @@ impl Reply {
              content-type: {}\r\n\
              content-length: {}\r\n\
              connection: close\r\n\r\n",
-            self.status, self.content_type, self.body.len(),
+            self.status,
+            self.content_type,
+            self.body.len(),
         )
     }
 }
@@ -383,7 +387,10 @@ fn route(
             .and_then(|url| pair(&url_query_pairs(url), "state"));
         if here.as_deref() != Some(state) {
             return (
-                Reply::page(403, error_page("Invalid state token", "Restart login from your terminal.")),
+                Reply::page(
+                    403,
+                    error_page("Invalid state token", "Restart login from your terminal."),
+                ),
                 None,
             );
         }
@@ -396,7 +403,13 @@ fn route(
                 (Reply::page(200, page), Some(Ok(callback)))
             }
             None => (
-                Reply::page(404, error_page("Return to your terminal", "Restart login from your terminal if you reached it directly.")),
+                Reply::page(
+                    404,
+                    error_page(
+                        "Return to your terminal",
+                        "Restart login from your terminal if you reached it directly.",
+                    ),
+                ),
                 None,
             ),
         };
@@ -409,17 +422,31 @@ fn route(
     }
     if method == "GET" {
         return (
-            Reply::page(405, error_page("Return to your terminal", "This page completes login automatically during sign-in.")),
+            Reply::page(
+                405,
+                error_page(
+                    "Return to your terminal",
+                    "This page completes login automatically during sign-in.",
+                ),
+            ),
             None,
         );
     }
     if method != "POST" {
         return (
-            Reply::json(405, r#"{"success":false,"error":"Method not allowed. Use POST."}"#),
+            Reply::json(
+                405,
+                r#"{"success":false,"error":"Method not allowed. Use POST."}"#,
+            ),
             None,
         );
     }
-    let kind = content_type.split(';').next().unwrap_or_default().trim().to_lowercase();
+    let kind = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
     if kind == "application/json" {
         return json_callback(body, state);
     }
@@ -427,7 +454,10 @@ fn route(
         return form_callback(&String::from_utf8_lossy(body), state, pending);
     }
     (
-        Reply::json(415, r#"{"success":false,"error":"Unsupported content type"}"#),
+        Reply::json(
+            415,
+            r#"{"success":false,"error":"Unsupported content type"}"#,
+        ),
         None,
     )
 }
@@ -449,13 +479,19 @@ fn json_callback(body: &[u8], state: &str) -> (Reply, Option<Result<Callback, St
         .collect::<Vec<_>>();
     let [api_key, here, _, user_name, _] = fields[..] else {
         return (
-            Reply::json(400, r#"{"success":false,"error":"Missing required fields"}"#),
+            Reply::json(
+                400,
+                r#"{"success":false,"error":"Missing required fields"}"#,
+            ),
             None,
         );
     };
     if api_key.is_empty() {
         return (
-            Reply::json(400, r#"{"success":false,"error":"Missing required fields"}"#),
+            Reply::json(
+                400,
+                r#"{"success":false,"error":"Missing required fields"}"#,
+            ),
             None,
         );
     }
@@ -485,33 +521,54 @@ fn form_callback(
         let (reply, outcome) = denied(
             pair(&pairs, "state").as_deref().unwrap_or_default(),
             &error,
-            pair(&pairs, "error_description").as_deref().unwrap_or_default(),
+            pair(&pairs, "error_description")
+                .as_deref()
+                .unwrap_or_default(),
             state,
         );
         let reply = match outcome {
-            Some(Err(_)) => Reply::page(200, error_page("Authorization denied", "Return to your terminal and run login again, or paste a key.")),
-            _ => Reply::page(reply.status, error_page("Invalid state token", "Restart login from your terminal.")),
+            Some(Err(_)) => Reply::page(
+                200,
+                error_page(
+                    "Authorization denied",
+                    "Return to your terminal and run login again, or paste a key.",
+                ),
+            ),
+            _ => Reply::page(
+                reply.status,
+                error_page("Invalid state token", "Restart login from your terminal."),
+            ),
         };
         return (reply, outcome);
     }
     let field = |name: &str| pair(&pairs, name).unwrap_or_default();
     let (api_key, here, user_name) = (field("apiKey"), field("state"), field("userName"));
-    if api_key.is_empty() || field("userId").is_empty() || user_name.is_empty() || field("keyName").is_empty() {
+    if api_key.is_empty()
+        || field("userId").is_empty()
+        || user_name.is_empty()
+        || field("keyName").is_empty()
+    {
         return (
-            Reply::page(400, error_page("Invalid request", "Required parameters are missing. Restart login, or paste a key.")),
+            Reply::page(
+                400,
+                error_page(
+                    "Invalid request",
+                    "Required parameters are missing. Restart login, or paste a key.",
+                ),
+            ),
             None,
         );
     }
     if here != state {
         return (
-            Reply::page(403, error_page("Invalid state token", "Restart login from your terminal.")),
+            Reply::page(
+                403,
+                error_page("Invalid state token", "Restart login from your terminal."),
+            ),
             None,
         );
     }
-    *pending = Some(Callback {
-        api_key,
-        user_name,
-    });
+    *pending = Some(Callback { api_key, user_name });
     (
         Reply {
             status: 303,
@@ -540,10 +597,7 @@ fn denied(
         "access_denied" => "Command Code authorization was denied".to_string(),
         _ => format!("{error} {description}").trim().to_string(),
     };
-    (
-        Reply::json(200, r#"{"success":true}"#),
-        Some(Err(message)),
-    )
+    (Reply::json(200, r#"{"success":true}"#), Some(Err(message)))
 }
 
 /// The account `key` names, or why it names none.
@@ -563,7 +617,9 @@ async fn whoami(http: &reqwest::Client, key: &str) -> Result<Value> {
         bail!("Command Code turned the key away (HTTP 401); run `killi login command-code` again");
     }
     if !status.is_success() {
-        bail!("Command Code turned the sign-in away (HTTP {status}); run `killi login command-code` again");
+        bail!(
+            "Command Code turned the sign-in away (HTTP {status}); run `killi login command-code` again"
+        );
     }
     Ok(body)
 }
@@ -669,7 +725,14 @@ mod tests {
         body: &str,
         pending: &mut Option<Callback>,
     ) -> (Reply, Option<Result<Callback, String>>) {
-        route(method, target, content_type, body.as_bytes(), "state-1", pending)
+        route(
+            method,
+            target,
+            content_type,
+            body.as_bytes(),
+            "state-1",
+            pending,
+        )
     }
 
     #[test]
@@ -682,7 +745,10 @@ mod tests {
             r#"{"apiKey":"user_k","state":"state-1","userId":"u","userName":"tim","keyName":"cli"}"#,
             &mut pending,
         );
-        assert_eq!((reply.status, reply.body.as_str()), (200, r#"{"success":true}"#));
+        assert_eq!(
+            (reply.status, reply.body.as_str()),
+            (200, r#"{"success":true}"#)
+        );
         assert_eq!(
             outcome.unwrap().unwrap(),
             Callback {
@@ -703,10 +769,19 @@ mod tests {
             &mut pending,
         );
         assert_eq!(reply.status, 303);
-        assert_eq!(reply.location.as_deref(), Some("/callback/complete?state=state-1"));
+        assert_eq!(
+            reply.location.as_deref(),
+            Some("/callback/complete?state=state-1")
+        );
         assert!(outcome.is_none() && pending.is_some());
 
-        let (reply, outcome) = routed("GET", "/callback/complete?state=state-1", "", "", &mut pending);
+        let (reply, outcome) = routed(
+            "GET",
+            "/callback/complete?state=state-1",
+            "",
+            "",
+            &mut pending,
+        );
         assert_eq!(reply.status, 200);
         assert!(reply.body.contains("tim"), "{}", reply.body);
         assert_eq!(outcome.unwrap().unwrap().api_key, "user_k");
@@ -733,7 +808,10 @@ mod tests {
             &mut pending,
         );
         assert_eq!(reply.status, 200);
-        assert_eq!(outcome.unwrap().unwrap_err(), "Command Code authorization was denied");
+        assert_eq!(
+            outcome.unwrap().unwrap_err(),
+            "Command Code authorization was denied"
+        );
     }
 
     #[test]
@@ -756,11 +834,20 @@ mod tests {
     #[test]
     fn the_callback_answers_carry_cors_and_a_length() {
         let head = Reply::json(200, r#"{"success":true}"#).head("https://commandcode.ai", true);
-        assert!(head.contains("access-control-allow-origin: https://commandcode.ai"), "{head}");
-        assert!(head.contains("access-control-allow-private-network: true"), "{head}");
+        assert!(
+            head.contains("access-control-allow-origin: https://commandcode.ai"),
+            "{head}"
+        );
+        assert!(
+            head.contains("access-control-allow-private-network: true"),
+            "{head}"
+        );
         assert!(head.contains("content-length: 16"), "{head}");
         let head = Reply::json(200, "{}").head("https://rogue.example", false);
-        assert!(head.contains("access-control-allow-origin: http://localhost:3000"), "{head}");
+        assert!(
+            head.contains("access-control-allow-origin: http://localhost:3000"),
+            "{head}"
+        );
     }
 
     #[test]

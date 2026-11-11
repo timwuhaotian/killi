@@ -77,7 +77,7 @@ pub(super) fn runs_at_once(menu: &Suggestions, index: usize) -> bool {
 /// The commands that also work while the agent works: they need nothing the running turn holds,
 /// except /effort, which waits for the turn to end (see `App::effort_after_turn`).
 pub(super) const BUSY_COMMANDS: &[&str] = &[
-    "btw", "plan", "swarm", "later", "sessions", "help", "effort",
+    "btw", "plan", "swarm", "pair", "later", "sessions", "help", "effort",
 ];
 
 /// The effort `arg` names among those `model` takes, or what to tell the user.
@@ -191,6 +191,12 @@ pub(super) const COMMANDS: &[Command] = &[
         about: "Swarm mode: split work across many subagents",
     },
     Command {
+        name: "pair",
+        aliases: &[],
+        args: "[mentor|executor|…]",
+        about: "Pair mode: a mentor model plans and reviews, an executor model works",
+    },
+    Command {
         name: "goal",
         aliases: &[],
         args: "[<text>|done|clear]",
@@ -296,6 +302,30 @@ impl App {
             ("swarm", "off") => self.set_swarm(false),
             ("later", "") => self.show_later(),
             ("sessions", _) => self.show_sessions(),
+            ("pair", "stop") if self.pair_driving && self.pair_ctl.is_some() => {
+                self.pair_ctl
+                    .as_ref()
+                    .expect("a pair is driving")
+                    .stop
+                    .set(true);
+                self.pair_interrupt = true;
+                self.notice("Stopping the pair.");
+            }
+            ("pair", "" | "status") if self.pair_driving && self.pair_ctl.is_some() => {
+                let progress = self
+                    .pair_ctl
+                    .as_ref()
+                    .expect("a pair is driving")
+                    .progress
+                    .borrow()
+                    .clone();
+                let progress = if progress.is_empty() {
+                    "starting".to_string()
+                } else {
+                    progress
+                };
+                self.notice(&format!("Pair: {progress}."));
+            }
             ("later", arg) => match arg
                 .strip_prefix("done")
                 .and_then(|rest| rest.trim().parse::<usize>().ok())
@@ -394,6 +424,20 @@ impl App {
             short(usage.prompt),
             short(usage.completion)
         ));
+        if let Some(split) = agent.pair_split() {
+            for (role, counts) in [("Mentor", &split[0]), ("Executor", &split[1])] {
+                let cached = counts.cached * 100 / counts.prompt.max(1);
+                self.commit(format!(
+                    "{DIM}Pair {role}: {} request{}, {} tool call{}, {} in ({cached}% cached), {} out.{RESET}",
+                    counts.requests,
+                    if counts.requests == 1 { "" } else { "s" },
+                    counts.tool_calls,
+                    if counts.tool_calls == 1 { "" } else { "s" },
+                    short(counts.prompt),
+                    short(counts.completion)
+                ));
+            }
+        }
     }
 
     /// Prints and copies what another agent needs to find this session: its id, the log's

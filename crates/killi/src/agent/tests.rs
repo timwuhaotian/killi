@@ -18,7 +18,7 @@ fn test_client() -> Client {
 }
 
 /// A client that talks to the stub at `base_url`, named `alias`.
-fn test_client_at(alias: &str, base_url: &str) -> Client {
+pub(super) fn test_client_at(alias: &str, base_url: &str) -> Client {
     let model = crate::config::ResolvedModel {
         alias: alias.into(),
         model: "test".into(),
@@ -40,7 +40,7 @@ fn test_client_at(alias: &str, base_url: &str) -> Client {
 
 /// Serves `replies` as SSE responses on 127.0.0.1 and returns the base URL to point a
 /// test client at.
-async fn stub_replies(replies: Vec<String>) -> String {
+pub(super) async fn stub_replies(replies: Vec<String>) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -115,7 +115,7 @@ async fn serve_raw(replies: Vec<String>) -> String {
 }
 
 /// One SSE reply with `text` and a choice-level `finish_reason`.
-fn sse(text: &str, finish_reason: &str) -> String {
+pub(super) fn sse(text: &str, finish_reason: &str) -> String {
     format!(
         "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{text}\"}},\"finish_reason\":\"{finish_reason}\"}}]}}\n\ndata: [DONE]\n\n"
     )
@@ -123,7 +123,7 @@ fn sse(text: &str, finish_reason: &str) -> String {
 
 /// An agent that has never asked a model anything: enough to run a reply's tool calls.
 /// Its scratch folder goes when the agent does, so `cargo test` leaves nothing behind.
-fn idle_agent(name: &str, controls: Controls, sink: Sink) -> Agent {
+pub(super) fn idle_agent(name: &str, controls: Controls, sink: Sink) -> Agent {
     let tmp = crate::test_temp::TempDir::new(&format!("killi-{name}"));
     let log = tmp.join("session.jsonl");
     std::fs::write(&log, "").unwrap();

@@ -73,7 +73,9 @@ mod tests {
         let out = written();
         assert!(out.contains("type = \"openai\""), "{out}");
         assert!(
-            out.contains("base_url = \"https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1\""),
+            out.contains(
+                "base_url = \"https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1\""
+            ),
             "{out}"
         );
     }

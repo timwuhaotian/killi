@@ -17,19 +17,19 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 pub use claude::import_claude;
-pub use codex::import_codex;
-pub use gemini::import_gemini;
-pub use kimi::import_kimi;
-pub use opencode::import_opencode;
-pub use pi::{import_omp, import_pi};
 #[cfg(test)]
 pub(crate) use claude::import_claude_from;
+pub use codex::import_codex;
 #[cfg(test)]
 pub(crate) use codex::import_codex_from;
+pub use gemini::import_gemini;
 #[cfg(test)]
 pub(crate) use gemini::import_gemini_from;
+pub use kimi::import_kimi;
+pub use opencode::import_opencode;
 #[cfg(test)]
 pub(crate) use opencode::import_opencode_from;
+pub use pi::{import_omp, import_pi};
 #[cfg(test)]
 pub(crate) use pi::{import_omp_from, import_pi_from};
 

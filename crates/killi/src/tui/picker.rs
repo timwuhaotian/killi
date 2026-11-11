@@ -98,6 +98,8 @@ pub(super) enum PickerChoice {
     Prune(usize),
     Search(String),
     Provider(String),
+    PairModel(Role, String),
+    PairEffort(Role, String),
     /// Whether to install the newer killi on offer.
     Update(bool),
 }
@@ -238,6 +240,12 @@ impl App {
                         PickerChoice::Update(install) => {
                             self.on_update_choice(install);
                             Idle::Continue
+                        }
+                        PickerChoice::PairModel(role, alias) => {
+                            Idle::Input(Input::PairModel(role, alias))
+                        }
+                        PickerChoice::PairEffort(role, effort) => {
+                            Idle::Input(Input::PairEffort(role, effort))
                         }
                     };
                 }
@@ -761,6 +769,59 @@ impl App {
             .position(|(name, _)| *name == current)
             .unwrap_or(0);
         self.picker = Some(Picker::new("Color theme".into(), options, selected));
+    }
+
+    /// A /pair setup's model list for a role, preselected on the remembered pick.
+    pub(super) fn open_pair_model_picker(&mut self, config: &Config, role: Role, current: &str) {
+        let options: Vec<_> = config
+            .models
+            .iter()
+            .map(|(alias, model)| {
+                let mark = if alias == current { " · current" } else { "" };
+                (
+                    alias.clone(),
+                    format!("{}{mark}", model.provider),
+                    PickerChoice::PairModel(role, alias.clone()),
+                )
+            })
+            .collect();
+        let selected = options
+            .iter()
+            .position(|(_, _, c)| matches!(c, PickerChoice::PairModel(_, a) if a == current))
+            .unwrap_or(0);
+        let title = match role {
+            Role::Mentor => "Pair mentor model",
+            Role::Executor => "Pair executor model",
+        };
+        self.picker = Some(Picker::new(title.into(), options, selected));
+    }
+
+    /// A /pair setup's effort list for a role's picked model.
+    pub(super) fn open_pair_effort_picker(
+        &mut self,
+        config: &Config,
+        role: Role,
+        alias: &str,
+        current: &str,
+    ) {
+        let options: Vec<_> = config
+            .efforts(alias)
+            .into_iter()
+            .map(|effort| {
+                let mark = if effort == current { "current" } else { "" };
+                (
+                    effort.clone(),
+                    mark.to_string(),
+                    PickerChoice::PairEffort(role, effort),
+                )
+            })
+            .collect();
+        let selected = options
+            .iter()
+            .position(|(_, _, c)| matches!(c, PickerChoice::PairEffort(_, e) if e == current))
+            .unwrap_or(options.len() / 2);
+        let title = format!("{} effort for {alias}", role.label());
+        self.picker = Some(Picker::new(title, options, selected));
     }
 
     pub(super) fn open_effort_picker(&mut self, config: &Config) {
