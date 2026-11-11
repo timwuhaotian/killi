@@ -1009,6 +1009,27 @@ fn the_streaming_preview_is_styled_once_per_tail() {
 }
 
 #[test]
+fn pair_subcommands_complete_in_idle_and_busy_menus() {
+    for busy in [false, true] {
+        let mut app = test_app();
+        app.entries = vec![Entry {
+            name: "pair".into(),
+            aliases: Vec::new(),
+            description: String::new(),
+        }];
+        if busy {
+            app.busy = Some(Instant::now());
+        }
+        app.editor.insert("/pair rsm");
+        let menu = app.suggestions().expect("fuzzy subcommand menu");
+        assert_eq!(menu.items[0].value, "resume");
+        app.on_key_menu(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &menu);
+        assert_eq!(app.editor.text(), "/pair resume");
+        assert!(app.suggestions().is_none());
+    }
+}
+
+#[test]
 fn the_busy_menu_offers_skills_and_skills_queue_their_prompt() {
     let mut app = test_app();
     app.busy = Some(Instant::now());
