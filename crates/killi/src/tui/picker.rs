@@ -503,7 +503,16 @@ impl App {
             })
             .collect();
         if options.is_empty() {
-            return self.notice("No model has an API key yet: /provider adds one, then /model picks it.");
+            let hint = if config
+                .models
+                .keys()
+                .any(|alias| !config.missing_key(Some(alias)))
+            {
+                "Models with keys are hidden by [models_filter]: loosen it, then /model picks one."
+            } else {
+                "No model has an API key yet: /provider adds one, then /model picks it."
+            };
+            return self.notice(hint);
         }
         let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) | PickerChoice::BackupModel(a) if *a == chosen)).unwrap_or(0);
         let title = if backup {

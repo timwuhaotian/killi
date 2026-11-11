@@ -355,6 +355,24 @@ fn the_model_picker_hides_models_the_filter_excludes() {
 }
 
 #[test]
+fn the_model_picker_explains_when_the_filter_hides_every_keyed_model() {
+    let mut app = test_app();
+    let config: Config = toml::from_str(
+        "default_model = \"b/hide\"\n\n[providers.b]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"b/hide\"]\nprovider = \"b\"\nmodel = \"hide\"\n\n[models_filter.b]\nexclude = [\"b/hide\"]\n",
+    )
+    .unwrap();
+    app.open_model_picker(&config, false);
+    assert!(app.picker.is_none());
+    let shown = app
+        .pending
+        .iter()
+        .map(|row| unstyled(row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(shown.contains("hidden by [models_filter]"), "{shown}");
+}
+
+#[test]
 fn the_swarm_argument_menu_offers_modes_and_parallel_counts() {
     let mut app = test_app();
     app.editor.insert("/swarm ");
