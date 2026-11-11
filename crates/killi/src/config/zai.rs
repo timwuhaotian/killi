@@ -16,7 +16,7 @@ pub fn ours(provider: &Provider) -> bool {
     provider
         .base_url
         .as_deref()
-        .is_some_and(|url| url.starts_with("https://api.z.ai"))
+        .is_some_and(|url| url.trim_end_matches('/') == BASE_URL)
 }
 
 /// `/provider zai`: writes the provider and the models its list endpoint names with
@@ -211,6 +211,30 @@ mod tests {
             again == out && none.is_empty() && nothing.is_empty(),
             "a repaired config needs nothing more: {again}"
         );
+    }
+
+    #[test]
+    fn only_the_coding_api_is_ours() {
+        for url in [
+            BASE_URL,
+            "https://api.z.ai/api/coding/paas/v4/",
+        ] {
+            let provider: Provider = toml::from_str(&format!(
+                "type = \"openai\"\nbase_url = \"{url}\"\napi_key = \"k\"\n"
+            ))
+            .unwrap();
+            assert!(ours(&provider), "{url}");
+        }
+        for url in [
+            "https://api.z.ai-mirror.example/v4",
+            "https://api.z.ai/api/paas/v4",
+        ] {
+            let provider: Provider = toml::from_str(&format!(
+                "type = \"openai\"\nbase_url = \"{url}\"\napi_key = \"k\"\n"
+            ))
+            .unwrap();
+            assert!(!ours(&provider), "{url}");
+        }
     }
 
     #[test]

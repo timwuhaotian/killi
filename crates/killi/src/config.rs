@@ -437,7 +437,7 @@ pub async fn sync_models(only: Option<&str>) -> Result<Vec<String>> {
                 out.extend(outcome.notes);
                 outcome.added
             })
-        } else if base.starts_with("https://api.z.ai") {
+        } else if zai::ours(provider) {
             match (inline, provider.api_key_env.as_deref()) {
                 (true, _) => zai::add(&key).await,
                 (false, Some(env)) => zai::add_env(env, &key).await,
