@@ -69,8 +69,7 @@ impl Setup {
             Choice::default()
         };
         let requested = requested_model(&config, model, &last, defer_key);
-        if defer_key
-            && model.is_none()
+        if model.is_none()
             && let Some(alias) = &requested
         {
             last.model = Some(alias.clone());
@@ -426,10 +425,9 @@ fn known<'a>(config: &Config, choice: &'a Choice) -> Option<&'a str> {
 }
 
 /// The model a new session starts on: `-m`, else the last `/model` pick, else the config's
-/// default. When that model can't run and an interactive start may fix it — its key is
-/// missing, or `[models_filter]` hides it — the first keyed model the filter keeps is used
-/// instead. A keyed default is kept over the first keyed model. `None` when no model is
-/// configured at all.
+/// default. When `[models_filter]` hides that model, or an interactive start may fix its
+/// missing key, the first keyed model the filter keeps is used instead. A keyed default is
+/// kept over the first keyed model. `None` when no model is configured at all.
 fn requested_model(
     config: &Config,
     model: Option<&str>,

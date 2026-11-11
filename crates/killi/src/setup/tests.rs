@@ -64,16 +64,27 @@ fn a_keyless_default_falls_to_the_first_keyed_model() {
     );
 }
 
-#[test]
-fn a_filtered_default_is_not_used_by_a_headless_start() {
+#[tokio::test]
+async fn a_filtered_default_is_not_used_by_a_headless_start() {
+    let root = std::env::temp_dir().join(format!("killi-start-filtered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let previous = std::env::var_os("HOME");
+    // SAFETY: the override isolates the saved model choice, then HOME is restored.
+    unsafe { std::env::set_var("HOME", &root) };
     let config: Config = toml::from_str(
         "default_model = \"zai/glm-4.5\"\n\n[providers.zai]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"zai/glm-4.5\"]\nprovider = \"zai\"\nmodel = \"glm-4.5\"\n\n[models.\"zai/glm-5.3\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n\n[models_filter.zai]\ninclude = [\"glm-5.3\"]\n",
     )
     .unwrap();
-    assert_eq!(
-        requested_model(&config, None, &Choice::default(), false).as_deref(),
-        Some("zai/glm-5.3")
-    );
+    let setup = Setup::new(config, &root, None, false).await.unwrap();
+    let agent = setup.start(Controls::default(), Rc::new(|_| {})).unwrap();
+    assert_eq!(agent.model_alias(), "zai/glm-5.3");
+    match previous {
+        Some(home) => unsafe { std::env::set_var("HOME", home) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    drop(agent);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
