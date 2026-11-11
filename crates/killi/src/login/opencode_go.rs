@@ -178,13 +178,22 @@ async fn served(http: &reqwest::Client, key: &str) -> Result<Vec<String>> {
         .error_for_status()?
         .bytes()
         .await?;
-    let list: Value = serde_json::from_slice(&body)?;
-    Ok(list["data"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|model| model["id"].as_str().map(String::from))
-        .collect())
+    served_ids(&body)
+}
+
+/// Parses the pruning authority strictly: a successful response with the wrong shape is an
+/// error, never an empty list that could remove every model.
+fn served_ids(body: &[u8]) -> Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Served {
+        data: Vec<ServedModel>,
+    }
+    #[derive(Deserialize)]
+    struct ServedModel {
+        id: String,
+    }
+    let list: Served = serde_json::from_slice(body)?;
+    Ok(list.data.into_iter().map(|model| model.id).collect())
 }
 
 /// models.dev's entries for OpenCode Go; the rest of the catalog is skipped as it is read.
@@ -319,6 +328,22 @@ mod tests {
                 json!({"provider": {"api": "https://opencode.ai/inference/go/openai/v1"}}),
             ),
         ])
+    }
+
+    #[test]
+    fn a_malformed_served_list_is_not_a_pruning_authority() {
+        for body in [
+            "{}",
+            r#"{"data":{}}"#,
+            r#"{"data":[{}]}"#,
+            r#"{"data":[{"id":7}]}"#,
+        ] {
+            assert!(served_ids(body.as_bytes()).is_err(), "accepted {body}");
+        }
+        assert_eq!(
+            served_ids(br#"{"data":[{"id":"kimi-k3"}]}"#).unwrap(),
+            ["kimi-k3"]
+        );
     }
 
     #[test]
