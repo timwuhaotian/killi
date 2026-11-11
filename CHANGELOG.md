@@ -3,6 +3,15 @@
 Notable changes to killi. `install.sh` and `killi update` always install the latest release
 from [`releases/`](releases); the versions below match `Cargo.toml`.
 
+## 0.6.75 — 2026-11-11
+
+- After a slash command and a space, the `/` menu now offers that command's subcommands and
+  choices as it already offered `/model`'s and `/effort`'s: `/pair` suggests `mentor`,
+  `executor`, `stop`, `resume` and `status`; `/swarm` suggests `on` and `off`; `/goal`
+  suggests `done` and `clear`; `/later` suggests `done`. Typing part of one fuzzy-completes
+  it, and the menu closes once the subcommand (or something else) is typed, so an argument
+  after it is never blocked.
+
 ## 0.6.74 — 2026-11-11
 
 - `/pair` runs one task with two roles: a mentor model that plans and reviews, and an
