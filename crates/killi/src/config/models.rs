@@ -120,7 +120,7 @@ pub(crate) fn kept_models(config: &Config, provider: &str, served: &[String]) ->
 /// Adds a sign-in's provider and the models the config doesn't have yet. A provider already
 /// there gets the fields the sign-in writes, its key and `tool_names` among them, and keeps
 /// the rest of its table. A new config, or one without `default_model`, starts on the first
-/// model added.
+/// allowed model added; an entirely filtered addition leaves the default unset.
 pub fn add_models(additions: &Additions) -> Result<Added> {
     let dir = killi_home();
     let path = dir.join("config.toml");
@@ -260,10 +260,12 @@ pub(super) fn with_models(
         return Ok((text.to_string(), name, true, added));
     }
     let mut out = String::new();
-    if config.default_model.is_none() && !added.is_empty() {
+    if config.default_model.is_none()
+        && let Some(default) = added.iter().find(|alias| config.model_allowed(alias))
+    {
         out.push_str(&format!(
             "default_model = {}\n",
-            toml::Value::String(added[0].clone())
+            toml::Value::String(default.clone())
         ));
     }
     out.push_str(text);

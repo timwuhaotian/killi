@@ -18,6 +18,28 @@ fn template_parses_without_a_model() {
 }
 
 #[test]
+fn a_filtered_addition_does_not_become_the_default_model() {
+    let (text, _, _, added) = super::with_models(
+        "[models_filter.chatgpt]\nexclude = [\"gpt-a\"]\n",
+        &chatgpt(vec![plan_model("gpt-a")]),
+    )
+    .unwrap();
+    assert_eq!(added, ["chatgpt/gpt-a"]);
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.default_model, None);
+
+    let root = std::env::temp_dir().join(format!("killi-filtered-add-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    std::fs::write(&path, text).unwrap();
+    super::remove_models(&path, "chatgpt", &[]).unwrap();
+    let config: super::Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(config.models.is_empty() && config.default_model.is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn thinking_follows_the_model_and_ignores_a_former_global_effort() {
     let base = "[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n";
     let off: super::Config =
