@@ -211,11 +211,12 @@ impl Setup {
     }
 
     /// The backup client the config's `backup_model` names, if it resolves: every session —
-    /// new or resumed — starts on it. A backup the config no longer knows is dropped.
+    /// new or resumed — starts on it. An unknown or filtered backup is dropped.
     fn backup_client(&self) -> Option<Client> {
         self.config
             .backup_model
             .as_deref()
+            .filter(|alias| self.config.model_allowed(alias))
             .and_then(|alias| self.config.resolve(Some(alias)).and_then(Client::new).ok())
     }
 

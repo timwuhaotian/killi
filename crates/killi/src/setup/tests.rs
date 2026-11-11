@@ -396,6 +396,25 @@ fn every_session_gets_the_configured_backup_model() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[tokio::test]
+async fn a_filtered_backup_is_not_installed_at_startup() {
+    let root = std::env::temp_dir().join(format!("killi-backup-filtered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let config: Config = toml::from_str(
+        "default_model = \"test/model\"\nbackup_model = \"test/backup\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n\n[models.\"test/backup\"]\nprovider = \"test\"\nmodel = \"backup\"\n\n[models_filter.test]\ninclude = [\"test/model\"]\n",
+    )
+    .unwrap();
+    let setup = Setup::new(config, &root, Some("test/model"), false)
+        .await
+        .unwrap();
+    let agent = setup.start(Controls::default(), Rc::new(|_| {})).unwrap();
+    assert_eq!(agent.model_alias(), "test/model");
+    assert_eq!(agent.backup_alias(), None);
+    drop(agent);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn reload_without_the_skill_tool_keeps_skills_out_of_the_prompt() {
     let root = std::env::temp_dir().join(format!("killi-setup-bare-{}", std::process::id()));
