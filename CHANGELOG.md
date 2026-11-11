@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.79 — 2026-11-12
+
+- The task list's `… N more` row now expands on a double-click, showing every task, and a
+  double-click on the expanded list folds it back to eight. On a short window the list is
+  still shrunk to fit, but it keeps its `… N more` row (with the hidden count) instead of
+  dropping it, so the row to double-click is always the one on screen.
+
 ## 0.6.78 — 2026-11-11
 
 - A message typed while the agent works no longer replaces the request it interrupted.
