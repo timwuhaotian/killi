@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.77 — 2026-11-11
+
 - `/swarm` now saves what it changes: `/swarm on` and `/swarm off` write `[agent] swarm`, and
   `/swarm parallel <n>` writes `swarm_parallel` and applies it to this session's next swarm,
   so the choice survives restarts instead of only lasting until killi exits.
