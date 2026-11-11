@@ -49,7 +49,7 @@ use yaml::read_yaml;
 #[cfg(test)]
 use command::{agree, create_command_link, valid_command_name};
 #[cfg(test)]
-use guide::TEMPLATE;
+use guide::{TEMPLATE, starting_config};
 #[cfg(test)]
 use import::{
     import_claude_from, import_codex_from, import_gemini_from, import_omp_from,

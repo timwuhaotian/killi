@@ -18,6 +18,22 @@ fn template_parses_without_a_model() {
 }
 
 #[test]
+fn starting_config_resolves_a_keyed_openai_model() {
+    // SAFETY: no other test reads or writes OPENAI_API_KEY.
+    unsafe { std::env::set_var("OPENAI_API_KEY", "test-key") };
+    let text = super::starting_config() + &super::prompt_section();
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.default_model.as_deref(), Some("openai/gpt-5.5"));
+    assert_eq!(
+        config.providers["openai"].api_key_env.as_deref(),
+        Some("OPENAI_API_KEY")
+    );
+    let model = config.resolve(None).unwrap();
+    assert_eq!(model.alias, "openai/gpt-5.5");
+    assert_eq!(model.protocol, super::Protocol::Responses);
+}
+
+#[test]
 fn a_filtered_addition_does_not_become_the_default_model() {
     let (text, _, _, added) = super::with_models(
         "[models_filter.chatgpt]\nexclude = [\"gpt-a\"]\n",

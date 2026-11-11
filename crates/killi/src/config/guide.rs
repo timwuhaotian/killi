@@ -131,7 +131,7 @@ pub fn init() -> Result<()> {
 /// The config a new file starts with: the examples in `TEMPLATE`, plus an active provider
 /// and model for each API key already in the environment, so a machine that is set up starts
 /// configured. With no key, no provider or model is written at all.
-fn starting_config() -> String {
+pub(super) fn starting_config() -> String {
     let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
     let (openai, anthropic) = (set("OPENAI_API_KEY"), set("ANTHROPIC_API_KEY"));
     let mut text = String::new();
