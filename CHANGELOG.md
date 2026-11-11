@@ -3,6 +3,16 @@
 Notable changes to killi. `install.sh` and `killi update` always install the latest release
 from [`releases/`](releases); the versions below match `Cargo.toml`.
 
+## 0.6.76 — 2026-11-11
+
+- An `mcp` call that names a tool but can't say what it takes is now answered with what the
+  tool takes: its properties, which of them are required, and an object to copy. A model
+  that omitted `arguments`, sent an empty string or malformed JSON was previously handed
+  either a server error naming one missing field or a JSON parse error, with no way to tell
+  what a good call looked like. A server that rejects the arguments it was sent (`-32602`)
+  gets the same description appended to its error. Tools that take no arguments still run
+  without them.
+
 ## 0.6.75 — 2026-11-11
 
 - After a slash command and a space, the `/` menu now offers that command's subcommands and
