@@ -94,6 +94,7 @@ impl App {
         // the queue, then the streaming preview, the /btw block and the peer rows. The
         // running calls, the spinner and the retry countdown never go.
         let mut shrink_tasks: Vec<usize> = Vec::new();
+        let mut todo_rows = None;
         let mut shrink_queue: Vec<usize> = Vec::new();
         let mut shrink_head: Vec<usize> = Vec::new();
         // A blank row, unless the row above is blank already: it keeps the parts of the live
@@ -247,11 +248,22 @@ impl App {
                 .iter()
                 .filter(|t| t.status == "completed")
                 .count();
+            let first = rows.len();
+            let hint = if self.todos_expanded {
+                " · double-click collapses"
+            } else {
+                ""
+            };
             rows.push(fit(
-                &format!("  {DIM}tasks {done}/{}{RESET}", self.todos.len()),
+                &format!("  {DIM}tasks {done}/{}{hint}{RESET}", self.todos.len()),
                 width,
             ));
-            for todo in self.todos.iter().take(8) {
+            let visible = if self.todos_expanded {
+                self.todos.len()
+            } else {
+                8
+            };
+            for todo in self.todos.iter().take(visible) {
                 let line = match todo.status.as_str() {
                     "completed" => format!("{LAGOON}✓{RESET} {DIM}{}{RESET}", todo.content),
                     "in_progress" => format!("{LAGOON}◐{RESET} {}", todo.content),
@@ -259,9 +271,16 @@ impl App {
                 };
                 rows.push(fit(&format!("  {line}"), width));
             }
-            if self.todos.len() > 8 {
-                rows.push(format!("  {DIM}… {} more{RESET}", self.todos.len() - 8));
+            if self.todos.len() > visible {
+                rows.push(fit(
+                    &format!(
+                        "  {DIM}… {} more · double-click expands{RESET}",
+                        self.todos.len() - visible
+                    ),
+                    width,
+                ));
             }
+            todo_rows = Some((first, rows.len() - 1));
             shrink_tasks.extend((tasks..rows.len()).rev());
         }
         if self.picker.is_some() && self.theme_before_preview.is_some() {
@@ -480,8 +499,49 @@ impl App {
                 .collect();
             drop.sort_unstable_by(|a, b| b.cmp(a));
             gone = drop.iter().filter(|&&i| i < cursor.0).count();
+            let mut todo_dropped = false;
             for i in drop {
+                if let Some((first, last)) = todo_rows {
+                    todo_dropped |= (first..=last).contains(&i);
+                }
+                todo_rows = todo_rows.and_then(|(first, last)| {
+                    if i < first {
+                        Some((first - 1, last - 1))
+                    } else if i <= last {
+                        (first < last).then_some((first, last - 1))
+                    } else {
+                        Some((first, last))
+                    }
+                });
                 rows.remove(i);
+            }
+            // Shrinking takes todo rows from the bottom, the `more` row first; put it back
+            // in place of the last surviving task, so the hidden count and the row a
+            // double-click lands on stay the ones on screen.
+            if todo_dropped {
+                match todo_rows {
+                    Some((first, last)) if first < last => {
+                        let shown = last - first;
+                        if shown < self.todos.len() {
+                            let hint = if !self.todos_expanded && self.todos.len() > 8 {
+                                " · double-click expands"
+                            } else {
+                                ""
+                            };
+                            rows[last] = fit(
+                                &format!(
+                                    "  {DIM}… {} more{hint}{RESET}",
+                                    self.todos.len() - (shown - 1)
+                                ),
+                                width,
+                            );
+                        }
+                    }
+                    Some(_) if !self.todos_expanded && self.todos.len() > 8 => {
+                        todo_rows = None;
+                    }
+                    _ => {}
+                }
             }
             cursor.0 -= gone;
             // Every row that shrinks away is above the prompt.
@@ -491,6 +551,9 @@ impl App {
         if excess > 0 {
             let cut = excess.min(top.saturating_sub(gone));
             rows.drain(..cut);
+            todo_rows = todo_rows.and_then(|(first, last)| {
+                Some((first.saturating_sub(cut), last.checked_sub(cut)?))
+            });
             cursor.0 -= cut;
             input_rows.top -= cut;
         }
@@ -506,6 +569,7 @@ impl App {
         rows.splice(0..0, std::iter::repeat_n(String::new(), pad));
         input_rows.top += pad;
         self.input_rows = input_rows;
+        self.todo_rows = todo_rows.map(|(first, last)| (first + pad, last + pad));
         (rows, cursor.0 + pad, cursor.1)
     }
 

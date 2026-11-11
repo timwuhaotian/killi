@@ -490,6 +490,8 @@ impl App {
         self.send_now = false;
         self.swarm_send_armed = false;
         self.todos.clear();
+        self.todos_expanded = false;
+        self.todo_rows = None;
         self.reset_usage();
         self.details.clear();
         self.detail_back = 0;

@@ -195,6 +195,8 @@ pub(super) struct App {
     /// The `agent_swarm` call in flight, whose subagents the live area lists.
     pub(super) swarm: Option<swarm::Swarm>,
     pub(super) todos: Vec<Todo>,
+    /// Whether the live area shows every todo instead of the first eight.
+    pub(super) todos_expanded: bool,
     pub(super) asking: Option<Asking>,
     /// This turn's answered model questions, oldest first, for ←/→ navigation.
     pub(super) ask_past: Vec<PastAsk>,
@@ -322,6 +324,8 @@ pub(super) struct App {
     pub(super) input_first: usize,
     /// Where the prompt's rows were last drawn, so a press there selects its text.
     pub(super) input_rows: InputRows,
+    /// The todo list's first and last rows on the last painted screen, both included.
+    pub(super) todo_rows: Option<(usize, usize)>,
     /// Whether the banner says it is a resumed session, for drawing it again.
     pub(super) banner_resumed: bool,
     /// When the branch was last read, so two git spawns don't run after every input.

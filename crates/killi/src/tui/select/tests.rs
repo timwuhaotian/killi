@@ -75,7 +75,121 @@ fn layout_prompt(app: &mut App) -> Vec<String> {
     let above = app.height - (rows.len() - cut);
     app.view_rows = above;
     app.input_rows = app.input_rows.placed(above, cut);
-    rows
+    app.todo_rows = app
+        .todo_rows
+        .and_then(|(first, last)| {
+            Some((first.saturating_sub(cut), last.checked_sub(cut)?))
+        })
+        .map(|(first, last)| (above + first, above + last));
+    // The screen's rows, so a row number indexes straight into them.
+    let mut screen = vec![String::new(); above];
+    screen.extend(rows.into_iter().skip(cut));
+    screen
+}
+
+#[test]
+fn double_clicking_todos_expands_and_collapses_the_list() {
+    let mut app = app_with_rows(0, 0);
+    app.todos = (0..12)
+        .map(|n| Todo {
+            content: format!("task {n}"),
+            status: "pending".into(),
+        })
+        .collect();
+    let rows = layout_prompt(&mut app);
+    let more = app.todo_rows.expect("the extra tasks fold").1 as u16;
+    assert!(
+        text::plain(&rows[more as usize]).contains("4 more · double-click expands"),
+        "the press row is the row on screen: {}",
+        text::plain(&rows[more as usize])
+    );
+
+    app.on_mouse(press(more, 4));
+    assert!(!app.todos_expanded, "one click does not expand");
+    app.on_mouse(press(more, 4));
+    assert!(app.todos_expanded);
+
+    let rows = layout_prompt(&mut app);
+    let shown = rows
+        .iter()
+        .map(|row| text::plain(row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(shown.contains("task 11"), "{shown}");
+    assert!(shown.contains("double-click collapses"), "{shown}");
+    assert!(!shown.contains("4 more"), "{shown}");
+
+    let (header, task) = app.todo_rows.expect("the expanded list is drawn");
+    app.on_mouse(press(header as u16, 4));
+    app.on_mouse(press(task as u16, 4));
+    assert!(
+        app.todos_expanded,
+        "presses on different rows are not a double-click"
+    );
+    app.on_mouse(press(task as u16, 4));
+    assert!(!app.todos_expanded);
+
+    let rows = layout_prompt(&mut app);
+    let shown = rows
+        .iter()
+        .map(|row| text::plain(row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!shown.contains("task 11"), "{shown}");
+    assert!(shown.contains("4 more"), "{shown}");
+}
+
+#[test]
+fn a_shrunk_todo_list_keeps_its_more_row_as_the_double_click_target() {
+    let mut app = app_with_rows(0, 0);
+    app.height = 14;
+    app.todos = (0..12)
+        .map(|n| Todo {
+            content: format!("task {n}"),
+            status: "pending".into(),
+        })
+        .collect();
+    let rows = layout_prompt(&mut app);
+    let (header, last) = app.todo_rows.expect("the shrunk list is drawn");
+    assert!(
+        text::plain(&rows[last]).contains("more · double-click expands"),
+        "the last row stays the more row: {}",
+        text::plain(&rows[last])
+    );
+
+    app.on_mouse(press((header + 1) as u16, 4));
+    app.on_mouse(press((header + 1) as u16, 4));
+    assert!(!app.todos_expanded, "a task row is not the target");
+    app.on_mouse(press(last as u16, 4));
+    app.on_mouse(press(last as u16, 4));
+    assert!(app.todos_expanded);
+
+    let rows = layout_prompt(&mut app);
+    let shown = rows
+        .iter()
+        .map(|row| text::plain(row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(shown.contains("double-click collapses"), "{shown}");
+    assert!(shown.contains("… "), "the cut tail is marked: {shown}");
+    assert!(!shown.contains("task 11"), "{shown}");
+}
+
+#[test]
+fn a_shorter_todo_list_drops_the_expanded_flag() {
+    let mut app = app_with_rows(0, 0);
+    let todos = |n: usize| {
+        (0..n)
+            .map(|i| Todo {
+                content: format!("task {i}"),
+                status: "pending".into(),
+            })
+            .collect::<Vec<_>>()
+    };
+    app.on_agent(Event::Todos(todos(12)));
+    app.todos_expanded = true;
+    app.on_agent(Event::Todos(todos(5)));
+    assert!(!app.todos_expanded);
 }
 
 #[test]

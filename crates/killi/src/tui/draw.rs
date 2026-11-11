@@ -225,8 +225,12 @@ impl App {
         self.forget_stale();
         let (live, cursor_row, cursor_col) = self.live();
         let cut = live.len().saturating_sub(self.height);
+        let todo_rows = self.todo_rows.and_then(|(first, last)| {
+            Some((first.saturating_sub(cut), last.checked_sub(cut)?))
+        });
         let (live, cursor_row) = (&live[cut..], cursor_row.saturating_sub(cut));
         let area = self.height - live.len();
+        self.todo_rows = todo_rows.map(|(first, last)| (area + first, area + last));
         let scrolled = self.history.below(area) > 0 && area > 1;
         let view = area - usize::from(scrolled);
         let mut rows = self.view_lines(view);

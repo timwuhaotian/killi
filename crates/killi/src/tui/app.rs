@@ -29,6 +29,7 @@ impl App {
             running: Vec::new(),
             swarm: None,
             todos: Vec::new(),
+            todos_expanded: false,
             asking: None,
             ask_past: Vec::new(),
             ask_view: None,
@@ -100,6 +101,7 @@ impl App {
             pressed: None,
             input_first: 0,
             input_rows: InputRows::default(),
+            todo_rows: None,
             banner_resumed: false,
             branch_at: None,
             live: None,
@@ -394,6 +396,10 @@ impl App {
     }
 
     pub(super) fn resize(&mut self, columns: u16, rows: u16) {
+        // A todo press is a screen row, which the new size moves.
+        if matches!(self.pressed, Some((Spot::Todos(_), _, _))) {
+            self.pressed = None;
+        }
         self.width = usize::from(columns).max(20);
         self.markdown.width = self.width;
         self.height = usize::from(rows).max(5);

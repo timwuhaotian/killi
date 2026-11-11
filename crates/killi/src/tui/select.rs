@@ -14,11 +14,13 @@ use super::*;
 /// How close together two presses on the same point land to count as a double-click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
-/// Where a press landed: a point of the conversation, or a byte of the prompt's text.
+/// Where a press landed: a point of the conversation, a byte of the prompt's text, or the
+/// todo list's expandable rows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Spot {
     View((usize, usize)),
     Input(usize),
+    Todos(usize),
 }
 
 /// Where the prompt's rows were drawn: the first row shown, which of the editor's visual rows
@@ -254,15 +256,25 @@ impl App {
     }
 
     /// A press in the conversation or the prompt starts a selection there, a second one on the
-    /// same point soon after selects the word under it and a third the whole row; anywhere else
-    /// a press only ends the last selection.
+    /// same point soon after selects the word under it and a third the whole row. A second press
+    /// on the todos' `more` row expands them, or on an expanded list collapses it; anywhere else
+    /// a press ends the selection.
     fn press(&mut self, (row, col): (usize, usize)) {
-        let input = (row >= self.view_rows && self.input_rows.contains(row))
+        let todos = self.todo_rows.and_then(|(first, last)| {
+            let hit = if self.todos_expanded {
+                (first..=last).contains(&row)
+            } else {
+                self.todos.len() > 8 && row == last
+            };
+            hit.then_some(Spot::Todos(row))
+        });
+        let input = (todos.is_none() && row >= self.view_rows && self.input_rows.contains(row))
             .then(|| self.input_rows.at(row, col))
             .flatten();
-        let spot = match input {
-            Some((line, column)) => Some(Spot::Input(self.editor.point(line, column))),
-            None => (row < self.view_rows)
+        let spot = match (todos, input) {
+            (Some(spot), _) => Some(spot),
+            (None, Some((line, column))) => Some(Spot::Input(self.editor.point(line, column))),
+            (None, None) => (row < self.view_rows)
                 .then(|| self.point_at(row, col))
                 .flatten()
                 .map(Spot::View),
@@ -276,6 +288,15 @@ impl App {
         self.clear_selection();
         self.pressed = spot.map(|spot| (spot, Instant::now(), run));
         let point = match (spot, input) {
+            (Some(Spot::Todos(_)), _) => {
+                self.editor.deselect();
+                if run == 2 {
+                    self.todos_expanded = !self.todos_expanded;
+                    self.todo_rows = None;
+                    self.pressed = None;
+                }
+                return;
+            }
             (Some(Spot::Input(byte)), Some((line, _))) => {
                 self.drag = Some((row, col));
                 match run {

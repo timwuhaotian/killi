@@ -143,6 +143,11 @@ impl App {
                     .iter_mut()
                     .for_each(|todo| todo.content = text::sanitize_row(&todo.content).into_owned());
                 self.todos = todos;
+                if self.todos.len() <= 8
+                    || self.todos.iter().all(|todo| todo.status == "completed")
+                {
+                    self.todos_expanded = false;
+                }
             }
             Event::Ask(question) => {
                 self.flush_partial();
