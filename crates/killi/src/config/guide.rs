@@ -52,7 +52,7 @@ peers = true                    # other killi sessions here can see this one, as
 # Keep a provider to the models you want. A provider without an entry keeps every model.
 # [models_filter.zai]
 # include = ["glm-5.3", "glm-5.3-flash"]   # aliases or model ids; a trailing * is a prefix
-# exclude = ["*-preview"]
+# exclude = ["glm-5.3-preview"]
 "#;
 
 /// The OpenAI provider and model, added to a new config when its key is already in the
