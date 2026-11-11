@@ -5,6 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.78 — 2026-11-11
+
+- A message typed while the agent works no longer replaces the request it interrupted.
+  The tool calls it skips now say the earlier request still stands, the queued message is
+  marked as adding to it (unless it says to stop or change course), and a turn whose calls
+  were skipped can't end on a reply covering only the newer message: the agent is asked to
+  re-check every message in the turn first. Before this, asking for a deploy and a push in
+  quick succession ran only the push — the deploy's calls were skipped for the newer
+  message, and the turn ended after noting the deploy never ran.
+
 ## 0.6.77 — 2026-11-11
 
 - `/swarm` now saves what it changes: `/swarm on` and `/swarm off` write `[agent] swarm`, and
