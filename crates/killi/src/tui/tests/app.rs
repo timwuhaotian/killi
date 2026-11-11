@@ -456,6 +456,18 @@ fn ctrl_c_arms_an_exit_hint_instead_of_printing_one() {
 }
 
 #[test]
+fn provider_switch_notice_distinguishes_first_configuration() {
+    assert_eq!(
+        run::provider_switch_notice("", "zai/glm-5.3"),
+        "Now on `zai/glm-5.3`; /model picks another."
+    );
+    assert_eq!(
+        run::provider_switch_notice("zai/old", "zai/glm-5.3"),
+        "`zai/old` is no longer served; switched to `zai/glm-5.3`."
+    );
+}
+
+#[test]
 fn every_provider_preset_asks_its_key() {
     let mut app = test_app();
     app.open_provider_picker(&crate::config::Config::default());

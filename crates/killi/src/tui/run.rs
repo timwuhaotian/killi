@@ -506,9 +506,7 @@ pub(super) async fn provider_add(
                         Ok(client) => match agent.switch_model(client) {
                             Ok(()) => {
                                 app.show_model(agent, session.config());
-                                app.notice(&format!(
-                                    "`{alias}` is no longer served; switched to `{first}`."
-                                ));
+                                app.notice(&provider_switch_notice(&alias, &first));
                             }
                             Err(e) => app.error_report(&e),
                         },
@@ -519,6 +517,15 @@ pub(super) async fn provider_add(
         }
     }
     Ok(())
+}
+
+/// The model switch after `/provider`: first configuration has no removed model to name.
+pub(super) fn provider_switch_notice(alias: &str, first: &str) -> String {
+    if alias.is_empty() {
+        format!("Now on `{first}`; /model picks another.")
+    } else {
+        format!("`{alias}` is no longer served; switched to `{first}`.")
+    }
 }
 
 /// `/goal [<text>|done|clear]`: shows the session goal, sets one the model hears on its
