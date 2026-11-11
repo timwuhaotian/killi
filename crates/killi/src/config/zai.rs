@@ -41,16 +41,8 @@ async fn add_with(key_field: (&str, &str), api_key: &str) -> Result<Added> {
     };
     let mut added = add_models(&additions(key_field, ids.clone()))?;
     if listed {
-        let filter = Config::load().ok();
-        let keep: Vec<String> = ids
-            .iter()
-            .map(|id| format!("{}/{}", added.provider, id))
-            .filter(|alias| {
-                filter
-                    .as_ref()
-                    .is_none_or(|config| config.model_allowed(alias))
-            })
-            .collect();
+        let config = Config::load()?;
+        let keep = crate::config::kept_models(&config, &added.provider, &ids);
         added.dropped = crate::config::remove_models(&added.path, &added.provider, &keep)?;
     } else if let Err(error) = served {
         added.notes.push(format!(

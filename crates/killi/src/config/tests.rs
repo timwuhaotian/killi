@@ -392,6 +392,28 @@ fn removing_models_drops_only_that_providers_stale_ones() {
 }
 
 #[test]
+fn syncing_keeps_custom_aliases_for_served_model_ids() {
+    let root = std::env::temp_dir().join(format!("killi-custom-alias-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    std::fs::write(
+        &path,
+        "default_model = \"zai/fast\"\n\n[providers.zai]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"zai/fast\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\nmax_context_size = 123456\n\n[models.\"zai/hidden\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n\n[models.\"zai/old\"]\nprovider = \"zai\"\nmodel = \"glm-4.5\"\n\n[models_filter.zai]\nexclude = [\"zai/hidden\"]\n",
+    )
+    .unwrap();
+    let config: super::Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let keep = super::kept_models(&config, "zai", &["glm-5.3".to_string()]);
+    assert_eq!(keep, ["zai/fast"]);
+    let dropped = super::remove_models(&path, "zai", &keep).unwrap();
+    assert_eq!(dropped, ["zai/hidden", "zai/old"]);
+    let config: super::Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(config.default_model.as_deref(), Some("zai/fast"));
+    assert_eq!(config.models["zai/fast"].max_context_size, Some(123456));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn removing_the_default_model_moves_it_to_a_kept_one() {
     let root = std::env::temp_dir().join(format!("killi-default-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

@@ -30,6 +30,7 @@ pub use edit::{
 pub use guide::{init, start_if_missing};
 pub use import::import_command;
 pub use models::{Added, Additions, NewModel, add_models};
+pub(crate) use models::kept_models;
 pub use anthropic::{ABOUT as ANTHROPIC_ABOUT, add as add_anthropic, ours as anthropic_ours};
 pub use kimi::{ABOUT as KIMI_ABOUT, add as add_kimi, ours as kimi_ours};
 pub use mimo::{ABOUT as MIMO_ABOUT, add as add_mimo, ours as mimo_ours};

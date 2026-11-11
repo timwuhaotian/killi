@@ -102,6 +102,21 @@ impl Added {
     }
 }
 
+/// Aliases of `provider` whose model id is still served and whose own alias passes the filter.
+/// Matching the id preserves custom aliases and their settings when a provider syncs.
+pub(crate) fn kept_models(config: &Config, provider: &str, served: &[String]) -> Vec<String> {
+    config
+        .models
+        .iter()
+        .filter(|(alias, model)| {
+            model.provider == provider
+                && served.contains(&model.model)
+                && config.model_allowed(alias)
+        })
+        .map(|(alias, _)| alias.clone())
+        .collect()
+}
+
 /// Adds a sign-in's provider and the models the config doesn't have yet. A provider already
 /// there gets the fields the sign-in writes, its key and `tool_names` among them, and keeps
 /// the rest of its table. A new config, or one without `default_model`, starts on the first

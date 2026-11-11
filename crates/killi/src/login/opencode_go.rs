@@ -114,16 +114,8 @@ async fn add_with(key: Option<&str>, env: Option<(&str, &str)>) -> Result<Outcom
         models,
         comment: "OpenCode Go, signed in with `killi login opencode-go`.",
     })?;
-    let filter = crate::config::Config::load().ok();
-    let keep: Vec<String> = ids
-        .iter()
-        .map(|id| format!("{}/{}", added.provider, id))
-        .filter(|alias| {
-            filter
-                .as_ref()
-                .is_none_or(|config| config.model_allowed(alias))
-        })
-        .collect();
+    let config = crate::config::Config::load()?;
+    let keep = crate::config::kept_models(&config, &added.provider, &ids);
     added.dropped = crate::config::remove_models(&added.path, &added.provider, &keep)?;
     Ok(Outcome { added, notes })
 }
