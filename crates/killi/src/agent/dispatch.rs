@@ -6,8 +6,12 @@ pub(super) const REPEAT_STOP: u32 = 8;
 pub(super) const REPEAT_BLOCK_AFTER: u32 = 2;
 
 /// The result of a call that didn't run because the user sent a message before its turn.
-pub(super) const SKIPPED_FOR_MESSAGE: &str =
-    "Not run: the user sent a message first, which follows. Run it again if it is still needed.";
+pub(super) const SKIPPED_FOR_MESSAGE: &str = "Not run: the user sent a message first, which follows. The request this call was for still stands unless that message replaces it; run it again if it is still needed, in an order that makes sense with the new message.";
+
+/// Whether a history message is a call skipped for a message typed meanwhile.
+pub(super) fn skipped_for_message(message: &Value) -> bool {
+    message["role"] == "tool" && message["content"].as_str() == Some(SKIPPED_FOR_MESSAGE)
+}
 
 impl Agent {
     /// Runs a reply's tool calls in order; consecutive read-only file/search calls and `agent`

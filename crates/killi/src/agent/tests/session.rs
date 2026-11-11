@@ -948,7 +948,7 @@ async fn compaction_runs_before_steered_messages_are_pushed() {
         .borrow_mut()
         .push_back(("meanwhile this".into(), Vec::new()));
     agent.before_request().await.unwrap();
-    assert_eq!(agent.messages.len(), 3);
+    assert_eq!(agent.messages.len(), 4);
     assert!(
         agent.messages[1]["content"]
             .as_str()
@@ -958,6 +958,11 @@ async fn compaction_runs_before_steered_messages_are_pushed() {
     assert_eq!(
         agent.messages[2],
         json!({"role": "user", "content": "meanwhile this"})
+    );
+    assert_eq!(
+        agent.messages[3]["content"],
+        crate::agent::turn::STEERED,
+        "the steered note follows the message, after the compaction"
     );
 }
 

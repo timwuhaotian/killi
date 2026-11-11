@@ -171,8 +171,59 @@ async fn a_message_typed_during_a_call_goes_ahead_of_the_calls_after_it() {
     );
     agent.before_request().await.unwrap();
     assert_eq!(
-        agent.messages.last().unwrap(),
-        &json!({"role": "user", "content": "stop"})
+        agent.messages[agent.messages.len() - 2],
+        json!({"role": "user", "content": "stop"})
+    );
+    assert_eq!(
+        agent.messages.last().unwrap()["content"],
+        crate::agent::turn::STEERED,
+        "the queued message is marked as adding to the request it interrupted"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_turn_whose_calls_were_skipped_for_a_newer_message_rechecks_the_earlier_request() {
+    use crate::agent::turn::{SKIPPED_EARLIER, STEERED};
+    let calls = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"todo_write\",\"arguments\":\"{\\\"todos\\\":[]}\"}},{\"index\":1,\"id\":\"b\",\"function\":{\"name\":\"todo_write\",\"arguments\":\"{\\\"todos\\\":[]}\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+    let url = stub_replies(vec![
+        calls.to_string(),
+        sse("Second request done.", "stop"),
+        sse("Both requests done.", "stop"),
+    ])
+    .await;
+    let controls = Controls::default();
+    let steer = controls.steer.clone();
+    let sink: Sink = Rc::new(move |event| {
+        if let Event::ToolStart { id, .. } = event
+            && id == "a"
+        {
+            steer
+                .borrow_mut()
+                .push_back(("second request".into(), Vec::new()));
+        }
+    });
+    let mut agent = idle_agent("skipped-earlier", controls, sink);
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, stop) = agent.run("first request", &[]).await.unwrap();
+    assert_eq!(
+        (text.as_str(), stop),
+        ("Both requests done.", Stop::Completed),
+        "the reply covering only the newer message did not end the turn"
+    );
+    let contents: Vec<&str> = agent
+        .messages
+        .iter()
+        .filter_map(|m| m["content"].as_str())
+        .collect();
+    assert_eq!(contents.iter().filter(|c| **c == STEERED).count(), 1);
+    assert_eq!(
+        contents.iter().filter(|c| **c == SKIPPED_EARLIER).count(),
+        1,
+        "the earlier request is re-checked once, not until the model gives in"
+    );
+    assert!(
+        contents.contains(&SKIPPED_FOR_MESSAGE),
+        "the second call was skipped for the newer message: {contents:?}"
     );
 }
 

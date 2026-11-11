@@ -9,6 +9,16 @@ const LEFT_RUNNING: &str = "Stop with task_stop what nothing needs anymore, such
 /// lookup or a list and the turn ended before giving it.
 pub(super) const UNFINISHED: &str = "<system-reminder>Your reply ends with a colon, so something was meant to follow it, but nothing did. If you meant to look something up or run something, do it now with a tool call. If you had nothing more to say, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
 
+/// Appended after messages typed while the agent was working: they were sent mid-turn,
+/// so without this a model can read the newest one as replacing the request it
+/// interrupted and finish having done only that one.
+pub(super) const STEERED: &str = "<system-reminder>The message(s) above arrived while you were working on an earlier message in this same turn. They add to it and don't replace it, unless one says to stop or change course: finish everything still standing from the earlier message too, in an order that makes sense, before your final reply.</system-reminder>";
+
+/// Told once per batch of skipped calls when a reply would end the turn: a message typed
+/// meanwhile stopped calls for an earlier request, and a reply that covers only the newer
+/// message (even one noting the earlier work undone) must not be the turn's end.
+pub(super) const SKIPPED_EARLIER: &str = "<system-reminder>Tool calls for an earlier user message in this turn were skipped when a newer message arrived, and your reply may cover only the newer one. Before you finish, re-check every user message in this turn: do anything still standing from the earlier ones now, in an order that makes sense, unless a later message told you to drop or replace it. If everything still standing is already done, say so in one short sentence. Don't repeat your last reply.</system-reminder>";
+
 /// Told once when a short reply ends by saying what it will do next ("Let me check that.")
 /// with no tool call after it: the turn ended where the work was meant to start.
 pub(super) const ANNOUNCED: &str = "<system-reminder>Your reply says what you will do next, but the turn ended without a tool call. If you meant to do it, do it now with a tool call. If it is already done or nothing more is needed, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
@@ -79,6 +89,9 @@ impl Agent {
         let mut told_unfinished = false;
         let mut told_left_running = false;
         let mut told_open_tasks = false;
+        // Calls a message typed meanwhile skipped, not yet re-checked at a would-be end
+        // of the turn: the work they were for may still be standing.
+        let mut skipped_unchecked = false;
         loop {
             self.before_request().await?;
             let reply = match self.request().await {
@@ -105,6 +118,15 @@ impl Agent {
                     continue;
                 }
                 if self.pending_steer() {
+                    continue;
+                }
+                if !truncated && skipped_unchecked {
+                    skipped_unchecked = false;
+                    (self.sink)(Event::Notice(
+                        "A message typed meanwhile skipped tool calls for an earlier request. Asked the agent to check it too before finishing."
+                            .into(),
+                    ));
+                    self.push(json!({"role": "user", "content": SKIPPED_EARLIER}))?;
                     continue;
                 }
                 if !truncated
@@ -167,7 +189,16 @@ impl Agent {
                     },
                 ));
             }
-            if self.execute_calls(calls, truncated).await? {
+            let ran_from = self.messages.len();
+            let stop = self.execute_calls(calls, truncated).await?;
+            if self
+                .messages
+                .get(ran_from..)
+                .is_some_and(|ran| ran.iter().any(super::dispatch::skipped_for_message))
+            {
+                skipped_unchecked = true;
+            }
+            if stop {
                 return Ok((String::new(), Stop::RepeatBreaker));
             }
         }
@@ -187,9 +218,13 @@ impl Agent {
             )));
         }
         let steered: Vec<_> = self.controls.steer.borrow_mut().drain(..).collect();
+        let steered_any = !steered.is_empty();
         for (text, images) in steered {
             self.push(json!({"role": "user", "content": text}))?;
             self.push_images(&images)?;
+        }
+        if steered_any {
+            self.push(json!({"role": "user", "content": STEERED}))?;
         }
         let plan = self.controls.plan.get();
         if plan != self.plan_announced && self.depth == 0 {
