@@ -13,7 +13,7 @@ first few characters. `~` is `$HOME`; nothing else moves these paths.
 
 | Path | Holds |
 |---|---|
-| `~/.killi/config.toml` | the config, TOML; everything under "Keys". `killi init` writes a starting one (mode 0600), `killi import [tool]` copies another agent's (kimi, pi, omp, opencode, codex, claude, gemini; `import-kimi` still works), and the first-run guide offers every agent it finds in one list |
+| `~/.killi/config.toml` | the config, TOML; everything under "Keys". `killi init` writes a starting one (mode 0600), `killi import [tool]` copies another agent's (kimi, pi, omp, opencode, codex, claude, gemini; `import-kimi` still works) |
 | `~/.killi/mcp.json` | user MCP servers, `{"mcpServers": {...}}` as Claude Code and Kimi Code write it |
 | `<project>/.mcp.json` | project MCP servers, same format; the project is the nearest folder with `.git` |
 | `<project>/.killi/config.toml` | project config; only `[mcp] eager = ["name"]` is read: servers to start with the session, with native tools, after a one-time trust check per repo (kept in `~/.killi/trusted.json`) |
@@ -54,6 +54,9 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   `type`, `base_url`) and keep the rest, so either one repairs a broken provider; only
   muse-code's preset owns `tool_names` (the mapping Meta needs), so only it repairs a `meta`
   provider that has none.
+- `[models_filter.<provider>]`: `include` and `exclude` patterns, each a full alias or a
+  model id, with a trailing `*` matching a prefix; only included models are listed, synced
+  and started, `exclude` wins, and a provider without the table keeps every model.
 - `[models."<provider>/<model>"]`: `provider` (a `[providers]` name), `model` (the API's
   model id), `protocol` (overrides the provider's `type` for this model), `base_url` (overrides
   the provider's, for a gateway with a URL per API), `cache_control = true`
@@ -69,8 +72,8 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
 - `[agent]`: `compact_at` (compact once a request passes this many input tokens; unset: 60%
   of the model's `max_context_size`, or 256000 when the window is unknown), `plan_allow = ["make -n"]` (extra command prefixes bash may run in plan mode),
   `notify_after` (seconds a turn takes before a desktop notification, default 10),
-  `swarm_parallel` (subagents one `agent_swarm` call runs at once, default 8),
-  `swarm = false` (start sessions with swarm mode off; it is on by default, and `/swarm on|off` changes it),
+  `swarm_parallel` (subagents one `agent_swarm` call runs at once, default 8; `/swarm parallel <n>` writes it),
+  `swarm = false` (start sessions with swarm mode off; it is on by default, and `/swarm on|off` writes it),
   `peers = false` (keep this machine's other killi sessions from seeing this one, asking it about its work and messaging it, and don't tell the model about the sessions in its repository; on by default).
 - `[skills] dirs = ["~/other/skills"]`: skill folders used instead of `~/.agents/skills`; the
   project's own folders are always read.

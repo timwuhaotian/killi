@@ -48,6 +48,10 @@ pub struct Added {
     pub aliases: Vec<String>,
     pub repaired: Vec<String>,
     pub starts_on: Option<String>,
+    /// Models of this provider the config had and the API no longer serves.
+    pub dropped: Vec<String>,
+    /// What to tell the user besides the added models, such as a list call that failed.
+    pub notes: Vec<String>,
 }
 
 impl Added {
@@ -62,6 +66,15 @@ impl Added {
             ),
         };
         if let Some(note) = self.repair_note() {
+            out.push_str(&format!("\n{note}"));
+        }
+        if !self.dropped.is_empty() {
+            out.push_str(&format!(
+                "\nNo longer served, removed: {}.",
+                self.dropped.join(", ")
+            ));
+        }
+        for note in &self.notes {
             out.push_str(&format!("\n{note}"));
         }
         match &self.starts_on {
@@ -89,10 +102,25 @@ impl Added {
     }
 }
 
+/// Aliases of `provider` whose model id is still served and whose own alias passes the filter.
+/// Matching the id preserves custom aliases and their settings when a provider syncs.
+pub(crate) fn kept_models(config: &Config, provider: &str, served: &[String]) -> Vec<String> {
+    config
+        .models
+        .iter()
+        .filter(|(alias, model)| {
+            model.provider == provider
+                && served.contains(&model.model)
+                && config.model_allowed(alias)
+        })
+        .map(|(alias, _)| alias.clone())
+        .collect()
+}
+
 /// Adds a sign-in's provider and the models the config doesn't have yet. A provider already
 /// there gets the fields the sign-in writes, its key and `tool_names` among them, and keeps
 /// the rest of its table. A new config, or one without `default_model`, starts on the first
-/// model added.
+/// allowed model added; an entirely filtered addition leaves the default unset.
 pub fn add_models(additions: &Additions) -> Result<Added> {
     let dir = killi_home();
     let path = dir.join("config.toml");
@@ -134,6 +162,8 @@ pub fn add_models(additions: &Additions) -> Result<Added> {
         aliases: added,
         repaired,
         starts_on,
+        dropped: Vec::new(),
+        notes: Vec::new(),
     })
 }
 
@@ -230,10 +260,12 @@ pub(super) fn with_models(
         return Ok((text.to_string(), name, true, added));
     }
     let mut out = String::new();
-    if config.default_model.is_none() && !added.is_empty() {
+    if config.default_model.is_none()
+        && let Some(default) = added.iter().find(|alias| config.model_allowed(alias))
+    {
         out.push_str(&format!(
             "default_model = {}\n",
-            toml::Value::String(added[0].clone())
+            toml::Value::String(default.clone())
         ));
     }
     out.push_str(text);

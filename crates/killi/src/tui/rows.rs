@@ -193,7 +193,7 @@ pub(super) fn help_rows(width: usize, enhanced: bool) -> Vec<String> {
         .unwrap_or(0);
     for (name, rest, about) in commands {
         let pad = " ".repeat(column - text::width(&name) - text::width(&rest));
-        rows.extend(wrap_words(
+        rows.extend(text::wrap_words_help(
             &format!("  {LAGOON}{name}{RESET}{DIM}{rest}{RESET}{pad}  {about}"),
             width,
             column + 4,
@@ -211,7 +211,7 @@ pub(super) fn help_rows(width: usize, enhanced: bool) -> Vec<String> {
             "Shift+Enter" if !enhanced => ("Ctrl+J", "new line; also \\ then Enter"),
             _ => (*key, *about),
         };
-        rows.extend(wrap_words(
+        rows.extend(text::wrap_words_help(
             &format!("  {BOLD}{key:<column$}{RESET}  {DIM}{about}{RESET}"),
             width,
             column + 4,

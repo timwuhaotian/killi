@@ -189,9 +189,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         None
     };
     text::init_theme(config.ui.theme.as_deref(), ground);
-    let mut session = Setup::new(config, &cwd, start.model.as_deref()).await?;
-    // Only once killi has a model to start on: a broken config ends on the reason instead.
-    crate::config::command_guide_if_first()?;
+    let mut session = Setup::new(config, &cwd, start.model.as_deref(), true).await?;
     // The log parses once: the items below replay from the same load the resume moves.
     let mut start_replayed = Vec::new();
     let mut start_recap = None;
@@ -210,7 +208,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     app.peers = peers;
     app.live_sync(&agent);
     app.entries = entries(&session);
-    app.refresh_choices(session.config());
+    app.show_model(&agent, session.config());
+    // Only once killi has a model to start on: a broken config ends on the reason instead,
+    // and an unconfigured session starts on /provider without a terminal prompt first.
+    if !app.needs_provider {
+        crate::config::command_guide_if_first()?;
+    }
     app.notify_after = Duration::from_secs(session.config().agent.notify_after.unwrap_or(10));
     app.auto_recap = session.config().ui.recap.unwrap_or(true);
     let terminal = TerminalGuard::enter(fullscreen)?;
@@ -219,6 +222,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         app.locate();
     }
     app.banner(&agent, &session, &snapshots, start.resume.is_some());
+    if app.needs_provider {
+        app.onboarding();
+    }
     if start.resume.is_some() {
         app.replay_items(start_replayed);
         if let Some(saved) = start_recap.filter(|t| !t.trim().is_empty()) {
@@ -377,6 +383,11 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     }
                 }
             },
+            Input::Model(alias) if !session.config().model_allowed(&alias) => {
+                app.notice(&format!(
+                    "`{alias}` is hidden by [models_filter.<provider>]."
+                ));
+            }
             Input::Model(alias) => {
                 match session.config().resolve(Some(&alias)).and_then(Client::new) {
                     Ok(client) => {
@@ -390,6 +401,16 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     }
                     Err(e) => app.error_report(&e),
                 }
+            }
+            Input::BackupModel(alias)
+                if !alias.trim().is_empty()
+                    && !matches!(alias.trim(), "none" | "off" | "clear")
+                    && !session.config().model_allowed(alias.trim()) =>
+            {
+                app.notice(&format!(
+                    "`{}` is hidden by [models_filter.<provider>].",
+                    alias.trim()
+                ));
             }
             Input::BackupModel(alias) => {
                 let alias = alias.trim().to_string();

@@ -33,6 +33,24 @@ pub(super) struct Picker {
     pub(super) selected: usize,
 }
 
+/// What `/swarm ` offers: its two modes and a few subagent counts, each chosen into the prompt.
+fn swarm_choices() -> Vec<Item> {
+    [
+        ("on", "turn swarm mode on"),
+        ("off", "turn swarm mode off"),
+        ("parallel 4", "4 subagents at once"),
+        ("parallel 8", "8 subagents at once (default)"),
+        ("parallel 16", "16 subagents at once"),
+        ("parallel 32", "32 subagents at once"),
+    ]
+    .into_iter()
+    .map(|(value, description)| Item {
+        value: value.into(),
+        description: description.into(),
+    })
+    .collect()
+}
+
 /// The /web-search-config flow under way: the service picked (none while its list is open),
 /// whether killi starts a local SearXNG with Docker or the user points at their own, the
 /// instance URL once answered, and the `[search]` the flow started from, for prefilling.
@@ -330,6 +348,7 @@ impl App {
                 &entries,
                 |command| match command {
                     "effort" | "thinking" => self.effort_choices.clone(),
+                    "swarm" => swarm_choices(),
                     _ => Vec::new(),
                 },
             )
@@ -342,6 +361,7 @@ impl App {
                 "model" => self.model_choices.clone(),
                 "effort" | "thinking" => self.effort_choices.clone(),
                 "theme" => self.theme_choices.clone(),
+                "swarm" => swarm_choices(),
                 _ => Vec::new(),
             },
         )
@@ -471,6 +491,7 @@ impl App {
         let options: Vec<_> = config
             .models
             .iter()
+            .filter(|(alias, _)| config.model_allowed(alias) && !config.missing_key(Some(alias)))
             .map(|(alias, model)| {
                 let current = if *alias == chosen { " · current" } else { "" };
                 let pick = if backup {
@@ -481,6 +502,18 @@ impl App {
                 (alias.clone(), format!("{}{current}", model.provider), pick)
             })
             .collect();
+        if options.is_empty() {
+            let hint = if config
+                .models
+                .keys()
+                .any(|alias| !config.missing_key(Some(alias)))
+            {
+                "Models with keys are hidden by [models_filter]: loosen it, then /model picks one."
+            } else {
+                "No model has an API key yet: /provider adds one, then /model picks it."
+            };
+            return self.notice(hint);
+        }
         let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) | PickerChoice::BackupModel(a) if *a == chosen)).unwrap_or(0);
         let title = if backup {
             "Backup model, for every session"

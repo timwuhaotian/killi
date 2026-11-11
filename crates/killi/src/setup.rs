@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::agent::{Agent, Controls, Settings, Sink};
-use crate::config::{Config, Thinking};
+use crate::config::{Config, ResolvedModel, Thinking};
 use crate::llm::Client;
 use crate::mcp::Mcp;
 use crate::prompt::{self, SystemPrompt};
@@ -51,16 +51,42 @@ pub struct Setup {
     skills: Skills,
     /// Things worth telling the user at start, such as an MCP server that didn't start.
     notes: Vec<String>,
+    /// The start opens without the model's key, for an interactive session whose `/provider`
+    /// can add one; a headless run fails on the reason instead.
+    defer_key: bool,
 }
 
 impl Setup {
-    pub async fn new(config: Config, cwd: &Path, model: Option<&str>) -> Result<Self> {
-        let last = if model.is_none() {
+    pub async fn new(
+        config: Config,
+        cwd: &Path,
+        model: Option<&str>,
+        defer_key: bool,
+    ) -> Result<Self> {
+        let mut last = if model.is_none() {
             session::last_choice()
         } else {
             Choice::default()
         };
-        config.resolve(model.or(known(&config, &last)))?;
+        let requested = requested_model(&config, model, &last, defer_key);
+        if model.is_none()
+            && let Some(alias) = &requested
+        {
+            last.model = Some(alias.clone());
+        }
+        match requested.as_deref() {
+            Some(alias) => {
+                if let Err(error) = config.resolve(Some(alias))
+                    && (!defer_key || config.resolve_without_key(Some(alias)).is_err())
+                {
+                    return Err(error);
+                }
+            }
+            None if !defer_key => {
+                config.resolve(None)?;
+            }
+            None => {}
+        }
         let skills = Skills::discover(cwd, &config.skills.dirs);
         let prompt = prompt::build(cwd, &skills, config.guidance());
         let mut tools = tools::definitions();
@@ -123,6 +149,7 @@ impl Setup {
             settings,
             skills,
             notes,
+            defer_key,
         })
     }
 
@@ -184,11 +211,12 @@ impl Setup {
     }
 
     /// The backup client the config's `backup_model` names, if it resolves: every session —
-    /// new or resumed — starts on it. A backup the config no longer knows is dropped.
+    /// new or resumed — starts on it. An unknown or filtered backup is dropped.
     fn backup_client(&self) -> Option<Client> {
         self.config
             .backup_model
             .as_deref()
+            .filter(|alias| self.config.model_allowed(alias))
             .and_then(|alias| self.config.resolve(Some(alias)).and_then(Client::new).ok())
     }
 
@@ -197,7 +225,32 @@ impl Setup {
     /// default model.
     fn client(&self, choice: &Choice) -> Result<Client> {
         let chosen = known(&self.config, choice).filter(|_| self.model.is_none());
-        let mut model = self.config.resolve(self.model.as_deref().or(chosen))?;
+        let requested = self.model.as_deref().or(chosen);
+        let mut model = match requested {
+            Some(alias) => match self.config.resolve(Some(alias)) {
+                Ok(model) => model,
+                Err(error) if self.defer_key => self
+                    .config
+                    .resolve_without_key(Some(alias))
+                    .map_err(|_| error)?,
+                Err(error) => return Err(error),
+            },
+            None => match self.config.resolve(None) {
+                Ok(model) => model,
+                Err(_) if self.defer_key => {
+                    // Only a missing key may open unconfigured: a `default_model` that
+                    // doesn't resolve at all is a config error, and the user needs its
+                    // reason, not an empty session.
+                    if self.config.default_model.is_some()
+                        && let Err(broken) = self.config.resolve_without_key(None)
+                    {
+                        return Err(broken);
+                    }
+                    return Client::new(ResolvedModel::unconfigured());
+                }
+                Err(error) => return Err(error),
+            },
+        };
         if let Some(effort) = choice
             .effort
             .as_ref()
@@ -236,7 +289,17 @@ impl Setup {
         self.settings.skills = self.skills.clone();
         self.settings.instruction_files = self.prompt.instruction_files.clone();
         self.settings.search = config.search.settings();
+        self.settings.swarm_parallel = config
+            .agent
+            .swarm_parallel
+            .unwrap_or(DEFAULT_SWARM_PARALLEL)
+            .max(1);
         self.config = config;
+    }
+
+    /// Applies `/swarm parallel <n>` to the sessions started later in this run.
+    pub fn set_swarm_parallel(&mut self, parallel: usize) {
+        self.settings.swarm_parallel = parallel.max(1);
     }
 
     /// Applies a `[search]` pick from /web-search-config: the settings stay the single
@@ -360,6 +423,32 @@ fn known<'a>(config: &Config, choice: &'a Choice) -> Option<&'a str> {
         .model
         .as_deref()
         .filter(|alias| config.models.contains_key(*alias))
+}
+
+/// The model a new session starts on: `-m`, else the last `/model` pick, else the config's
+/// default. When `[models_filter]` hides that model, or an interactive start may fix its
+/// missing key, the first keyed model the filter keeps is used instead. A keyed default is
+/// kept over the first keyed model. `None` when no model is configured at all.
+fn requested_model(
+    config: &Config,
+    model: Option<&str>,
+    last: &Choice,
+    defer_key: bool,
+) -> Option<String> {
+    let requested = model
+        .or(known(config, last))
+        .or(config.default_model.as_deref());
+    let blocked = requested.is_none_or(|alias| {
+        !config.model_allowed(alias) || (defer_key && config.missing_key(Some(alias)))
+    });
+    if model.is_none() && blocked {
+        config
+            .first_keyed()
+            .map(String::from)
+            .or_else(|| requested.map(String::from))
+    } else {
+        requested.map(String::from)
+    }
 }
 
 /// The project killi runs in: the nearest folder with `.git`, else the working directory.

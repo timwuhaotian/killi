@@ -201,6 +201,18 @@ pub fn wrap(line: &str, max: usize) -> Vec<String> {
 /// start with `indent` spaces. A word longer than a row is still split.
 pub fn wrap_words(line: &str, max: usize, indent: usize) -> Vec<String> {
     let max = max.max(1);
+    wrap_words_with(line, max, indent.min(max / 2))
+}
+
+/// Like `wrap_words`, but keeps the hanging indent unless it would leave fewer than 16
+/// columns, so a help table's descriptions stay under their column when a command's
+/// arguments widen it.
+pub fn wrap_words_help(line: &str, max: usize, indent: usize) -> Vec<String> {
+    let max = max.max(1);
+    wrap_words_with(line, max, indent.min(max.saturating_sub(16)))
+}
+
+fn wrap_words_with(line: &str, max: usize, hanging: usize) -> Vec<String> {
     if width(line) <= max {
         return vec![line.to_string()];
     }
@@ -210,7 +222,7 @@ pub fn wrap_words(line: &str, max: usize, indent: usize) -> Vec<String> {
         width: 0,
         active: String::new(),
         link: None,
-        indent: indent.min(max / 2),
+        indent: hanging,
         max,
     };
     let mut word: Vec<(String, usize)> = Vec::new();

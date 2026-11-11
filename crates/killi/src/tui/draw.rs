@@ -75,6 +75,27 @@ impl App {
         self.commit(format!("{DIM}{}{RESET}", text::sanitize(text)));
     }
 
+    /// The first-run guide: no provider key yet, and the commands that add one, a step per row
+    /// so the glyphs carry the eye from one to the next.
+    pub(super) fn onboarding(&mut self) {
+        self.begin(Kind::Note);
+        let rows = [
+            format!(
+                "{LAGOON}✻{RESET} {BOLD}No provider yet{RESET} {DIM}· nothing is configured{RESET}"
+            ),
+            format!(
+                "  {LAGOON}→{RESET} {BOLD}/provider{RESET}   {DIM}add a provider and its key{RESET}"
+            ),
+            format!("  {LAGOON}→{RESET} {BOLD}/model{RESET}      {DIM}pick a model it added{RESET}"),
+            format!(
+                "  {LAGOON}→{RESET} {BOLD}killi login{RESET} {DIM}sign in to a subscription{RESET}"
+            ),
+        ];
+        for row in rows {
+            self.commit(fit(&row, self.width));
+        }
+    }
+
     pub(super) fn error(&mut self, text: &str) {
         self.begin(Kind::Note);
         let why = gist(text);

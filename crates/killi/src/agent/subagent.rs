@@ -175,7 +175,7 @@ impl Agent {
             description: description.into(),
             items: items.clone(),
         });
-        let children = self.run_children(jobs, self.settings.swarm_parallel).await;
+        let children = self.run_children(jobs, self.swarm_parallel.get()).await;
         // An item that never started has an empty log, so the report doesn't point at one.
         let logs: Vec<String> = logs
             .into_iter()
@@ -375,6 +375,7 @@ impl Agent {
                 peer_notes: Rc::default(),
             },
             settings: self.settings.clone(),
+            swarm_parallel: Cell::new(self.swarm_parallel.get()),
             sink,
             ids: self.ids.clone(),
             repeats: HashMap::new(),

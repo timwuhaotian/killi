@@ -592,12 +592,21 @@ impl App {
         });
     }
 
-    pub(super) fn set_swarm(&mut self, on: bool) {
+    /// Toggles swarm mode in this session; `persist` also writes `[agent] swarm`, which only
+    /// the explicit `on`/`off` forms do.
+    pub(super) fn set_swarm(&mut self, on: bool, persist: bool) {
         self.controls.swarm.set(on);
         self.notice(if on {
             "Swarm mode on: the agent splits the work across many subagents with agent_swarm."
         } else {
             "Swarm mode off."
         });
+        if persist {
+            let path = crate::config::killi_home().join("config.toml");
+            match crate::config::set_swarm(&path, on) {
+                Ok(()) => self.notice(&format!("Saved to {}.", path.display())),
+                Err(e) => self.error_report(&e),
+            }
+        }
     }
 }

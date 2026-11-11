@@ -10,7 +10,9 @@ mod opencode_go;
 pub(crate) use commandcode::{
     add as commandcode_add, offer as commandcode_offer, signed_in as commandcode_signed_in,
 };
-pub(crate) use opencode_go::{add as opencode_go_add, signed_in as opencode_go_signed_in};
+pub(crate) use opencode_go::{
+    add as opencode_go_add, add_env as opencode_go_add_env, signed_in as opencode_go_signed_in,
+};
 
 use std::io::IsTerminal;
 use std::process::{Command, Stdio};

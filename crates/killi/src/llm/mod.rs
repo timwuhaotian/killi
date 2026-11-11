@@ -14,7 +14,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -271,6 +271,17 @@ impl Client {
         cache_key: &str,
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<Reply> {
+        if self.model.alias.is_empty() {
+            bail!(
+                "no model is configured yet; type /provider to add one, then /model picks it"
+            );
+        }
+        if !self.model.chatgpt && self.model.api_key.is_empty() {
+            bail!(
+                "model `{}` has no API key yet; type /provider to add one, or run `killi login` for a subscription",
+                self.model.alias
+            );
+        }
         let mut prepared = match self.model.protocol {
             Protocol::OpenAi => openai::prepare(&self.model, messages, tools, cache_key),
             Protocol::Anthropic => anthropic::prepare(&self.model, messages, tools),

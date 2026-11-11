@@ -157,6 +157,33 @@ pub(super) async fn handle_command(
             }
         }
         "goal" => goal_command(app, agent, arg),
+        "swarm"
+            if arg
+                .split_whitespace()
+                .next()
+                .is_some_and(|word| word == "parallel") =>
+        {
+            let n = arg
+                .split_whitespace()
+                .nth(1)
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|n| *n > 0);
+            let Some(n) = n else {
+                app.error("Use /swarm parallel <n> with n at least 1, for example /swarm parallel 16.");
+                return Ok(true);
+            };
+            let path = crate::config::killi_home().join("config.toml");
+            if let Err(e) = crate::config::set_swarm_parallel(&path, n) {
+                app.error_report(&e);
+                return Ok(true);
+            }
+            session.set_swarm_parallel(n);
+            agent.set_swarm_parallel(n);
+            app.notice(&format!(
+                "Swarm parallel: {n} subagents at once; saved to {}.",
+                path.display()
+            ));
+        }
         "pair" => {
             pair::pair_command(app, agent, session, snapshots, keys, rx, arg).await?;
         }
@@ -397,7 +424,9 @@ pub(super) async fn provider_add(
             "qwen" => crate::config::add_qwen(&key).map(|added| (added, Vec::new())),
             "stepfun" => crate::config::add_stepfun(&key).map(|added| (added, Vec::new())),
             "unisound" => crate::config::add_unisound(&key).map(|added| (added, Vec::new())),
-            "zai" => crate::config::add_zai(&key).map(|added| (added, Vec::new())),
+            "zai" => crate::config::add_zai(&key)
+                .await
+                .map(|added| (added, Vec::new())),
             _ => crate::config::add_muse(&key).map(|added| (added, Vec::new())),
         });
         Ok((String::new(), Stop::Completed))
@@ -426,6 +455,15 @@ pub(super) async fn provider_add(
             if let Some(note) = added.repair_note() {
                 app.notice(&note);
             }
+            if !added.dropped.is_empty() {
+                app.notice(&format!(
+                    "Removed models no longer served: {}.",
+                    added.dropped.join(", ")
+                ));
+            }
+            for note in &added.notes {
+                app.notice(note);
+            }
             for note in &notes {
                 app.notice(note);
             }
@@ -442,15 +480,52 @@ pub(super) async fn provider_add(
             if on_it {
                 match session.config().resolve(Some(&alias)).and_then(Client::new) {
                     Ok(client) => match agent.switch_model(client) {
-                        Ok(()) => app.notice("This session takes it from its next request."),
+                        Ok(()) => {
+                            app.show_model(agent, session.config());
+                            app.notice("This session takes it from its next request.");
+                        }
                         Err(e) => app.error_report(&e),
                     },
                     Err(e) => app.error_report(&e),
+                }
+            } else if !session.config().models.contains_key(&alias) {
+                // The list sync removed the model this session was on; move to one the
+                // provider still serves rather than leaving the status on a stale alias.
+                let first = session
+                    .config()
+                    .models
+                    .iter()
+                    .find(|(name, model)| {
+                        model.provider == added.provider
+                            && session.config().model_allowed(name)
+                            && !session.config().missing_key(Some(name))
+                    })
+                    .map(|(name, _)| name.clone());
+                if let Some(first) = first {
+                    match session.config().resolve(Some(&first)).and_then(Client::new) {
+                        Ok(client) => match agent.switch_model(client) {
+                            Ok(()) => {
+                                app.show_model(agent, session.config());
+                                app.notice(&provider_switch_notice(&alias, &first));
+                            }
+                            Err(e) => app.error_report(&e),
+                        },
+                        Err(e) => app.error_report(&e),
+                    }
                 }
             }
         }
     }
     Ok(())
+}
+
+/// The model switch after `/provider`: first configuration has no removed model to name.
+pub(super) fn provider_switch_notice(alias: &str, first: &str) -> String {
+    if alias.is_empty() {
+        format!("Now on `{first}`; /model picks another.")
+    } else {
+        format!("`{alias}` is no longer served; switched to `{first}`.")
+    }
 }
 
 /// `/goal [<text>|done|clear]`: shows the session goal, sets one the model hears on its

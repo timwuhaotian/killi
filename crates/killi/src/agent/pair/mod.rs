@@ -271,6 +271,7 @@ impl Agent {
                 peer_notes: Rc::default(),
             },
             settings: self.settings.clone(),
+            swarm_parallel: Cell::new(self.swarm_parallel.get()),
             sink: forward_sink(&self.sink, role),
             ids: self.ids.clone(),
             repeats: HashMap::new(),

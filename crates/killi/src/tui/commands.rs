@@ -187,7 +187,7 @@ pub(super) const COMMANDS: &[Command] = &[
     Command {
         name: "swarm",
         aliases: &[],
-        args: "[task|on|off]",
+        args: "[task|on|off|parallel <n>]",
         about: "Swarm mode: split work across many subagents",
     },
     Command {
@@ -297,9 +297,9 @@ impl App {
             ("help" | "h" | "?", _) => self.help(),
             ("btw", "") => self.error("Ask with /btw <question>."),
             ("plan", _) => self.toggle_plan(),
-            ("swarm", "") => self.set_swarm(!self.controls.swarm.get()),
-            ("swarm", "on") => self.set_swarm(true),
-            ("swarm", "off") => self.set_swarm(false),
+            ("swarm", "") => self.set_swarm(!self.controls.swarm.get(), false),
+            ("swarm", "on") => self.set_swarm(true, true),
+            ("swarm", "off") => self.set_swarm(false, true),
             ("later", "") => self.show_later(),
             ("sessions", _) => self.show_sessions(),
             ("pair", "stop") if self.pair_driving && self.pair_ctl.is_some() => {

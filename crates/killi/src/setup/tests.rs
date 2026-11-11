@@ -29,6 +29,7 @@ fn setup(root: &Path, tools: Vec<Value>) -> Setup {
         settings,
         skills,
         notes: Vec::new(),
+        defer_key: false,
     }
 }
 
@@ -36,6 +37,92 @@ fn fresh_config() -> Config {
     let mut config = Config::default();
     config.skills.dirs = vec!["/nonexistent".to_string()];
     config
+}
+
+#[test]
+fn a_keyed_default_is_kept_over_the_first_keyed_model() {
+    let config: Config = toml::from_str(
+        "default_model = \"openai/gpt\"\n\n[providers.openai]\ntype = \"openai\"\napi_key = \"k\"\n\n[providers.anthropic]\ntype = \"anthropic\"\napi_key = \"k\"\n\n[models.\"openai/gpt\"]\nprovider = \"openai\"\nmodel = \"gpt\"\n\n[models.\"anthropic/claude\"]\nprovider = \"anthropic\"\nmodel = \"claude\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        requested_model(&config, None, &Choice::default(), true).as_deref(),
+        Some("openai/gpt"),
+        "a keyed default wins over the alphabetically first keyed model"
+    );
+}
+
+#[test]
+fn a_keyless_default_falls_to_the_first_keyed_model() {
+    let config: Config = toml::from_str(
+        "default_model = \"openai/gpt\"\n\n[providers.openai]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[providers.anthropic]\ntype = \"anthropic\"\napi_key = \"k\"\n\n[models.\"openai/gpt\"]\nprovider = \"openai\"\nmodel = \"gpt\"\n\n[models.\"anthropic/claude\"]\nprovider = \"anthropic\"\nmodel = \"claude\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        requested_model(&config, None, &Choice::default(), true).as_deref(),
+        Some("anthropic/claude")
+    );
+}
+
+#[tokio::test]
+async fn a_filtered_default_is_not_used_by_a_headless_start() {
+    let root = std::env::temp_dir().join(format!("killi-start-filtered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let previous = std::env::var_os("HOME");
+    // SAFETY: the override isolates the saved model choice, then HOME is restored.
+    unsafe { std::env::set_var("HOME", &root) };
+    let config: Config = toml::from_str(
+        "default_model = \"zai/glm-4.5\"\n\n[providers.zai]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"zai/glm-4.5\"]\nprovider = \"zai\"\nmodel = \"glm-4.5\"\n\n[models.\"zai/glm-5.3\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n\n[models_filter.zai]\ninclude = [\"glm-5.3\"]\n",
+    )
+    .unwrap();
+    let setup = Setup::new(config, &root, None, false).await.unwrap();
+    let agent = setup.start(Controls::default(), Rc::new(|_| {})).unwrap();
+    assert_eq!(agent.model_alias(), "zai/glm-5.3");
+    match previous {
+        Some(home) => unsafe { std::env::set_var("HOME", home) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    drop(agent);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn an_interactive_start_defers_only_a_missing_key() {
+    let root = std::env::temp_dir().join(format!("killi-start-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let source = "default_model = \"t/model\"\n\n[providers.t]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[models.\"t/model\"]\nprovider = \"t\"\nmodel = \"model\"\n";
+    let config: Config = toml::from_str(source).unwrap();
+    let Err(error) = Setup::new(config, &root, Some("t/model"), false).await else {
+        panic!("a missing key must end a headless start");
+    };
+    assert!(error.to_string().contains("KILLI_TEST_ABSENT_KEY"), "{error}");
+    let config: Config = toml::from_str(source).unwrap();
+    let setup = Setup::new(config, &root, Some("t/model"), true)
+        .await
+        .unwrap();
+    let agent = setup
+        .start(Controls::default(), Rc::new(|_| {}))
+        .unwrap();
+    assert_eq!(agent.model_alias(), "t/model");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn a_broken_default_is_reported_not_an_unconfigured_session() {
+    let root = std::env::temp_dir().join(format!("killi-start-broken-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let config: Config = toml::from_str(
+        "default_model = \"t/unknown\"\n\n[providers.t]\ntype = \"openai\"\napi_key = \"k\"\n",
+    )
+    .unwrap();
+    let Err(error) = Setup::new(config, &root, None, true).await else {
+        panic!("a broken default must not open an unconfigured session");
+    };
+    assert!(error.to_string().contains("unknown model"), "{error}");
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -228,6 +315,7 @@ fn resume_runs_on_the_logs_model_with_its_conversation() {
         settings,
         skills,
         notes: Vec::new(),
+        defer_key: false,
     };
     let agent = setup
         .resume(&log, Controls::default(), Rc::new(|_| {}))
@@ -280,6 +368,7 @@ fn every_session_gets_the_configured_backup_model() {
         settings,
         skills,
         notes: Vec::new(),
+        defer_key: false,
     };
     let agent = setup
         .resume(&log, Controls::default(), Rc::new(|_| {}))
@@ -303,6 +392,25 @@ fn every_session_gets_the_configured_backup_model() {
         None,
         "an unknown backup alias starts without one"
     );
+    drop(agent);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn a_filtered_backup_is_not_installed_at_startup() {
+    let root = std::env::temp_dir().join(format!("killi-backup-filtered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let config: Config = toml::from_str(
+        "default_model = \"test/model\"\nbackup_model = \"test/backup\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n\n[models.\"test/backup\"]\nprovider = \"test\"\nmodel = \"backup\"\n\n[models_filter.test]\ninclude = [\"test/model\"]\n",
+    )
+    .unwrap();
+    let setup = Setup::new(config, &root, Some("test/model"), false)
+        .await
+        .unwrap();
+    let agent = setup.start(Controls::default(), Rc::new(|_| {})).unwrap();
+    assert_eq!(agent.model_alias(), "test/model");
+    assert_eq!(agent.backup_alias(), None);
     drop(agent);
     std::fs::remove_dir_all(root).unwrap();
 }

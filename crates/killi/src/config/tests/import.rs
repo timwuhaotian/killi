@@ -122,7 +122,7 @@ providers:
         std::fs::read_to_string(src.join("mcp.json")).unwrap()
     );
     assert!(
-        config.missing_key(None).is_none(),
+        !config.missing_key(None),
         "the imported config starts as it is"
     );
     // SAFETY: as above.
@@ -262,10 +262,7 @@ enabled = false
         servers.get("empty").is_none() && servers.get("off").is_none(),
         "servers with nowhere to run and disabled ones are left out"
     );
-    assert!(
-        config.missing_key(None).is_some(),
-        "the key variable isn't set"
-    );
+    assert!(config.missing_key(None), "the key variable isn't set");
 
     // Without a configured model the providers still come over, with no default.
     std::fs::write(

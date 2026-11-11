@@ -49,21 +49,39 @@ pub(crate) struct Outcome {
 /// names for it. `key` is the pasted key; `None` reads `$OPENCODE_API_KEY` at request time
 /// (`api_key_env` in the config).
 pub(crate) async fn add(key: Option<&str>) -> Result<Outcome> {
+    add_with(key, None).await
+}
+
+/// The same, for a provider whose key is kept in `env` rather than inline: the list is
+/// fetched with the resolved key, but the provider keeps the variable's name.
+pub(crate) async fn add_env(env: &str, key: &str) -> Result<Outcome> {
+    add_with(None, Some((env, key))).await
+}
+
+async fn add_with(key: Option<&str>, env: Option<(&str, &str)>) -> Result<Outcome> {
     let http = super::http_client()?;
     let mut notes = Vec::new();
-    let served = match served(&http).await {
-        Ok(served) => Some(served),
-        Err(error) => {
-            notes.push(format!(
-                "could not list the models Go serves ({error:#}); taking models.dev's list"
-            ));
-            None
-        }
+    let inline = key.is_some();
+    let (key, env_name) = match (key, env) {
+        (Some(key), _) => (key.to_string(), None),
+        (None, Some((env, key))) => (key.to_string(), Some(env.to_string())),
+        (None, None) => (
+            std::env::var(KEY_ENV)
+                .with_context(|| format!("no OpenCode Go key: pass one or set ${KEY_ENV}"))?,
+            Some(KEY_ENV.to_string()),
+        ),
     };
+    // The served list is the account's own: the models it didn't enable are not in it.
+    // The request must carry the key; without it the endpoint lists every model Go has.
+    // When it can't be read, fail before writing rather than fall back to every model
+    // models.dev names, which would offer models the key can't use.
+    let served = served(&http, &key)
+        .await
+        .context("could not list the models OpenCode Go serves")?;
     let catalog = catalog(&http)
         .await
         .context("could not read OpenCode Go's models from models.dev")?;
-    let (models, skipped, dropped) = go_models(&catalog, served.as_deref());
+    let (models, skipped, dropped) = go_models(&catalog, &served);
     if !skipped.is_empty() {
         notes.push(format!(
             "Left out, as they take Gemini's API, which killi doesn't speak: {}.",
@@ -80,17 +98,25 @@ pub(crate) async fn add(key: Option<&str>) -> Result<Outcome> {
     provider.insert("type".into(), "openai".into());
     provider.insert("base_url".into(), OPENAI_URL.into());
     provider.insert("session_header".into(), SESSION_HEADER.into());
-    match key {
-        Some(key) => provider.insert("api_key".into(), key.into()),
-        None => provider.insert("api_key_env".into(), KEY_ENV.into()),
-    };
-    let added = crate::config::add_models(&Additions {
+    if inline {
+        provider.insert("api_key".into(), key.into());
+    } else {
+        provider.insert(
+            "api_key_env".into(),
+            env_name.unwrap_or_else(|| KEY_ENV.to_string()).into(),
+        );
+    }
+    let ids: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
+    let mut added = crate::config::add_models(&Additions {
         name: "opencode-go",
         ours,
         provider,
         models,
         comment: "OpenCode Go, signed in with `killi login opencode-go`.",
     })?;
+    let config = crate::config::Config::load()?;
+    let keep = crate::config::kept_models(&config, &added.provider, &ids);
+    added.dropped = crate::config::remove_models(&added.path, &added.provider, &keep)?;
     Ok(Outcome { added, notes })
 }
 
@@ -140,22 +166,34 @@ pub(super) fn logout() -> Result<()> {
     Ok(())
 }
 
-/// The ids of the models Go serves now, in its order.
-async fn served(http: &reqwest::Client) -> Result<Vec<String>> {
+/// The ids of the models Go serves this account now, in its order: with the key, the list
+/// is the account's enabled models; without it, every model Go has.
+async fn served(http: &reqwest::Client, key: &str) -> Result<Vec<String>> {
     let body = http
         .get(SERVED_URL)
+        .bearer_auth(key)
+        .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await?
         .error_for_status()?
         .bytes()
         .await?;
-    let list: Value = serde_json::from_slice(&body)?;
-    Ok(list["data"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|model| model["id"].as_str().map(String::from))
-        .collect())
+    served_ids(&body)
+}
+
+/// Parses the pruning authority strictly: a successful response with the wrong shape is an
+/// error, never an empty list that could remove every model.
+fn served_ids(body: &[u8]) -> Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Served {
+        data: Vec<ServedModel>,
+    }
+    #[derive(Deserialize)]
+    struct ServedModel {
+        id: String,
+    }
+    let list: Served = serde_json::from_slice(body)?;
+    Ok(list.data.into_iter().map(|model| model.id).collect())
 }
 
 /// models.dev's entries for OpenCode Go; the rest of the catalog is skipped as it is read.
@@ -183,21 +221,18 @@ async fn catalog(http: &reqwest::Client) -> Result<BTreeMap<String, Value>> {
         .ok_or_else(|| anyhow!("models.dev has no opencode-go entry"))
 }
 
-/// The models to add, in the order Go serves them (models.dev's when that list is missing),
-/// each on the API and URL models.dev names, and the ones left out: Gemini's API, and URLs
-/// outside OpenCode Go, which the key must not be sent to. A model Go serves that
-/// models.dev doesn't know is left out as well: its API can't be told.
+/// The models to add, in the order Go serves them, each on the API and URL models.dev names,
+/// and the ones left out: Gemini's API, and URLs outside OpenCode Go, which the key must not
+/// be sent to. A model Go serves that models.dev doesn't know is left out as well: its API
+/// can't be told.
 fn go_models(
     catalog: &BTreeMap<String, Value>,
-    served: Option<&[String]>,
+    served: &[String],
 ) -> (Vec<NewModel>, Vec<String>, Vec<String>) {
-    let ids: Vec<&String> = match served {
-        Some(served) => served
-            .iter()
-            .filter(|id| catalog.contains_key(*id))
-            .collect(),
-        None => catalog.keys().collect(),
-    };
+    let ids: Vec<&String> = served
+        .iter()
+        .filter(|id| catalog.contains_key(*id))
+        .collect();
     let mut models = Vec::new();
     let mut skipped = Vec::new();
     let mut dropped = Vec::new();
@@ -296,6 +331,22 @@ mod tests {
     }
 
     #[test]
+    fn a_malformed_served_list_is_not_a_pruning_authority() {
+        for body in [
+            "{}",
+            r#"{"data":{}}"#,
+            r#"{"data":[{}]}"#,
+            r#"{"data":[{"id":7}]}"#,
+        ] {
+            assert!(served_ids(body.as_bytes()).is_err(), "accepted {body}");
+        }
+        assert_eq!(
+            served_ids(br#"{"data":[{"id":"kimi-k3"}]}"#).unwrap(),
+            ["kimi-k3"]
+        );
+    }
+
+    #[test]
     fn each_model_gets_the_api_and_url_it_answers_on() {
         let served: Vec<String> = [
             "kimi-k3",
@@ -306,7 +357,7 @@ mod tests {
         ]
         .map(String::from)
         .to_vec();
-        let (models, skipped, dropped) = go_models(&catalog(), Some(&served));
+        let (models, skipped, dropped) = go_models(&catalog(), &served);
         let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
         assert_eq!(
             ids,
@@ -353,7 +404,7 @@ mod tests {
         let mut entries = catalog();
         entries.insert("rogue-1".to_string(), json!({"provider": {"npm": "@ai-sdk/openai", "api": "https://rogue.example/v1"}, "tool_call": true}));
         let served: Vec<String> = ["rogue-1", "kimi-k3"].map(String::from).to_vec();
-        let (models, _, dropped) = go_models(&entries, Some(&served));
+        let (models, _, dropped) = go_models(&entries, &served);
         assert_eq!(dropped, ["rogue-1"]);
         assert!(
             models.iter().all(|model| model.id != "rogue-1"),
@@ -365,14 +416,6 @@ mod tests {
                 .unwrap_or("(provider url)")
         );
         assert!(models.iter().any(|model| model.id == "kimi-k3"));
-    }
-
-    #[test]
-    fn without_gos_list_models_dev_names_the_models() {
-        let (models, skipped, dropped) = go_models(&catalog(), None);
-        assert_eq!(models.len(), 4);
-        assert_eq!(skipped, ["gemini-4-argon"]);
-        assert!(dropped.is_empty());
     }
 
     #[test]
