@@ -3,6 +3,10 @@
 //! starts until it is first used. Servers a project names in `[mcp] eager` start with the
 //! session instead and get native tool definitions, fixed for the session.
 //!
+//! A call that arrives without arguments the tool takes is answered with the tool's own
+//! schema — its properties, which are required, and an object to copy — so a model that
+//! can't express them is told what to send instead of being handed a server error.
+//!
 //! Servers come from `~/.killi/mcp.json` and the project's `.mcp.json`, in the
 //! `{"mcpServers": {...}}` format Claude Code and Kimi Code use. Stdio servers run in the
 //! shared broker (see `broker.rs`), so killi sessions share them: user servers start in the

@@ -1,5 +1,6 @@
 use super::*;
 
+use super::connection::RpcError;
 use crate::tools::Output;
 
 impl Mcp {
@@ -25,7 +26,7 @@ impl Mcp {
             "parameters": {"type": "object", "properties": {
                 "server": {"type": "string"},
                 "tool": {"type": "string"},
-                "arguments": {"type": "object"}
+                "arguments": {"type": "object", "description": "The tool's arguments as a JSON object, exactly as its `Arguments:` schema shows."}
             }, "required": ["server"]}
         }}))
     }
@@ -107,10 +108,69 @@ impl Mcp {
                 }
                 Err(e) => Output::error(format!("Could not reach MCP server {server}: {e:#}")),
             },
-            Some(tool) => match Self::tool_arguments(args) {
+            Some(tool) => match self.tool_arguments(server, tool, args).await {
                 Ok(arguments) => self.call(server, tool, arguments, images).await,
-                Err(e) => Output::error(e),
+                Err(refused) => refused,
             },
+        }
+    }
+
+    /// One of `server`'s tools as it describes itself, when the server can be reached.
+    async fn tool_schema(&self, server: &str, tool: &str) -> Option<Value> {
+        self.tools(server)
+            .await
+            .ok()?
+            .into_iter()
+            .find(|t| t["name"].as_str() == Some(tool))
+    }
+
+    /// What `tool` takes, from its input schema, for a call that came without arguments.
+    async fn shape(&self, server: &str, tool: &str) -> Shape {
+        let schema = self.tool_schema(server, tool).await;
+        Shape::of(schema.as_ref().and_then(|t| t.get("inputSchema")))
+    }
+
+    /// The `arguments` a tool call sends. A model that omits them, sends an empty string or
+    /// malformed JSON is told what the tool takes instead of being handed a server error
+    /// it can't read; a tool that takes nothing still runs with no arguments.
+    async fn tool_arguments(&self, server: &str, tool: &str, args: &Value) -> Result<Value, Output> {
+        let sent = match Self::sent_arguments(args) {
+            Ok(sent) => sent,
+            Err(problem) => {
+                return Err(Output::error(format!(
+                    "{problem}\n{}",
+                    self.shape(server, tool).await.text
+                )));
+            }
+        };
+        if let Some(arguments) = sent {
+            return Ok(arguments);
+        }
+        let shape = self.shape(server, tool).await;
+        if shape.required.is_empty() {
+            return Ok(json!({}));
+        }
+        Err(Output::error(format!(
+            "mcp needs `arguments` for {tool}:\n{}",
+            shape.text
+        )))
+    }
+
+    /// What the model sent as `arguments`: the object to send, or nothing a tool takes when
+    /// it is missing, empty or a value no tool takes, with the problem to report when it
+    /// sent something unreadable.
+    pub(super) fn sent_arguments(args: &Value) -> Result<Option<Value>, String> {
+        match args.get("arguments") {
+            Some(value @ Value::Object(_)) => Ok(Some(value.clone())),
+            Some(Value::String(text)) if text.trim().is_empty() => Ok(None),
+            Some(Value::String(text)) => match serde_json::from_str::<Value>(text) {
+                Ok(parsed @ Value::Object(_)) => Ok(Some(parsed)),
+                Ok(_) => Err(
+                    "mcp `arguments` is a string but not a JSON object; send an object.".into(),
+                ),
+                Err(e) => Err(format!("mcp `arguments` is a string but not JSON: {e}")),
+            },
+            _ => Ok(None),
         }
     }
 
@@ -149,7 +209,17 @@ impl Mcp {
             .await
         {
             Ok(result) => result,
-            Err(e) => return Output::error(format!("{server}/{tool} failed: {e:#}")),
+            // A server that rejects the arguments it was sent is told what the tool takes,
+            // so the next call can carry them.
+            Err(e) => {
+                let mut text = format!("{server}/{tool} failed: {e:#}");
+                if e.downcast_ref::<RpcError>()
+                    .is_some_and(|error| error.code == Some(-32602))
+                {
+                    text.push_str(&format!("\n{}", self.shape(server, tool).await.text));
+                }
+                return Output::error(text);
+            }
         };
         let empty = Vec::new();
         let content = result["content"].as_array().unwrap_or(&empty);
@@ -200,23 +270,79 @@ impl Mcp {
         }
         (text, image)
     }
+}
 
-    /// The `arguments` for an MCP tool call: an object as sent, or a string holding one.
-    /// Anything else (missing, or a value no tool takes) is no arguments, as before.
-    pub(super) fn tool_arguments(args: &Value) -> Result<Value, String> {
-        match args.get("arguments") {
-            None | Some(Value::Null) => Ok(json!({})),
-            Some(Value::Object(_)) => Ok(args["arguments"].clone()),
-            Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
-                Ok(parsed @ Value::Object(_)) => Ok(parsed),
-                Ok(_) => {
-                    Err("mcp `arguments` is a string but not a JSON object; send an object.".into())
-                }
-                Err(e) => Err(format!("mcp `arguments` is a string but not JSON: {e}")),
-            },
-            Some(_) => Ok(json!({})),
+/// What a tool takes, as the model must send it: the properties with their types, which of
+/// them are required, and an object to copy.
+struct Shape {
+    /// What the model reads.
+    text: String,
+    /// The properties the tool requires; empty when it takes none.
+    required: Vec<String>,
+}
+
+impl Shape {
+    /// The shape from a tool's input schema; `None` when the server couldn't say.
+    fn of(schema: Option<&Value>) -> Self {
+        let is_required = |property: &str| {
+            schema
+                .and_then(|s| s["required"].as_array())
+                .is_some_and(|list| list.iter().any(|v| v.as_str() == Some(property)))
+        };
+        let Some(properties) = schema.and_then(|s| s["properties"].as_object()) else {
+            return Self {
+                text: format!(
+                    "its schema names no arguments ({}); send `arguments` as an object.",
+                    crate::llm::truncate(&schema.map_or_else(|| "{}".into(), Value::to_string), 300)
+                ),
+                required: Vec::new(),
+            };
+        };
+        let required: Vec<String> = properties
+            .keys()
+            .filter(|property| is_required(property))
+            .cloned()
+            .collect();
+        let optional: Vec<String> = properties
+            .keys()
+            .filter(|property| !is_required(property))
+            .cloned()
+            .collect();
+        // The required ones come first: they are what the call can't go without.
+        let takes: Vec<String> = required
+            .iter()
+            .chain(optional.iter())
+            .map(|property| {
+                format!(
+                    "{property} ({}{})",
+                    kind(&properties[property]),
+                    if required.contains(property) { ", required" } else { "" }
+                )
+            })
+            .collect();
+        // An object to copy: the required properties when there are any, else every one.
+        let example: Vec<String> = if required.is_empty() {
+            optional
+        } else {
+            required.clone()
+        }
+        .iter()
+        .map(|property| format!("\"{property}\": \"<{}>\"", kind(&properties[property])))
+        .collect();
+        Self {
+            text: format!(
+                "{}. Send `arguments` as a JSON object, e.g. {{{}}}.",
+                takes.join(", "),
+                example.join(", ")
+            ),
+            required,
         }
     }
+}
+
+/// A property's type as its schema names it.
+fn kind(property: &Value) -> &str {
+    property["type"].as_str().unwrap_or("value")
 }
 
 /// An image the model isn't shown, named by type and size instead of dumped as base64.
