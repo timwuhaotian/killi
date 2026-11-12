@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.80 — 2026-11-12
+
+- A plan whose usage limit ran out now fails at once, instead of retrying for two minutes
+  before reporting the same error. The limit arrives inside the event stream, and killi
+  read the error code from the wrong level of it, so the code came out empty — which is
+  the one that says "try again". The code is now read wherever the provider put it, and
+  a spent limit is recognised by the same words a 429 body is recognised by, so the two
+  paths read one allowance the same way.
+
 ## 0.6.79 — 2026-11-12
 
 - The task list's `… N more` row now expands on a double-click, showing every task, and a
