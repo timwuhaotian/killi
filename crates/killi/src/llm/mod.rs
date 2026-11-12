@@ -22,7 +22,8 @@ use serde_json::Value;
 use crate::config::{Protocol, ResolvedModel};
 
 use error::{
-    backoff, body_excerpt, classify, excerpt, kind_for_status, retryable_status, transport_failure,
+    backoff, body_excerpt, classify, excerpt, kind_for_status, retryable_status, spent_quota,
+    transport_failure,
 };
 use history::{arguments_object, arguments_valid, content_text, json_arguments, system_text};
 use tokens::cap_output;

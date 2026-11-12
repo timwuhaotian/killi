@@ -158,12 +158,19 @@ const OVERFLOW_WORDS: [&str; 7] = [
 /// Words in a rejection body that say the provider refused an image or other media.
 const MEDIA_WORDS: [&str; 2] = ["image", "media"];
 
+/// Whether a body or a code says a usage allowance ran out rather than that requests
+/// came too fast. The same words for an HTTP body and for a code a stream carried, so
+/// the two paths read one allowance the same way.
+pub(super) fn spent_quota(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    QUOTA_WORDS.iter().any(|w| lower.contains(w))
+}
+
 /// What a failed HTTP response means: retried, unless waiting won't help. A spent quota
 /// (a 5-hour or monthly limit) resets in hours, so it fails at once with the server's message.
 pub(super) fn classify(status: StatusCode, retry_after: Option<Duration>, body: &str) -> Failure {
     let lower = body.to_lowercase();
-    let quota =
-        status == StatusCode::TOO_MANY_REQUESTS && QUOTA_WORDS.iter().any(|w| lower.contains(w));
+    let quota = status == StatusCode::TOO_MANY_REQUESTS && spent_quota(body);
     let too_long = retry_after.is_some_and(|wait| wait > LONGEST_WAIT);
     let kind = match status.as_u16() {
         429 if quota => ErrorKind::Quota,
