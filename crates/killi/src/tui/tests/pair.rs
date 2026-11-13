@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn pair_turns_stand_apart_and_keep_their_details_at_narrow_widths() {
+    for width in [60, 80] {
+        let mut app = test_app();
+        app.width = width;
+        app.on_agent(Event::Text("Previous report".into()));
+        app.on_agent(Event::PairTurn {
+            role: Role::Executor,
+            model: "commandcode/meta/muse-spark-1.3-contributor".into(),
+            effort: "high".into(),
+            what: "round 1".into(),
+        });
+        let rows: Vec<String> = app.pending.iter().map(|row| unstyled(row)).collect();
+        assert!(
+            rows.iter().any(|row| row.contains("→ Executor · round 1")),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("commandcode/meta/muse-spark-1.3-contributor (high)")),
+            "{rows:?}"
+        );
+        assert!(app.pending.iter().all(|row| text::width(row) <= width));
+        assert!(
+            app.pending
+                .iter()
+                .any(|row| row.contains(BOLD) && row.contains("Executor"))
+        );
+    }
+}
+
+#[test]
 fn typed_text_interjects_to_the_driving_pair() {
     let mut app = test_app();
     app.pair_ctl = Some(PairControls::default());

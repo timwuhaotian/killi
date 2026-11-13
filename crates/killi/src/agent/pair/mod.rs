@@ -428,7 +428,12 @@ impl Agent {
         };
         let header = format!("{} · {model} ({effort}) — {what}", role.label());
         *pair.ctl.progress.borrow_mut() = format!("round {} · {header}", pair.rounds.max(1));
-        (self.sink)(Event::Notice(header));
+        (self.sink)(Event::PairTurn {
+            role,
+            model: model.clone(),
+            effort: effort.clone(),
+            what: what.to_string(),
+        });
     }
 
     /// Answers the tool calls an interruption left without results in both roles, so either

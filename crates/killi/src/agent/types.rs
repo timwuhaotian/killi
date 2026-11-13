@@ -30,6 +30,13 @@ pub enum Event {
     Todos(Vec<Todo>),
     Ask(Question),
     Notice(String),
+    /// A pair role begins its turn.
+    PairTurn {
+        role: Role,
+        model: String,
+        effort: String,
+        what: String,
+    },
     /// An `agent_swarm` call began: its tool call id, its description, and each subagent's item
     /// in order. Subagents are told apart from the call's other work by their `Slot`.
     Swarm {

@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.81 — 2026-11-13
+
+- `/pair` role handoffs now stand out in the conversation: the active role and its stage
+  appear in a bold header, with the model and effort on a separate line that wraps on narrow
+  terminals. Ordinary notices keep their existing appearance.
+
 ## 0.6.80 — 2026-11-12
 
 - A plan whose usage limit ran out now fails at once, instead of retrying for two minutes

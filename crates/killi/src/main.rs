@@ -529,6 +529,15 @@ impl Printer {
                 self.end_text();
                 eprintln!("{}{text}{}", self.dim, self.reset);
             }
+            Event::PairTurn {
+                role,
+                model,
+                effort,
+                what,
+            } => {
+                self.end_text();
+                eprintln!("→ {} · {what} — {model} ({effort})", role.label());
+            }
             Event::Sub { label, event, .. } => {
                 if matches!(
                     *event,

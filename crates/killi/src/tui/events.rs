@@ -188,6 +188,28 @@ impl App {
                 self.end_thinking();
                 self.notice(&text);
             }
+            Event::PairTurn {
+                role,
+                model,
+                effort,
+                what,
+            } => {
+                self.flush_partial();
+                self.end_thinking();
+                self.commit(String::new());
+                self.begin(Kind::Note);
+                let model = text::sanitize_row(&model).into_owned();
+                let effort = text::sanitize_row(&effort).into_owned();
+                let what = text::sanitize_row(&what).into_owned();
+                self.emit(Line::block(move |width| {
+                    let title =
+                        format!("{BOLD}{LAGOON}→ {}{RESET} {BOLD}· {what}{RESET}", role.label());
+                    let detail = format!("  {DIM}{model} ({effort}){RESET}");
+                    let mut rows = wrap_words(&title, width, 2);
+                    rows.extend(wrap_words(&detail, width, 2));
+                    rows
+                }));
+            }
             Event::Swarm {
                 id,
                 description,
