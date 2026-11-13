@@ -281,7 +281,7 @@ fn before_the_download_starts_there_is_only_the_island_and_its_detail() {
         "{line:?}"
     );
     assert!(
-        ['❄', '❅', '❆'].iter().any(|flake| line.contains(*flake)),
-        "the snowflake spinner: {line:?}"
+        line.contains('🧊'),
+        "the ice-cube spinner: {line:?}"
     );
 }

@@ -471,7 +471,7 @@ fn the_working_rows_name_the_action_and_put_the_time_with_the_hint_beside_it() {
     let rows: Vec<String> = styled.iter().map(|row| unstyled(row)).collect();
     assert_eq!(rows.len(), 1);
     assert_eq!(
-        rows[0], " ❅ thinking  The internal § references · ~128 out · 45s · Esc to interrupt",
+        rows[0], " ▅🧊▅ thinking  The internal § references · ~128 out · 45s · Esc to interrupt",
         "{}",
         rows[0]
     );

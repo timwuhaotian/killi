@@ -463,7 +463,7 @@ impl Drop for Status {
 }
 
 /// The status line `frame` tenths of a second in, cut to fit `columns`: the session's
-/// working island — the snowflake and the action word — its detail beside it, and for a
+/// working island — the ice cube and the action word — its detail beside it, and for a
 /// download its progress.
 fn live_line(
     frame: usize,

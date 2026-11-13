@@ -615,7 +615,7 @@ fn interrupt_hint(elapsed: Duration) -> String {
     )
 }
 
-/// The working line while the snapshot runs: the island of the snowflake spinner and the
+/// The working line while the snapshot runs: the island of the ice-cube spinner and the
 /// whole snapshot word beside it in the logo's gradient, then the turn's output count, the
 /// elapsed time and the interrupt hint.
 pub(super) fn snapshot_rows(
@@ -631,7 +631,7 @@ pub(super) fn snapshot_rows(
     )]
 }
 
-/// The working line: the island of the snowflake spinner and the turn's action word
+/// The working line: the island of the ice-cube spinner and the turn's action word
 /// (`thinking`, `writing`, …), what it is doing after it, then the turn's output count,
 /// the elapsed time and the interrupt hint. While a failed request waits to be retried
 /// the action word counts that wait down instead, since nothing is working then.

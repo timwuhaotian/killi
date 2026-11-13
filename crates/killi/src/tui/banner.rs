@@ -111,29 +111,47 @@ fn flow(frame: usize, across: f32, shift: f32, fade: f32) -> String {
     color(r * fade, g * fade, b * fade, truecolor())
 }
 
-/// The snowflake spinner's glyphs, in the order they pulse: light to heavy and back again,
-/// the way kimi-code's moon turns through its phases. All from the snowflake block, so no
-/// frame jumps in weight the way the asterisk did.
-const SNOWFLAKES: [char; 4] = ['❄', '❅', '❆', '❅'];
-/// Frames (a tenth of a second each) each snowflake glyph holds before the next turns in,
-/// so the flake rotates slowly instead of flickering.
-const SNOWFLAKE_HOLD: usize = 4;
-/// Frames (a tenth of a second each) for the snowflake's full bright-to-bright cycle.
+/// The sea's glyphs around the cube, from a thin line of water to nearly filling the cell.
+const TIDE: [char; 5] = ['▁', '▂', '▃', '▄', '▅'];
+/// The tide's level frame by frame through one swell — in to high water and back out, each
+/// level held two frames so the sea breathes rather than flickers.
+const SWELL: [usize; 20] = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 3, 3, 2, 2, 1, 1, 0, 0];
+/// The glint that skims the water: the swell frame it starts on and the side it sits on, left
+/// as the tide comes in and right as it goes out, fading through [`GLINT`] one frame a glyph.
+const GLINTS: [(usize, bool); 2] = [(4, true), (14, false)];
+/// The glint's glyphs, bright to spent.
+const GLINT: [char; 3] = ['✦', '✧', '·'];
+/// Frames (a tenth of a second each) for the working icon's full bright-to-bright cycle.
 const WAX_CYCLE: f32 = 24.0;
-/// The spinner `frame` tenths of a second in: one bold snowflake in a single column,
-/// turning through its variants in the logo's gradient while its light waxes and wanes,
-/// so the working line's icon changes shape in place instead of spreading out.
-pub fn snowflake(frame: usize) -> String {
-    let c = SNOWFLAKES[(frame / SNOWFLAKE_HOLD) % SNOWFLAKES.len()];
-    let t = frame as f32 / WAX_CYCLE;
-    let wax = (1.0 - (std::f32::consts::TAU * t).cos()) / 2.0;
-    let fade = 0.55 + 0.45 * wax;
+
+/// The default skin's icon: an ice cube in a sea whose level swells and falls around it, with
+/// a glint skimming the water as the tide turns — across the left water as it comes in and the
+/// right as it goes out. `frame` is tenths of a second; the cube is two columns and the water
+/// one each side, so the island keeps its width while the icon moves.
+pub fn ice_cube(frame: usize) -> String {
+    let step = frame % SWELL.len();
+    let level = TIDE[SWELL[step]];
+    let glint = GLINTS.iter().find_map(|(start, left)| {
+        let shade = step.checked_sub(*start).filter(|at| *at < GLINT.len())?;
+        Some((*left, GLINT[shade]))
+    });
+    let side = |c: char, lit: f32| format!("{BOLD}{}{c}{RESET}", ink(frame, lit));
+    let (left, right) = match glint {
+        Some((true, light)) => (side(light, 1.0), side(level, 0.8)),
+        Some((false, light)) => (side(level, 0.8), side(light, 1.0)),
+        None => (side(level, 0.8), side(level, 0.8)),
+    };
+    format!("{left}🧊{right}")
+}
+
+/// The logo's ink `frame` tenths of a second in, `lit` of its brightness: its hue drifts across
+/// the gradient while its light waxes and wanes, so the icon glows as it works.
+fn ink(frame: usize, lit: f32) -> String {
+    let wax = (1.0 - (std::f32::consts::TAU * frame as f32 / WAX_CYCLE).cos()) / 2.0;
+    let fade = lit * (0.55 + 0.45 * wax);
     let across = (0.5 + frame as f32 * 0.012) % 2.0;
     let (r, g, b) = gradient(if across > 1.0 { 2.0 - across } else { across });
-    format!(
-        "{BOLD}{}{c}{RESET}",
-        color(r * fade, g * fade, b * fade, truecolor())
-    )
+    color(r * fade, g * fade, b * fade, truecolor())
 }
 
 /// The working line's island: `inner` on the selection ground with a space of it on each
@@ -147,18 +165,18 @@ fn island(inner: String) -> String {
 }
 
 /// The spinner `frame` tenths of a second in, as the session's working line shows it and
-/// `killi update` mirrors it: the island of the snowflake and the action word fading in
-/// beside it. Always the snowflake, a space and the word, with a space of ground each side.
+/// `killi update` mirrors it: the island of the ice cube and the action word fading in
+/// beside it. Always the cube, a space and the word, with a space of ground each side.
 pub fn working_island(frame: usize, word: &str) -> String {
-    island(format!("{} {}", snowflake(frame), action_word(frame, word)))
+    island(format!("{} {}", ice_cube(frame), action_word(frame, word)))
 }
 
 /// The same island with the word shown whole at once, for work too brief to fade in.
 pub fn steady_island(frame: usize, word: &str) -> String {
-    island(format!("{} {}", snowflake(frame), steady_word(frame, word)))
+    island(format!("{} {}", ice_cube(frame), steady_word(frame, word)))
 }
 
-/// `word` fading in letter by letter beside the snowflake, each letter taking the logo's
+/// `word` fading in letter by letter beside the icon, each letter taking the logo's
 /// gradient as it flows with `frame`; letters not yet there are dim dots. Two sparkles
 /// travel across the letters against each other, so the word shimmers while it works.
 pub fn action_word(frame: usize, word: &str) -> String {
@@ -188,7 +206,7 @@ pub fn action_word(frame: usize, word: &str) -> String {
     out
 }
 
-/// `word` shown whole at once beside the snowflake, in the logo's gradient flowing with
+/// `word` shown whole at once beside the icon, in the logo's gradient flowing with
 /// `frame`, with the same two sparkles traveling across it as `action_word`.
 pub fn steady_word(frame: usize, word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
@@ -342,12 +360,12 @@ mod tests {
         for frame in 0..200 {
             assert_eq!(
                 width(&working_island(frame, "downloading")),
-                1 + 1 + 1 + 11 + 1,
+                1 + 4 + 1 + 11 + 1,
                 "frame {frame}"
             );
             assert_eq!(
                 width(&steady_island(frame, "contrapposto")),
-                1 + 1 + 1 + 12 + 1,
+                1 + 4 + 1 + 12 + 1,
                 "frame {frame}"
             );
         }
@@ -358,8 +376,8 @@ mod tests {
             island.matches(&ground).count() > 1,
             "the ground is reapplied inside: {island:?}"
         );
-        assert_eq!(unstyled(&working_island(40, "checking")), " ❆ checking ");
-        assert_eq!(unstyled(&steady_island(0, "checking")), " ❄ checking ");
+        assert_eq!(unstyled(&working_island(40, "checking")), " ▁🧊▁ checking ");
+        assert_eq!(unstyled(&steady_island(0, "checking")), " ▁🧊▁ checking ");
     }
 
     #[test]
@@ -381,35 +399,39 @@ mod tests {
     }
 
     #[test]
-    fn the_snowflake_is_one_column_and_turns_slowly() {
-        for frame in 0..120 {
-            assert_eq!(width(&snowflake(frame)), 1, "frame {frame}");
+    fn the_cube_floats_on_a_swell_and_glints_on_both_sides() {
+        for frame in 0..200 {
+            let shown = unstyled(&ice_cube(frame));
+            assert_eq!(width(&shown), 4, "frame {frame}");
+            assert!(shown.contains('🧊'), "the cube is always there: {shown:?}");
+            assert!(ice_cube(frame).contains(BOLD), "frame {frame}: the sea is bold");
         }
-        let glyph = |frame| unstyled(&snowflake(frame));
-        assert!(
-            (1..SNOWFLAKE_HOLD).all(|frame| glyph(frame) == glyph(0)),
-            "the flake flickers"
-        );
-        assert_ne!(glyph(0), glyph(SNOWFLAKE_HOLD), "the flake stands still");
-        let mut glyphs = std::collections::HashSet::new();
-        for frame in (0..SNOWFLAKES.len() * SNOWFLAKE_HOLD).step_by(SNOWFLAKE_HOLD) {
-            glyphs.insert(unstyled(&snowflake(frame)));
+        // Each side of the water shows every level of the tide over one swell.
+        let levels: std::collections::HashSet<char> = (0..SWELL.len()).map(|f| sides(f).0).collect();
+        for c in TIDE {
+            assert!(levels.contains(&c), "missing {c}: {levels:?}");
         }
-        let shown: String = glyphs.iter().cloned().collect();
-        assert_eq!(glyphs.len(), 3, "one glyph at a time, in place: {glyphs:?}");
-        for c in SNOWFLAKES {
-            assert!(shown.contains(c), "missing {c}: {glyphs:?}");
+        // With no glint the sea is level, and it stands still for two frames at a time.
+        for frame in [0, 8, 12, 18] {
+            let (left, right) = sides(frame);
+            assert_eq!(left, right, "frame {frame}: the sea is level");
+            assert_eq!(left, sides(frame + 1).0, "frame {frame}: held two frames");
+        }
+        // The glint crosses the left water as the tide comes in and the right as it goes out.
+        for (start, left) in GLINTS {
+            let seen: Vec<char> = (start..start + GLINT.len())
+                .map(|f| if left { sides(f).0 } else { sides(f).1 })
+                .collect();
+            assert_eq!(seen, GLINT, "the glint at frame {start}");
+            let other = if left { sides(start).1 } else { sides(start).0 };
+            assert!(TIDE.contains(&other), "the far water stays water: {other:?}");
         }
     }
 
-    #[test]
-    fn the_snowflake_is_bold() {
-        for frame in 0..40 {
-            let flake = snowflake(frame);
-            let parts: Vec<&str> = flake.split(RESET).collect();
-            assert_eq!(parts.len(), 2, "frame {frame}: the flake alone");
-            assert!(parts[0].contains(BOLD), "frame {frame}: the flake is bold");
-        }
+    /// The glyphs of the sea either side of the cube `frame` tenths of a second in.
+    fn sides(frame: usize) -> (char, char) {
+        let shown: Vec<char> = unstyled(&ice_cube(frame)).chars().collect();
+        (shown[0], shown[2])
     }
 
     #[test]
