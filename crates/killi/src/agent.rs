@@ -6,6 +6,7 @@ mod ask;
 mod compact;
 mod dispatch;
 mod lifecycle;
+mod near;
 mod pair;
 mod peer_guard;
 mod request;
@@ -51,6 +52,7 @@ pub(crate) use task::task_agent;
 
 use compact::CompactMode;
 use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
+use near::{NEAR_BASH_WARN_AT, NEAR_REPEAT_WARN_AT, near_key};
 use request::{is_media, is_overflow, provider_limit, reasoning_evidence};
 use types::{PartialSwarm, PendingPrompt, Repeat, last_plan_state, unanswered};
 
@@ -63,8 +65,8 @@ use compact::{
 };
 #[cfg(test)]
 use dispatch::{
-    NEAR_REPEAT_WARN_AT, REPEAT_STOP, REPEAT_WARNINGS, SKIPPED_FOR_MESSAGE, dispatch_tool,
-    hash_call, image_parts, near_key, parallel_read, repeat_key,
+    REPEAT_STOP, REPEAT_WARNINGS, SKIPPED_FOR_MESSAGE, dispatch_tool, hash_call, image_parts,
+    parallel_read, repeat_key,
 };
 #[cfg(test)]
 use request::hides_reasoning;
@@ -116,8 +118,9 @@ pub struct Agent {
     ids: HashSet<String>,
     /// Identical tool calls made in the current turn, by a hash of the call.
     repeats: HashMap<u64, Repeat>,
-    /// Read/search calls made in the current turn against one target, by a hash of the
-    /// tool and its target; a call that only retunes offset, pattern or limit shares it.
+    /// Calls made in the current turn against one read/search target or bash command, by a
+    /// hash of the tool and its target; calls that differ only in tuning arguments or
+    /// output filters share it.
     near_repeats: HashMap<u64, u32>,
     /// History length at the last usage report; later messages are the unbilled suffix.
     accounted_messages: usize,

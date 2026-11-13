@@ -4,10 +4,6 @@ pub(super) const REPEAT_WARNINGS: [u32; 3] = [3, 5, 7];
 pub(super) const REPEAT_STOP: u32 = 8;
 /// An identical call that has already returned the same result twice is not run again.
 pub(super) const REPEAT_BLOCK_AFTER: u32 = 2;
-/// Read/search calls against one target in a turn at which the model is warned once, however
-/// their tuning arguments differ. A warning only: paging through a long file or narrowing a
-/// search legitimately retunes the call, so near-duplicates are never blocked or stopped.
-pub(super) const NEAR_REPEAT_WARN_AT: u32 = 5;
 
 /// The result of a call that didn't run because the user sent a message before its turn.
 pub(super) const SKIPPED_FOR_MESSAGE: &str = "Not run: the user sent a message first, which follows. The request this call was for still stands unless that message replaces it; run it again if it is still needed, in an order that makes sense with the new message.";
@@ -432,22 +428,34 @@ impl Agent {
                 call.name
             )}))?;
         }
-        // Near-duplicates: the same read/search target, tuning arguments aside. A successful
-        // write or edit may have changed what the target holds, so it clears the count and
-        // reading after it is verification, not churn.
+        // Near-duplicates: the same target or command, tuning arguments and output filters
+        // aside. A successful write or edit may have changed what the target holds, so it
+        // clears the count and reading after it is verification, not churn.
         if matches!(call.name.as_str(), "write" | "edit") && !output.is_error {
             self.near_repeats.clear();
         } else if let Some(key) = near_key(call) {
+            let threshold = if call.name == "bash" {
+                NEAR_BASH_WARN_AT
+            } else {
+                NEAR_REPEAT_WARN_AT
+            };
             let warned = {
                 let count = self.near_repeats.entry(key).or_insert(0);
                 *count += 1;
-                *count == NEAR_REPEAT_WARN_AT
+                *count == threshold
             };
             if warned {
-                self.push(json!({"role": "user", "content": format!(
-                    "<system-reminder>You have made this similar {} call {NEAR_REPEAT_WARN_AT} times against the same target in this turn, differing only in offset, pattern, limit or other tuning arguments. Similar calls slip past the exact repeat breaker; if you have what you need, change the call or reply in text instead of reading or searching the same target again.</system-reminder>",
-                    call.name
-                )}))?;
+                let note = if call.name == "bash" {
+                    format!(
+                        "<system-reminder>You have run this same bash command {threshold} times in this turn, differing only in output filters (tail/grep/head) or redirects. When an earlier run's output was too long to show, its full output was saved to a file named in the result; read that file instead of running the command again.</system-reminder>"
+                    )
+                } else {
+                    format!(
+                        "<system-reminder>You have made this similar {} call {threshold} times against the same target in this turn, differing only in offset, pattern, limit or other tuning arguments. Similar calls slip past the exact repeat breaker; if you have what you need, change the call or reply in text instead of reading or searching the same target again.</system-reminder>",
+                        call.name
+                    )
+                };
+                self.push(json!({"role": "user", "content": note}))?;
             }
         }
         Ok(same && count >= REPEAT_STOP)
@@ -574,27 +582,6 @@ pub(super) fn hash_call(call: &ToolCall) -> u64 {
     let mut hasher = DefaultHasher::new();
     (&call.name, &call.arguments).hash(&mut hasher);
     hasher.finish()
-}
-
-/// Identifies a read/search call by its tool and target alone, so a call that only retunes
-/// offset, pattern or limit shares the key. `grep` and `glob` without a path search the
-/// working directory, so they count against `.`.
-pub(super) fn near_key(call: &ToolCall) -> Option<u64> {
-    if !matches!(call.name.as_str(), "read" | "grep" | "glob") {
-        return None;
-    }
-    let args = parse_args(call).ok()?;
-    let target = args["path"].as_str().filter(|path| !path.is_empty());
-    let target = match (call.name.as_str(), target) {
-        ("read", Some(path)) => path,
-        ("read", None) => return None,
-        (_, Some(path)) => path,
-        (_, None) => ".",
-    };
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    (&call.name, target).hash(&mut hasher);
-    Some(hasher.finish())
 }
 
 /// What the repeat breaker counts as the same call. A wait on a background task is a poll:

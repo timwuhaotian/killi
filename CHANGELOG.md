@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- Running the same bash command three times in one turn, differing only in output filters
+  (tail/grep/head) or redirects, now warns the model once and points it at the file holding
+  an earlier run's full output instead of rerunning the command. The exact repeat breaker
+  only sees identical arguments, so filter variants slipped past it and showed up as the
+  same expensive command run over and over. The warning never blocks a call, and a
+  successful edit clears the count, so rebuilding after a change is not churn.
+
 ## 0.6.85 — 2026-11-13
 
 - The working row's ice cube plays a fixed set of frames now, the way Kimi's spinner does,

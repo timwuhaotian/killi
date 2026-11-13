@@ -666,7 +666,7 @@ fn near_keys_share_a_target_not_tuning() {
         near_key(&named("grep", r#"{"pattern":"x","path":"src"}"#)),
         near_key(&named("grep", r#"{"pattern":"x"}"#))
     );
-    assert_eq!(near_key(&named("bash", r#"{"command":"ls"}"#)), None);
+    assert!(near_key(&named("bash", r#"{"command":"ls"}"#)).is_some());
     assert_eq!(near_key(&call(r#"{"offset":1}"#)), None);
 }
 
@@ -766,6 +766,218 @@ fn a_successful_edit_clears_the_near_count() {
         })
         .count();
     assert_eq!(warnings, 1, "the fifth read after the edit warns");
+}
+
+#[test]
+fn bash_near_keys_share_a_command_not_its_output_filters() {
+    let bash = |command: &str| ToolCall {
+        id: "c".into(),
+        name: "bash".into(),
+        arguments: json!({"command": command}).to_string(),
+    };
+    assert_eq!(
+        near_key(&bash("npm run test:ui 2>&1 | grep -E \"failed|passed\" | tail -20")),
+        near_key(&bash("npm run test:ui | grep failed | head -5")),
+        "output-filter pipes and redirects don't change the command"
+    );
+    assert_eq!(
+        near_key(&bash("cargo test --lib")),
+        near_key(&bash("cargo test --lib 2>&1 | tail -50"))
+    );
+    assert_eq!(
+        near_key(&bash("git show HEAD:src/config.rs > /tmp/out")),
+        near_key(&bash("git show HEAD:src/config.rs"))
+    );
+    assert_eq!(
+        near_key(&bash("cargo test | python summarize.py | tail -5")),
+        near_key(&bash("cargo test | python summarize.py | head -5")),
+        "a filter after a real transform trims the same work"
+    );
+    assert_ne!(
+        near_key(&bash("cmd | python a.py")),
+        near_key(&bash("cmd | jq .")),
+        "pipes that transform the output stay part of the key"
+    );
+    assert_ne!(near_key(&bash("cmd | python a.py")), near_key(&bash("cmd")));
+    assert_ne!(
+        near_key(&bash("cargo test --lib")),
+        near_key(&bash("cargo test --doc"))
+    );
+    assert_ne!(
+        near_key(&bash("tail -f run.log")),
+        near_key(&bash("tail -n 5 run.log")),
+        "a filter that starts the command is the command itself"
+    );
+    assert_ne!(
+        near_key(&bash("echo \"a | tail -1\"")),
+        near_key(&bash("echo \"a")),
+        "a quoted pipe is not a pipe"
+    );
+    assert_ne!(
+        near_key(&bash("cmd || echo fallback")),
+        near_key(&bash("cmd")),
+        "|| is a choice, not a pipe"
+    );
+    assert_eq!(near_key(&bash("")), None);
+    assert_eq!(near_key(&bash("   ")), None);
+    assert_eq!(
+        near_key(&bash("2>&1")),
+        None,
+        "nothing but plumbing is no command"
+    );
+    assert_eq!(
+        near_key(&ToolCall {
+            id: "c".into(),
+            name: "bash".into(),
+            arguments: "{}".into(),
+        }),
+        None
+    );
+}
+
+#[test]
+fn near_duplicate_bash_warns_at_three_once_and_never_blocks() {
+    let mut agent = idle_agent("near-bash", Controls::default(), Rc::new(|_| {}));
+    let bash = |n: usize, command: &str| ToolCall {
+        id: format!("c{n}"),
+        name: "bash".into(),
+        arguments: json!({"command": command}).to_string(),
+    };
+    let variants = [
+        "cargo test --lib 2>&1 | tail -20",
+        "cargo test --lib | grep failed | head -5",
+        "cargo test --lib | tail -5",
+        "cargo test --lib | head -20",
+    ];
+    for (n, command) in variants.iter().enumerate() {
+        let stop = agent
+            .finish_call(
+                &format!("c{n}"),
+                &bash(n, command),
+                tools::Output::ok(format!("result {n}")),
+                Duration::ZERO,
+                None,
+            )
+            .unwrap();
+        assert!(!stop, "a near-duplicate never stops the turn");
+    }
+    let warnings: Vec<&Value> = agent
+        .messages
+        .iter()
+        .filter(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("same bash command"))
+        })
+        .collect();
+    assert_eq!(warnings.len(), 1, "warned once, at the third run");
+    let text = warnings[0]["content"].as_str().unwrap();
+    assert!(text.contains("3 times"), "{text}");
+    assert!(text.contains("file"), "{text}");
+    assert_eq!(
+        agent.messages[3]["content"].as_str().unwrap(),
+        text,
+        "the warning follows the third run's result"
+    );
+    assert!(
+        agent
+            .repeat_block(&bash(9, "cargo test --lib | wc -l"))
+            .is_none(),
+        "a near-duplicate is warned about, never blocked"
+    );
+}
+
+#[test]
+fn a_successful_edit_clears_the_bash_near_count() {
+    let mut agent = idle_agent("near-bash-clear", Controls::default(), Rc::new(|_| {}));
+    let bash = |n: u32| ToolCall {
+        id: format!("c{n}"),
+        name: "bash".into(),
+        arguments: json!({"command": format!("cargo check 2>&1 | tail -{n}")}).to_string(),
+    };
+    for n in 0..NEAR_BASH_WARN_AT - 1 {
+        agent
+            .finish_call(
+                &format!("c{n}"),
+                &bash(n),
+                tools::Output::ok(format!("result {n}")),
+                Duration::ZERO,
+                None,
+            )
+            .unwrap();
+    }
+    let edit = ToolCall {
+        id: "e".into(),
+        name: "edit".into(),
+        arguments: r#"{"path":"a","edits":[]}"#.into(),
+    };
+    agent
+        .finish_call("e", &edit, tools::Output::ok("edited"), Duration::ZERO, None)
+        .unwrap();
+    for n in 0..NEAR_BASH_WARN_AT - 1 {
+        agent
+            .finish_call(
+                &format!("d{n}"),
+                &bash(n),
+                tools::Output::ok(format!("after {n}")),
+                Duration::ZERO,
+                None,
+            )
+            .unwrap();
+    }
+    let warnings = agent
+        .messages
+        .iter()
+        .filter(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("same bash command"))
+        })
+        .count();
+    assert_eq!(warnings, 0, "rebuilding after an edit is verification");
+    agent
+        .finish_call("d9", &bash(9), tools::Output::ok("after 9"), Duration::ZERO, None)
+        .unwrap();
+    let warnings = agent
+        .messages
+        .iter()
+        .filter(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("same bash command"))
+        })
+        .count();
+    assert_eq!(warnings, 1, "the third run after the edit warns");
+}
+
+#[test]
+fn identical_bash_calls_still_block_after_two() {
+    let mut agent = idle_agent("bash-exact", Controls::default(), Rc::new(|_| {}));
+    let call = ToolCall {
+        id: "c".into(),
+        name: "bash".into(),
+        arguments: r#"{"command":"cargo test --lib | tail -5"}"#.into(),
+    };
+    agent
+        .finish_call("c1", &call, tools::Output::ok("same result"), Duration::ZERO, None)
+        .unwrap();
+    assert!(agent.repeat_block(&call).is_none(), "the first call runs");
+    agent
+        .finish_call("c2", &call, tools::Output::ok("same result"), Duration::ZERO, None)
+        .unwrap();
+    let (_, block) = agent
+        .repeat_block(&call)
+        .expect("the third identical call is blocked");
+    assert!(block.text.contains("Not run again"), "{}", block.text);
+    let variant = ToolCall {
+        id: "d".into(),
+        name: "bash".into(),
+        arguments: r#"{"command":"cargo test --lib | head -5"}"#.into(),
+    };
+    assert!(
+        agent.repeat_block(&variant).is_none(),
+        "a different filter is a different exact call"
+    );
 }
 
 #[test]
