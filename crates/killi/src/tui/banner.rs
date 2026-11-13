@@ -112,36 +112,25 @@ fn flow(frame: usize, across: f32, shift: f32, fade: f32) -> String {
 }
 
 /// The icon's frames, a tenth of a second each, four columns wide so the island keeps its
-/// width: frost forms on the water either side of the cube a braille dot at a time (the right
-/// side a beat behind the left), holds, thaws through a glint and clears, and the cube rests.
-const FROST: [&str; 16] = [
-    " 🧊 ",
-    "⠁🧊 ",
-    "⠃🧊⠈",
-    "⠇🧊⠘",
-    "⡇🧊⠸",
-    "⣇🧊⢸",
-    "⣧🧊⣸",
-    "⣷🧊⣼",
-    "⣷🧊⣾",
-    "⣷🧊⣾",
-    "✦🧊✦",
-    "✧🧊✧",
-    "·🧊·",
-    " 🧊 ",
-    " 🧊 ",
-    " 🧊 ",
+/// width. Like a moon through its phases, the one icon changes shape every frame: a crystal
+/// grows from a seed (braille dots filling out from the middle), freezes into the cube, which
+/// glints, melts to a drop, and spreads into a ripple that shrinks back to the seed.
+const THAW: [&str; 15] = [
+    " ⠐⠂ ", " ⠰⠆ ", " ⠸⠇ ", " ⢸⡇ ", " ⢾⡷ ", " ⢿⡿ ", " ⣿⣿ ", // the crystal grows
+    " 🧊 ", "✦🧊 ", " 🧊✧", " 🧊 ", // frozen, glinting
+    " 💧 ", "˙💧˙", // melting to a drop, falling
+    " ⠤⠤ ", " ⠒⠒ ", // the ripple, closing on the seed
 ];
 /// Frames (a tenth of a second each) for the working icon's full bright-to-bright cycle.
 const WAX_CYCLE: f32 = 24.0;
 
-/// The default skin's icon: an ice cube with frost growing around it and thawing away. `frame`
+/// The default skin's icon: an ice crystal that grows, freezes into a cube, melts and ripples away. `frame`
 /// is tenths of a second; every frame is four columns wide.
 pub fn ice_cube(frame: usize) -> String {
     format!(
         "{BOLD}{}{}{RESET}",
         ink(frame, 0.9),
-        FROST[frame % FROST.len()]
+        THAW[frame % THAW.len()]
     )
 }
 
@@ -377,8 +366,8 @@ mod tests {
             island.matches(&ground).count() > 1,
             "the ground is reapplied inside: {island:?}"
         );
-        assert_eq!(unstyled(&working_island(48, "checking")), "  🧊  checking ");
-        assert_eq!(unstyled(&steady_island(0, "checking")), "  🧊  checking ");
+        assert_eq!(unstyled(&working_island(48, "checking")), "  ⢸⡇  checking ");
+        assert_eq!(unstyled(&steady_island(0, "checking")), "  ⠐⠂  checking ");
     }
 
     #[test]
@@ -400,20 +389,23 @@ mod tests {
     }
 
     #[test]
-    fn frost_forms_around_the_cube_and_thaws_away() {
-        for (frame, shown) in FROST.iter().enumerate() {
+    fn the_crystal_grows_freezes_melts_and_ripples_back_to_its_seed() {
+        for (frame, shown) in THAW.iter().enumerate() {
             assert_eq!(width(shown), 4, "frame {frame}: {shown:?}");
-            assert!(shown.contains('🧊'), "the cube is always there: {shown:?}");
             assert_eq!(unstyled(&ice_cube(frame)), *shown);
+            assert_ne!(
+                shown,
+                &THAW[(frame + 1) % THAW.len()],
+                "frame {frame} repeats"
+            );
         }
         assert_eq!(
             unstyled(&ice_cube(3)),
-            unstyled(&ice_cube(3 + FROST.len())),
+            unstyled(&ice_cube(3 + THAW.len())),
             "the cycle repeats"
         );
-        assert_eq!(FROST.first(), FROST.last(), "it ends where it began");
-        let story = FROST.concat();
-        for part in ['⠁', '⣷', '✦', '✧'] {
+        let story = THAW.concat();
+        for part in ['⠐', '⣿', '🧊', '✦', '✧', '💧', '⠤', '⠒'] {
             assert!(story.contains(part), "the story lacks {part}");
         }
     }

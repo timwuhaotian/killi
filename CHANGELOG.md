@@ -8,8 +8,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 ## 0.6.85 — 2026-11-13
 
 - The working row's ice cube plays a fixed set of frames now, the way Kimi's spinner does,
-  instead of a swelling sea: frost forms around the cube a braille dot at a time, holds,
-  thaws through a glint and clears. `killi update`'s progress line shows the same frames.
+  instead of a swelling sea, and the icon itself changes shape every frame: a crystal
+  grows from a seed, freezes into the cube, glints, melts to a drop and ripples away. `killi update`'s progress line shows the same frames.
 
 ## 0.6.84 — 2026-11-13
 
