@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.82 — 2026-11-13
+
+- Reading or searching the same target five times in one turn, differing only in offset,
+  pattern or limit, now warns the model once. The exact repeat breaker only sees identical
+  arguments, so near-duplicates slipped past it and showed up as the same file being read
+  over and over. The warning never blocks a call — paging a long file legitimately retunes
+  it — and a successful edit clears the count, so verifying after a change is not churn.
+
 ## 0.6.81 — 2026-11-13
 
 - `/pair` role handoffs now stand out in the conversation: the active role and its stage

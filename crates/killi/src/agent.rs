@@ -63,8 +63,8 @@ use compact::{
 };
 #[cfg(test)]
 use dispatch::{
-    REPEAT_STOP, REPEAT_WARNINGS, SKIPPED_FOR_MESSAGE, dispatch_tool, hash_call, image_parts,
-    parallel_read, repeat_key,
+    NEAR_REPEAT_WARN_AT, REPEAT_STOP, REPEAT_WARNINGS, SKIPPED_FOR_MESSAGE, dispatch_tool,
+    hash_call, image_parts, near_key, parallel_read, repeat_key,
 };
 #[cfg(test)]
 use request::hides_reasoning;
@@ -116,6 +116,9 @@ pub struct Agent {
     ids: HashSet<String>,
     /// Identical tool calls made in the current turn, by a hash of the call.
     repeats: HashMap<u64, Repeat>,
+    /// Read/search calls made in the current turn against one target, by a hash of the
+    /// tool and its target; a call that only retunes offset, pattern or limit shares it.
+    near_repeats: HashMap<u64, u32>,
     /// History length at the last usage report; later messages are the unbilled suffix.
     accounted_messages: usize,
     /// Estimated size of the history right after its last compaction, the growth from which

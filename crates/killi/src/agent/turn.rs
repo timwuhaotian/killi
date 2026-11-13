@@ -28,6 +28,7 @@ impl Agent {
     pub async fn run(&mut self, user: &str, images: &[Image]) -> Result<(String, Stop)> {
         // The breaker is for a loop inside one turn; a call the user asks for again is not one.
         self.repeats.clear();
+        self.near_repeats.clear();
         self.swarm_used = 0;
         self.pending_prompt = None;
         // A blocked prompt leaves no trace: the notes below are taken only once this passes,

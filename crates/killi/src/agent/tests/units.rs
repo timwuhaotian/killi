@@ -643,6 +643,132 @@ fn identical_calls_share_a_key_and_others_do_not() {
 }
 
 #[test]
+fn near_keys_share_a_target_not_tuning() {
+    let named = |name: &str, arguments: &str| ToolCall {
+        id: "c".into(),
+        name: name.into(),
+        arguments: arguments.into(),
+    };
+    assert_eq!(
+        near_key(&call(r#"{"path":"a","offset":1}"#)),
+        near_key(&call(r#"{"path":"a","offset":100,"limit":5}"#))
+    );
+    assert_ne!(
+        near_key(&call(r#"{"path":"a"}"#)),
+        near_key(&call(r#"{"path":"b"}"#))
+    );
+    assert_eq!(
+        near_key(&named("grep", r#"{"pattern":"x"}"#)),
+        near_key(&named("grep", r#"{"pattern":"y","path":"."}"#)),
+        "different patterns against the default target share a key"
+    );
+    assert_ne!(
+        near_key(&named("grep", r#"{"pattern":"x","path":"src"}"#)),
+        near_key(&named("grep", r#"{"pattern":"x"}"#))
+    );
+    assert_eq!(near_key(&named("bash", r#"{"command":"ls"}"#)), None);
+    assert_eq!(near_key(&call(r#"{"offset":1}"#)), None);
+}
+
+#[test]
+fn near_duplicate_reads_warn_once_and_never_block() {
+    let mut agent = idle_agent("near-warn", Controls::default(), Rc::new(|_| {}));
+    for n in 0..=NEAR_REPEAT_WARN_AT {
+        let read = call(&format!(r#"{{"path":"a","offset":{n}}}"#));
+        agent
+            .finish_call(
+                &format!("c{n}"),
+                &read,
+                tools::Output::ok(format!("result {n}")),
+                Duration::ZERO,
+                None,
+            )
+            .unwrap();
+    }
+    let warnings = agent
+        .messages
+        .iter()
+        .filter(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("similar read call"))
+        })
+        .count();
+    assert_eq!(warnings, 1, "warned once, at the threshold");
+    assert!(
+        agent
+            .repeat_block(&call(r#"{"path":"a","offset":99}"#))
+            .is_none(),
+        "a near-duplicate is warned about, never blocked"
+    );
+}
+
+#[test]
+fn a_successful_edit_clears_the_near_count() {
+    let mut agent = idle_agent("near-clear", Controls::default(), Rc::new(|_| {}));
+    let read = |n: u32| call(&format!(r#"{{"path":"a","offset":{n}}}"#));
+    for n in 0..NEAR_REPEAT_WARN_AT - 1 {
+        agent
+            .finish_call(
+                &format!("c{n}"),
+                &read(n),
+                tools::Output::ok(format!("result {n}")),
+                Duration::ZERO,
+                None,
+            )
+            .unwrap();
+    }
+    let edit = ToolCall {
+        id: "e".into(),
+        name: "edit".into(),
+        arguments: r#"{"path":"a","edits":[]}"#.into(),
+    };
+    agent
+        .finish_call("e", &edit, tools::Output::ok("edited"), Duration::ZERO, None)
+        .unwrap();
+    for n in 0..NEAR_REPEAT_WARN_AT - 1 {
+        agent
+            .finish_call(
+                &format!("d{n}"),
+                &read(n),
+                tools::Output::ok(format!("after {n}")),
+                Duration::ZERO,
+                None,
+            )
+            .unwrap();
+    }
+    let warnings = agent
+        .messages
+        .iter()
+        .filter(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("similar read call"))
+        })
+        .count();
+    assert_eq!(warnings, 0, "re-reading after an edit is verification");
+    agent
+        .finish_call(
+            "d9",
+            &read(9),
+            tools::Output::ok("after 9"),
+            Duration::ZERO,
+            None,
+        )
+        .unwrap();
+    let warnings = agent
+        .messages
+        .iter()
+        .filter(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("similar read call"))
+        })
+        .count();
+    assert_eq!(warnings, 1, "the fifth read after the edit warns");
+}
+
+#[test]
 fn overflow_errors_are_recognized() {
     assert!(is_overflow(&anyhow::anyhow!(
         "HTTP 400: This model's maximum context length is 128000 tokens"
