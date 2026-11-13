@@ -153,9 +153,7 @@ impl Agent {
                         continue;
                     }
                 }
-                if self.depth == 0
-                    && self.controls.interactive
-                    && !truncated
+                if !truncated
                     && !told_open_tasks
                     && !ends_with_question(&reply.text)
                     && let Some(note) = open_tasks_note(&self.todos)
@@ -253,8 +251,7 @@ impl Agent {
         if let Some(note) = self.peers_note() {
             self.push(json!({"role": "user", "content": note}))?;
         }
-        if self.depth == 0
-            && self.calls_since_todo >= STALE_TASKS_AFTER
+        if self.calls_since_todo >= STALE_TASKS_AFTER
             && let Some(note) = stale_tasks_note(&self.todos, self.calls_since_todo)
         {
             self.calls_since_todo = 0;

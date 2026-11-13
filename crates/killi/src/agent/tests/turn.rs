@@ -306,6 +306,87 @@ async fn a_task_list_unchanged_for_many_calls_is_pointed_out_once() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_subagents_unchanged_task_list_is_also_pointed_out() {
+    let mut agent = idle_agent("stale-tasks-child", Controls::default(), Rc::new(|_| {}));
+    agent.depth = 1;
+    std::fs::write(agent.ctx.cwd.join("a.txt"), "alpha").unwrap();
+    let list = (
+        "t".to_string(),
+        ToolCall {
+            id: "t".into(),
+            name: "todo_write".into(),
+            arguments: r#"{"todos":[{"content":"first","status":"in_progress"},{"content":"second","status":"pending"}]}"#.into(),
+        },
+    );
+    agent.execute_calls(vec![list], false).await.unwrap();
+    let reads: Vec<_> = (0..STALE_TASKS_AFTER)
+        .map(|i| {
+            (
+                format!("r{i}"),
+                ToolCall {
+                    id: format!("r{i}"),
+                    name: "read".into(),
+                    arguments: r#"{"path":"a.txt"}"#.into(),
+                },
+            )
+        })
+        .collect();
+    agent.execute_calls(reads, false).await.unwrap();
+    agent.before_request().await.unwrap();
+    assert!(
+        agent.messages.last().unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .contains("hasn't changed in"),
+        "a subagent hears the stale-list note too"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_subagent_ending_with_open_tasks_is_asked_to_update_them() {
+    let url = stub_replies(vec![sse("Done.", "stop"), sse("Updated the list.", "stop")]).await;
+    let mut agent = idle_agent("open-tasks-child", Controls::default(), Rc::new(|_| {}));
+    agent.depth = 1;
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let set = agent.todo_write(&json!({"todos": [
+        {"content": "first", "status": "completed"},
+        {"content": "second", "status": "in_progress"},
+    ]}));
+    assert!(!set.is_error, "{}", set.text);
+    let (text, stop) = agent.run("do it", &[]).await.unwrap();
+    assert_eq!((text.as_str(), stop), ("Updated the list.", Stop::Completed));
+    assert!(
+        agent.messages.iter().any(|m| m["content"]
+            .as_str()
+            .is_some_and(|c| c.contains("task list still has 1 open"))),
+        "the subagent was asked once before its report ended the turn"
+    );
+}
+
+#[test]
+fn a_task_list_with_two_items_in_progress_is_refused_and_kept() {
+    let mut agent = idle_agent("todo-in-progress", Controls::default(), Rc::new(|_| {}));
+    let ok = agent.todo_write(&json!({"todos": [
+        {"content": "first", "status": "in_progress"},
+        {"content": "second", "status": "pending"},
+    ]}));
+    assert!(!ok.is_error, "{}", ok.text);
+    let bad = agent.todo_write(&json!({"todos": [
+        {"content": "first", "status": "in_progress"},
+        {"content": "second", "status": "in_progress"},
+    ]}));
+    assert!(bad.is_error && bad.text.contains("Only one item can be in_progress"), "{}", bad.text);
+    assert_eq!(agent.todos.len(), 2);
+    assert_eq!(agent.todos[0].status, "in_progress");
+    assert_eq!(agent.todos[1].status, "pending");
+    let done = agent.todo_write(&json!({"todos": [
+        {"content": "first", "status": "completed"},
+        {"content": "second", "status": "completed"},
+    ]}));
+    assert!(!done.is_error, "{}", done.text);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn the_model_hears_the_session_goal_until_it_ends() {
     let mut agent = idle_agent("goal", Controls::default(), Rc::new(|_| {}));
     agent.set_goal("ship v2").unwrap();
