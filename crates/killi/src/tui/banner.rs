@@ -112,19 +112,27 @@ fn flow(frame: usize, across: f32, shift: f32, fade: f32) -> String {
 }
 
 /// The icon's frames, a tenth of a second each, four columns wide so the island keeps its
-/// width. Like a moon through its phases, the one icon changes shape every frame: a crystal
-/// grows from a seed (braille dots filling out from the middle), freezes into the cube, which
-/// glints, melts to a drop, and spreads into a ripple that shrinks back to the seed.
-const THAW: [&str; 15] = [
-    " ⠐⠂ ", " ⠰⠆ ", " ⠸⠇ ", " ⢸⡇ ", " ⢾⡷ ", " ⢿⡿ ", " ⣿⣿ ", // the crystal grows
-    " 🧊 ", "✦🧊 ", " 🧊✧", " 🧊 ", // frozen, glinting
-    " 💧 ", "˙💧˙", // melting to a drop, falling
-    " ⠤⠤ ", " ⠒⠒ ", // the ripple, closing on the seed
+/// width. Like Kimi's moon through its phases, one wide emoji changes every frame and the
+/// loop closes on itself: water drips to a drop, the drop freezes through a blue crystal into
+/// ice (snowflakes drifting past), the ice glints, then thaws back to a drop, a splash and the
+/// sea.
+const THAW: [&str; 11] = [
+    " 🌊 ",
+    " 💧 ",
+    "·🔹·",
+    "❅💠❆",
+    "❆🧊❅",
+    "✦🧊✧",
+    "✧🧊✦",
+    "❅🧊❆",
+    "·🧊·",
+    "˙💧˙",
+    " 💦 ",
 ];
 /// Frames (a tenth of a second each) for the working icon's full bright-to-bright cycle.
 const WAX_CYCLE: f32 = 24.0;
 
-/// The default skin's icon: an ice crystal that grows, freezes into a cube, melts and ripples away. `frame`
+/// The default skin's icon: an ice cube's life: water freezes to ice, glints and thaws, a step a frame. `frame`
 /// is tenths of a second; every frame is four columns wide.
 pub fn ice_cube(frame: usize) -> String {
     format!(
@@ -366,8 +374,8 @@ mod tests {
             island.matches(&ground).count() > 1,
             "the ground is reapplied inside: {island:?}"
         );
-        assert_eq!(unstyled(&working_island(48, "checking")), "  ⢸⡇  checking ");
-        assert_eq!(unstyled(&steady_island(0, "checking")), "  ⠐⠂  checking ");
+        assert_eq!(unstyled(&working_island(48, "checking")), " ❆🧊❅ checking ");
+        assert_eq!(unstyled(&steady_island(0, "checking")), "  🌊  checking ");
     }
 
     #[test]
@@ -389,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn the_crystal_grows_freezes_melts_and_ripples_back_to_its_seed() {
+    fn water_freezes_to_ice_glints_and_thaws_a_step_at_a_time() {
         for (frame, shown) in THAW.iter().enumerate() {
             assert_eq!(width(shown), 4, "frame {frame}: {shown:?}");
             assert_eq!(unstyled(&ice_cube(frame)), *shown);
@@ -405,7 +413,7 @@ mod tests {
             "the cycle repeats"
         );
         let story = THAW.concat();
-        for part in ['⠐', '⣿', '🧊', '✦', '✧', '💧', '⠤', '⠒'] {
+        for part in ["🌊", "💧", "🔹", "💠", "🧊", "💦", "❅", "❆", "✦", "✧"] {
             assert!(story.contains(part), "the story lacks {part}");
         }
     }
