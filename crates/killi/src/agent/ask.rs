@@ -46,6 +46,12 @@ impl Agent {
                 bad.status
             ));
         }
+        let in_progress = todos.iter().filter(|t| t.status == "in_progress").count();
+        if in_progress > 1 {
+            return tools::Output::error(format!(
+                "Only one item can be in_progress, got {in_progress}. Mark the others pending or completed and call todo_write again."
+            ));
+        }
         self.todos = todos.clone();
         let open = todos.iter().filter(|t| t.status != "completed").count();
         (self.sink)(Event::Todos(todos));

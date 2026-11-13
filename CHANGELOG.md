@@ -9,6 +9,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
   rises and falls around it, and a glint skims the surface as the tide turns, once on each
   side. The snowflake is gone; `killi update`'s progress line draws the same cube.
 
+## 0.6.83 — 2026-11-13
+
+- The task list now stays current for every agent, not just the main interactive one. A
+  subagent, a `/pair` role or a task from another session that finished its work with
+  items still open or in progress was never reminded, so the screen kept showing the
+  old list as still running. The stale-list and end-of-turn reminders now cover them
+  too, and `todo_write` refuses a list with more than one `in_progress` item (the
+  tool's own rule), leaving the previous list in place.
+
 ## 0.6.82 — 2026-11-13
 
 - Reading or searching the same target five times in one turn, differing only in offset,
