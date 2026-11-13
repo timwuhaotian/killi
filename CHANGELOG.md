@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.84 — 2026-11-13
+
 - The working row's spinner is an ice cube in a swelling sea now, in every theme: the water
   rises and falls around it, and a glint skims the surface as the tide turns, once on each
   side. The snowflake is gone; `killi update`'s progress line draws the same cube.
