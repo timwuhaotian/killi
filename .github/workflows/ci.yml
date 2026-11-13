@@ -44,13 +44,20 @@ jobs:
       - run: cargo test --workspace --locked
 
   audit:
+    # cargo-audit runs here, not through the rustsec action: the action writes a check
+    # run, which the read-only token cannot create, so the job died on a permission
+    # error with the advisory result in the log. This way the job fails only on an
+    # advisory, and no token is needed.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit --locked
+      # unsound advisories are memory-safety bugs in a dependency; they stay a
+      # warning by default, so ask for them to fail the job.
+      - run: cargo audit --deny unsound
 
   msrv:
     runs-on: macos-15
