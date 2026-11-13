@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.85 — 2026-11-13
+
+- The working row's ice cube plays a fixed set of frames now, the way Kimi's spinner does,
+  instead of a swelling sea: frost forms around the cube a braille dot at a time, holds,
+  thaws through a glint and clears. `killi update`'s progress line shows the same frames.
+
 ## 0.6.84 — 2026-11-13
 
 - The working row's spinner is an ice cube in a swelling sea now, in every theme: the water

@@ -111,37 +111,38 @@ fn flow(frame: usize, across: f32, shift: f32, fade: f32) -> String {
     color(r * fade, g * fade, b * fade, truecolor())
 }
 
-/// The sea's glyphs around the cube, from a thin line of water to nearly filling the cell.
-const TIDE: [char; 5] = ['▁', '▂', '▃', '▄', '▅'];
-/// The tide's level frame by frame through one swell — in to high water and back out, each
-/// level held two frames so the sea breathes rather than flickers.
-const SWELL: [usize; 20] = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 3, 3, 2, 2, 1, 1, 0, 0];
-/// The glint that skims the water: the swell frame it starts on and the side it sits on, left
-/// as the tide comes in and right as it goes out, fading through [`GLINT`] one frame a glyph.
-const GLINTS: [(usize, bool); 2] = [(4, true), (14, false)];
-/// The glint's glyphs, bright to spent.
-const GLINT: [char; 3] = ['✦', '✧', '·'];
+/// The icon's frames, a tenth of a second each, four columns wide so the island keeps its
+/// width: frost forms on the water either side of the cube a braille dot at a time (the right
+/// side a beat behind the left), holds, thaws through a glint and clears, and the cube rests.
+const FROST: [&str; 16] = [
+    " 🧊 ",
+    "⠁🧊 ",
+    "⠃🧊⠈",
+    "⠇🧊⠘",
+    "⡇🧊⠸",
+    "⣇🧊⢸",
+    "⣧🧊⣸",
+    "⣷🧊⣼",
+    "⣷🧊⣾",
+    "⣷🧊⣾",
+    "✦🧊✦",
+    "✧🧊✧",
+    "·🧊·",
+    " 🧊 ",
+    " 🧊 ",
+    " 🧊 ",
+];
 /// Frames (a tenth of a second each) for the working icon's full bright-to-bright cycle.
 const WAX_CYCLE: f32 = 24.0;
 
-/// The default skin's icon: an ice cube in a sea whose level swells and falls around it, with
-/// a glint skimming the water as the tide turns — across the left water as it comes in and the
-/// right as it goes out. `frame` is tenths of a second; the cube is two columns and the water
-/// one each side, so the island keeps its width while the icon moves.
+/// The default skin's icon: an ice cube with frost growing around it and thawing away. `frame`
+/// is tenths of a second; every frame is four columns wide.
 pub fn ice_cube(frame: usize) -> String {
-    let step = frame % SWELL.len();
-    let level = TIDE[SWELL[step]];
-    let glint = GLINTS.iter().find_map(|(start, left)| {
-        let shade = step.checked_sub(*start).filter(|at| *at < GLINT.len())?;
-        Some((*left, GLINT[shade]))
-    });
-    let side = |c: char, lit: f32| format!("{BOLD}{}{c}{RESET}", ink(frame, lit));
-    let (left, right) = match glint {
-        Some((true, light)) => (side(light, 1.0), side(level, 0.8)),
-        Some((false, light)) => (side(level, 0.8), side(light, 1.0)),
-        None => (side(level, 0.8), side(level, 0.8)),
-    };
-    format!("{left}🧊{right}")
+    format!(
+        "{BOLD}{}{}{RESET}",
+        ink(frame, 0.9),
+        FROST[frame % FROST.len()]
+    )
 }
 
 /// The logo's ink `frame` tenths of a second in, `lit` of its brightness: its hue drifts across
@@ -376,8 +377,8 @@ mod tests {
             island.matches(&ground).count() > 1,
             "the ground is reapplied inside: {island:?}"
         );
-        assert_eq!(unstyled(&working_island(40, "checking")), " ▁🧊▁ checking ");
-        assert_eq!(unstyled(&steady_island(0, "checking")), " ▁🧊▁ checking ");
+        assert_eq!(unstyled(&working_island(48, "checking")), "  🧊  checking ");
+        assert_eq!(unstyled(&steady_island(0, "checking")), "  🧊  checking ");
     }
 
     #[test]
@@ -399,39 +400,22 @@ mod tests {
     }
 
     #[test]
-    fn the_cube_floats_on_a_swell_and_glints_on_both_sides() {
-        for frame in 0..200 {
-            let shown = unstyled(&ice_cube(frame));
-            assert_eq!(width(&shown), 4, "frame {frame}");
+    fn frost_forms_around_the_cube_and_thaws_away() {
+        for (frame, shown) in FROST.iter().enumerate() {
+            assert_eq!(width(shown), 4, "frame {frame}: {shown:?}");
             assert!(shown.contains('🧊'), "the cube is always there: {shown:?}");
-            assert!(ice_cube(frame).contains(BOLD), "frame {frame}: the sea is bold");
+            assert_eq!(unstyled(&ice_cube(frame)), *shown);
         }
-        // Each side of the water shows every level of the tide over one swell.
-        let levels: std::collections::HashSet<char> = (0..SWELL.len()).map(|f| sides(f).0).collect();
-        for c in TIDE {
-            assert!(levels.contains(&c), "missing {c}: {levels:?}");
+        assert_eq!(
+            unstyled(&ice_cube(3)),
+            unstyled(&ice_cube(3 + FROST.len())),
+            "the cycle repeats"
+        );
+        assert_eq!(FROST.first(), FROST.last(), "it ends where it began");
+        let story = FROST.concat();
+        for part in ['⠁', '⣷', '✦', '✧'] {
+            assert!(story.contains(part), "the story lacks {part}");
         }
-        // With no glint the sea is level, and it stands still for two frames at a time.
-        for frame in [0, 8, 12, 18] {
-            let (left, right) = sides(frame);
-            assert_eq!(left, right, "frame {frame}: the sea is level");
-            assert_eq!(left, sides(frame + 1).0, "frame {frame}: held two frames");
-        }
-        // The glint crosses the left water as the tide comes in and the right as it goes out.
-        for (start, left) in GLINTS {
-            let seen: Vec<char> = (start..start + GLINT.len())
-                .map(|f| if left { sides(f).0 } else { sides(f).1 })
-                .collect();
-            assert_eq!(seen, GLINT, "the glint at frame {start}");
-            let other = if left { sides(start).1 } else { sides(start).0 };
-            assert!(TIDE.contains(&other), "the far water stays water: {other:?}");
-        }
-    }
-
-    /// The glyphs of the sea either side of the cube `frame` tenths of a second in.
-    fn sides(frame: usize) -> (char, char) {
-        let shown: Vec<char> = unstyled(&ice_cube(frame)).chars().collect();
-        (shown[0], shown[2])
     }
 
     #[test]
