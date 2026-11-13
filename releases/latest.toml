@@ -1,3 +1,3 @@
-version = "0.6.80"
-sha256-arm64 = "113bfc09b5b73c117bf1bfa4aafa8c014fd5afabb6c0bcb9bc15b579ab5ccf8d"
-sha256 = "113bfc09b5b73c117bf1bfa4aafa8c014fd5afabb6c0bcb9bc15b579ab5ccf8d"
+version = "0.6.81"
+sha256-arm64 = "ed8d7cbd892b22129a149997f47468b73e0bfac68053315652a62ac58a39ff7c"
+sha256 = "ed8d7cbd892b22129a149997f47468b73e0bfac68053315652a62ac58a39ff7c"
