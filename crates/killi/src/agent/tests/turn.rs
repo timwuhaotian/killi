@@ -114,6 +114,36 @@ async fn a_reminder_raised_mid_batch_follows_the_last_result() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn any_user_message_pushed_mid_batch_waits_for_the_last_result() {
+    let mut agent = idle_agent("batch-defer", Controls::default(), Rc::new(|_| {}));
+    let calls: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|id| {
+            (
+                id.to_string(),
+                ToolCall {
+                    id: id.into(),
+                    name: "todo_write".into(),
+                    arguments: r#"{"todos":[]}"#.into(),
+                },
+            )
+        })
+        .collect();
+    let ids: Vec<_> = calls.iter().map(|(id, _)| json!({"id": id})).collect();
+    agent
+        .push(json!({"role": "assistant", "tool_calls": ids}))
+        .unwrap();
+    let note = "<system-reminder>From any producer, not just a tool result.</system-reminder>";
+    agent.push(json!({"role": "user", "content": note})).unwrap();
+    assert_eq!(agent.messages.len(), 1, "the message waits, not recorded yet");
+    agent.execute_calls(calls, false).await.unwrap();
+    let roles: Vec<_> = agent.messages.iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["assistant", "tool", "tool", "user"]);
+    assert_eq!(agent.messages[3]["content"], note);
+    assert!(unanswered(&agent.messages).is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn the_first_tool_call_waits_for_an_in_flight_snapshot() {
     let events = Rc::new(RefCell::new(Vec::new()));
     let seen = events.clone();

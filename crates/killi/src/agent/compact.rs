@@ -311,8 +311,25 @@ impl Agent {
     }
 
     /// Appends a message. The log keeps `meta` beside a tool result, outside the message itself:
-    /// how it ended and how long it took, which a resumed session shows again.
+    /// how it ended and how long it took, which a resumed session shows again. A user message
+    /// pushed while the last reply's calls still await results waits until the last result is
+    /// recorded: between a call and its result it reads as a missing result to providers.
     pub(super) fn push_meta(&mut self, message: Value, meta: Option<Value>) -> Result<()> {
+        if message["role"] == "user" && !unanswered(&self.messages).is_empty() {
+            self.deferred_messages.push((message, meta));
+            return Ok(());
+        }
+        let tool = message["role"] == "tool";
+        self.append_message(message, meta)?;
+        if tool && !self.deferred_messages.is_empty() && unanswered(&self.messages).is_empty() {
+            for (message, meta) in std::mem::take(&mut self.deferred_messages) {
+                self.append_message(message, meta)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn append_message(&mut self, message: Value, meta: Option<Value>) -> Result<()> {
         let mut entry = json!({"type": "message", "message": message});
         if let Some(meta) = meta {
             entry["tool"] = meta;

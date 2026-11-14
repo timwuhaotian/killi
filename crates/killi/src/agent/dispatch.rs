@@ -109,7 +109,6 @@ impl Agent {
             stop |= self.finish_call(id, call, output, took, None)?;
             i += 1;
         }
-        self.flush_call_notes()?;
         if !images.is_empty() {
             let mut parts = Vec::new();
             for (label, url) in images {
@@ -362,8 +361,7 @@ impl Agent {
 
     /// Reports and records a call's result. Returns true when the repeat breaker trips.
     /// `same_as` is the previous result's hash for a call the repeat breaker refused to run
-    /// again, so it counts as the same result instead of breaking the streak. Reminders the
-    /// result raises wait in `call_notes` until the batch's last result is recorded.
+    /// again, so it counts as the same result instead of breaking the streak.
     pub(super) fn finish_call(
         &mut self,
         id: &str,
@@ -426,10 +424,10 @@ impl Agent {
                 "and its result changed, so this is a repetition warning, not a stale-result loop."
                     .to_string()
             };
-            self.call_notes.push(format!(
+            self.push(json!({"role": "user", "content": format!(
                 "<system-reminder>You have made this exact {} call {count} times {same_part}</system-reminder>",
                 call.name
-            ));
+            )}))?;
         }
         // Near-duplicates: the same target or command, tuning arguments and output filters
         // aside. A successful write or edit may have changed what the target holds, so it
@@ -458,19 +456,10 @@ impl Agent {
                         call.name
                     )
                 };
-                self.call_notes.push(note);
+                self.push(json!({"role": "user", "content": note}))?;
             }
         }
         Ok(same && count >= REPEAT_STOP)
-    }
-
-    /// Appends the reminders the batch's results raised, now that every result is recorded:
-    /// between a call and its result they would read as a missing result to providers.
-    pub(super) fn flush_call_notes(&mut self) -> Result<()> {
-        for note in std::mem::take(&mut self.call_notes) {
-            self.push(json!({"role": "user", "content": note}))?;
-        }
-        Ok(())
     }
 
     /// An identical call that has already returned the same result twice is not run again:
