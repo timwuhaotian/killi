@@ -122,6 +122,10 @@ pub struct Agent {
     /// hash of the tool and its target; calls that differ only in tuning arguments or
     /// output filters share it.
     near_repeats: HashMap<u64, u32>,
+    /// Reminders raised by the running batch's tool results. They enter the history only
+    /// once every result is recorded: a user message between a call and its result reads
+    /// as a missing result to providers.
+    call_notes: Vec<String>,
     /// History length at the last usage report; later messages are the unbilled suffix.
     accounted_messages: usize,
     /// Estimated size of the history right after its last compaction, the growth from which

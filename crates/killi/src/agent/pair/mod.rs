@@ -276,6 +276,7 @@ impl Agent {
             ids: self.ids.clone(),
             repeats: HashMap::new(),
             near_repeats: HashMap::new(),
+            call_notes: Vec::new(),
             accounted_messages: 0,
             compact_floor: 0,
             swarm_used: 0,

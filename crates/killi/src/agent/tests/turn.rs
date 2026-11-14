@@ -54,6 +54,66 @@ async fn read_batches_start_together_and_write_results_in_call_order() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_reminder_raised_mid_batch_follows_the_last_result() {
+    let mut agent = idle_agent("batch-reminder", Controls::default(), Rc::new(|_| {}));
+    std::fs::write(agent.ctx.cwd.join("a.txt"), "alpha").unwrap();
+    let grep = |n: u32, id: &str| ToolCall {
+        id: id.into(),
+        name: "grep".into(),
+        arguments: json!({"pattern": format!("p{n}"), "path": "."}).to_string(),
+    };
+    for n in 0..NEAR_REPEAT_WARN_AT - 1 {
+        agent
+            .finish_call(
+                &format!("p{n}"),
+                &grep(n, &format!("p{n}")),
+                tools::Output::ok(format!("result {n}")),
+                Duration::ZERO,
+                None,
+            )
+            .unwrap();
+    }
+    let at = agent.messages.len();
+    let calls = vec![
+        (
+            "g".to_string(),
+            grep(NEAR_REPEAT_WARN_AT, "g"),
+        ),
+        (
+            "b".to_string(),
+            ToolCall {
+                id: "b".into(),
+                name: "bash".into(),
+                arguments: r#"{"command":"ls"}"#.into(),
+            },
+        ),
+    ];
+    let ids: Vec<_> = calls.iter().map(|(id, _)| json!({"id": id})).collect();
+    agent
+        .push(json!({"role": "assistant", "tool_calls": ids}))
+        .unwrap();
+    agent.execute_calls(calls, false).await.unwrap();
+    let batch = &agent.messages[at..];
+    let roles: Vec<_> = batch.iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(
+        roles,
+        ["assistant", "tool", "tool", "user"],
+        "the reminder waits for every result: a user message between two results reads as a missing result to providers"
+    );
+    assert_eq!(batch[1]["tool_call_id"], "g");
+    assert_eq!(batch[2]["tool_call_id"], "b");
+    assert!(
+        batch[3]["content"]
+            .as_str()
+            .unwrap()
+            .contains("similar grep call"),
+        "{}",
+        batch[3]
+    );
+    assert!(unanswered(&agent.messages).is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn the_first_tool_call_waits_for_an_in_flight_snapshot() {
     let events = Rc::new(RefCell::new(Vec::new()));
     let seen = events.clone();

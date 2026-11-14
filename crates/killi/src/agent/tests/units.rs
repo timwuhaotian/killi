@@ -253,6 +253,7 @@ fn changed_results_warn_but_only_unchanged_results_hit_the_repeat_stop() {
                 .unwrap()
         );
     }
+    changing.flush_call_notes().unwrap();
     let warnings = changing
         .messages
         .iter()
@@ -610,6 +611,7 @@ fn repeat_warnings_are_user_messages_not_tool_data() {
             )
             .unwrap();
     }
+    agent.flush_call_notes().unwrap();
     let warning = agent.messages.last().unwrap();
     assert_eq!(warning["role"], "user");
     let text = warning["content"].as_str().unwrap();
@@ -685,6 +687,7 @@ fn near_duplicate_reads_warn_once_and_never_block() {
             )
             .unwrap();
     }
+    agent.flush_call_notes().unwrap();
     let warnings = agent
         .messages
         .iter()
@@ -737,6 +740,7 @@ fn a_successful_edit_clears_the_near_count() {
             )
             .unwrap();
     }
+    agent.flush_call_notes().unwrap();
     let warnings = agent
         .messages
         .iter()
@@ -756,6 +760,7 @@ fn a_successful_edit_clears_the_near_count() {
             None,
         )
         .unwrap();
+    agent.flush_call_notes().unwrap();
     let warnings = agent
         .messages
         .iter()
@@ -861,6 +866,7 @@ fn near_duplicate_bash_warns_at_three_once_and_never_blocks() {
             .unwrap();
         assert!(!stop, "a near-duplicate never stops the turn");
     }
+    agent.flush_call_notes().unwrap();
     let warnings: Vec<&Value> = agent
         .messages
         .iter()
@@ -875,9 +881,9 @@ fn near_duplicate_bash_warns_at_three_once_and_never_blocks() {
     assert!(text.contains("3 times"), "{text}");
     assert!(text.contains("file"), "{text}");
     assert_eq!(
-        agent.messages[3]["content"].as_str().unwrap(),
+        agent.messages[4]["content"].as_str().unwrap(),
         text,
-        "the warning follows the third run's result"
+        "the warning follows the batch's results, never sits between two of them"
     );
     assert!(
         agent
@@ -925,6 +931,7 @@ fn a_successful_edit_clears_the_bash_near_count() {
             )
             .unwrap();
     }
+    agent.flush_call_notes().unwrap();
     let warnings = agent
         .messages
         .iter()
@@ -938,6 +945,7 @@ fn a_successful_edit_clears_the_bash_near_count() {
     agent
         .finish_call("d9", &bash(9), tools::Output::ok("after 9"), Duration::ZERO, None)
         .unwrap();
+    agent.flush_call_notes().unwrap();
     let warnings = agent
         .messages
         .iter()

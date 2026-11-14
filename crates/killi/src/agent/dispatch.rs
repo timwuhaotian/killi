@@ -17,7 +17,8 @@ impl Agent {
     /// Runs a reply's tool calls in order; consecutive read-only file/search calls and `agent`
     /// calls run in parallel, and an `agent_swarm` call runs its subagents in parallel. Tool hooks
     /// keep every call serial. A message typed meanwhile waits for the calls running now, not
-    /// for the ones after them: those are answered as not run.
+    /// for the ones after them: those are answered as not run. Reminders the results raise
+    /// follow the batch's last result, never sit between two of them.
     /// Returns true when the repeat breaker trips.
     pub(super) async fn execute_calls(
         &mut self,
@@ -108,6 +109,7 @@ impl Agent {
             stop |= self.finish_call(id, call, output, took, None)?;
             i += 1;
         }
+        self.flush_call_notes()?;
         if !images.is_empty() {
             let mut parts = Vec::new();
             for (label, url) in images {
@@ -360,7 +362,8 @@ impl Agent {
 
     /// Reports and records a call's result. Returns true when the repeat breaker trips.
     /// `same_as` is the previous result's hash for a call the repeat breaker refused to run
-    /// again, so it counts as the same result instead of breaking the streak.
+    /// again, so it counts as the same result instead of breaking the streak. Reminders the
+    /// result raises wait in `call_notes` until the batch's last result is recorded.
     pub(super) fn finish_call(
         &mut self,
         id: &str,
@@ -423,10 +426,10 @@ impl Agent {
                 "and its result changed, so this is a repetition warning, not a stale-result loop."
                     .to_string()
             };
-            self.push(json!({"role": "user", "content": format!(
+            self.call_notes.push(format!(
                 "<system-reminder>You have made this exact {} call {count} times {same_part}</system-reminder>",
                 call.name
-            )}))?;
+            ));
         }
         // Near-duplicates: the same target or command, tuning arguments and output filters
         // aside. A successful write or edit may have changed what the target holds, so it
@@ -455,10 +458,19 @@ impl Agent {
                         call.name
                     )
                 };
-                self.push(json!({"role": "user", "content": note}))?;
+                self.call_notes.push(note);
             }
         }
         Ok(same && count >= REPEAT_STOP)
+    }
+
+    /// Appends the reminders the batch's results raised, now that every result is recorded:
+    /// between a call and its result they would read as a missing result to providers.
+    pub(super) fn flush_call_notes(&mut self) -> Result<()> {
+        for note in std::mem::take(&mut self.call_notes) {
+            self.push(json!({"role": "user", "content": note}))?;
+        }
+        Ok(())
     }
 
     /// An identical call that has already returned the same result twice is not run again:
