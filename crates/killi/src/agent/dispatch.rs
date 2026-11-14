@@ -243,9 +243,9 @@ impl Agent {
             "later" => self.later(&args),
             "ask_user_question" => self.ask(&args).await,
             "exit_plan_mode" => self.exit_plan(&args).await,
-            "agent" | "agent_swarm" => {
-                tools::Output::error("Subagents can't start other subagents.")
-            }
+            "agent" | "agent_swarm" => tools::Output::error(
+                "Subagents can't start other subagents. Do the assigned work yourself and report any blockers to your parent.",
+            ),
             _ => {
                 // Only the top-level agent hears the user; a subagent waits out its own commands.
                 let steer = (self.depth == 0).then(|| self.controls.steer.clone());

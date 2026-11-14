@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.90 — 2026-11-15
+
+- Tell subagents they cannot delegate to other subagents, including after context compaction,
+  so they can work directly instead of repeatedly hitting the nested-delegation guard.
+
 ## 0.6.89 — 2026-11-15
 
 - Retry transient connection and request timeout errors instead of treating them as invalid

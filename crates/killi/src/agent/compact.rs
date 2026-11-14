@@ -174,6 +174,9 @@ impl Agent {
             "messages": *self.messages,
         }))?;
         self.after_compaction(limit);
+        if self.depth > 0 && self.pair.is_none() {
+            self.push(json!({"role": "user", "content": super::subagent::CHILD_REMINDER}))?;
+        }
         (self.sink)(Event::Notice("Compacted.".into()));
         Ok(())
     }
