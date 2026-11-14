@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.89 — 2026-11-15
+
+- Retry transient connection and request timeout errors instead of treating them as invalid
+  requests. Connection failures now use the existing three-attempt limit; invalid request
+  construction and certificate errors still fail immediately.
+
 ## 0.6.88 — 2026-11-14
 
 - A user message pushed while a reply's tool calls still await results now waits until
