@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.88 — 2026-11-14
+
+- A user message pushed while a reply's tool calls still await results now waits until
+  the last result is recorded, whatever raised it — not just the repeat warnings fixed
+  in 0.6.87. Providers read a message between a call and its result as a missing result;
+  the history's write path now holds that line for every producer.
+
 ## 0.6.87 — 2026-11-14
 
 - A repeat warning raised while a reply's tool calls run now waits until every result is
