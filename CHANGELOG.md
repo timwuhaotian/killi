@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.87 — 2026-11-14
+
+- A repeat warning raised while a reply's tool calls run now waits until every result is
+  recorded instead of landing between two of them. Command Code read the user message
+  between a call and its result as a missing result, retried the same history ten times
+  and ended the turn; the reminders now follow the batch's last result, so the history
+  stays valid for every provider.
+
 ## 0.6.86 — 2026-11-14
 
 - Running the same bash command three times in one turn, differing only in output filters
