@@ -229,6 +229,23 @@ fn options_given_as_labelled_objects_keep_their_description() {
 }
 
 #[test]
+fn options_under_an_option_key_a_lone_description_or_an_extra_layer_are_asked() {
+    let (_, options) = question_args(
+        &json!({"question": "Which?", "options": [{"option": "All of it", "description": "17G"}]}),
+    )
+    .unwrap();
+    assert_eq!(options, ["All of it — 17G"]);
+    let (_, options) = question_args(
+        &json!({"question": "Which?", "options": [{"description": "Fix the top 20"}, {"description": "Not yet"}]}),
+    )
+    .unwrap();
+    assert_eq!(options, ["Fix the top 20", "Not yet"]);
+    let (_, options) =
+        question_args(&json!({"question": "Which?", "options": [["a", "b"]]})).unwrap();
+    assert_eq!(options, ["a", "b"]);
+}
+
+#[test]
 fn a_poll_repeats_only_when_its_result_does() {
     let wait = ToolCall {
         id: "a".into(),

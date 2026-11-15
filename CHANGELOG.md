@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.92 — 2026-11-15
+
+- `ask_user_question` accepts the option shapes models send — an `option` key instead of
+  `label`, an object holding only its `description`, one extra array layer around the
+  choices — instead of refusing the question and spending a round trip on the correction.
+
 ## 0.6.91 — 2026-11-15
 
 - Keep completed parallel subagent reports across interruptions and mark truncated reports as failures.

@@ -138,11 +138,19 @@ pub(super) fn question_args(args: &Value) -> Result<(String, Vec<String>), Strin
     if text.is_empty() {
         return Err(format!("`question` is missing or empty. {SHAPE}"));
     }
-    let items = args["options"]
+    let raw = args["options"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default();
-    let options: Vec<String> = items.iter().filter_map(option_text).collect();
+    // An extra array layer around the choices ([["a", "b"]]) loses nothing flattened.
+    let items: Vec<&Value> = raw
+        .iter()
+        .flat_map(|item| match item.as_array() {
+            Some(inner) => inner.iter().collect::<Vec<_>>(),
+            None => vec![item],
+        })
+        .collect();
+    let options: Vec<String> = items.iter().filter_map(|item| option_text(item)).collect();
     if options.len() < items.len() {
         return Err(format!(
             "Every option must be a string, or an object with a `label`. {SHAPE}"
@@ -152,23 +160,27 @@ pub(super) fn question_args(args: &Value) -> Result<(String, Vec<String>), Strin
 }
 
 /// An option as the user sees it: a string, or the `label` of an object with its `description`
-/// after it, which is the shape other agents' question tools take.
+/// after it, which is the shape other agents' question tools take. `option` stands in for
+/// `label` (the key some models reach for), and an object holding only a `description` shows
+/// that, as it is the option's whole text; an object with its own `question` is a nested
+/// question, not a choice, and stays an error so nothing is silently dropped.
 fn option_text(option: &Value) -> Option<String> {
     if let Some(text) = option.as_str() {
         return Some(text.to_string());
     }
-    let label = option["label"]
-        .as_str()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())?;
-    Some(
-        match option["description"]
+    let field = |key: &str| {
+        option[key]
             .as_str()
             .map(str::trim)
-            .filter(|d| !d.is_empty())
-        {
+            .filter(|t| !t.is_empty())
+    };
+    let description = field("description");
+    match field("label").or_else(|| field("option")) {
+        Some(label) => Some(match description {
             Some(description) => format!("{label} — {description}"),
             None => label.to_string(),
-        },
-    )
+        }),
+        None if option.get("question").is_none() => description.map(str::to_string),
+        None => None,
+    }
 }
