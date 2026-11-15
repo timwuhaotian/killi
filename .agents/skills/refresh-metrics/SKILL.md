@@ -24,7 +24,7 @@ The README quotes numbers from all of them, so it is the last thing to edit.
   because `--format json` carries no usage.
 - Measure the binary people install on your host: `releases/killi-arm64` (macOS arm64) or
   `releases/killi-linux-x64` / `releases/killi-linux-arm64` (Linux), built by
-  `scripts/release.sh` (or `cargo build --release`). `~/.local/bin/killi` can be a release
+  `cargo build --release`. `~/.local/bin/killi` can be a release
   behind. Pass it as `KILLI_BIN="$PWD/releases/killi-arm64"` (the `killi-linux-*` file on Linux).
 - Look at `uptime`. Other agents and test suites on the machine raise the load; startup time
   jitters with it (0.2.16 measured 38, 13 and 17 ms in three runs, and 8 ms when timed directly).

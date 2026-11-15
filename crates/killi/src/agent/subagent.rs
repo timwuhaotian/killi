@@ -308,7 +308,7 @@ impl Agent {
             }
         };
         (agent.sink)(Event::Started);
-        let (output, limited) = match agent.run(&subagent_prompt(&prompt), &[]).await {
+        let (output, limited) = match agent.run(&child_prompt(&prompt), &[]).await {
             Ok((text, Stop::MaxTokens)) if !text.trim().is_empty() => (
                 tools::Output::error(format!(
                     "The subagent's report was truncated (MaxTokens). Partial report:\n{text}"
@@ -448,6 +448,12 @@ impl Agent {
     }
 }
 
+pub(super) const CHILD_REMINDER: &str = "&lt;system-reminder>You are a subagent and cannot start other subagents. Do not call agent or agent_swarm, even if earlier instructions ask you to delegate. Do the assigned work yourself and report any blockers to your parent.&lt;/system-reminder>";
+
+fn child_prompt(prompt: &str) -> String {
+    format!("{}\n\n{CHILD_REMINDER}", subagent_prompt(prompt))
+}
+
 /// The task prompt with its reporting convention: the parent tells a real result from a
 /// stuck subagent by the final line, without parsing free text in code. A task another session
 /// sent reports the same way.
@@ -465,4 +471,19 @@ pub(super) fn reserve_swarm(used: usize, requested: usize) -> Result<(), String>
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn child_task_overrides_inherited_delegation_instructions() {
+        let prompt = child_prompt("Do the task.");
+        assert!(prompt.starts_with("Do the task."));
+        assert!(prompt.contains("Status: ready"));
+        assert!(prompt.ends_with(CHILD_REMINDER));
+        assert!(CHILD_REMINDER.contains("agent_swarm"));
+        assert!(!subagent_prompt("Do the task.").contains(CHILD_REMINDER));
+    }
 }

@@ -173,6 +173,29 @@ async fn retries_are_recorded_in_the_session_log() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn compaction_restores_a_childs_delegation_reminder() {
+    let url = answering_stub_times("summary", 1).await;
+    let mut parent = idle_agent(
+        "child-compact-reminder",
+        Controls::default(),
+        Rc::new(|_| {}),
+    );
+    parent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    parent.client = Rc::new(test_client_at("primary", &url));
+    let mut child = parent.subagent("child", None, true).unwrap();
+    child
+        .push(json!({"role": "user", "content": "task"}))
+        .unwrap();
+    child.compact(None).await.unwrap();
+    assert_eq!(
+        child.messages.last().unwrap()["content"],
+        super::super::subagent::CHILD_REMINDER
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_rate_limited_swarm_member_finishes_its_work_on_the_backup() {
     let primary = rate_limited_stub(30, "slow down").await;
     let backup = answering_stub_times("from backup", 4).await;

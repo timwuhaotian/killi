@@ -510,6 +510,31 @@ async fn the_model_hears_the_session_goal_until_it_ends() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_subagent_cannot_delegate_and_is_told_how_to_continue() {
+    let mut parent = idle_agent("child-delegation", Controls::default(), Rc::new(|_| {}));
+    parent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    for fork in [false, true] {
+        let mut child = parent.subagent("child", None, fork).unwrap();
+        for name in ["agent", "agent_swarm"] {
+            let call = ToolCall {
+                id: name.into(),
+                name: name.into(),
+                arguments: "{}".into(),
+            };
+            let output = child.execute(name, &call, false).await;
+            assert!(output.is_error);
+            assert!(
+                output.text.contains("Do the assigned work yourself"),
+                "{}",
+                output.text
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_subagent_leaves_finished_tasks_for_its_parent_to_report() {
     let mut agent = idle_agent("child-tasks", Controls::default(), Rc::new(|_| {}));
     agent

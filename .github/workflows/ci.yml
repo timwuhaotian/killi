@@ -42,6 +42,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - run: python3 -B -m unittest -v scripts.test_assemble_release
 
   audit:
     # cargo-audit runs here, not through the rustsec action: the action writes a check

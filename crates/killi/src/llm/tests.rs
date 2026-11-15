@@ -384,11 +384,7 @@ async fn a_server_that_closes_without_responding_is_not_hammered() {
         .unwrap_err();
     let provider = error.downcast_ref::<ProviderError>().unwrap();
     assert_eq!(provider.kind, ErrorKind::Transport);
-    assert!(
-        provider.attempts <= TRANSPORT_ATTEMPTS,
-        "{} attempts",
-        provider.attempts
-    );
+    assert_eq!(provider.attempts, TRANSPORT_ATTEMPTS);
     assert!(
         provider.message.starts_with("request failed: "),
         "{}",
@@ -401,6 +397,28 @@ async fn a_server_that_closes_without_responding_is_not_hammered() {
         provider.message
     );
     assert_eq!(arrivals.lock().unwrap().len() as u32, provider.attempts);
+}
+
+#[tokio::test]
+async fn a_connection_failure_can_recover_on_retry() {
+    let (url, arrivals) = serve(vec![String::new(), sse_ok()]).await;
+    let client = Client::new(test_model(&url)).unwrap();
+    let mut retries = 0;
+    client
+        .complete(
+            &[serde_json::json!({"role": "user", "content": "hi"})],
+            &[],
+            "k",
+            &mut |delta| {
+                if matches!(delta, Delta::Retry { .. }) {
+                    retries += 1;
+                }
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(retries, 1);
+    assert_eq!(arrivals.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -420,11 +438,7 @@ async fn a_refused_connection_names_its_cause_and_stops_early() {
         .unwrap_err();
     let provider = error.downcast_ref::<ProviderError>().unwrap();
     assert_eq!(provider.kind, ErrorKind::Transport);
-    assert!(
-        provider.attempts <= TRANSPORT_ATTEMPTS,
-        "{} attempts",
-        provider.attempts
-    );
+    assert_eq!(provider.attempts, TRANSPORT_ATTEMPTS);
     assert!(
         provider.message.to_ascii_lowercase().contains("refused"),
         "{}",
@@ -449,6 +463,50 @@ async fn an_unusable_url_fails_at_once() {
         (provider.kind, provider.attempts),
         (ErrorKind::Transport, 1)
     );
+}
+
+#[tokio::test]
+async fn a_timeout_is_retryable_without_the_transport_attempt_cap() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (_socket, _) = listener.accept().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    });
+    let error = reqwest::Client::builder()
+        .timeout(Duration::from_millis(100))
+        .build()
+        .unwrap()
+        .get(url)
+        .send()
+        .await
+        .unwrap_err();
+    server.abort();
+    assert!(error.is_timeout());
+    let failure = transport_failure(error);
+    assert!(failure.retryable);
+    assert_eq!(failure.max_attempts, None);
+}
+
+#[tokio::test]
+async fn an_invalid_header_fails_without_a_retry_or_connection() {
+    let (url, arrivals) = serve(Vec::new()).await;
+    let mut model = test_model(&url);
+    model.headers.insert("invalid header".into(), "value".into());
+    let client = Client::new(model).unwrap();
+    let mut retries = 0;
+    let error = client
+        .complete(&[], &[], "k", &mut |delta| {
+            if matches!(delta, Delta::Retry { .. }) {
+                retries += 1;
+            }
+        })
+        .await
+        .unwrap_err();
+    let provider = error.downcast_ref::<ProviderError>().unwrap();
+    assert_eq!(provider.attempts, 1);
+    assert_eq!(retries, 0);
+    assert!(arrivals.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

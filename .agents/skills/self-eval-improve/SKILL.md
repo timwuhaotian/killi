@@ -142,8 +142,6 @@ is unverified — say so plainly if a live run wasn't possible.
 - Append a numbered decision to `docs/decisions.md`: what the logs showed (the counts), what
   changed and why there, what was measured and left alone, and what is deliberately not done.
   Add the `CHANGELOG.md` entry under `## Unreleased`. Don't commit unless asked.
-- Only when the user asks to release: follow `RELEASING.md` — bump `[workspace.package]
-  version`, `cargo update -p killi --offline`, move the entry under a `## x.y.z — date`
-  heading, commit, `scripts/release.sh`, commit `releases/`, push, then `killi update` from the
-  installed copy and report its version (GitHub's raw cache lags about five minutes). Stage
-  files by name; this folder accumulates strays (`out/`).
+- Only when the user asks to release: follow `RELEASING.md` to prepare the source commit,
+  build and verify the three-platform release bundle, and publish it. Stage files by name;
+  this folder accumulates strays (`out/`).

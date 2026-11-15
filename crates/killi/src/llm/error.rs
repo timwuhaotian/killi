@@ -86,9 +86,7 @@ pub(crate) fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
 /// get `TRANSPORT_ATTEMPTS`; timeouts stay as transient as ever.
 pub(super) fn transport_failure(error: reqwest::Error) -> Failure {
     let chain = error_chain(&error);
-    let fatal = error.is_builder()
-        || error.is_request()
-        || chain.to_ascii_lowercase().contains("certificate");
+    let fatal = error.is_builder() || chain.to_ascii_lowercase().contains("certificate");
     Failure {
         max_attempts: (!fatal && !error.is_timeout()).then_some(TRANSPORT_ATTEMPTS),
         ..Failure::of(

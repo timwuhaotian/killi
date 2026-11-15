@@ -1,0 +1,142 @@
+name: Release binaries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit --deny warnings --deny yanked
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            id: macos-arm64
+            binary: killi-arm64
+            architecture: Darwin-arm64
+          - runner: ubuntu-22.04
+            id: linux-x64
+            binary: killi-linux-x64
+            architecture: Linux-x86_64
+          - runner: ubuntu-22.04-arm
+            id: linux-arm64
+            binary: killi-linux-arm64
+            architecture: Linux-aarch64
+    runs-on: ${{ matrix.runner }}
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+      EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
+      BINARY: ${{ matrix.binary }}
+    steps:
+      - name: Verify dispatch and runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Dispatch must target main' >&2; exit 1; }
+          [[ "$(uname -s)-$(uname -m)" == "$EXPECTED_ARCHITECTURE" ]] || { echo 'Unexpected runner architecture' >&2; exit 1; }
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Verify source and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]]
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import runpy
+          import tomllib
+
+          with open('Cargo.toml', 'rb') as f:
+              version = tomllib.load(f)['workspace']['package']['version']
+          with open('releases/latest.toml', 'rb') as f:
+              published = tomllib.load(f)['version']
+          runpy.run_path('scripts/assemble-release.py')['validate_versions'](version, published)
+          if not any(line.startswith(f'## {version} — ') for line in pathlib.Path('CHANGELOG.md').read_text().splitlines()):
+              raise SystemExit(f'CHANGELOG.md has no heading for {version}')
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f'VERSION={version}\n')
+              f.write(f'RUSTFLAGS={os.environ.get("RUSTFLAGS", "")} --remap-path-prefix={os.environ["HOME"]}=~\n')
+          PY
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --release --locked -p killi
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir artifact
+          cp target/release/killi "artifact/$BINARY"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          binary = pathlib.Path('artifact') / os.environ['BINARY']
+          version = os.environ['VERSION']
+          if subprocess.check_output([str(binary.resolve()), '--version']) != f'killi {version}\n'.encode():
+              raise SystemExit('Unexpected binary version')
+          metadata = {
+              'version': version,
+              'source_sha': os.environ['SOURCE_SHA'],
+              'sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+          }
+          pathlib.Path('artifact/metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.id }}
+          path: artifact/
+          if-no-files-found: error
+
+  assemble:
+    needs: [audit, build]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B -m unittest -v scripts.test_assemble_release
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          chmod +x artifacts/macos-arm64/killi-arm64 artifacts/linux-x64/killi-linux-x64 artifacts/linux-arm64/killi-linux-arm64
+          PUBLISHED="$(python3 -c 'import tomllib; print(tomllib.load(open("releases/latest.toml", "rb"))["version"])')"
+          python3 scripts/assemble-release.py artifacts bundle "$VERSION" "$GITHUB_SHA" "$PUBLISHED"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: bundle/
+          if-no-files-found: error

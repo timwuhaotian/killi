@@ -1,34 +1,49 @@
 # Releasing killi
 
-Releases are built natively on each host (Apple silicon Mac, Linux x64/arm64); CI only
-checks. Users install from `releases/killi-arm64`, `releases/killi-linux-x64` or
-`releases/killi-linux-arm64` through `install.sh` or `killi update`, which read
+Users install from `releases/killi-arm64`, `releases/killi-linux-x64` or
+`releases/killi-linux-arm64` through `install.sh` or `killi update`. Both read
 `releases/latest.toml` for the version and the SHA-256 of each binary.
 
-1. **Start clean and green.** Everything to ship is committed on `main`.
-2. **Bump the version** in the root `Cargo.toml` (`[workspace.package] version`), then
-   `cargo update -p killi --offline` so `Cargo.lock` carries it; the release script builds
-   with `--locked` and refuses a stale lock file.
-3. **Changelog.** In `CHANGELOG.md`, put a `## x.y.z — YYYY-MM-DD` heading under
-   `## Unreleased`, so the release takes its entries and `Unreleased` starts empty.
-4. **Build:** `scripts/release.sh` on each host. It runs clippy and the tests, builds the
-   release binary for that host, and writes it to `releases/` with its SHA-256 in
-   `releases/latest.toml`.
-5. **Commit and push** everything at once: version, lock file, changelog and `releases/`.
-6. **Check the update** from an installed copy: `killi update` should report the new version.
-   GitHub serves raw files through a cache for about five minutes after a push, so until then
-   `killi update` may still see the previous version.
-7. **Clean up:** `cargo clean` to drop the local `target/` directory the release build left behind.
+## Prepare and build
+
+1. Start with a clean `main` and commit the changes to ship. Bump `[workspace.package] version`
+   in `Cargo.toml` to a newer three-number version than `releases/latest.toml`, run
+   `cargo update -p killi --offline`, and add a `## x.y.z — YYYY-MM-DD` heading under
+   `## Unreleased` in `CHANGELOG.md`. This also applies when adding a missing platform: users
+   already on the current version otherwise would not receive the replacement binary.
+2. Push the source commit to `main` and wait for its CI run to pass. Record its full SHA:
+   `git rev-parse HEAD`. The release workflow must be dispatched on `main` at this commit.
+3. Run the **Release binaries** workflow on `main` using GitHub Actions or
+   `gh workflow run release-binaries.yml --ref main`. Check that the run's source SHA is the
+   recorded commit (`gh run view <run-id> --json headSha,status,conclusion`) and wait for it
+   to succeed. If `main` advanced, do not use a bundle from a different commit.
+4. The workflow runs the dependency audit, clippy, tests and native release builds for macOS
+   arm64, Linux x64 and Linux arm64. Each runner checks its binary's version. The assembly job
+   requires all three binaries from that run and verifies their source SHA, version and hashes
+   before producing one `bundle` artifact. Linux builds use Ubuntu 22.04's glibc baseline.
+   The workflow has read-only repository permissions and does not publish.
+
+## Publish
+
+1. From the clean, unchanged source commit, download `bundle` to an empty directory:
+   `gh run download <run-id> -n bundle -D target/release-bundle`.
+2. Review the bundle's `latest.toml`, recompute the SHA-256 of each binary, and confirm the
+   manifest version matches `Cargo.toml`. Artifact downloads do not preserve executable bits;
+   set them on all three binaries. Copy the binaries and manifest together into `releases/`.
+3. Review `git diff` and confirm all three binaries and their hashes belong to the recorded
+   source commit. Commit and push the four files in one commit. Never publish a manifest with
+   an old binary or a missing platform. `scripts/release.sh` refuses single-host publication.
+4. Check a fresh install and `killi update` on each architecture. A pinned
+   `KILLI_RELEASES_URL` can verify a commit before using mutable `main` URLs. GitHub raw-file
+   caches may take about five minutes to propagate; mismatched cached files fail the checksum
+   check rather than install.
 
 To refresh the size, memory and capability charts and the README numbers, follow the
-`refresh-metrics` skill (`.agents/skills/refresh-metrics`); it needs `kimi` and `claude`
-installed and signed in.
+`refresh-metrics` skill. It needs `kimi` and `claude` installed and signed in.
 
 ## Bad release
 
-If a pushed release turns out broken, roll the pointer back: find the previous release
-commit (`git log -- releases/latest.toml`), restore the binaries and the pointer from it
-(`git checkout <commit> -- releases/killi-arm64 releases/killi-linux-x64 releases/killi-linux-arm64 releases/latest.toml`), commit and push.
-Installs and `killi update` then see the previous version again. A `KILLI_RELEASES_URL`
-pinned to a commit keeps serving whatever that commit holds, so pinned installs never
-pick up the bad binary in the first place.
+Restoring the previous binaries and manifest stops new installations from taking the bad
+release, but `killi update` does not downgrade an already updated installation. Ship a
+higher-version fix or explicitly reinstall a pinned older commit. A `KILLI_RELEASES_URL`
+pinned to a commit keeps serving that commit's files.
