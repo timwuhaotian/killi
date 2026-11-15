@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.91 — 2026-11-15
+
+- Keep completed parallel subagent reports across interruptions and mark truncated reports as failures.
+- Read resumed sessions under their lock and preserve damaged logs instead of deleting them.
+- Avoid stale repeat blocks after external changes and protect files against failed overwrites. Files whose links or metadata cannot be safely preserved are refused.
+
 ## 0.6.90 — 2026-11-15
 
 - Tell subagents they cannot delegate to other subagents, including after context compaction,
