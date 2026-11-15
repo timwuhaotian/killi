@@ -141,6 +141,19 @@ impl Session {
         Ok(Self::from_parts(log_path.to_path_buf(), file))
     }
 
+    /// Locks the log before reading it and keeps that lock with the replayed history.
+    pub fn resume(log_path: &Path) -> Result<(Self, LoadReport)> {
+        let mut session = Self::open(log_path)?;
+        session.file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        session
+            .file
+            .read_to_end(&mut bytes)
+            .with_context(|| format!("could not read {}", log_path.display()))?;
+        let report = load::load_bytes(log_path, &bytes)?;
+        Ok((session, report))
+    }
+
     /// Takes the log's exclusive lock and holds it until the `Session` is dropped or the
     /// process ends: two sessions writing one log interleave their records, and the log can
     /// never be resumed again.
@@ -201,7 +214,7 @@ pub struct Pruned {
 }
 
 /// Replays a log: messages in order, restarting from the summary at each compaction.
-/// Resume loads once via `load_reported`; only the tests call this.
+/// Resume loads once under the session lock; only the tests call this.
 #[allow(dead_code)]
 pub fn load(path: &Path) -> Result<Loaded> {
     Ok(load_reported(path)?.loaded)

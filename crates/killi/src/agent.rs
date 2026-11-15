@@ -136,6 +136,7 @@ pub struct Agent {
     /// The in-flight `agent_swarm` call's finished subagent results, if any, so an
     /// interruption can keep them instead of dropping the whole swarm's work.
     partial_swarm: Option<PartialSwarm>,
+    partial_agents: HashMap<String, (String, bool)>,
     /// The log already says that the provider hides its reasoning.
     reasoning_noted: bool,
     todos: Vec<Todo>,

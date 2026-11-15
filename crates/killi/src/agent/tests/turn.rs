@@ -1124,6 +1124,66 @@ async fn an_answered_prompt_cannot_be_taken_back() {
 }
 
 #[test]
+fn resumed_damaged_logs_are_not_discarded() {
+    for damaged in [b"{\"type\":\"message\"".as_slice(), b"\xff\xfe".as_slice()] {
+        let dir = crate::test_temp::TempDir::new("killi-discard-damaged");
+        let log = dir.join("1-1.jsonl");
+        let mut original =
+            b"{\"type\":\"message\",\"message\":{\"role\":\"system\",\"content\":\"sys\"}}\n"
+                .to_vec();
+        original.extend_from_slice(damaged);
+        original.push(b'\n');
+        std::fs::write(&log, &original).unwrap();
+        let (locked, report) = Session::resume(&log).unwrap();
+        assert_eq!(report.skipped, 1);
+        let agent = Agent::resume_reported(
+            test_client(),
+            None,
+            &dir,
+            locked,
+            report,
+            Vec::new(),
+            Settings::default(),
+            Controls::default(),
+            Rc::new(|_| {}),
+        )
+        .unwrap();
+        agent.discard_if_unused();
+        assert_eq!(
+            std::fs::read(&log).expect("damaged log must survive"),
+            original
+        );
+    }
+}
+
+#[test]
+fn resumed_legacy_empty_log_is_discarded() {
+    let dir = crate::test_temp::TempDir::new("killi-discard-legacy");
+    let log = dir.join("1-1.jsonl");
+    std::fs::write(
+        &log,
+        b"{\"type\":\"message\",\"message\":{\"role\":\"system\",\"content\":\"sys\"}}\n",
+    )
+    .unwrap();
+    let (locked, report) = Session::resume(&log).unwrap();
+    assert_eq!(report.skipped, 0);
+    let agent = Agent::resume_reported(
+        test_client(),
+        None,
+        &dir,
+        locked,
+        report,
+        Vec::new(),
+        Settings::default(),
+        Controls::default(),
+        Rc::new(|_| {}),
+    )
+    .unwrap();
+    agent.discard_if_unused();
+    assert!(!log.exists());
+}
+
+#[test]
 fn a_session_with_only_reminders_left_is_unused() {
     let mut agent = idle_agent("discard-reminders", Controls::default(), Rc::new(|_| {}));
     agent

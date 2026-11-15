@@ -595,6 +595,98 @@ fn a_same_result_repeat_is_not_run_again() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn identical_read_after_successful_edit_reads_updated_file() {
+    let mut agent = idle_agent("repeat-after-edit", Controls::default(), Rc::new(|_| {}));
+    let path = agent.ctx.cwd.join("a.txt");
+    std::fs::write(&path, "before").unwrap();
+    let read = call(r#"{"path":"a.txt"}"#);
+    for id in ["r1", "r2"] {
+        agent
+            .execute_calls(vec![(id.into(), read.clone())], false)
+            .await
+            .unwrap();
+        assert!(
+            agent.messages.last().unwrap()["content"]
+                .as_str()
+                .unwrap()
+                .contains("before")
+        );
+    }
+    let edit = ToolCall {
+        id: "e".into(),
+        name: "edit".into(),
+        arguments: r#"{"path":"a.txt","edits":[{"old_string":"before","new_string":"after"}]}"#
+            .into(),
+    };
+    agent
+        .execute_calls(vec![("e".into(), edit)], false)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "after");
+    agent
+        .execute_calls(vec![("r3".into(), read)], false)
+        .await
+        .unwrap();
+    let result = agent
+        .messages
+        .iter()
+        .find(|m| m["tool_call_id"] == "r3")
+        .unwrap()["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        result.contains("after") && !result.contains("Not run again"),
+        "{result}"
+    );
+}
+
+#[test]
+fn external_changes_invalidate_reads_without_disabling_mutator_loop_breaking() {
+    let mut agent = idle_agent("repeat-external-change", Controls::default(), Rc::new(|_| {}));
+    let read = call(r#"{"path":"a"}"#);
+    let bash = ToolCall {
+        id: "b".into(),
+        name: "bash".into(),
+        arguments: r#"{"command":"update"}"#.into(),
+    };
+    for id in ["r1", "r2"] {
+        agent
+            .finish_call(id, &read, tools::Output::ok("old"), Duration::ZERO, None)
+            .unwrap();
+    }
+    assert!(agent.repeat_block(&read).is_some());
+    for id in ["b1", "b2"] {
+        agent
+            .finish_call(
+                id,
+                &bash,
+                tools::Output::error("failed after changing files"),
+                Duration::ZERO,
+                None,
+            )
+            .unwrap();
+    }
+    assert!(agent.repeat_block(&read).is_none());
+    assert!(agent.repeat_block(&bash).is_some());
+    for id in ["r3", "r4"] {
+        agent
+            .finish_call(id, &read, tools::Output::ok("new"), Duration::ZERO, None)
+            .unwrap();
+    }
+    assert!(agent.repeat_block(&read).is_some());
+    let subagent = ToolCall {
+        id: "a".into(),
+        name: "agent".into(),
+        arguments: "{}".into(),
+    };
+    agent
+        .finish_call("a", &subagent, tools::Output::ok("done"), Duration::ZERO, None)
+        .unwrap();
+    assert!(agent.repeat_block(&read).is_none());
+    assert!(agent.repeat_block(&bash).is_none());
+}
+
 #[test]
 fn repeat_warnings_are_user_messages_not_tool_data() {
     let read = call(r#"{"path":"a"}"#);

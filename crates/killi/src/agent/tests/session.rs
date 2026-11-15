@@ -628,13 +628,13 @@ fn a_resumed_session_keeps_the_plan_mode_it_ended_in_and_drops_the_queue() {
         .steer
         .borrow_mut()
         .push_back(("queued".into(), Vec::new()));
-    let load = |log: &Path| crate::session::load_reported(log).unwrap();
+    let (locked, report) = Session::resume(&log).unwrap();
     let agent = Agent::resume_reported(
         test_client(),
         None,
         &dir,
-        &log,
-        load(&log),
+        locked,
+        report,
         Vec::new(),
         Settings::default(),
         controls.clone(),
@@ -652,12 +652,13 @@ fn a_resumed_session_keeps_the_plan_mode_it_ended_in_and_drops_the_queue() {
         json!({"type": "message", "message": {"role": "user", "content": plan::OFF}}).to_string(),
     ];
     std::fs::write(&log, off.join("\n") + "\n").unwrap();
+    let (locked, report) = Session::resume(&log).unwrap();
     let agent = Agent::resume_reported(
         test_client(),
         None,
         &dir,
-        &log,
-        load(&log),
+        locked,
+        report,
         Vec::new(),
         Settings::default(),
         Controls::default(),
@@ -674,6 +675,175 @@ async fn length_continuations_keep_every_part() {
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
     let (text, stop) = agent.run("go", &[]).await.unwrap();
     assert_eq!((text.as_str(), stop), ("part1part2", Stop::Completed));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn max_tokens_with_a_nonempty_report_is_not_a_successful_agent() {
+    let url = stub_replies(vec![sse("partial report", "length"); 4]).await;
+    let mut agent = idle_agent("agent-truncated", Controls::default(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent.client = Rc::new(test_client_at("test", &url));
+    let call = ToolCall {
+        id: "a1".into(),
+        name: "agent".into(),
+        arguments: json!({"prompt": "Do the work."}).to_string(),
+    };
+    let outputs = agent.run_subagents(&[("a1".into(), call)]).await;
+    assert!(
+        outputs[0].is_error,
+        "truncated agent reported success: {}",
+        outputs[0].text
+    );
+    assert!(outputs[0].text.contains("MaxTokens"), "{}", outputs[0].text);
+    assert!(
+        outputs[0].text.contains(&"partial report".repeat(4)),
+        "{}",
+        outputs[0].text
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn max_tokens_with_nonempty_reports_is_not_a_completed_swarm() {
+    let url = stub_replies(vec![sse("partial report", "length"); 8]).await;
+    let mut agent = idle_agent("swarm-truncated", Controls::default(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent.client = Rc::new(test_client_at("test", &url));
+    let call = ToolCall {
+        id: "s1".into(),
+        name: "agent_swarm".into(),
+        arguments: json!({"prompt_template": "Do {{item}}.", "items": ["a", "b"]}).to_string(),
+    };
+    let output = agent.run_swarm("s1", &call).await;
+    assert!(
+        output.is_error,
+        "truncated swarm reported success: {}",
+        output.text
+    );
+    assert!(
+        output
+            .text
+            .contains("<summary>completed: 0, failed: 2</summary>"),
+        "{}",
+        output.text
+    );
+    assert_eq!(
+        output.text.matches("outcome=\"failed\"").count(),
+        2,
+        "{}",
+        output.text
+    );
+    assert_eq!(
+        output.text.matches(&"partial report".repeat(4)).count(),
+        2,
+        "{}",
+        output.text
+    );
+    assert_eq!(
+        output.text.matches("MaxTokens").count(),
+        2,
+        "{}",
+        output.text
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn four_length_replies_stop_at_max_tokens_with_text() {
+    let url = stub_replies(vec![sse("partial report", "length"); 4]).await;
+    let mut agent = idle_agent("max-tokens-report", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, stop) = agent.run("go", &[]).await.unwrap();
+    assert_eq!(stop, Stop::MaxTokens);
+    assert_eq!(text, "partial report".repeat(4));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn interrupted_parallel_agents_keep_finished_reports_on_recovery_and_resume() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        async fn request(socket: &mut tokio::net::TcpStream) -> String {
+            let mut bytes = Vec::new();
+            let mut buf = [0; 4096];
+            loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                assert_ne!(n, 0);
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                    let length = headers.lines().find_map(|line| line.strip_prefix("content-length:")).unwrap().trim().parse::<usize>().unwrap();
+                    if bytes.len() >= end + 4 + length { break; }
+                }
+            }
+            String::from_utf8(bytes).unwrap()
+        }
+        let (mut first, _) = listener.accept().await.unwrap();
+        let (mut second, _) = listener.accept().await.unwrap();
+        let first_request = request(&mut first).await;
+        let second_request = request(&mut second).await;
+        let fast = if first_request.contains("second") { &mut first } else { assert!(second_request.contains("second")); &mut second };
+        let reply = format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{}", sse("finished report", "stop"));
+        fast.write_all(reply.as_bytes()).await.unwrap();
+        fast.shutdown().await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let dir = crate::test_temp::TempDir::new("killi-agent-interrupt");
+    let log = dir.join("session.jsonl");
+    std::fs::write(&log, "").unwrap();
+    let finished = Rc::new(RefCell::new(None));
+    let seen = finished.clone();
+    let sink: Sink = Rc::new(move |event| {
+        if let Event::Sub { label, event, .. } = event
+            && matches!(*event, Event::Finished { .. })
+        {
+            *seen.borrow_mut() = Some(label);
+        }
+    });
+    let mut agent = Agent::assemble(test_client_at("test", &url), &dir, Vec::new(), Settings::default(), Controls::default(), sink, Session::open(&log).unwrap());
+    agent.push(json!({"role": "system", "content": "sys"})).unwrap();
+    agent.push(json!({"role": "assistant", "tool_calls": [{"id": "prior"}, {"id": "a", "function": {"name": "agent"}}, {"id": "b", "function": {"name": "agent"}}]})).unwrap();
+    agent.push(json!({"role": "tool", "tool_call_id": "prior", "content": "prior result"})).unwrap();
+    let calls: Vec<_> = [("a", "first"), ("b", "second")].into_iter().map(|(id, label)| (id.to_string(), ToolCall { id: id.into(), name: "agent".into(), arguments: json!({"description": label, "prompt": label}).to_string() })).collect();
+    {
+        let future = agent.execute_calls(calls, false);
+        tokio::pin!(future);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    result = &mut future => panic!("batch unexpectedly completed: {result:?}"),
+                    _ = tokio::task::yield_now() => if finished.borrow().is_some() { break; },
+                }
+            }
+        }).await.unwrap();
+    }
+    assert_eq!(finished.borrow().as_deref(), Some("second"));
+    let done = "b";
+    let pending = "a";
+    let snapshot = dir.join("snapshot.jsonl");
+    std::fs::copy(&log, &snapshot).unwrap();
+    let prefix = agent.messages.to_vec();
+    agent.recover().unwrap();
+    assert_eq!(&agent.messages[..prefix.len()], prefix);
+    let check = |messages: &[Value]| {
+        let content = |id: &str| messages.iter().find(|m| m["tool_call_id"] == id).unwrap()["content"].as_str().unwrap();
+        assert_eq!(content("prior"), "prior result");
+        assert!(content(done).contains("finished report"), "{}", content(done));
+        assert!(content(pending).contains("side effects"), "{}", content(pending));
+    };
+    check(&agent.messages);
+    let (locked, report) = Session::resume(&snapshot).unwrap();
+    let resumed = Agent::resume_reported(test_client(), None, &dir, locked, report, Vec::new(), Settings::default(), Controls::default(), Rc::new(|_| {})).unwrap();
+    assert_eq!(&resumed.messages[..prefix.len()], prefix);
+    check(&resumed.messages);
+    drop(resumed);
+    let (locked, report) = Session::resume(&snapshot).unwrap();
+    let resumed_again = Agent::resume_reported(test_client(), None, &dir, locked, report, Vec::new(), Settings::default(), Controls::default(), Rc::new(|_| {})).unwrap();
+    check(&resumed_again.messages);
+    server.abort();
 }
 
 #[test]
@@ -741,6 +911,53 @@ fn recover_marks_a_tool_result_as_interrupted() {
 }
 
 #[test]
+fn resume_does_not_compact_away_records_appended_after_a_load() {
+    let dir = crate::test_temp::TempDir::new("killi-resume-race");
+    let log = dir.join("1-1.jsonl");
+    let lines = [
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "message", "message": {"role": "assistant", "tool_calls": [{"id": "c1"}]}}),
+        json!({"type": "message", "message": {"role": "user", "content": "continue"}}),
+    ];
+    std::fs::write(
+        &log,
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let preview = crate::session::load_reported(&log).unwrap();
+    assert_eq!(preview.repaired, 1);
+    let mut other = Session::open(&log).unwrap();
+    other
+        .record(&json!({"type": "message", "message": {"role": "user", "content": "appended"}}))
+        .unwrap();
+    other
+        .record(&json!({"type": "model", "model": "new/model"}))
+        .unwrap();
+    other
+        .record(&json!({"type": "recap", "text": "new recap"}))
+        .unwrap();
+    drop(other);
+    let (locked, report) = Session::resume(&log).unwrap();
+    assert_eq!(report.loaded.choice.model.as_deref(), Some("new/model"));
+    assert_eq!(report.loaded.recap.as_deref(), Some("new recap"));
+    let agent = Agent::resume_reported(
+        test_client(),
+        None,
+        &dir,
+        locked,
+        report,
+        Vec::new(),
+        Settings::default(),
+        Controls::default(),
+        Rc::new(|_| {}),
+    )
+    .unwrap();
+    drop(agent);
+    let loaded = crate::session::load(&log).unwrap();
+    assert!(loaded.messages.iter().any(|m| m["content"] == "appended"));
+}
+
+#[test]
 fn resume_rebuilds_an_interrupted_swarm_from_persisted_results() {
     let dir = crate::test_temp::TempDir::new("killi-resume-swarm");
     let log = dir.join("1-1.jsonl");
@@ -756,12 +973,12 @@ fn resume_rebuilds_an_interrupted_swarm_from_persisted_results() {
         lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
     )
     .unwrap();
-    let report = crate::session::load_reported(&log).unwrap();
+    let (locked, report) = Session::resume(&log).unwrap();
     let agent = Agent::resume_reported(
         test_client(),
         None,
         &dir,
-        &log,
+        locked,
         report,
         Vec::new(),
         Settings::default(),
@@ -810,12 +1027,12 @@ fn resume_reports_skipped_lines_and_keeps_the_dangling_call_repair() {
             seen.borrow_mut().push(notice);
         }
     });
-    let report = crate::session::load_reported(&log).unwrap();
+    let (locked, report) = Session::resume(&log).unwrap();
     let agent = Agent::resume_reported(
         test_client(),
         None,
         &dir,
-        &log,
+        locked,
         report,
         Vec::new(),
         Settings::default(),
@@ -869,12 +1086,12 @@ fn resume_from_another_folder_warns_with_the_way_back() {
             seen.borrow_mut().push(notice);
         }
     });
-    let report = crate::session::load_reported(&log).unwrap();
+    let (locked, report) = Session::resume(&log).unwrap();
     let agent = Agent::resume_reported(
         test_client(),
         None,
         &dir,
-        &log,
+        locked,
         report,
         Vec::new(),
         Settings::default(),
@@ -908,12 +1125,12 @@ fn resume_from_another_folder_warns_with_the_way_back() {
             seen.borrow_mut().push(notice);
         }
     });
-    let report = crate::session::load_reported(&log).unwrap();
+    let (locked, report) = Session::resume(&log).unwrap();
     let agent = Agent::resume_reported(
         test_client(),
         None,
         &dir,
-        &log,
+        locked,
         report,
         Vec::new(),
         Settings::default(),

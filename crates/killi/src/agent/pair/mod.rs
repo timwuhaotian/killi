@@ -281,6 +281,7 @@ impl Agent {
             compact_floor: 0,
             swarm_used: 0,
             partial_swarm: None,
+            partial_agents: HashMap::new(),
             reasoning_noted: false,
             todos: Vec::new(),
             calls_since_todo: 0,

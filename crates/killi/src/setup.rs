@@ -183,16 +183,16 @@ impl Setup {
     /// Continues a logged session, on the model and effort it last used unless -m chose one.
     /// The log parses once: the choice comes from the same load the agent replays.
     pub fn resume(&self, log: &Path, controls: Controls, sink: Sink) -> Result<Agent> {
-        let report = session::load_reported(log)?;
-        self.resume_loaded(report, log, controls, sink)
+        let (session, report) = session::Session::resume(log)?;
+        self.resume_loaded(session, report, controls, sink)
     }
 
     /// `resume` from the log's load, so callers that already show it don't parse it again:
     /// replay the conversation from `report.loaded` first, then move the report here.
     pub fn resume_loaded(
         &self,
+        session: session::Session,
         report: session::LoadReport,
-        log: &Path,
         controls: Controls,
         sink: Sink,
     ) -> Result<Agent> {
@@ -201,7 +201,7 @@ impl Setup {
             client,
             self.backup_client(),
             &self.cwd,
-            log,
+            session,
             report,
             self.tools.clone(),
             self.settings.clone(),

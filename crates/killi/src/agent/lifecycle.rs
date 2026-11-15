@@ -83,7 +83,7 @@ impl Agent {
         client: Client,
         backup: Option<Client>,
         cwd: &Path,
-        log: &Path,
+        session: Session,
         report: crate::session::LoadReport,
         tools: Vec<Value>,
         settings: Settings,
@@ -95,7 +95,7 @@ impl Agent {
             skipped,
             repaired,
         } = report;
-        let session = Session::open(log)?;
+        let log = session.log_path.clone();
         // A resumed session keeps its goal, re-announced on its first step even when the
         // log still holds the reminder: compaction may have summarized it away.
         if let Some(goal) = &loaded.goal {
@@ -130,7 +130,7 @@ impl Agent {
                 if skipped == 1 { "line" } else { "lines" }
             )));
         }
-        if let Some(logged) = logged_cwd(log)
+        if let Some(logged) = logged_cwd(&log)
             && logged.as_path() != cwd
         {
             (agent.sink)(Event::Notice(format!(
@@ -153,6 +153,7 @@ impl Agent {
                 });
             }
         }
+        agent.partial_agents = loaded.agents;
         agent.recover()?;
         agent.share();
         Ok(agent)
@@ -192,6 +193,7 @@ impl Agent {
             compact_floor: 0,
             swarm_used: 0,
             partial_swarm: None,
+            partial_agents: HashMap::new(),
             reasoning_noted: false,
             todos: Vec::new(),
             calls_since_todo: 0,
@@ -407,7 +409,9 @@ impl Agent {
             // logs, and a resumed session has no `pair` agent to guard them.
             let pair_noted = std::fs::read_to_string(&self.session.log_path)
                 .is_ok_and(|log| log.contains("\"type\":\"pair\""));
-            if !pair_noted {
+            let intact = crate::session::load_reported(&self.session.log_path)
+                .is_ok_and(|report| report.skipped == 0);
+            if !pair_noted && intact {
                 self.session.discard();
             }
         }

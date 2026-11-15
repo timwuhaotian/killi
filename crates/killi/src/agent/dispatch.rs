@@ -394,6 +394,17 @@ impl Agent {
             output.text = self.shorten(&output.text);
         }
         let result = same_as.unwrap_or_else(|| hash_text(&output.text));
+        if same_as.is_none()
+            && !parallel_read(call)
+            && !matches!(call.name.as_str(), "todo_write" | "later")
+        {
+            // Calls that can change external state invalidate observations, even on error:
+            // a command or subagent may have changed files before failing.
+            self.repeats.retain(|key, _| {
+                let kind = key & REPEAT_KIND_MASK;
+                kind != REPEAT_READ && (call.name == "bash" || kind != REPEAT_BASH)
+            });
+        }
         let key = repeat_key(call, result);
         // A blocked repeat keeps the tail of the earlier result, so a further repeat still
         // points at the hint that should have changed the call.
@@ -412,6 +423,7 @@ impl Agent {
             json!({"role": "tool", "tool_call_id": id, "content": output.text}),
             Some(meta),
         )?;
+        self.partial_agents.remove(id);
         if REPEAT_WARNINGS.contains(&count) {
             let same_part = if same {
                 let brief = if output.brief.is_empty() {
@@ -577,12 +589,23 @@ fn tail_of(text: &str) -> String {
     }
 }
 
+const REPEAT_KIND_MASK: u64 = 3 << 62;
+const REPEAT_READ: u64 = 1 << 62;
+const REPEAT_BASH: u64 = 2 << 62;
+
 /// Identifies a tool call by its name and exact arguments, without keeping the arguments.
 pub(super) fn hash_call(call: &ToolCall) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     (&call.name, &call.arguments).hash(&mut hasher);
-    hasher.finish()
+    let kind = if parallel_read(call) {
+        REPEAT_READ
+    } else if call.name == "bash" {
+        REPEAT_BASH
+    } else {
+        0
+    };
+    (hasher.finish() & !REPEAT_KIND_MASK) | kind
 }
 
 /// What the repeat breaker counts as the same call. A wait on a background task is a poll:
@@ -595,7 +618,7 @@ pub(super) fn repeat_key(call: &ToolCall, result: u64) -> u64 {
     }
     let mut hasher = DefaultHasher::new();
     (hash_call(call), result).hash(&mut hasher);
-    hasher.finish()
+    hasher.finish() & !REPEAT_KIND_MASK
 }
 
 /// An image in a user message: a line of text that says what it is, then the image.

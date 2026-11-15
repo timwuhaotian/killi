@@ -202,6 +202,20 @@ impl Agent {
         let missing = unanswered(&self.messages);
         let partial = self.partial_swarm.take();
         for id in &missing {
+            if let Some((text, is_error)) = self.partial_agents.get(id).cloned() {
+                let text = neutralize_reminder_tags(&text).into_owned();
+                let content = if text.len() > MAX_RESULT_BYTES {
+                    self.shorten(&text)
+                } else {
+                    text
+                };
+                self.push_meta(
+                    json!({"role": "tool", "tool_call_id": id, "content": content}),
+                    Some(json!({"name": "agent", "is_error": is_error})),
+                )?;
+                self.partial_agents.remove(id);
+                continue;
+            }
             let content = match &partial {
                 Some(partial) if partial.id == *id => {
                     let outputs: Vec<tools::Output> = partial
@@ -224,6 +238,11 @@ impl Agent {
                         .text,
                     )
                     .into_owned()
+                }
+                _ if self.messages.iter().flat_map(|message| {
+                    message["tool_calls"].as_array().into_iter().flatten()
+                }).any(|call| call["id"] == *id && call["function"]["name"] == "agent") => {
+                    "Interrupted before this agent finished. It may have performed work or caused side effects; inspect its subagent log before retrying.".to_string()
                 }
                 _ => "Interrupted by the user before this finished.".to_string(),
             };

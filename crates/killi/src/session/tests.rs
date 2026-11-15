@@ -61,6 +61,7 @@ fn loaded(messages: Vec<Value>) -> Loaded {
         messages,
         tools: HashMap::new(),
         swarms: HashMap::new(),
+        agents: HashMap::new(),
         context: 0,
         choice: Choice::default(),
         goal: None,
@@ -348,6 +349,34 @@ fn a_log_open_in_one_session_cannot_be_opened_again() {
     assert!(unlocked, "the lock goes when the session ends");
     assert!(Session::open(&path).is_ok());
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn resume_locks_before_loading_and_holds_the_lock_until_dropped() {
+    let dir = crate::test_temp::TempDir::new("killi-resume-lock");
+    let path = dir.join("session.jsonl");
+    fs::write(
+        &path,
+        format!(
+            "{}\n",
+            json!({"type": "message", "message": {"role": "system", "content": "sys"}})
+        ),
+    )
+    .unwrap();
+    let held = Session::open(&path).unwrap();
+    assert!(
+        Session::resume(&path)
+            .err()
+            .unwrap()
+            .to_string()
+            .starts_with("session is in use")
+    );
+    drop(held);
+    let (session, report) = Session::resume(&path).unwrap();
+    assert_eq!(report.loaded.messages.len(), 1);
+    assert!(Session::open(&path).is_err());
+    drop(session);
+    assert!(Session::open(&path).is_ok());
 }
 
 #[test]
@@ -760,6 +789,26 @@ fn new_logs_and_folders_are_private_to_this_user() {
     drop(child);
     drop(session);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn load_keeps_only_unanswered_agent_results_across_compaction() {
+    let lines = [
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "message", "message": {"role": "assistant", "tool_calls": [{"id": "old"}]}}),
+        json!({"type": "agent_result", "id": "old", "text": "stale", "is_error": false}),
+        json!({"type": "compaction", "messages": [{"role": "system", "content": "sys"}]}),
+        json!({"type": "message", "message": {"role": "assistant", "tool_calls": [{"id": "old"}, {"id": "done"}, {"id": "pending"}]}}),
+        json!({"type": "agent_result", "id": "done", "text": "answered", "is_error": false}),
+        json!({"type": "message", "message": {"role": "tool", "tool_call_id": "done", "content": "answered"}}),
+        json!({"type": "agent_result", "id": "pending", "text": "failed report", "is_error": true}),
+        json!({"type": "agent_result", "id": "unknown", "text": "ignored", "is_error": false}),
+    ];
+    let bytes = lines.iter().map(|line| format!("{line}\n")).collect::<String>();
+    let report = load::load_bytes(Path::new("test.jsonl"), bytes.as_bytes()).unwrap();
+    assert_eq!(report.repaired, 0);
+    assert_eq!(report.loaded.agents.len(), 1);
+    assert_eq!(report.loaded.agents["pending"], ("failed report".to_string(), true));
 }
 
 #[test]

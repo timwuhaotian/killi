@@ -23,6 +23,8 @@ pub struct Loaded {
     /// conversation. Answered ones, calls a compaction left behind, and empty starts are
     /// dropped, so a resume never grafts stale reports onto another call.
     pub swarms: HashMap<String, SwarmProgress>,
+    /// Finished ordinary agents whose tool calls remain unanswered.
+    pub agents: HashMap<String, (String, bool)>,
     /// Input tokens of the last request: how full the context was when the log stopped.
     pub context: u64,
     /// The model and effort the session last ran on.
@@ -58,11 +60,16 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
     // Decoded per line, so one bad-UTF-8 line is skipped instead of losing the whole log.
     // Splitting bytes on `\n` is safe: it never appears inside a multibyte UTF-8 sequence.
     let bytes = fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
+    load_bytes(path, &bytes)
+}
+
+pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
     let mut skipped = 0;
     let mut loaded = Loaded {
         messages: Vec::new(),
         tools: HashMap::new(),
         swarms: HashMap::new(),
+        agents: HashMap::new(),
         context: 0,
         choice: Choice::default(),
         goal: None,
@@ -139,8 +146,23 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
                     ));
                 }
             }
+            Some("agent_result") => {
+                if let (Some(id), Some(text), Some(is_error)) = (
+                    entry["id"].as_str(),
+                    entry["text"].as_str(),
+                    entry["is_error"].as_bool(),
+                ) {
+                    loaded.agents.insert(id.to_string(), (text.to_string(), is_error));
+                }
+            }
             Some("compaction") => {
                 loaded.messages = entry["messages"].as_array().cloned().unwrap_or_default();
+                let calls: HashSet<&str> = loaded.messages.iter()
+                    .filter(|m| m["role"] == "assistant")
+                    .flat_map(|m| m["tool_calls"].as_array().into_iter().flatten())
+                    .filter_map(|call| call["id"].as_str())
+                    .collect();
+                loaded.agents.retain(|id, _| calls.contains(id.as_str()));
                 loaded.context = 0;
             }
             _ => {}
@@ -163,6 +185,9 @@ pub fn load_reported(path: &Path) -> Result<LoadReport> {
         !swarm.items.is_empty()
             && called.contains(id.as_str())
             && !answered.contains(id.as_str())
+    });
+    loaded.agents.retain(|id, _| {
+        called.contains(id.as_str()) && !answered.contains(id.as_str())
     });
     let repaired = repair_dangling_calls(&mut loaded.messages);
     if loaded
@@ -187,8 +212,9 @@ const DANGLING_TOOL_RESULT: &str =
     "(no result: the session stopped before this tool call returned)";
 
 /// Gives every mid-history assistant tool call the log never answered a placeholder result
-/// right after its calls, and returns how many were inserted. A call at the very end is left
-/// alone: resuming runs it. This is a load-time repair only; a resume that wants it kept in
+/// right after its calls, and returns how many were inserted. Calls at the end, including a
+/// batch with some results already recorded, are left for recovery. This is a load-time repair;
+/// a resume that wants it kept in
 /// the log records the repaired messages as a compaction-kind entry, the way the media
 /// recovery in `agent.rs` records its rewrite.
 fn repair_dangling_calls(messages: &mut Vec<Value>) -> usize {
@@ -199,7 +225,9 @@ fn repair_dangling_calls(messages: &mut Vec<Value>) -> usize {
         .collect();
     let mut pending: Vec<(usize, Vec<Value>)> = Vec::new();
     for (index, message) in messages.iter().enumerate() {
-        if message["role"] != "assistant" || index + 1 >= messages.len() {
+        if message["role"] != "assistant"
+            || messages[index + 1..].iter().all(|m| m["role"] == "tool")
+        {
             continue;
         }
         let mut placeholders = Vec::new();

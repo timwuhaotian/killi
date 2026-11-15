@@ -43,18 +43,20 @@ pub fn edit(ctx: &Context, args: &Value) -> Output {
     }
     let file = TextFile::decode(bytes);
     match apply(&file.text, &edits, path) {
-        Ok(applied) => match fs::write(&full, file.encode(&applied.text)) {
-            Ok(()) => {
-                let mut output = Output::ok(format!(
-                    "Applied {} replacement(s) to {path}.",
-                    applied.count
-                ))
-                .brief(format!("+{} −{}", applied.added, applied.removed));
-                output.display = Some(applied.diff);
-                output
+        Ok(applied) => {
+            match super::files::atomic_write::write(&full, file.encode(&applied.text).as_bytes()) {
+                Ok(()) => {
+                    let mut output = Output::ok(format!(
+                        "Applied {} replacement(s) to {path}.",
+                        applied.count
+                    ))
+                    .brief(format!("+{} −{}", applied.added, applied.removed));
+                    output.display = Some(applied.diff);
+                    output
+                }
+                Err(e) => Output::error(format!("Could not write {path}: {e}")),
             }
-            Err(e) => Output::error(format!("Could not write {path}: {e}")),
-        },
+        }
         Err(message) => Output::error(message),
     }
 }

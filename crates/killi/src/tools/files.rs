@@ -9,6 +9,8 @@ use serde_json::Value;
 use super::{Context, MAX_BYTES, MAX_LINES, Output, is_binary, resolve};
 use crate::llm::truncate;
 
+pub(super) mod atomic_write;
+
 const MAX_LINE_CHARS: usize = 2000;
 /// Larger text files are not read whole: the file, its decoded copy and its lines would take
 /// several times its size in memory. `bash` can read part of one (`sed -n`, `tail`).
@@ -301,7 +303,7 @@ pub fn write(ctx: &Context, args: &Value) -> Output {
     {
         return Output::error(format!("Could not create {}: {e}", parent.display()));
     }
-    if let Err(e) = fs::write(&full, content) {
+    if let Err(e) = atomic_write::write(&full, content.as_bytes()) {
         return Output::error(format!("Could not write {path}: {e}"));
     }
     let verb = if existed { "Overwrote" } else { "Created" };
@@ -365,6 +367,188 @@ mod tests {
 
     fn ctx(dir: &std::path::Path) -> Context {
         Context::new(dir.to_path_buf(), dir.join("spill"))
+    }
+
+    #[test]
+    fn failed_overwrites_leave_original_intact() {
+        use std::os::unix::process::CommandExt;
+
+        if let Ok(root) = std::env::var("KILLI_WRITE_FAILURE_TEST") {
+            let dir = Path::new(&root);
+            let context = ctx(dir);
+            for name in ["write", "edit"] {
+                let out = if name == "write" {
+                    write(
+                        &context,
+                        &json!({"path": name, "content": "replacement content"}),
+                    )
+                } else {
+                    super::super::edit::edit(
+                        &context,
+                        &json!({"path": name, "old_string": "original", "new_string": "replacement content"}),
+                    )
+                };
+                assert!(out.is_error, "{name}: {}", out.text);
+            }
+            return;
+        }
+        let dir = crate::test_temp::TempDir::new("killi-write-failure");
+        for name in ["write", "edit"] {
+            fs::write(dir.join(name), "original").unwrap();
+        }
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "tools::files::tests::failed_overwrites_leave_original_intact",
+            "--nocapture",
+        ])
+        .env("KILLI_WRITE_FAILURE_TEST", dir.path());
+        unsafe {
+            cmd.pre_exec(|| {
+                let limit = libc::rlimit {
+                    rlim_cur: 4,
+                    rlim_max: 4,
+                };
+                if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
+                Ok(())
+            });
+        }
+        let result = cmd.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        for name in ["edit", "write"] {
+            assert_eq!(fs::read(dir.join(name)).unwrap(), b"original", "{name}");
+        }
+    }
+
+    #[test]
+    fn writes_follow_symlinks_and_keep_permissions() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = crate::test_temp::TempDir::new("killi-write-link");
+        let target = dir.join("target");
+        fs::write(&target, "original").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        symlink("target", dir.join("link")).unwrap();
+        let out = write(&ctx(&dir), &json!({"path": "link", "content": "new"}));
+        assert!(!out.is_error, "{}", out.text);
+        assert!(dir.join("link").is_symlink());
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        let out = super::super::edit::edit(
+            &ctx(&dir),
+            &json!({"path": "link", "old_string": "new", "new_string": "edited"}),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        assert_eq!(fs::read(&target).unwrap(), b"edited");
+        assert!(dir.join("link").is_symlink());
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        symlink("missing", dir.join("dangling")).unwrap();
+        let out = write(
+            &ctx(&dir),
+            &json!({"path": "dangling", "content": "created"}),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        assert!(dir.join("dangling").is_symlink());
+        assert_eq!(fs::read(dir.join("missing")).unwrap(), b"created");
+    }
+
+    #[test]
+    fn writes_reject_hard_links_and_extended_attributes() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = crate::test_temp::TempDir::new("killi-write-metadata");
+        let context = ctx(&dir);
+        let path = dir.join("file");
+        fs::write(&path, "original").unwrap();
+        fs::hard_link(&path, dir.join("other")).unwrap();
+        let attempt = || write(&context, &json!({"path": "file", "content": "changed"}));
+        assert!(attempt().is_error);
+        let edit = || {
+            super::super::edit::edit(
+                &context,
+                &json!({"path": "file", "old_string": "original", "new_string": "changed"}),
+            )
+        };
+        assert!(edit().is_error);
+        assert_eq!(fs::read(dir.join("other")).unwrap(), b"original");
+        fs::remove_file(dir.join("other")).unwrap();
+        let name = CString::new(if cfg!(target_os = "macos") {
+            "org.killi.test"
+        } else {
+            "user.killi_test"
+        })
+        .unwrap();
+        let path_c = CString::new(path.as_os_str().as_bytes()).unwrap();
+        #[cfg(target_os = "macos")]
+        let result = unsafe {
+            libc::setxattr(
+                path_c.as_ptr(),
+                name.as_ptr(),
+                b"value".as_ptr().cast(),
+                5,
+                0,
+                0,
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::setxattr(
+                path_c.as_ptr(),
+                name.as_ptr(),
+                b"value".as_ptr().cast(),
+                5,
+                0,
+            )
+        };
+        assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+        assert!(attempt().is_error);
+        assert!(edit().is_error);
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn new_files_obey_umask() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::process::CommandExt;
+        if let Ok(root) = std::env::var("KILLI_WRITE_UMASK_TEST") {
+            let dir = Path::new(&root);
+            let out = write(&ctx(dir), &json!({"path": "new", "content": "new"}));
+            assert!(!out.is_error, "{}", out.text);
+            assert_eq!(
+                fs::metadata(dir.join("new")).unwrap().permissions().mode() & 0o777,
+                0o640
+            );
+            return;
+        }
+        let dir = crate::test_temp::TempDir::new("killi-write-umask");
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "tools::files::tests::new_files_obey_umask"])
+            .env("KILLI_WRITE_UMASK_TEST", dir.path());
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::umask(0o137);
+                Ok(())
+            });
+        }
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[test]

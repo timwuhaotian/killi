@@ -88,12 +88,18 @@ impl Agent {
                 ));
             }
         }
-        let mut outputs = self.run_children(jobs, MAX_PARALLEL_AGENTS)
+        let ids: Vec<String> = group.iter().map(|(id, _)| id.clone()).collect();
+        let mut outputs = self
+            .run_children(jobs, MAX_PARALLEL_AGENTS, Some(&ids))
             .await
             .outputs;
-        for (args, output) in hooked.into_iter().zip(outputs.iter_mut()) {
-            let Some(args) = args else { continue };
-            self.post_hook("agent", &args, output).await;
+        for ((args, output), id) in hooked.into_iter().zip(outputs.iter_mut()).zip(&ids) {
+            if let Some(args) = args {
+                self.post_hook("agent", &args, output).await;
+                self.save_agent_result(id, output);
+            } else if !self.partial_agents.contains_key(id) {
+                self.save_agent_result(id, output);
+            }
         }
         outputs
     }
@@ -175,7 +181,9 @@ impl Agent {
             description: description.into(),
             items: items.clone(),
         });
-        let children = self.run_children(jobs, self.swarm_parallel.get()).await;
+        let children = self
+            .run_children(jobs, self.swarm_parallel.get(), None)
+            .await;
         // An item that never started has an empty log, so the report doesn't point at one.
         let logs: Vec<String> = logs
             .into_iter()
@@ -197,7 +205,12 @@ impl Agent {
     /// returns each one's result as a tool output, in order. One that couldn't start reports why.
     /// A member the provider rate-limits or whose quota is spent stops the queue: the items after
     /// it would fail the same way, so they report that they were never run.
-    async fn run_children(&mut self, jobs: Vec<Job>, limit: usize) -> Children {
+    async fn run_children(
+        &mut self,
+        jobs: Vec<Job>,
+        limit: usize,
+        ids: Option<&[String]>,
+    ) -> Children {
         let count = jobs.len();
         let mut jobs = jobs.into_iter().enumerate();
         let mut running = FuturesUnordered::new();
@@ -246,6 +259,9 @@ impl Agent {
                     "text": output.text,
                 }));
             }
+            if let Some(id) = ids.and_then(|ids| ids.get(index)) {
+                self.save_agent_result(id, &output);
+            }
             outputs[index] = Some(output);
         }
         let mut unrun = Vec::new();
@@ -267,6 +283,18 @@ impl Agent {
         }
     }
 
+    fn save_agent_result(&mut self, id: &str, output: &tools::Output) {
+        self.partial_agents
+            .insert(id.to_string(), (output.text.clone(), output.is_error));
+        if let Err(error) = self.session.record(&json!({
+            "type": "agent_result", "id": id, "text": output.text, "is_error": output.is_error
+        })) {
+            (self.sink)(Event::Notice(format!(
+                "Could not save agent result for {id}; it may be lost on resume: {error:#}"
+            )));
+        }
+    }
+
     async fn run_child(index: usize, job: Job) -> ChildDone {
         let (mut agent, prompt) = match job {
             Ok(job) => job,
@@ -281,6 +309,12 @@ impl Agent {
         };
         (agent.sink)(Event::Started);
         let (output, limited) = match agent.run(&subagent_prompt(&prompt), &[]).await {
+            Ok((text, Stop::MaxTokens)) if !text.trim().is_empty() => (
+                tools::Output::error(format!(
+                    "The subagent's report was truncated (MaxTokens). Partial report:\n{text}"
+                )),
+                None,
+            ),
             Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => {
                 (tools::Output::ok(text), None)
             }
@@ -385,6 +419,7 @@ impl Agent {
             compact_floor: 0,
             swarm_used: 0,
             partial_swarm: None,
+            partial_agents: HashMap::new(),
             reasoning_noted: false,
             todos: Vec::new(),
             calls_since_todo: 0,

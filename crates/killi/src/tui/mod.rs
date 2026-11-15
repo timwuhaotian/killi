@@ -195,10 +195,10 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     let mut start_recap = None;
     let mut agent = match &start.resume {
         Some(log) => {
-            let report = crate::session::load_reported(log)?;
+            let (locked, report) = crate::session::Session::resume(log)?;
             start_replayed = crate::session::replay(&report.loaded, &cwd, REPLAY_PROMPTS);
             start_recap = report.loaded.recap.clone();
-            session.resume_loaded(report, log, controls.clone(), sink.clone())?
+            session.resume_loaded(locked, report, controls.clone(), sink.clone())?
         }
         None => session.start(controls.clone(), sink.clone())?,
     };
@@ -350,12 +350,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             Input::Resume(_) if agent.pair_active() => {
                 app.notice("A pair is still running; /pair stop ends it before a resume.");
             }
-            Input::Resume(path) => match crate::session::load_reported(&path) {
+            Input::Resume(path) => match crate::session::Session::resume(&path) {
                 Err(e) => app.error_report(&e),
-                Ok(report) => {
+                Ok((locked, report)) => {
                     let replayed = crate::session::replay(&report.loaded, &cwd, REPLAY_PROMPTS);
                     let saved = report.loaded.recap.clone();
-                    match session.resume_loaded(report, &path, controls.clone(), sink.clone()) {
+                    match session.resume_loaded(locked, report, controls.clone(), sink.clone()) {
                         Ok(resumed) => {
                             app.reset_conversation(&mut snapshots, &cwd);
                             let stopped = agent.stop_tasks();
