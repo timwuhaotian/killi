@@ -123,6 +123,8 @@ pub(super) fn sse(text: &str, finish_reason: &str) -> String {
 
 /// An agent that has never asked a model anything: enough to run a reply's tool calls.
 /// Its scratch folder goes when the agent does, so `cargo test` leaves nothing behind.
+/// It watches a memory file in that folder rather than `$HOME`'s, which another test may be
+/// pointing at a folder of its own and changing while this one runs.
 pub(super) fn idle_agent(name: &str, controls: Controls, sink: Sink) -> Agent {
     let tmp = crate::test_temp::TempDir::new(&format!("killi-{name}"));
     let log = tmp.join("session.jsonl");
@@ -136,6 +138,7 @@ pub(super) fn idle_agent(name: &str, controls: Controls, sink: Sink) -> Agent {
         sink,
         Session::open(&log).unwrap(),
     );
+    agent.instructions = crate::prompt::Instructions::new(tmp.path(), &[], &tmp.join("memory.md"));
     Rc::get_mut(&mut agent.ctx)
         .expect("a fresh agent owns its context")
         .temp = Some(tmp);

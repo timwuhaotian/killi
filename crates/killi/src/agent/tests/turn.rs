@@ -802,6 +802,8 @@ async fn a_memory_edited_between_turns_is_pointed_at() {
     let _home = crate::test_temp::Home::set(dir.path());
     let url = stub_replies(vec![sse("first done", "stop"), sse("second done", "stop")]).await;
     let mut agent = idle_agent("memory-turn", Controls::default(), Rc::new(|_| {}));
+    agent.instructions =
+        crate::prompt::Instructions::new(&agent.ctx.cwd, &[], &crate::memory::path());
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
     agent.run("first", &[]).await.unwrap();
     crate::memory::add("Uses pnpm").unwrap();
