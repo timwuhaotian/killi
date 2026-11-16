@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- The README now says up front that killi is opinionated: its tool list is fixed for a session,
+  it runs commands and edits files without approval prompts, and it runs on macOS and Linux only.
+  The comparisons with Claude Code and the other agents say these are different trade-offs, not
+  a drop-in replacement.
+
 ## 0.6.95 — 2026-11-16
 
 - A model that keeps resending a tool call the repeat breaker already refused now has its turn

@@ -11,14 +11,25 @@
 
 **killi is a fast, tiny, free and open-source AI coding agent for your terminal**, written in
 Rust. It ships as one ~7 MB native binary for Apple silicon Macs and Linux (x64 and arm64) — no runtime to install, starts
-in under 10 ms, and uses about 18 MB of memory while running a prompt. Like Claude Code, Codex
-CLI, opencode or Kimi Code, it reads your code, runs commands and edits files, but it works with
-any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, including ChatGPT
-subscriptions, and it supports MCP servers, subagents, plan mode, skills, hooks and `AGENTS.md`.
+in under 10 ms, and uses about 18 MB of memory while running a prompt. It reads your code, runs commands and edits files, and works with any OpenAI-compatible,
+Anthropic-compatible or OpenAI Responses LLM, including ChatGPT subscriptions. It supports MCP
+servers, subagents, plan mode, skills, hooks and `AGENTS.md`.
 It is built around one idea: send the model as little as possible, and send it the same way
 every time, so the provider's prompt cache keeps hitting (70–90% of input tokens come from the
 cache). It is the sibling of the [Kil](https://github.com/timwuhaotian/kil) terminal and the
 [Kiled](https://github.com/timwuhaotian/kiled) editor.
+
+**killi is opinionated, not a general-purpose replacement for other agents.** It makes these
+trade-offs on purpose:
+
+- **Cache first.** The system prompt and tool list are fixed for a session, so tools can't be
+  added or removed mid-session. MCP servers are reached through one gateway tool.
+- **No approval prompts.** killi runs commands and edits files without asking. `/undo` and git
+  are the safety net; plan mode is the only mode that blocks edits.
+- **macOS and Linux only.** No Windows, no Intel Macs, and no LSP.
+
+If you need per-command approval, Windows, or a toolset you can change mid-session, another
+agent will fit better.
 
 **killi at a glance**
 
@@ -135,13 +146,13 @@ Rust 1.94 or later, on macOS (arm64) or Linux (x64/arm64).
 ## FAQ
 
 **What is killi?**
-killi is a fast, tiny, open-source AI coding agent for the terminal, written in Rust. It ships as one ~7 MB native binary for Apple silicon Macs and Linux (x64 and arm64) with no runtime to install, starts in under 10 ms, and uses about 18 MB of memory while running a prompt. Like Claude Code, Codex CLI, opencode or Kimi Code, it reads your code, runs commands and edits files, but it is free (MIT), works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, and is built so the provider's prompt cache keeps hitting.
+killi is a fast, tiny, open-source AI coding agent for the terminal, written in Rust. It ships as one ~7 MB native binary for Apple silicon Macs and Linux (x64 and arm64) with no runtime to install, starts in under 10 ms, and uses about 18 MB of memory while running a prompt. It reads your code, runs commands and edits files without approval prompts, is free (MIT), works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM, and is built so the provider's prompt cache keeps hitting. It is opinionated: its tool list never changes mid-session, and it runs on macOS and Linux only.
 
 **Is killi open source?**
 Yes. killi is open source under the MIT license, and the full source is on GitHub at github.com/timwuhaotian/killi. It is free to use and installs as a single ~7 MB binary.
 
 **How is killi different from Claude Code?**
-Claude Code is Anthropic's closed-source agent tied to Anthropic models. killi is open source, model-agnostic, and much lighter: in the same benchmark, killi used about 18 MB of memory while Claude Code used 318 MB, Kimi Code 408 MB and opencode 2 332 MB. In killi's capability tests, killi passed every task Kimi Code passed on the same model with 5.6× fewer input tokens. Because killi never changes the system prompt or the tool list during a session, 70–90% of its input tokens are served from the provider's prompt cache.
+Claude Code is Anthropic's closed-source agent tied to Anthropic models. killi makes different trade-offs: it runs commands and edits files without approval prompts, never changes its tool list mid-session, and runs on macOS and Linux only. In return it is open source, model-agnostic, and much lighter: in the same benchmark, killi used about 18 MB of memory while Claude Code used 318 MB, Kimi Code 408 MB and opencode 2 332 MB. In killi's capability tests, killi passed every task Kimi Code passed on the same model with 5.6× fewer input tokens. Because killi never changes the system prompt or the tool list during a session, 70–90% of its input tokens are served from the provider's prompt cache.
 
 **How much memory does killi use?**
 About 18 MB of peak memory while running a prompt, measured on 2026-11-07 on an M4 Pro with [`scripts/bench.py`](scripts/bench.py) (hooks disabled). For comparison, the same benchmark measured Kimi Code at 408 MB, Claude Code at 318 MB and opencode 2 at 332 MB. The installed binary itself is about 7 MB.
@@ -166,7 +177,7 @@ Yes. killi supports MCP servers (stdio and HTTP) from `mcp.json`, subagents and 
 
 ## killi vs Claude Code, Kimi Code and opencode
 
-killi is an open-source, model-agnostic alternative to the big terminal coding agents, and it is much lighter. In the same benchmarks (measured with [`scripts/bench.py`](scripts/bench.py), see [Size and memory](#size-and-memory) and [Capability tests](#capability-tests)):
+killi makes different trade-offs from the big terminal coding agents (see the top of this page). It is open-source, model-agnostic and much lighter. In the same benchmarks (measured with [`scripts/bench.py`](scripts/bench.py), see [Size and memory](#size-and-memory) and [Capability tests](#capability-tests)):
 
 - **Memory:** about 18 MB while running a prompt, where Claude Code uses 318 MB, Kimi Code 408 MB and opencode 2 332 MB.
 - **Tokens:** it passes every capability task Kimi Code passes on the same model, with 5.6× fewer input tokens.
