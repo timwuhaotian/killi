@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.93 — 2026-11-16
+
 - killi now remembers about you across sessions and projects. `~/.killi/memory.md` holds lasting
   facts and preferences, sent after the instructions in every session's prompt; `/remember <fact>`
   saves one, `/memory` lists them and `/memory forget N` removes one, and the new `memory` tool
