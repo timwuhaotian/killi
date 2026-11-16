@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Mirror releases/ into one GitHub Release for its version and delete every older one.
 
-Runs from the publish workflow after releases/latest.toml changes on main. The binaries are
-uploaded only when they match the manifest's SHA-256s and the manifest matches Cargo.toml.
+Runs from the GitHub release workflow on main. The binaries are uploaded only when they match
+the manifest's SHA-256s, and a page that already matches is left alone, so reruns are safe.
+`--check` runs before a build and refuses a Cargo.toml version with no CHANGELOG.md notes.
 """
 
 import argparse
@@ -42,21 +43,28 @@ def notes(changelog, version):
 
 
 def verified_assets(root):
-    """The manifest's version and the files to upload, after checking every hash."""
+    """The manifest's version and the files to upload with their SHA-256, after checking every hash.
+
+    Cargo.toml is not compared: it moves ahead of releases/ while the next version is prepared.
+    """
     manifest = tomllib.loads((root / "releases/latest.toml").read_text())
-    version = manifest["version"]
-    cargo = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-    if version != cargo:
-        raise ValueError(f"releases/latest.toml is {version} but Cargo.toml is {cargo}")
-    assets = []
+    assets = {}
     for binary, key in BINARIES:
         path = root / "releases" / binary
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         if digest != manifest.get(key, "").lower():
             raise ValueError(f"SHA-256 of {path} does not match {key} in latest.toml")
-        assets.append(path)
-    assets.append(root / "releases/latest.toml")
-    return version, assets
+        assets[path] = digest
+    path = root / "releases/latest.toml"
+    assets[path] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return manifest["version"], assets
+
+
+def check_notes(root):
+    """Refuse a version about to be built when CHANGELOG.md has no notes for it."""
+    version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    notes((root / "CHANGELOG.md").read_text(), version)
+    print(f"CHANGELOG.md has notes for {version}")
 
 
 def gh(*args, capture=False):
@@ -65,30 +73,47 @@ def gh(*args, capture=False):
 
 
 def publish(root, target):
+    """Make `v<version>` the only, latest release, with releases/ as its assets; a no-op when it is."""
     version, assets = verified_assets(root)
-    tag = f"v{version}"
+    tag, title = f"v{version}", f"killi {version}"
     body = notes((root / "CHANGELOG.md").read_text(), version)
-    existing = {r["tagName"] for r in json.loads(gh("release", "list", "--limit", "1000", "--json", "tagName", capture=True))}
-    files = [str(a) for a in assets]
+    releases = json.loads(gh("release", "list", "--limit", "1000", "--json", "tagName,isLatest", capture=True))
+    existing = {r["tagName"] for r in releases}
+    files = [str(path) for path in assets]
     if tag in existing:
-        gh("release", "upload", tag, *files, "--clobber")
-        gh("release", "edit", tag, "--title", f"killi {version}", "--notes", body, "--latest")
+        live = json.loads(gh("release", "view", tag, "--json", "assets,body,name", capture=True))
+        uploaded = {a["name"]: a.get("digest") for a in live["assets"]}
+        wanted = {path.name: f"sha256:{digest}" for path, digest in assets.items()}
+        latest = any(r["tagName"] == tag and r["isLatest"] for r in releases)
+        stale_assets = uploaded != wanted
+        stale_page = not latest or live["name"] != title or live["body"].strip() != body.strip()
+        if stale_assets:
+            gh("release", "upload", tag, *files, "--clobber")
+        if stale_page:
+            gh("release", "edit", tag, "--title", title, "--notes", body, "--latest")
+        changed = stale_assets or stale_page
     else:
         # An existing tag (pushed at the source commit) is kept; otherwise it is made at `target`.
-        gh("release", "create", tag, *files, "--title", f"killi {version}", "--notes", body,
-           "--latest", "--target", target)
+        gh("release", "create", tag, *files, "--title", title, "--notes", body, "--latest", "--target", target)
+        changed = True
     for old in sorted(existing - {tag}):
         # Tags stay so old commits remain addressable; only the release pages go.
         gh("release", "delete", old, "--yes")
-    print(f"published {tag}; removed {len(existing - {tag})} older release(s)")
+    removed = len(existing - {tag})
+    print(f"{'published' if changed else 'up to date:'} {tag}; removed {removed} older release(s)")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("target", help="commit to tag when the version's tag does not exist yet")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("target", nargs="?", help="commit to tag when the version's tag does not exist yet")
+    group.add_argument("--check", action="store_true", help="only check CHANGELOG.md has notes for Cargo.toml's version")
     args = parser.parse_args()
     try:
-        publish(ROOT, args.target)
+        if args.check:
+            check_notes(ROOT)
+        else:
+            publish(ROOT, args.target)
     except (OSError, KeyError, ValueError, tomllib.TOMLDecodeError) as error:
         parser.exit(1, f"error: {error}\n")
     except subprocess.CalledProcessError as error:

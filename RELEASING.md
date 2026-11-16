@@ -41,7 +41,10 @@ Users install from `releases/killi-arm64`, `releases/killi-linux-x64` or
    binaries against the manifest and `Cargo.toml`, publishes them as release `vX.Y.Z` with that
    version's `CHANGELOG.md` notes (using the tag if one was pushed, otherwise tagging the
    publish commit), marks it latest and deletes every older release page; tags stay. Check
-   that run succeeded; rerun it with `gh workflow run github-release.yml --ref main`.
+   that run succeeded; rerun it with `gh workflow run github-release.yml --ref main`. It also
+   runs on `CHANGELOG.md` pushes, so corrected notes reach the page, and daily, so a missed or
+   failed run is repaired; a run that finds the page current changes nothing. The Release
+   binaries workflow refuses a version with no `CHANGELOG.md` notes before building.
 
 To refresh the size, memory and capability charts and the README numbers, follow the
 `refresh-metrics` skill. It needs `kimi` and `claude` installed and signed in.

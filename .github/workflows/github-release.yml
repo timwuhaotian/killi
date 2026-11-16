@@ -2,10 +2,14 @@ name: GitHub release
 
 # Publishing is a push of releases/ to main (RELEASING.md); this mirrors it into the one
 # GitHub Release page and deletes older ones, so the page never lags behind `killi update`.
+# CHANGELOG.md pushes carry corrected notes over; the daily run repairs any missed or
+# failed run. A run that finds the page current changes nothing.
 on:
   push:
     branches: [main]
-    paths: [releases/latest.toml]
+    paths: [releases/latest.toml, CHANGELOG.md]
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -22,12 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: main
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: python3 -B -m unittest -v scripts.test_github_release
-      - run: python3 scripts/github-release.py "$GITHUB_SHA"
+      - run: python3 scripts/github-release.py "$(git rev-parse HEAD)"
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

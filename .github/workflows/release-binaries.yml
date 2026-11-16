@@ -14,6 +14,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # The GitHub release workflow publishes these notes; a missing section would fail it
+      # only after the binaries were already published.
+      - run: python3 scripts/github-release.py --check
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked
       - run: cargo audit --deny warnings --deny yanked
