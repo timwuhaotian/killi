@@ -52,6 +52,12 @@ impl Agent {
                 changed.join(", ")
             ));
         }
+        if self.instructions.memory_changed() {
+            notes.push(
+                "The user's memory changed since your prompt was built; call `memory` with no arguments to read the current list before relying on the one in your prompt."
+                    .to_string(),
+            );
+        }
         if !std::mem::replace(&mut self.session_started, true) {
             notes.extend(
                 self.hook("SessionStart", None, json!({"source": "startup"}))

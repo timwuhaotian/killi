@@ -744,6 +744,82 @@ async fn plan_mode_lets_a_cd_before_read_only_commands_and_names_what_it_refuses
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn plan_mode_lets_memory_be_read_but_not_changed() {
+    let mut agent = idle_agent("plan-memory", Controls::default(), Rc::new(|_| {}));
+    agent.controls.plan.set(true);
+    let read = ToolCall {
+        id: "a".into(),
+        name: "memory".into(),
+        arguments: "{}".into(),
+    };
+    let listed = agent.dispatch(&read, &json!({})).await;
+    assert!(!listed.is_error, "{}", listed.text);
+    let write = ToolCall {
+        id: "b".into(),
+        name: "memory".into(),
+        arguments: json!({"add": "Uses pnpm"}).to_string(),
+    };
+    let blocked = agent
+        .dispatch(&write, &json!({"add": "Uses pnpm"}))
+        .await;
+    assert!(
+        blocked.is_error && blocked.text.contains("Plan mode"),
+        "{}",
+        blocked.text
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn only_the_main_session_changes_the_user_memory() {
+    let mut agent = idle_agent("memory-depth", Controls::default(), Rc::new(|_| {}));
+    agent.depth = 1;
+    let write = ToolCall {
+        id: "a".into(),
+        name: "memory".into(),
+        arguments: json!({"add": "Uses pnpm"}).to_string(),
+    };
+    let refused = agent
+        .dispatch(&write, &json!({"add": "Uses pnpm"}))
+        .await;
+    assert!(
+        refused.is_error && refused.text.contains("Only the main session"),
+        "{}",
+        refused.text
+    );
+    let read = ToolCall {
+        id: "b".into(),
+        name: "memory".into(),
+        arguments: "{}".into(),
+    };
+    let listed = agent.dispatch(&read, &json!({})).await;
+    assert!(!listed.is_error, "{}", listed.text);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_memory_edited_between_turns_is_pointed_at() {
+    let dir = crate::test_temp::TempDir::new("killi-memory-turn");
+    let previous = std::env::var_os("HOME");
+    // SAFETY: the override isolates ~/.killi for both turns, then HOME is restored.
+    unsafe { std::env::set_var("HOME", dir.path()) };
+    let url = stub_replies(vec![sse("first done", "stop"), sse("second done", "stop")]).await;
+    let mut agent = idle_agent("memory-turn", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent.run("first", &[]).await.unwrap();
+    crate::memory::add("Uses pnpm").unwrap();
+    agent.run("second", &[]).await.unwrap();
+    let found = agent
+        .messages
+        .iter()
+        .filter_map(|message| message["content"].as_str())
+        .any(|content| content.contains("memory changed since your prompt was built"));
+    match previous {
+        Some(home) => unsafe { std::env::set_var("HOME", home) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    assert!(found, "the second turn was not pointed at the new memory");
+}
+
 #[test]
 fn a_subagent_in_plan_mode_hears_it_first() {
     let mut agent = idle_agent("plan-child", Controls::default(), Rc::new(|_| {}));

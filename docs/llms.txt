@@ -4,8 +4,8 @@
 > single ~7 MB native binary for Apple silicon Macs, starts in under 10 ms, uses about 18 MB of
 > RAM while running a prompt, and is designed so 70–90% of input tokens hit the provider's prompt
 > cache. It works with any OpenAI-compatible, Anthropic-compatible or OpenAI Responses LLM —
-> including ChatGPT subscriptions — and supports MCP servers, subagents, plan mode, skills, hooks
-> and AGENTS.md. It is an open-source (MIT), lightweight alternative to Claude Code, Codex CLI,
+> including ChatGPT subscriptions — and supports MCP servers, subagents, plan mode, skills, hooks,
+> AGENTS.md and user memory. It is an open-source (MIT), lightweight alternative to Claude Code, Codex CLI,
 > opencode and Kimi Code.
 
 - [GitHub repository](https://github.com/timwuhaotian/killi): source, install command and full README

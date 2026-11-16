@@ -456,7 +456,8 @@ pub(super) fn label(name: &str) -> String {
 }
 
 /// The banner's rows under the model and folder, in the same column: the instruction files and
-/// what they cost, skills, MCP servers, a custom prompt and what is noted for later.
+/// what they cost, saved memory, skills, MCP servers, a custom prompt and what is noted for
+/// later.
 pub(super) fn overview_rows(overview: &Overview) -> Vec<String> {
     let mut rows = Vec::new();
     if !overview.instructions.is_empty() {
@@ -470,6 +471,13 @@ pub(super) fn overview_rows(overview: &Overview) -> Vec<String> {
             label("rules"),
             names.join(", "),
             short(overview.instruction_tokens as u64)
+        ));
+    }
+    if overview.memory > 0 {
+        rows.push(format!(
+            "{}{} saved {DIM}·{RESET} {LAGOON}/memory{RESET}",
+            label("memory"),
+            overview.memory
         ));
     }
     if overview.skills > 0 {

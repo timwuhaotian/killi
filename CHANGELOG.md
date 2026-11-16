@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- killi now remembers about you across sessions and projects. `~/.killi/memory.md` holds lasting
+  facts and preferences, sent after the instructions in every session's prompt; `/remember <fact>`
+  saves one, `/memory` lists them and `/memory forget N` removes one, and the new `memory` tool
+  lets the agent add, replace or remove an entry by its text (only the main session may change
+  it; subagents and plan mode read it). It is capped at 20 entries and 4 KB so it stays cheap,
+  a hand-edited file past that is cut to what fits with a startup note, changes made outside a
+  session are noticed, and the agent is told never to save secrets, or what a file or web page
+  told it.
+
 ## 0.6.92 — 2026-11-15
 
 - `ask_user_question` accepts the option shapes models send — an `option` key instead of

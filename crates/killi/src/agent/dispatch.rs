@@ -241,6 +241,16 @@ impl Agent {
             }
             "todo_write" => self.todo_write(&args),
             "later" => self.later(&args),
+            "memory" if self.depth > 0 && crate::memory::writes(&args) => tools::Output::error(
+                "Only the main session changes the user's memory. Read it with `memory` if you need it, and report anything worth keeping to your parent.",
+            ),
+            "memory" => {
+                let output = crate::memory::run(&args);
+                if crate::memory::writes(&args) {
+                    self.instructions.refresh_memory();
+                }
+                output
+            }
             "ask_user_question" => self.ask(&args).await,
             "exit_plan_mode" => self.exit_plan(&args).await,
             "agent" | "agent_swarm" => tools::Output::error(
@@ -273,6 +283,11 @@ impl Agent {
                 "Plan mode is on, so {} is blocked. Finish the plan and call exit_plan_mode.",
                 call.name
             )));
+        }
+        if call.name == "memory" && crate::memory::writes(args) {
+            return Some(tools::Output::error(
+                "Plan mode is on, so the user's memory can't change yet; read it with `memory` and save the note once the plan is approved.",
+            ));
         }
         if call.name == "bash"
             && let Some(segment) = plan::bash_refused(

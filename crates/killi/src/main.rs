@@ -9,6 +9,7 @@ mod live;
 mod llm;
 mod login;
 mod mcp;
+mod memory;
 mod plan;
 mod prompt;
 mod session;
@@ -376,6 +377,7 @@ async fn run_once(
             "first_prompt_tokens": stats.first_prompt,
             "instruction_tokens": setup.instruction_tokens(),
             "instruction_files": setup.instruction_files(),
+            "memory": setup.memory(),
             "duration_ms": elapsed.as_millis() as u64,
             "stopped": stopped,
             "final_text": text,

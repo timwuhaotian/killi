@@ -114,6 +114,7 @@ fn the_banner_lists_the_setup_in_its_column() {
             PathBuf::from("AGENTS.md"),
         ],
         instruction_tokens: 4551,
+        memory: 3,
         skills: 204,
         later: 2,
         ..Overview::default()
@@ -126,6 +127,7 @@ fn the_banner_lists_the_setup_in_its_column() {
         rows,
         [
             "rules  ~/.agents/AGENTS.md, AGENTS.md · ~4.6k tokens",
+            "memory 3 saved · /memory",
             "skills 204",
             "prompt custom · [prompt] in config.toml",
             "later  2 noted · /later",

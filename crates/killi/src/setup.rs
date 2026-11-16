@@ -29,6 +29,8 @@ pub struct Overview {
     /// Instruction files (AGENTS.md), relative to the folder when they are in it.
     pub instructions: Vec<PathBuf>,
     pub instruction_tokens: usize,
+    /// Facts saved in the user's memory, sent with every session's prompt.
+    pub memory: usize,
     pub skills: usize,
     /// MCP servers that are on.
     pub mcp: Vec<String>,
@@ -88,13 +90,21 @@ impl Setup {
             None => {}
         }
         let skills = Skills::discover(cwd, &config.skills.dirs);
-        let prompt = prompt::build(cwd, &skills, config.guidance());
+        let memory = crate::memory::for_prompt();
+        let prompt = prompt::build(cwd, &skills, config.guidance(), &memory.items);
         let mut tools = tools::definitions();
         if !skills.is_empty() {
             tools.push(crate::skills::definition());
         }
         let mut mcp = Mcp::load(cwd);
         let mut notes = Vec::new();
+        if memory.total > memory.items.len() {
+            notes.push(format!(
+                "memory.md holds {} entries; only the first {} fit in the prompt. /memory lists them all; remove some to make the rest apply.",
+                memory.total,
+                memory.items.len()
+            ));
+        }
         if let Some(gateway) = mcp.definition() {
             tools.push(gateway);
             // A global eager name whose definition the project's `.mcp.json` replaced is a
@@ -279,15 +289,8 @@ impl Setup {
 
     fn refresh(&mut self, config: Config) {
         self.skills = Skills::discover(&self.cwd, &config.skills.dirs);
-        // Without the skill tool the model can't load skills, so the prompt doesn't name them.
-        let listed = if self.has_skill_tool() {
-            self.skills.clone()
-        } else {
-            Skills::default()
-        };
-        self.prompt = prompt::build(&self.cwd, &listed, config.guidance());
+        self.rebuild_prompt(config.guidance());
         self.settings.skills = self.skills.clone();
-        self.settings.instruction_files = self.prompt.instruction_files.clone();
         self.settings.search = config.search.settings();
         self.settings.swarm_parallel = config
             .agent
@@ -295,6 +298,26 @@ impl Setup {
             .unwrap_or(DEFAULT_SWARM_PARALLEL)
             .max(1);
         self.config = config;
+    }
+
+    /// Rebuilds the prompt a session started now would get, without re-reading the config:
+    /// `/new` calls it after `/remember` or a hand edit, so the session it starts carries the
+    /// memory and instruction files as they stand.
+    pub fn refresh_prompt(&mut self) {
+        let guidance = self.config.guidance().to_string();
+        self.rebuild_prompt(&guidance);
+    }
+
+    fn rebuild_prompt(&mut self, guidance: &str) {
+        // Without the skill tool the model can't load skills, so the prompt doesn't name them.
+        let listed = if self.has_skill_tool() {
+            self.skills.clone()
+        } else {
+            Skills::default()
+        };
+        let memory = crate::memory::for_prompt();
+        self.prompt = prompt::build(&self.cwd, &listed, guidance, &memory.items);
+        self.settings.instruction_files = self.prompt.instruction_files.clone();
     }
 
     /// Applies `/swarm parallel <n>` to the sessions started later in this run.
@@ -350,6 +373,7 @@ impl Setup {
                 .map(|p| p.strip_prefix(&self.cwd).unwrap_or(p).to_path_buf())
                 .collect(),
             instruction_tokens: self.prompt.instruction_tokens,
+            memory: crate::memory::list().len(),
             skills: self.skills.len(),
             mcp: self
                 .settings
@@ -382,6 +406,9 @@ impl Setup {
                 names.join(", ")
             ));
         }
+        if overview.memory > 0 {
+            parts.push(format!("{} remembered · /memory", overview.memory));
+        }
         if overview.skills > 0 {
             parts.push(format!("{} skills", overview.skills));
         }
@@ -401,6 +428,11 @@ impl Setup {
 
     pub fn instruction_files(&self) -> usize {
         self.prompt.instruction_files.len()
+    }
+
+    /// The facts saved in the user's memory, sent with every session's prompt.
+    pub fn memory(&self) -> usize {
+        crate::memory::list().len()
     }
 
     pub fn mcp(&self) -> &Mcp {

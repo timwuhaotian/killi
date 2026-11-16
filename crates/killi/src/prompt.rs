@@ -7,7 +7,7 @@ use crate::config::home;
 use crate::skills::Skills;
 
 /// The built-in guidance: who the agent is and how it works. `[prompt] system` in the config
-/// replaces it; the environment, instruction files and skills always follow it.
+/// replaces it; the environment, instruction files, memory and skills always follow it.
 pub const DEFAULT: &str = include_str!("prompt/system.md");
 
 pub struct SystemPrompt {
@@ -17,7 +17,7 @@ pub struct SystemPrompt {
     pub instruction_tokens: usize,
 }
 
-pub fn build(cwd: &Path, skills: &Skills, guidance: &str) -> SystemPrompt {
+pub fn build(cwd: &Path, skills: &Skills, guidance: &str, memory: &[String]) -> SystemPrompt {
     let mut text = format!(
         "{}\n\n# Environment\n- Working directory: {}\n- Date: {}\n- Each bash call starts a fresh shell in the working directory; `cd` doesn't carry over to the next call.\n",
         guidance.trim_end(),
@@ -43,6 +43,7 @@ pub fn build(cwd: &Path, skills: &Skills, guidance: &str) -> SystemPrompt {
         );
         text.push_str(&instructions);
     }
+    text.push_str(&crate::memory::section(memory));
     text.push_str(&skills.prompt_section());
     SystemPrompt {
         text,
@@ -189,13 +190,50 @@ mod tests {
         fs::create_dir_all(root.join(".git")).unwrap();
         fs::create_dir_all(root.join("web/src")).unwrap();
         fs::write(root.join("web/AGENTS.md"), "use pnpm").unwrap();
-        let mut instructions = Instructions::new(&root, &[]);
+        let mut instructions = Instructions::new(&root, &[], &root.join("memory.md"));
         instructions.touched(&root.join("web/src/app.ts"));
         instructions.touched(&root.join("web/src/other.ts"));
         let found = instructions.take_found();
         assert_eq!(found.len(), 1);
         assert!(found[0].ends_with("web/AGENTS.md"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn memory_follows_the_instructions_and_leaves_no_section_when_empty() {
+        let dir = std::env::temp_dir().join(format!("killi-memory-prompt-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("AGENTS.md"), "be terse").unwrap();
+        let skills = Skills::default();
+        let prompt = build(&dir, &skills, "guide", &["Uses pnpm".to_string()]);
+        assert!(
+            prompt.text.contains("# Memory\n") && prompt.text.contains("- Uses pnpm"),
+            "{}",
+            prompt.text
+        );
+        let instructions = prompt.text.find("# Instructions").unwrap();
+        let memory = prompt.text.find("# Memory").unwrap();
+        assert!(instructions < memory, "memory follows the instructions");
+        let empty = build(&dir, &skills, "guide", &[]);
+        assert!(!empty.text.contains("# Memory"), "{}", empty.text);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_memory_change_is_noticed_once_and_a_write_by_this_session_is_not() {
+        let dir = std::env::temp_dir().join(format!("killi-memory-watch-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let memory = dir.join("memory.md");
+        let mut instructions = Instructions::new(&dir, &[], &memory);
+        assert!(!instructions.memory_changed());
+        fs::write(&memory, "- Uses pnpm\n").unwrap();
+        assert!(instructions.memory_changed());
+        assert!(!instructions.memory_changed());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&memory, "- Uses pnpm, never npm\n").unwrap();
+        instructions.refresh_memory();
+        assert!(!instructions.memory_changed());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -220,10 +258,13 @@ pub struct Instructions {
     known: std::collections::HashSet<PathBuf>,
     found: Vec<String>,
     loaded: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+    /// The user's memory, watched so a change made outside this session is noticed: the memory
+    /// section of the system prompt was built when the session started.
+    memory: (PathBuf, Option<std::time::SystemTime>),
 }
 
 impl Instructions {
-    pub fn new(cwd: &Path, loaded: &[PathBuf]) -> Self {
+    pub fn new(cwd: &Path, loaded: &[PathBuf], memory: &Path) -> Self {
         let root = cwd
             .ancestors()
             .find(|dir| dir.join(".git").exists())
@@ -234,6 +275,7 @@ impl Instructions {
             known: loaded.iter().cloned().collect(),
             found: Vec::new(),
             loaded: loaded.iter().map(|p| (p.clone(), modified(p))).collect(),
+            memory: (memory.to_path_buf(), modified(memory)),
         }
     }
 
@@ -270,6 +312,23 @@ impl Instructions {
             }
         }
         changed
+    }
+
+    /// Whether the user's memory changed since this session read it.
+    pub fn memory_changed(&mut self) -> bool {
+        let now = modified(&self.memory.0);
+        if now != self.memory.1 {
+            self.memory.1 = now;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Takes the memory's current stamp after this session wrote it, so the write isn't
+    /// reported back as someone else's edit.
+    pub fn refresh_memory(&mut self) {
+        self.memory.1 = modified(&self.memory.0);
     }
 }
 

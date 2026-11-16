@@ -13,7 +13,7 @@ fn write_skill(root: &Path, name: &str) {
 fn setup(root: &Path, tools: Vec<Value>) -> Setup {
     let config = fresh_config();
     let skills = Skills::discover(root, &config.skills.dirs);
-    let prompt = prompt::build(root, &skills, config.guidance());
+    let prompt = prompt::build(root, &skills, config.guidance(), &[]);
     let settings = Settings {
         skills: skills.clone(),
         instruction_files: prompt.instruction_files.clone(),
@@ -299,7 +299,7 @@ fn resume_runs_on_the_logs_model_with_its_conversation() {
         toml::from_str("default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n").unwrap();
     config.skills.dirs = vec!["/nonexistent".to_string()];
     let skills = Skills::discover(&root, &config.skills.dirs);
-    let prompt = prompt::build(&root, &skills, config.guidance());
+    let prompt = prompt::build(&root, &skills, config.guidance(), &[]);
     let settings = Settings {
         skills: skills.clone(),
         instruction_files: prompt.instruction_files.clone(),
@@ -352,7 +352,7 @@ fn every_session_gets_the_configured_backup_model() {
     .unwrap();
     config.skills.dirs = vec!["/nonexistent".to_string()];
     let skills = Skills::discover(&root, &config.skills.dirs);
-    let prompt = prompt::build(&root, &skills, config.guidance());
+    let prompt = prompt::build(&root, &skills, config.guidance(), &[]);
     let settings = Settings {
         skills: skills.clone(),
         instruction_files: prompt.instruction_files.clone(),
@@ -413,6 +413,28 @@ async fn a_filtered_backup_is_not_installed_at_startup() {
     assert_eq!(agent.backup_alias(), None);
     drop(agent);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_new_session_picks_up_a_memory_saved_mid_session() {
+    let root = crate::test_temp::TempDir::new("killi-memory-new");
+    let mut setup = setup(root.path(), Vec::new());
+    assert_eq!(setup.overview().memory, 0);
+    let previous = std::env::var_os("HOME");
+    // SAFETY: the override isolates ~/.killi for the save and the rebuild, then HOME is restored.
+    unsafe { std::env::set_var("HOME", root.path()) };
+    crate::memory::add("Uses pnpm").unwrap();
+    setup.refresh_prompt();
+    assert_eq!(setup.overview().memory, 1);
+    match previous {
+        Some(home) => unsafe { std::env::set_var("HOME", home) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    assert!(
+        setup.prompt.text.contains("# Memory\n") && setup.prompt.text.contains("- Uses pnpm"),
+        "{}",
+        setup.prompt.text
+    );
 }
 
 #[test]

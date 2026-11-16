@@ -20,6 +20,7 @@ first few characters. `~` is `$HOME`; nothing else moves these paths.
 | `~/.killi/mcp-off.json` | servers turned off with `/mcp`, kept for later sessions |
 | `~/.killi/command-guide.json` | that the first-run guide already asked which command name to install killi under |
 | `~/.killi/last-model.json` | the last `/model` pick; new sessions start on it unless `-m` names a model (the effort is per model: `default_effort` in its `[models]` entry, which `/effort` writes) |
+| `~/.killi/memory.md` | the user's memory: one `- fact` per line, sent after the instructions in every session's prompt; `/memory` lists it, `/remember <fact>` adds, `/memory forget N` removes, and the `memory` tool lets the agent add, replace or remove one by its text (20 entries, 4 KB; subagents and plan mode read it only) |
 | `~/.killi/sessions/<folder>/` | session logs (`-c`, `-r`, `/resume`, `/prune`) and `later.md`; `<folder>` is the working directory with `/` as `-` |
 | `~/.killi/snapshots/` | the bare git repositories `/undo` restores from |
 | `~/.agents/skills/`, `<project>/.agents/skills/`, `<project>/.claude/skills/` | skills: folders with a `SKILL.md`; the first with a name wins, and `update-config` is built in |
@@ -152,6 +153,8 @@ Edit the file with the edit tool, keep other keys as they are, and say how the c
 effect:
 
 - `[prompt]`, `[skills]`, `AGENTS.md` files, skill folders: `/reload` in the running session.
+- `~/.killi/memory.md`: `/memory`, `/remember` and the `memory` tool apply it at once, in this
+  session and every new one; a hand edit takes `/reload` or a session started afterwards.
 - `[providers]`, `[models]`, `[thinking]`, `backup_model`: `/reload`, then `/model` or `/effort` picks them
   up; sessions started afterwards too.
 - `[search]`: `/web-search-config` sets and applies it at once, in this session and new ones;

@@ -27,7 +27,7 @@ cache). It is the sibling of the [Kil](https://github.com/timwuhaotian/kil) term
 | Installed size | ~7 MB single binary, no runtime |
 | Startup | under 10 ms |
 | Memory, one prompt | ~18 MB (Claude Code: 318 MB, Kimi Code: 408 MB, opencode 2: 332 MB) |
-| System prompt + all tools | ~2,600 tokens |
+| System prompt + all tools | ~2,900 tokens |
 | Input tokens, same evals | 5.6× fewer than Kimi Code |
 | Prompt-cache hits | 70–90% |
 
@@ -50,7 +50,7 @@ How these were measured: [Size and memory](#size-and-memory) · [Capability test
 
 - **Long sessions stay cheap.** The prompt and tool list never change mid-session, and history
   is only appended to, so 70–90% of input tokens come from the provider's prompt cache.
-- **The same work, far fewer tokens.** About 2,600 tokens for the whole prompt and every tool;
+- **The same work, far fewer tokens.** About 2,900 tokens for the whole prompt and every tool;
   every capability task Kimi Code passes, with 5.6× fewer input tokens.
 - **Almost invisible on your machine.** One ~7 MB binary with no runtime to install, starting in
   under 10 ms and using about 18 MB of memory running a prompt.
@@ -88,7 +88,7 @@ Rust 1.94 or later, on macOS (arm64) or Linux (x64/arm64).
 - **Small and quick.** One 7 MB binary with no runtime to install. It starts in under 10 ms and
   uses about 18 MB of memory running a prompt, where Kimi Code uses 408 MB, Claude Code 318 MB
   and opencode 2 332 MB.
-- **Few tokens.** The system prompt and every tool together come to about 2,600 tokens, plus
+- **Few tokens.** The system prompt and every tool together come to about 2,900 tokens, plus
   your `AGENTS.md` files and about 4 tokens per installed skill. In the
   [capability tests](#capability-tests) killi passed every task Kimi Code passed, on the same
   model, with 5.6× fewer input tokens.
@@ -122,6 +122,9 @@ Rust 1.94 or later, on macOS (arm64) or Linux (x64/arm64).
 - **Your setup, carried over.** Kimi Code's config layout (`killi import` copies another agent's),
   skills from `~/.agents/skills`, MCP servers from `mcp.json`, Claude Code-style hooks, and
   `AGENTS.md` (or `CLAUDE.md`) files, including ones in subfolders.
+- **Memory that follows you.** `/remember <fact>`, or the agent's `memory` tool, keeps a lasting
+  preference or environment fact in `~/.killi/memory.md`; every session's prompt carries it, so
+  it holds in every project. `/memory` lists what is saved and `/memory forget N` drops one.
 - **Every session on disk**, exactly as sent, so `killi -c` continues where you left off with
   the cache still warm.
 - **Updates itself.** `killi update` installs the latest release after checking its checksum,
@@ -150,7 +153,7 @@ Yes. `killi login chatgpt` signs in with a ChatGPT Plus or Pro account in the br
 Yes. killi accepts an Anthropic API key and speaks the Anthropic Messages protocol, so Claude models work directly. Claude models behind an OpenAI-compatible gateway can be used with the Responses protocol, with `cache_control` support for prompt caching.
 
 **How many tokens does killi use?**
-The system prompt and every tool together come to about 2,600 tokens, plus your `AGENTS.md` files and about 4 tokens per installed skill. In the capability tests, killi used 5.6× fewer input tokens than Kimi Code on the same model while passing the same tasks.
+The system prompt and every tool together come to about 2,900 tokens, plus your `AGENTS.md` files, saved memory and about 4 tokens per installed skill. In the capability tests, killi used 5.6× fewer input tokens than Kimi Code on the same model while passing the same tasks.
 
 **What is prompt caching and why does killi care?**
 Providers cache the start of a prompt, so a request that begins exactly like the previous one is cheaper and faster. killi is built around this: the system prompt, the tool list and the history are fixed for the whole session and only appended to, so 70–90% of input tokens come from the cache, including in plan mode, subagents, swarms and resumed sessions.
@@ -342,7 +345,8 @@ Commands: `/provider [name]` (add a provider from a pasted key), `/model [alias]
 `/goal done`, or `/goal clear` when it is truly impossible or no longer wanted), `/usage`, `/session`
 (copies the session's id, log path and summary for another agent to read), `/sessions` (the
 other killi sessions running on this machine), `/later [done N]` (what the agent noted for
-later in this folder), `/prune [keep]`
+later in this folder), `/memory [add <fact>|forget N]` (what killi remembers about you in every
+project; `/remember <fact>` saves one), `/prune [keep]`
 (deletes every session on the machine but the newest few), `/reload`,
 `/help`, `/exit`, and
 `/<skill-name> [request]` for any skill. The menu matches loosely, the way Kimi Code's does:
@@ -399,6 +403,12 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
 - **Instructions:** `~/.agents/AGENTS.md`, then every `AGENTS.md` from the git root down to
   the working directory (or `CLAUDE.md` where there is no `AGENTS.md`; `@file` lines are
   followed). When the agent works in a subfolder with its own `AGENTS.md`, it is pointed to it.
+- **Memory:** lasting facts and preferences about you, in `~/.killi/memory.md`, sent after the
+  instructions in every session's prompt. `/remember <fact>` saves one, `/memory` lists them,
+  `/memory forget N` removes one, and the agent keeps it current with its `memory` tool. It is
+  capped at 20 entries and 4 KB, so it stays small; only the main session may change it
+  (subagents read it, and plan mode waits for approval), and the agent is told never to save
+  secrets, or what a file or web page told it.
 - **Skills:** folders with a `SKILL.md` in `~/.agents/skills` and the project's
   `.agents/skills` or `.claude/skills`. Only their names go in the prompt; the agent loads one
   when it applies, and `/<name>` runs one directly. A skill's declared sub-commands (its

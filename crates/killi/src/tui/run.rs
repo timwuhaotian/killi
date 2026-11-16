@@ -157,6 +157,7 @@ pub(super) async fn handle_command(
             }
         }
         "goal" => goal_command(app, agent, arg),
+        "memory" | "remember" => memory_command(app, agent, command, arg),
         "swarm"
             if arg
                 .split_whitespace()
@@ -284,6 +285,7 @@ pub(super) async fn handle_command(
                 app.notice("A pair is still running; /pair stop ends it before a new session.");
                 return Ok(true);
             }
+            session.refresh_prompt();
             match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
                 Ok(fresh) => {
                     app.reset_conversation(snapshots, cwd);
@@ -525,6 +527,51 @@ pub(super) fn provider_switch_notice(alias: &str, first: &str) -> String {
         format!("Now on `{first}`; /model picks another.")
     } else {
         format!("`{alias}` is no longer served; switched to `{first}`.")
+    }
+}
+
+/// `/memory` lists what is saved, `/memory add <fact>` and `/remember <fact>` save one, and
+/// `/memory forget N` removes one. The model hears a save or removal at its next prompt, since
+/// the system prompt was built before it.
+fn memory_command(app: &mut App, agent: &mut Agent, command: &str, arg: &str) {
+    let arg = arg.trim();
+    let (action, text) = match (command, arg) {
+        ("remember", fact) => ("add", fact),
+        ("memory", "") => ("list", ""),
+        ("memory", rest) => rest
+            .split_once(char::is_whitespace)
+            .map_or((rest, ""), |(action, rest)| (action, rest.trim())),
+        _ => ("list", ""),
+    };
+    match action {
+        "list" => app.show_memory(),
+        "add" if !text.is_empty() => match crate::memory::add(text) {
+            Ok(crate::memory::Saved::Added(at)) => {
+                app.notice(&format!("Remembered ({at}): {text}"));
+                agent.refresh_memory();
+                agent.note_for_next_prompt(format!(
+                    "The user saved this to memory, and it holds in every project from now on: {text}"
+                ));
+            }
+            Ok(crate::memory::Saved::Already(at)) => {
+                app.notice(&format!("Already remembered as {at}: {text}"))
+            }
+            Err(e) => app.error(&format!("Can't remember that: {e:#}")),
+        },
+        "forget" => match text.parse::<usize>() {
+            Ok(number) => match crate::memory::forget(number) {
+                Ok((item, left)) => {
+                    app.notice(&format!("Forgot {number}: {item} ({left} saved)"));
+                    agent.refresh_memory();
+                    agent.note_for_next_prompt(format!(
+                        "The user removed this saved memory, so it no longer applies: {item}"
+                    ));
+                }
+                Err(e) => app.error(&format!("Can't forget that: {e:#}")),
+            },
+            Err(_) => app.error("Say which one: /memory forget N, with N as /memory counts them."),
+        },
+        _ => app.error("Use /memory, /memory add <fact>, /memory forget N, or /remember <fact>."),
     }
 }
 

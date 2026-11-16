@@ -117,6 +117,26 @@ impl Agent {
         agent.accounted_messages = loaded.messages.len();
         agent.messages = Rc::new(loaded.messages);
         agent.stats.context = loaded.context;
+        // The prompt in the log is from when the session started: point the model at the
+        // current list when the saved memory differs now, since the prompt won't change.
+        let current = crate::memory::section(&crate::memory::list());
+        let stale = agent
+            .messages
+            .first()
+            .and_then(|message| message["content"].as_str())
+            .is_some_and(|text| {
+                if current.is_empty() {
+                    text.contains("# Memory\n")
+                } else {
+                    !text.contains(&current)
+                }
+            });
+        if stale {
+            agent.note_for_next_prompt(
+                "The user's memory changed since this session started; call `memory` with no arguments to read the current list before relying on the prompt's version."
+                    .to_string(),
+            );
+        }
         if repaired > 0 {
             agent.session.record(&json!({
                 "type": "compaction",
@@ -212,7 +232,11 @@ impl Agent {
             current_reply: 0,
             session_started: false,
             snapshot_wait: None,
-            instructions: crate::prompt::Instructions::new(cwd, &settings_files),
+            instructions: crate::prompt::Instructions::new(
+                cwd,
+                &settings_files,
+                &crate::memory::path(),
+            ),
         }
     }
 
@@ -348,8 +372,11 @@ impl Agent {
     /// Replaces the system prompt and settings on purpose, for /reload; the next request is
     /// uncached.
     pub fn reload_system(&mut self, system: &str, settings: Settings) -> Result<()> {
-        self.instructions =
-            crate::prompt::Instructions::new(&self.ctx.cwd, &settings.instruction_files);
+        self.instructions = crate::prompt::Instructions::new(
+            &self.ctx.cwd,
+            &settings.instruction_files,
+            &crate::memory::path(),
+        );
         let search = settings.search.clone();
         self.settings = Rc::new(settings);
         *self.ctx.search.borrow_mut() = search;
@@ -388,6 +415,12 @@ impl Agent {
 
     pub fn context_window(&self) -> Option<u64> {
         self.client.model.context_window
+    }
+
+    /// Takes the memory's current stamp after this session wrote it, so the next turn doesn't
+    /// report this session's own change back to the model as someone else's edit.
+    pub fn refresh_memory(&mut self) {
+        self.instructions.refresh_memory();
     }
 
     /// Deletes this session's log if nothing was ever said in it, so opening killi and leaving

@@ -227,6 +227,12 @@ pub(super) const COMMANDS: &[Command] = &[
         about: "What the agent noted for later in this folder; done N crosses one off",
     },
     Command {
+        name: "memory",
+        aliases: &["remember"],
+        args: "[add <fact>|forget N]",
+        about: "What killi remembers about you in every project; /remember <fact> saves one",
+    },
+    Command {
         name: "prune",
         aliases: &[],
         args: "[keep]",
@@ -485,6 +491,37 @@ impl App {
             self.commit_wrapped(format!("  {DIM}{}.{RESET} {item}", i + 1));
         }
         self.notice("/later done N crosses one off.");
+    }
+
+    /// Lists the user's memory, numbered as `/memory forget N` counts it.
+    pub(super) fn show_memory(&mut self) {
+        let items = crate::memory::list();
+        self.begin(Kind::Note);
+        if items.is_empty() {
+            return self.notice(
+                "Nothing saved yet. /remember <fact> saves one, and the agent saves them with its `memory` tool.",
+            );
+        }
+        self.commit(format!(
+            "{BOLD}Memory{RESET} {DIM}({}) · {}{RESET}",
+            items.len(),
+            tilde(&crate::memory::path())
+        ));
+        for (i, item) in items.iter().enumerate() {
+            self.commit_wrapped(format!("  {DIM}{}.{RESET} {item}", i + 1));
+        }
+        let sent = crate::memory::for_prompt().items.len();
+        if sent < items.len() {
+            self.notice(&format!(
+                "Only the first {sent} go into the prompt ({} entries / {} KB); remove some to make the rest apply.",
+                crate::memory::MAX_ITEMS,
+                crate::memory::MAX_BYTES / 1024
+            ));
+        } else {
+            self.notice(
+                "/memory forget N removes one. Every session starts with them in its prompt.",
+            );
+        }
     }
 
     pub(super) fn refresh_branch(&mut self) {

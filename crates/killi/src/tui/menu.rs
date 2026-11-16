@@ -102,6 +102,10 @@ fn subcommands(name: &str) -> &'static [(&'static str, &'static str)] {
         "swarm" => &[("on", "Enable swarm mode"), ("off", "Disable swarm mode")],
         "goal" => &[("done", "Complete the goal"), ("clear", "Clear the goal")],
         "later" => &[("done", "Cross off an item by number")],
+        "memory" => &[
+            ("add", "Save a fact for every project"),
+            ("forget", "Forget one by number"),
+        ],
         _ => &[],
     }
 }
