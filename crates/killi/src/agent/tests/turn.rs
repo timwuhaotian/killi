@@ -799,9 +799,7 @@ async fn only_the_main_session_changes_the_user_memory() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_memory_edited_between_turns_is_pointed_at() {
     let dir = crate::test_temp::TempDir::new("killi-memory-turn");
-    let previous = std::env::var_os("HOME");
-    // SAFETY: the override isolates ~/.killi for both turns, then HOME is restored.
-    unsafe { std::env::set_var("HOME", dir.path()) };
+    let _home = crate::test_temp::Home::set(dir.path());
     let url = stub_replies(vec![sse("first done", "stop"), sse("second done", "stop")]).await;
     let mut agent = idle_agent("memory-turn", Controls::default(), Rc::new(|_| {}));
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
@@ -813,10 +811,6 @@ async fn a_memory_edited_between_turns_is_pointed_at() {
         .iter()
         .filter_map(|message| message["content"].as_str())
         .any(|content| content.contains("memory changed since your prompt was built"));
-    match previous {
-        Some(home) => unsafe { std::env::set_var("HOME", home) },
-        None => unsafe { std::env::remove_var("HOME") },
-    }
     assert!(found, "the second turn was not pointed at the new memory");
 }
 
@@ -865,18 +859,12 @@ async fn a_blocking_hook_stops_an_agent_call() {
 #[test]
 fn later_takes_a_number_or_a_string_and_shows_numbered_items() {
     let tmp = crate::test_temp::TempDir::new("killi-later-home");
-    let previous = std::env::var_os("HOME");
-    // SAFETY: the override lasts only for the file calls below, then HOME is restored.
-    unsafe { std::env::set_var("HOME", tmp.path()) };
+    let _home = crate::test_temp::Home::set(tmp.path());
     let mut agent = idle_agent("later-tool", Controls::default(), Rc::new(|_| {}));
     let first = agent.later(&json!({"note": "fix the flaky test"}));
     let second = agent.later(&json!({"note": "cache the glob"}));
     let done = agent.later(&json!({"done": "1"}));
     let missing = agent.later(&json!({"done": 5}));
-    match previous {
-        Some(home) => unsafe { std::env::set_var("HOME", home) },
-        None => unsafe { std::env::remove_var("HOME") },
-    }
     assert!(!first.is_error, "{}", first.text);
     assert!(
         first.text.contains("1. fix the flaky test"),

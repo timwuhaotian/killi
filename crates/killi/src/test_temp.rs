@@ -3,9 +3,11 @@
 //! pid, the time and a counter: two tests never share a folder, not even when the
 //! suite runs twice at once.
 
+use std::ffi::OsString;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 pub(crate) struct TempDir(PathBuf);
 
@@ -46,5 +48,39 @@ impl AsRef<Path> for TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Sets `HOME` for one test and puts it back on drop. The environment is one per process and
+/// tests run side by side, so a lock keeps two overrides from interleaving; a test that panics
+/// while holding it leaves the mutex poisoned, which the next one takes anyway.
+pub(crate) struct Home {
+    previous: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl Home {
+    pub(crate) fn set(path: &Path) -> Self {
+        static LOCK: Mutex<()> = Mutex::new(());
+        let lock = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let previous = std::env::var_os("HOME");
+        // SAFETY: the lock keeps every HOME override in this binary sequential.
+        unsafe { std::env::set_var("HOME", path) };
+        Self {
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for Home {
+    fn drop(&mut self) {
+        // SAFETY: the lock is still held.
+        unsafe {
+            match &self.previous {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+        }
     }
 }

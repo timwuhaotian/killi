@@ -51,6 +51,9 @@ pub struct Setup {
     tools: Vec<Value>,
     settings: Settings,
     skills: Skills,
+    /// Entries the user's memory held when the prompt was built: what the banner counts and
+    /// the headless summary reports, so neither reads the file again.
+    memory: usize,
     /// Things worth telling the user at start, such as an MCP server that didn't start.
     notes: Vec<String>,
     /// The start opens without the model's key, for an interactive session whose `/provider`
@@ -158,6 +161,7 @@ impl Setup {
             tools,
             settings,
             skills,
+            memory: memory.total,
             notes,
             defer_key,
         })
@@ -316,6 +320,7 @@ impl Setup {
             Skills::default()
         };
         let memory = crate::memory::for_prompt();
+        self.memory = memory.total;
         self.prompt = prompt::build(&self.cwd, &listed, guidance, &memory.items);
         self.settings.instruction_files = self.prompt.instruction_files.clone();
     }
@@ -373,7 +378,7 @@ impl Setup {
                 .map(|p| p.strip_prefix(&self.cwd).unwrap_or(p).to_path_buf())
                 .collect(),
             instruction_tokens: self.prompt.instruction_tokens,
-            memory: crate::memory::list().len(),
+            memory: self.memory,
             skills: self.skills.len(),
             mcp: self
                 .settings
@@ -432,7 +437,7 @@ impl Setup {
 
     /// The facts saved in the user's memory, sent with every session's prompt.
     pub fn memory(&self) -> usize {
-        crate::memory::list().len()
+        self.memory
     }
 
     pub fn mcp(&self) -> &Mcp {

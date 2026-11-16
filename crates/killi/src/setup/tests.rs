@@ -28,6 +28,7 @@ fn setup(root: &Path, tools: Vec<Value>) -> Setup {
         tools,
         settings,
         skills,
+        memory: 0,
         notes: Vec::new(),
         defer_key: false,
     }
@@ -69,9 +70,7 @@ async fn a_filtered_default_is_not_used_by_a_headless_start() {
     let root = std::env::temp_dir().join(format!("killi-start-filtered-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    let previous = std::env::var_os("HOME");
-    // SAFETY: the override isolates the saved model choice, then HOME is restored.
-    unsafe { std::env::set_var("HOME", &root) };
+    let _home = crate::test_temp::Home::set(&root);
     let config: Config = toml::from_str(
         "default_model = \"zai/glm-4.5\"\n\n[providers.zai]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"zai/glm-4.5\"]\nprovider = \"zai\"\nmodel = \"glm-4.5\"\n\n[models.\"zai/glm-5.3\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\n\n[models_filter.zai]\ninclude = [\"glm-5.3\"]\n",
     )
@@ -79,10 +78,6 @@ async fn a_filtered_default_is_not_used_by_a_headless_start() {
     let setup = Setup::new(config, &root, None, false).await.unwrap();
     let agent = setup.start(Controls::default(), Rc::new(|_| {})).unwrap();
     assert_eq!(agent.model_alias(), "zai/glm-5.3");
-    match previous {
-        Some(home) => unsafe { std::env::set_var("HOME", home) },
-        None => unsafe { std::env::remove_var("HOME") },
-    }
     drop(agent);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -314,6 +309,7 @@ fn resume_runs_on_the_logs_model_with_its_conversation() {
         tools: Vec::new(),
         settings,
         skills,
+        memory: 0,
         notes: Vec::new(),
         defer_key: false,
     };
@@ -367,6 +363,7 @@ fn every_session_gets_the_configured_backup_model() {
         tools: Vec::new(),
         settings,
         skills,
+        memory: 0,
         notes: Vec::new(),
         defer_key: false,
     };
@@ -420,16 +417,10 @@ fn a_new_session_picks_up_a_memory_saved_mid_session() {
     let root = crate::test_temp::TempDir::new("killi-memory-new");
     let mut setup = setup(root.path(), Vec::new());
     assert_eq!(setup.overview().memory, 0);
-    let previous = std::env::var_os("HOME");
-    // SAFETY: the override isolates ~/.killi for the save and the rebuild, then HOME is restored.
-    unsafe { std::env::set_var("HOME", root.path()) };
+    let _home = crate::test_temp::Home::set(root.path());
     crate::memory::add("Uses pnpm").unwrap();
     setup.refresh_prompt();
     assert_eq!(setup.overview().memory, 1);
-    match previous {
-        Some(home) => unsafe { std::env::set_var("HOME", home) },
-        None => unsafe { std::env::remove_var("HOME") },
-    }
     assert!(
         setup.prompt.text.contains("# Memory\n") && setup.prompt.text.contains("- Uses pnpm"),
         "{}",
