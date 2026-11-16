@@ -513,7 +513,9 @@ mod tests {
             )
         };
         assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
-        assert!(attempt().is_error);
+        let out = attempt();
+        assert!(out.is_error);
+        assert!(out.text.contains(name.to_str().unwrap()), "{}", out.text);
         assert!(edit().is_error);
         assert_eq!(fs::read(&path).unwrap(), b"original");
     }

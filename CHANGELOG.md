@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- On Linux, `edit` and `write` work again on files carrying an SELinux label (every ordinary file
+  on an Enforcing system, refused since 0.6.91); the replacement keeps the original's label. A
+  file with any other extended attribute is still refused, and the error now names it.
+
 ## 0.6.93 — 2026-11-16
 
 - killi now remembers about you across sessions and projects. `~/.killi/memory.md` holds lasting

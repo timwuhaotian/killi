@@ -1,3 +1,4 @@
+use std::ffi::CStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 #[cfg(target_os = "macos")]
@@ -9,8 +10,46 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-fn unsupported(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::Unsupported, message)
+/// The extended attribute the system puts on ordinary files. It is allowed, and the
+/// replacement must end up with the original's value (Linux copies it; macOS only compares).
+#[cfg(target_os = "linux")]
+const LABEL: &CStr = c"security.selinux";
+#[cfg(target_os = "macos")]
+const LABEL: &CStr = c"com.apple.provenance";
+#[cfg(target_os = "linux")]
+const NO_ATTR: i32 = libc::ENODATA;
+#[cfg(target_os = "macos")]
+const NO_ATTR: i32 = libc::ENOATTR;
+
+fn unsupported(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, message.into())
+}
+
+fn xattr_names(fd: libc::c_int) -> io::Result<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    let list = |buf: *mut libc::c_char, len| unsafe { libc::flistxattr(fd, buf, len, 0) };
+    #[cfg(target_os = "linux")]
+    let list = |buf: *mut libc::c_char, len| unsafe { libc::flistxattr(fd, buf, len) };
+    let size = list(std::ptr::null_mut(), 0);
+    if size < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut names = vec![0u8; size as usize];
+    if size > 0 {
+        let got = list(names.as_mut_ptr().cast(), names.len());
+        if got < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        names.truncate(got as usize);
+    }
+    Ok(names)
+}
+
+/// The first attribute in a NUL-separated name list that a replacement would lose.
+fn foreign_xattr(names: &[u8]) -> Option<&[u8]> {
+    names
+        .split(|&b| b == 0)
+        .find(|name| !name.is_empty() && *name != LABEL.to_bytes())
 }
 
 // Resolve the final symlink ourselves so a dangling link is preserved too.
@@ -54,35 +93,11 @@ fn check_metadata(file: &File) -> io::Result<()> {
         return Err(unsupported("cannot safely replace a file with hard links"));
     }
     let fd = file.as_raw_fd();
-    #[cfg(target_os = "macos")]
-    let size = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0, 0) };
-    #[cfg(target_os = "linux")]
-    let size = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
-    if size < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if size > 0 {
-        #[cfg(target_os = "linux")]
-        return Err(unsupported(
-            "cannot safely replace a file with extended attributes or ACLs",
-        ));
-        #[cfg(target_os = "macos")]
-        {
-            let mut names = vec![0u8; size as usize];
-            let got = unsafe { libc::flistxattr(fd, names.as_mut_ptr().cast(), names.len(), 0) };
-            if got < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            names.truncate(got as usize);
-            if names
-                .split(|&b| b == 0)
-                .any(|name| !name.is_empty() && name != b"com.apple.provenance")
-            {
-                return Err(unsupported(
-                    "cannot safely replace a file with extended attributes or ACLs",
-                ));
-            }
-        }
+    if let Some(name) = foreign_xattr(&xattr_names(fd)?) {
+        return Err(unsupported(format!(
+            "cannot safely replace a file with extended attribute {}",
+            String::from_utf8_lossy(name)
+        )));
     }
     #[cfg(target_os = "macos")]
     {
@@ -136,35 +151,59 @@ fn check_metadata(file: &File) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn provenance(file: &File) -> io::Result<Option<Vec<u8>>> {
-    let name = c"com.apple.provenance";
+/// The value of [`LABEL`] on `file`, or `None` when it has none.
+fn label(file: &File) -> io::Result<Option<Vec<u8>>> {
     let fd = file.as_raw_fd();
-    let size = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0, 0, 0) };
+    #[cfg(target_os = "macos")]
+    let get = |buf: *mut libc::c_void, len| unsafe {
+        libc::fgetxattr(fd, LABEL.as_ptr(), buf, len, 0, 0)
+    };
+    #[cfg(target_os = "linux")]
+    let get =
+        |buf: *mut libc::c_void, len| unsafe { libc::fgetxattr(fd, LABEL.as_ptr(), buf, len) };
+    let size = get(std::ptr::null_mut(), 0);
     if size < 0 {
         let e = io::Error::last_os_error();
-        return if e.raw_os_error() == Some(libc::ENOATTR) {
-            Ok(None)
-        } else {
-            Err(e)
+        return match e.raw_os_error() {
+            Some(code) if code == NO_ATTR || code == libc::ENOTSUP => Ok(None),
+            _ => Err(e),
         };
     }
     let mut value = vec![0; size as usize];
-    let got = unsafe {
-        libc::fgetxattr(
-            fd,
-            name.as_ptr(),
-            value.as_mut_ptr().cast(),
-            value.len(),
-            0,
-            0,
-        )
-    };
+    let got = get(value.as_mut_ptr().cast(), value.len());
     if got < 0 {
         return Err(io::Error::last_os_error());
     }
     value.truncate(got as usize);
     Ok(Some(value))
+}
+
+/// Gives `temp` the original's [`LABEL`], where the system lets a file's owner set it.
+fn keep_label(original: &File, temp: &File) -> io::Result<()> {
+    let want = label(original)?;
+    if want == label(temp)? {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(value) = &want {
+        // A refusal (no SELinux, no relabel permission) is reported by the check below.
+        unsafe {
+            libc::fsetxattr(
+                temp.as_raw_fd(),
+                LABEL.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+            );
+        }
+    }
+    if want != label(temp)? {
+        return Err(unsupported(format!(
+            "cannot preserve extended attribute {}",
+            LABEL.to_string_lossy()
+        )));
+    }
+    Ok(())
 }
 
 struct Temp(Option<PathBuf>);
@@ -217,10 +256,7 @@ pub(in crate::tools) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         if old.uid() != new.uid() || old.gid() != new.gid() {
             return Err(unsupported("cannot preserve file owner and group"));
         }
-        #[cfg(target_os = "macos")]
-        if provenance(original)? != provenance(&file)? {
-            return Err(unsupported("cannot preserve file provenance"));
-        }
+        keep_label(original, &file)?;
     }
     file.write_all(bytes)?;
     if let Some(original) = original {
@@ -248,4 +284,55 @@ pub(in crate::tools) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         fs::hard_link(temp.0.as_ref().unwrap(), &path)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_system_label_is_allowed() {
+        let label = LABEL.to_bytes();
+        assert_eq!(foreign_xattr(b""), None);
+        assert_eq!(foreign_xattr(&[label, b"\0"].concat()), None);
+        assert_eq!(
+            foreign_xattr(&[label, b"\0user.x\0"].concat()),
+            Some(&b"user.x"[..])
+        );
+        assert_eq!(
+            foreign_xattr(b"system.posix_acl_access\0"),
+            Some(&b"system.posix_acl_access"[..])
+        );
+    }
+
+    #[test]
+    fn replacing_a_file_keeps_its_system_label() {
+        let dir = crate::test_temp::TempDir::new("killi-write-label");
+        let path = dir.join("file");
+        fs::write(&path, "original").unwrap();
+        let file = File::open(&path).unwrap();
+        #[cfg(target_os = "linux")]
+        if label(&file).unwrap().is_none() {
+            // Without SELinux only a privileged process (root in CI or a container) can set it.
+            let value = b"system_u:object_r:user_home_t:s0\0";
+            unsafe {
+                libc::fsetxattr(
+                    file.as_raw_fd(),
+                    LABEL.as_ptr(),
+                    value.as_ptr().cast(),
+                    value.len(),
+                    0,
+                );
+            }
+        }
+        let Some(before) = label(&file).unwrap() else {
+            eprintln!("skipped: cannot give a file {LABEL:?} here");
+            return;
+        };
+        write(&path, b"changed").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"changed");
+        assert_eq!(label(&File::open(&path).unwrap()).unwrap(), Some(before));
+        write(&dir.join("new"), b"new").unwrap();
+        assert_eq!(fs::read(dir.join("new")).unwrap(), b"new");
+    }
 }
