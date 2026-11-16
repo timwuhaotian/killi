@@ -45,17 +45,7 @@ fn a_locked_log_counts_as_running_and_is_skipped_by_continue() {
         Some(old.clone())
     );
     drop(held);
-    // Another test forking at this moment can pin the lock past the drop, so the
-    // release is awaited instead of assumed instant; a leaked lock still fails.
-    let mut unlocked = false;
-    for _ in 0..100 {
-        if !session::is_locked(&new) {
-            unlocked = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert!(unlocked, "the lock goes when the session ends");
+    crate::test_temp::await_unlocked(&new);
     assert_eq!(
         newest_available(vec![listed(new.clone())]),
         Some(new.clone())

@@ -84,3 +84,17 @@ impl Drop for Home {
         }
     }
 }
+
+/// Waits up to five seconds for a session log's lock to go after its `Session` is dropped.
+/// Another test forking at that moment (the bash tool spawns through `pre_exec`) holds a copy
+/// of every open fd until it execs, and with it the lock, so the release is awaited instead
+/// of assumed instant; a leaked lock still fails.
+pub(crate) fn await_unlocked(path: &Path) {
+    for _ in 0..100 {
+        if !crate::session::is_locked(path) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("the lock on {} outlived its session", path.display());
+}

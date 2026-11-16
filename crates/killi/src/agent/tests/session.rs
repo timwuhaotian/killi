@@ -670,6 +670,7 @@ fn a_resumed_session_keeps_the_plan_mode_it_ended_in_and_drops_the_queue() {
         "resume drops another session's queued messages"
     );
     drop(agent);
+    crate::test_temp::await_unlocked(&log);
     let off = [
         json!({"type": "message", "message": {"role": "system", "content": "sys"}}).to_string(),
         json!({"type": "message", "message": {"role": "user", "content": plan::OFF}}).to_string(),
@@ -863,6 +864,7 @@ async fn interrupted_parallel_agents_keep_finished_reports_on_recovery_and_resum
     assert_eq!(&resumed.messages[..prefix.len()], prefix);
     check(&resumed.messages);
     drop(resumed);
+    crate::test_temp::await_unlocked(&snapshot);
     let (locked, report) = Session::resume(&snapshot).unwrap();
     let resumed_again = Agent::resume_reported(test_client(), None, &dir, locked, report, Vec::new(), Settings::default(), Controls::default(), Rc::new(|_| {})).unwrap();
     check(&resumed_again.messages);

@@ -335,18 +335,7 @@ fn a_log_open_in_one_session_cannot_be_opened_again() {
         Err(e) => assert!(e.to_string().starts_with("session is in use"), "{e:#}"),
     }
     drop(one);
-
-    // Another test forking at this moment inherits the lock's fd, so the release is
-    // awaited instead of assumed instant; a leaked lock still fails.
-    let mut unlocked = false;
-    for _ in 0..100 {
-        if !is_locked(&path) {
-            unlocked = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert!(unlocked, "the lock goes when the session ends");
+    crate::test_temp::await_unlocked(&path);
     assert!(Session::open(&path).is_ok());
     fs::remove_dir_all(&dir).unwrap();
 }
@@ -372,10 +361,12 @@ fn resume_locks_before_loading_and_holds_the_lock_until_dropped() {
             .starts_with("session is in use")
     );
     drop(held);
+    crate::test_temp::await_unlocked(&path);
     let (session, report) = Session::resume(&path).unwrap();
     assert_eq!(report.loaded.messages.len(), 1);
     assert!(Session::open(&path).is_err());
     drop(session);
+    crate::test_temp::await_unlocked(&path);
     assert!(Session::open(&path).is_ok());
 }
 
@@ -653,6 +644,7 @@ fn prune_skips_a_locked_log_and_a_live_listed_one() {
     assert!(!logs[1].exists() && !logs[2].exists());
     assert_eq!(pruned.sessions, 2);
     drop(held);
+    crate::test_temp::await_unlocked(&logs[0]);
     assert_eq!(
         prune_in(&root, 0, Path::new("nowhere")).unwrap().sessions,
         1

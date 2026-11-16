@@ -87,6 +87,7 @@ async fn an_interactive_start_defers_only_a_missing_key() {
     let root = std::env::temp_dir().join(format!("killi-start-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
+    let _home = crate::test_temp::Home::set(&root);
     let source = "default_model = \"t/model\"\n\n[providers.t]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[models.\"t/model\"]\nprovider = \"t\"\nmodel = \"model\"\n";
     let config: Config = toml::from_str(source).unwrap();
     let Err(error) = Setup::new(config, &root, Some("t/model"), false).await else {
@@ -377,6 +378,7 @@ fn every_session_gets_the_configured_backup_model() {
         "the config's backup_model is what every session starts with"
     );
     drop(agent);
+    crate::test_temp::await_unlocked(&log);
 
     // A backup the config no longer knows is dropped, not fatal.
     let mut setup = setup;
@@ -398,6 +400,7 @@ async fn a_filtered_backup_is_not_installed_at_startup() {
     let root = std::env::temp_dir().join(format!("killi-backup-filtered-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
+    let _home = crate::test_temp::Home::set(&root);
     let config: Config = toml::from_str(
         "default_model = \"test/model\"\nbackup_model = \"test/backup\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n\n[models.\"test/backup\"]\nprovider = \"test\"\nmodel = \"backup\"\n\n[models_filter.test]\ninclude = [\"test/model\"]\n",
     )
