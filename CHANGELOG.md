@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.95 — 2026-11-16
+
 - A model that keeps resending a tool call the repeat breaker already refused now has its turn
   stopped at the fourth identical call instead of the eighth. A session on `unisound/u2-flash`
   sent the same `mcp` call with empty `arguments` eight times and got the `mcp needs arguments`
