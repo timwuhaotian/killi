@@ -37,6 +37,11 @@ Users install from `releases/killi-arm64`, `releases/killi-linux-x64` or
    `KILLI_RELEASES_URL` can verify a commit before using mutable `main` URLs. GitHub raw-file
    caches may take about five minutes to propagate; mismatched cached files fail the checksum
    check rather than install.
+5. The push of `releases/latest.toml` runs the **GitHub release** workflow: it rechecks the
+   binaries against the manifest and `Cargo.toml`, publishes them as release `vX.Y.Z` with that
+   version's `CHANGELOG.md` notes (using the tag if one was pushed, otherwise tagging the
+   publish commit), marks it latest and deletes every older release page; tags stay. Check
+   that run succeeded; rerun it with `gh workflow run github-release.yml --ref main`.
 
 To refresh the size, memory and capability charts and the README numbers, follow the
 `refresh-metrics` skill. It needs `kimi` and `claude` installed and signed in.

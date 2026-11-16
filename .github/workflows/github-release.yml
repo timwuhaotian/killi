@@ -1,0 +1,33 @@
+name: GitHub release
+
+# Publishing is a push of releases/ to main (RELEASING.md); this mirrors it into the one
+# GitHub Release page and deletes older ones, so the page never lags behind `killi update`.
+on:
+  push:
+    branches: [main]
+    paths: [releases/latest.toml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: github-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python3 -B -m unittest -v scripts.test_github_release
+      - run: python3 scripts/github-release.py "$GITHUB_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
