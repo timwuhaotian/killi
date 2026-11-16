@@ -612,6 +612,53 @@ fn a_same_result_repeat_is_not_run_again() {
     );
 }
 
+#[test]
+fn a_repeat_refused_twice_stops_the_turn() {
+    let read = call(r#"{"path":"a"}"#);
+    let mut agent = idle_agent("repeat-block-stop", Controls::default(), Rc::new(|_| {}));
+    for n in 0..REPEAT_BLOCK_AFTER {
+        agent
+            .finish_call(
+                &format!("c{n}"),
+                &read,
+                tools::Output::ok("same result"),
+                Duration::ZERO,
+                None,
+            )
+            .unwrap();
+    }
+    // The first refused repeat warns but leaves the turn a chance to change course.
+    let (same_as, _) = agent
+        .repeat_block(&read)
+        .expect("the third identical call is refused");
+    assert!(
+        !agent
+            .finish_call(
+                "c3",
+                &read,
+                tools::Output::ok("same result"),
+                Duration::ZERO,
+                Some(same_as),
+            )
+            .unwrap(),
+        "the first refused repeat does not stop the turn"
+    );
+    // Sending the same call again after being told not to is a loop: the turn stops.
+    let (same_as, _) = agent.repeat_block(&read).expect("still refused");
+    assert!(
+        agent
+            .finish_call(
+                "c4",
+                &read,
+                tools::Output::ok("same result"),
+                Duration::ZERO,
+                Some(same_as),
+            )
+            .unwrap(),
+        "the second refused repeat stops the turn"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn identical_read_after_successful_edit_reads_updated_file() {
     let mut agent = idle_agent("repeat-after-edit", Controls::default(), Rc::new(|_| {}));

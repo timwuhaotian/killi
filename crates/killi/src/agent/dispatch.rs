@@ -4,6 +4,9 @@ pub(super) const REPEAT_WARNINGS: [u32; 3] = [3, 5, 7];
 pub(super) const REPEAT_STOP: u32 = 8;
 /// An identical call that has already returned the same result twice is not run again.
 pub(super) const REPEAT_BLOCK_AFTER: u32 = 2;
+/// A call the breaker already refused to run again stops the turn on the second such
+/// attempt: one "Not run again" is the chance to change course, trying it again is a loop.
+pub(super) const REPEAT_BLOCK_STOP_AFTER: u32 = REPEAT_BLOCK_AFTER + 2;
 
 /// The result of a call that didn't run because the user sent a message before its turn.
 pub(super) const SKIPPED_FOR_MESSAGE: &str = "Not run: the user sent a message first, which follows. The request this call was for still stands unless that message replaces it; run it again if it is still needed, in an order that makes sense with the new message.";
@@ -486,7 +489,16 @@ impl Agent {
                 self.push(json!({"role": "user", "content": note}))?;
             }
         }
-        Ok(same && count >= REPEAT_STOP)
+        // A call the breaker refused to run again is close to a loop: one "Not run again"
+        // result is the chance to change the call or reply, and sending it again after that
+        // stops the turn instead of burning the requests up to REPEAT_STOP. Calls that ran
+        // (same_as is None) get the full warning run-up before the turn stops.
+        let limit = if same_as.is_some() {
+            REPEAT_BLOCK_STOP_AFTER
+        } else {
+            REPEAT_STOP
+        };
+        Ok(same && count >= limit)
     }
 
     /// An identical call that has already returned the same result twice is not run again:

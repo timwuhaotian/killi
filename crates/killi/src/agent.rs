@@ -65,8 +65,8 @@ use compact::{
 };
 #[cfg(test)]
 use dispatch::{
-    REPEAT_STOP, REPEAT_WARNINGS, SKIPPED_FOR_MESSAGE, dispatch_tool, hash_call, image_parts,
-    parallel_read, repeat_key,
+    REPEAT_BLOCK_AFTER, REPEAT_STOP, REPEAT_WARNINGS, SKIPPED_FOR_MESSAGE, dispatch_tool,
+    hash_call, image_parts, parallel_read, repeat_key,
 };
 #[cfg(test)]
 use request::hides_reasoning;
