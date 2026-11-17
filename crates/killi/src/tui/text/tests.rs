@@ -116,23 +116,22 @@ fn a_sequence_split_across_deltas_is_still_taken_out() {
 }
 
 #[test]
-fn wrapped_code_rows_keep_the_indent() {
-    let rows = wrap_code(&format!("    {}", "let x = 1;".repeat(20)), 30);
-    assert!(rows.len() > 1);
-    assert!(rows.iter().all(|row| width(row) <= 30), "{rows:?}");
-    assert!(rows.iter().all(|row| row.starts_with("    ")), "{rows:?}");
-}
-
-#[test]
-fn code_marks_a_part_that_wraps_with_its_indent() {
+fn code_marks_a_part_that_wraps_without_an_indent() {
     let mut md = Markdown::new(30);
-    md.line("```rust");
-    let parts = md.parts(&"let x = 1;".repeat(20));
+    md.line("```");
+    let code = "let x = 1;".repeat(20);
+    let parts = md.parts(&code);
     assert!(matches!(parts.as_slice(), [Part::Code(_)]));
     let rows = md.rows(parts);
+    assert!(rows.len() > 1, "{rows:?}");
     assert!(
-        rows.len() > 1 && rows.iter().all(|row| width(row) <= 30 && row.starts_with("    ")),
-        "{rows:?}"
+        rows.iter().all(|row| width(row) <= 30 && !row.starts_with(' ')),
+        "a copy of a code row takes only the code: {rows:?}"
+    );
+    assert_eq!(
+        rows.join("").replace(RESET, ""),
+        code,
+        "the wrap takes nothing from the code and adds nothing to it: {rows:?}"
     );
 }
 
@@ -211,7 +210,7 @@ fn markdown_styles_lines() {
         md.line("```").is_empty(),
         "a fence with no language has nothing to say"
     );
-    assert_eq!(md.line("let x = 1;"), ["    let x = 1;"]);
+    assert_eq!(md.line("let x = 1;"), ["let x = 1;"]);
     assert!(
         md.line("```").is_empty(),
         "nor does the one that closes the block"
@@ -270,7 +269,7 @@ fn markdown_links_are_hyperlinks_with_no_columns_of_their_own() {
 fn code_blocks_are_colored_by_language() {
     let mut md = Markdown::default();
     let rows = lines(&mut md, "```rust\nlet n = 42; // note\n```");
-    assert_eq!(rows[0], format!("    {DIM}rust{RESET}"));
+    assert_eq!(rows[0], format!("{DIM}rust{RESET}"));
     assert!(rows[1].contains(&format!("{KEYWORD}let{RESET}")));
     assert!(rows[1].contains(&format!("{NUMBER}42{RESET}")));
     assert!(rows[1].contains(&format!("{DIM}// note{RESET}")));
@@ -343,7 +342,7 @@ fn tables_line_up_and_shrink_to_the_width() {
 fn an_unclosed_fence_does_not_leak_into_the_next_message() {
     let mut md = Markdown::default();
     assert!(md.line("```rust").iter().any(|row| row.contains("rust")));
-    assert!(md.line("let x = 1;").iter().all(|row| row.starts_with("    ")));
+    assert!(md.line("let x = 1;").iter().all(|row| !row.starts_with(' ')));
     let held = md.end_message();
     assert!(held.is_empty(), "no table was held");
     assert_eq!(md.line("plain"), ["plain"]);
@@ -352,7 +351,7 @@ fn an_unclosed_fence_does_not_leak_into_the_next_message() {
         reopened.iter().any(|row| row.contains("rust")),
         "a fence still opens after the reset: {reopened:?}"
     );
-    assert!(md.line("let y = 2;").iter().all(|row| row.starts_with("    ")));
+    assert!(md.line("let y = 2;").iter().all(|row| !row.starts_with(' ')));
 }
 
 #[test]

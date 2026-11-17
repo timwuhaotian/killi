@@ -1004,6 +1004,41 @@ fn a_retry_ends_the_partial_reply_in_its_own_row() {
 }
 
 #[test]
+fn a_fullscreen_code_row_is_wrapped_to_the_width_it_has() {
+    let mut app = test_app();
+    app.fullscreen = true;
+    app.width = 40;
+    app.history.set_width(40);
+    let link = "vless://214d975a-288c-47b0-a9af-187844dceaef@suhang.chinagpt.link:443";
+    app.on_agent(Event::Text(format!("```\n{link}\n```\n")));
+    let rows: Vec<String> = app.history.rows().iter().map(|row| unstyled(row)).collect();
+    let code: Vec<&String> = rows
+        .iter()
+        .filter(|row| row.contains("vless") || row.contains("chinagpt"))
+        .collect();
+    assert!(code.len() > 1, "the width wraps it: {rows:?}");
+    assert!(
+        code.iter()
+            .all(|row| text::width(row) <= 40 && !row.starts_with(' ')),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_code_row_goes_to_the_scrollback_whole_so_a_copy_takes_all_of_it() {
+    let mut app = test_app();
+    app.width = 60;
+    let link = "vless://214d975a-288c-47b0-a9af-187844dceaef@suhang.chinagpt.link:443?\
+               encryption=none&security=tls&sni=suhang.chinagpt.link&type=ws&host=suhang.chinagpt.link\
+               &path=%2F214d975a-288c-47b0-a9af-187844dceaef#suhang-VPS";
+    app.on_agent(Event::Text(format!("```\n{link}\n```\n")));
+    let rows: Vec<String> = app.pending.iter().map(|row| unstyled(row)).collect();
+    let kept: Vec<&String> = rows.iter().filter(|row| row.contains("vless://")).collect();
+    assert_eq!(kept.len(), 1, "one row, for the terminal to wrap: {rows:?}");
+    assert_eq!(kept[0], link, "nothing added to it: {rows:?}");
+}
+
+#[test]
 fn a_notice_ends_the_streamed_line_first() {
     let mut app = test_app();
     app.on_agent(Event::Text("hello".to_string()));

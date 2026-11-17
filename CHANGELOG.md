@@ -10,6 +10,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
   The comparisons with Claude Code and the other agents say these are different trade-offs, not
   a drop-in replacement.
 
+## 0.6.96 — 2026-11-17
+
+- A code block is printed flush left, with no indent of its own, and inline it goes to the
+  scrollback as one row that the terminal soft-wraps. A share link, a key or a command copied
+  out of the terminal used to come back broken: killi's own four-column indent rode every
+  continuation row, and the wrap it did itself put a real line break in the middle of the row.
+
 ## 0.6.95 — 2026-11-16
 
 - A model that keeps resending a tool call the repeat breaker already refused now has its turn

@@ -20,7 +20,16 @@ impl App {
         for part in parts {
             match part {
                 Part::Row(row) => self.commit_wrapped(row),
-                Part::Code(row) => self.emit(Line::block(move |width| wrap_code(&row, width))),
+                Part::Code(row) => {
+                    // Inline, a code row goes to the scrollback whole and the terminal soft-wraps
+                    // it, so a copy of it takes one row and nothing killi added. Fullscreen paints
+                    // rows itself, so there the row is wrapped to the width it has.
+                    if self.fullscreen {
+                        self.emit(Line::block(move |_| vec![row.clone()]));
+                    } else {
+                        self.commit(row);
+                    }
+                }
                 Part::Table(rows) => self.emit(Line::block(move |width| {
                     text::render_table(&rows, width)
                         .into_iter()

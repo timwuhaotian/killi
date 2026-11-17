@@ -85,7 +85,7 @@ use menu::{Entry, Fill, Item, Suggestions};
 use palette::Ground;
 use text::{
     ADD, BOLD, BRANCH, CHIP, DANGER, DEL, DIM, EFFORT, FAINT, FIN, LAGOON, Markdown, Part, RESET,
-    RULE, SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_code, wrap_words,
+    RULE, SELECT, TINT, TOKENS, WARN, ellipsize, wrap, wrap_words,
 };
 
 use commands::{

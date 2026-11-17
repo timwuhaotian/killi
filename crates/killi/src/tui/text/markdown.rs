@@ -1,7 +1,7 @@
 use super::*;
 
-/// What a line of Markdown adds: a styled row, a code row wrapped with its gutter kept, or
-/// a finished table, left as its source rows so it can be laid out for any width.
+/// What a line of Markdown adds: a styled row, a code row the width wraps with no indent of
+/// its own, or a finished table, left as its source rows so it can be laid out for any width.
 pub enum Part {
     Row(String),
     Code(String),
@@ -81,12 +81,15 @@ impl Markdown {
         self.rows(parts)
     }
 
+    /// The rows the parts take, laid out for `width`. Zero until the UI sets it, and a width too
+    /// narrow to wrap leaves a code row whole rather than a column per character.
     pub(super) fn rows(&self, parts: Vec<Part>) -> Vec<String> {
         parts
             .into_iter()
             .flat_map(|part| match part {
                 Part::Row(row) => vec![row],
-                Part::Code(row) => wrap_code(&row, self.width),
+                Part::Code(row) if self.width < 8 => vec![row],
+                Part::Code(row) => wrap(&row, self.width),
                 Part::Table(rows) => render_table(&rows, self.width),
             })
             .collect()
@@ -108,15 +111,16 @@ impl Markdown {
                 Lang::Plain
             };
             let label = if self.in_code { lang } else { "" };
-            return (!label.is_empty())
-                .then(|| Part::Row(format!("    {DIM}{label}{RESET}")));
+            return (!label.is_empty()).then(|| Part::Row(format!("{DIM}{label}{RESET}")));
         }
         if self.in_code {
+            // No indent: a code row is often the one thing in a reply the user copies (a link,
+            // a key, a command), and what a copy of it takes has to be the code alone.
             let code = match self.lang {
                 Lang::Plain => line.to_string(),
                 lang => highlight(lang, line),
             };
-            return Some(Part::Code(format!("    {code}")));
+            return Some(Part::Code(code));
         }
         if let Some((level, rest)) = heading(trimmed) {
             let color = if level <= 2 {
