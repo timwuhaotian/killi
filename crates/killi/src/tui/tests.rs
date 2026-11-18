@@ -100,6 +100,8 @@ pub(super) fn test_app() -> App {
         searxng: None,
         updates: Updates::default(),
         next_input: None,
+        schedules: Schedule::default(),
+        scheduled: None,
         effort_later: None,
         entries: Vec::new(),
         skills: crate::skills::Skills::default(),

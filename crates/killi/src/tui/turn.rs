@@ -375,6 +375,7 @@ impl App {
         match ended {
             Ended::Interrupted => {
                 self.last_end = Some(LastEnd::Interrupted);
+                self.schedules.defer_due(tokio::time::Instant::now());
                 self.begin(Kind::Note);
                 if self.send_now {
                     self.commit(format!(
@@ -492,6 +493,7 @@ impl App {
     pub(super) fn reset_conversation(&mut self, snapshots: &mut Snapshots, cwd: &Path) {
         // Messages from other sessions were about the conversation being left.
         self.controls.steer.borrow_mut().clear();
+        self.schedules = Schedule::default();
         self.queued.clear();
         self.send_now = false;
         self.swarm_send_armed = false;

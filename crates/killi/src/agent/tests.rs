@@ -145,6 +145,23 @@ pub(super) fn idle_agent(name: &str, controls: Controls, sink: Sink) -> Agent {
     agent
 }
 
+/// An agent whose prompt went to a provider that never answered: the prompt can still be
+/// taken back, as Esc before the first token does.
+pub(crate) async fn unanswered_agent(name: &str, prompt: &str) -> Agent {
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut agent = idle_agent(name, Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url =
+        format!("http://{}", silent.local_addr().unwrap());
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    tokio::select! {
+        _ = agent.run(prompt, &[]) => panic!("the stub never answers"),
+        () = tokio::time::sleep(Duration::from_millis(200)) => {}
+    }
+    agent
+}
+
 /// A stub that answers every request with a 429 carrying `body` and no wait, so `complete`
 /// burns its whole retry budget on it at once.
 async fn rate_limited_stub(attempts: usize, body: &str) -> String {

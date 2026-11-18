@@ -28,6 +28,7 @@ mod peers;
 mod picker;
 mod rows;
 mod run;
+mod schedule;
 mod select;
 mod shell;
 mod start;
@@ -110,6 +111,7 @@ use pair::{pair_kickoff, pair_pick, pair_turn};
 use run::{
     flush_recap, handle_command, next_incoming, peer_label, prompt_turn, provider_add, run_turn,
 };
+use schedule::Schedule;
 use select::{InputRows, Selection, Spot};
 use start::{
     CURSOR_ROW, ENHANCED, RESUMED, TerminalGuard, leave_fullscreen, query_ground, resume_command,
@@ -318,6 +320,25 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     )
                     .await?;
                 }
+            }
+            Input::Schedule(id, task) => {
+                app.notice(&format!("Scheduled task #{id}:"));
+                let sent = mention::expand(&cwd, &task);
+                app.scheduled = Some(id);
+                let ran = prompt_turn(
+                    &mut app,
+                    &mut agent,
+                    &mut snapshots,
+                    &mut keys,
+                    &mut rx,
+                    &task,
+                    &sent,
+                    &[],
+                )
+                .await;
+                app.scheduled = None;
+                app.schedules.rearm(id, tokio::time::Instant::now());
+                ran?;
             }
             Input::Command(command, arg, images) => {
                 if !handle_command(

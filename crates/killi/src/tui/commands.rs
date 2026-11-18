@@ -161,6 +161,12 @@ pub(super) const COMMANDS: &[Command] = &[
         about: "Ask a side question, also while the agent works; not kept",
     },
     Command {
+        name: "schedule",
+        aliases: &[],
+        args: "<interval> <task>",
+        about: "Repeat a task; /schedule lists tasks and /schedule cancel <id> removes one",
+    },
+    Command {
         name: "compact",
         aliases: &[],
         args: "[focus]",

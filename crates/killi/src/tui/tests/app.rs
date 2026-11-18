@@ -192,6 +192,13 @@ fn a_new_or_resumed_session_starts_with_a_clean_slate() {
         .push_back("note".into());
     app.peer_tells = 2;
     app.recap_unsaved = Some("old recap".into());
+    app.schedules
+        .add(
+            Duration::from_secs(60),
+            "old task".into(),
+            tokio::time::Instant::now(),
+        )
+        .unwrap();
     let root = crate::test_temp::TempDir::new("killi-reset");
     let mut snapshots = Snapshots::new(&root);
     app.reset_conversation(&mut snapshots, &root);
@@ -202,6 +209,7 @@ fn a_new_or_resumed_session_starts_with_a_clean_slate() {
     assert!(app.details.is_empty() && app.detail_back == 0);
     assert!(app.controls.peer_notes.borrow().is_empty() && app.peer_tells == 0);
     assert!(app.recap.is_none() && app.recap_unsaved.is_none());
+    assert!(app.schedules.next_due().is_none());
     assert!(snapshots.last_taken().is_none());
 }
 

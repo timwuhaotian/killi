@@ -156,6 +156,8 @@ pub(super) async fn handle_command(
                 _ => {}
             }
         }
+        "schedule" if !images.is_empty() => app.notice("Scheduled tasks take text only."),
+        "schedule" => schedule::command(app, agent, keys, rx, arg).await?,
         "goal" => goal_command(app, agent, arg),
         "memory" | "remember" => memory_command(app, agent, command, arg),
         "swarm"

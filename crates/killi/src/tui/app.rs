@@ -41,6 +41,8 @@ impl App {
             searxng: None,
             updates: Updates::new(),
             next_input: None,
+            schedules: Schedule::default(),
+            scheduled: None,
             effort_later: None,
             entries: Vec::new(),
             skills,

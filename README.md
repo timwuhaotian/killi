@@ -351,7 +351,8 @@ Commands: `/provider [name]` (add a provider from a pasted key), `/model [alias]
 `/backup-model [alias]` (the fallback when the primary keeps failing), `/mcp [server]`
 (turn servers on or off), `/web-search-config`, `/effort [level]` (thinking effort),
 `/new` (or `/clear`), `/resume`, `/btw <question>` (a side question, never kept),
-`/compact [focus]`, `/recap`, `/undo`, `/plan`, `/swarm [task|on|off|parallel <n>]`,
+`/schedule <interval> <task>`, `/compact [focus]`, `/recap`, `/undo`, `/plan`,
+`/swarm [task|on|off|parallel <n>]`,
 `/mode [normal|ultra-concise]` (ultra-concise: replies in the fewest words that keep the meaning),
 `/goal [<text>|done|clear]` (a session goal: `/exit`, `/new` and `/resume` wait until it is
 `/goal done`, or `/goal clear` when it is truly impossible or no longer wanted), `/usage`, `/session`
@@ -363,6 +364,18 @@ project; `/remember <fact>` saves one), `/prune [keep]`
 `/help`, `/exit`, and
 `/<skill-name> [request]` for any skill. The menu matches loosely, the way Kimi Code's does:
 `/cr` finds `code-review`.
+
+**Repeat a task.** Use `/schedule 30 mins <task>` or, for example,
+`/schedule 30 分钟 汇总最近的提交`.
+The model interprets the interval, from 1 minute to 7 days. The first run is due after one
+interval, and each later run one interval after the last one ends. A task is a prompt:
+commands, skills and `!` lines can't be scheduled. Tasks run one at a time as ordinary turns,
+with the usual controls and permissions, only when the interactive session is idle, the prompt
+is empty, and no picker or pair is active. Missed ticks don't pile up, and Esc on a run skips
+it and holds other due tasks back for an interval. `/schedule` lists tasks and
+`/schedule cancel <id>` removes one. No extra setup is needed: keep the session open. Exiting or switching sessions
+clears the schedules, and resuming doesn't restore them. Nothing runs in the background after
+exit.
 
 Ten color themes: `/theme` previews each one live — its banner gradient, diff stripes and
 status colors — as the selection moves, before you pick. The screenshots here wear

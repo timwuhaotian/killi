@@ -89,6 +89,8 @@ pub(super) enum Input {
     Prompt(String, Vec<Image>),
     /// A command with its argument and the images pasted into it.
     Command(String, String, Vec<Image>),
+    /// A scheduled task's ID and the original prompt to run as an ordinary turn.
+    Schedule(u64, String),
     /// A shell command after `!`; empty opens an interactive shell.
     Shell(String),
     Resume(PathBuf),
@@ -219,6 +221,11 @@ pub(super) struct App {
     pub(super) updates: Updates,
     /// Input to act on before reading keys again, such as `/model <alias>`.
     pub(super) next_input: Option<Input>,
+    /// Recurring tasks for this conversation; cleared when the conversation is left.
+    pub(super) schedules: Schedule,
+    /// The scheduled task whose turn runs now: Esc before its reply skips the run instead of
+    /// putting the task in the prompt, where it would hold every other job back.
+    pub(super) scheduled: Option<u64>,
     /// An effort picked while the agent works; it applies once the turn ends.
     pub(super) effort_later: Option<String>,
     /// What the slash menu searches, and the choices it offers after /model and /effort.

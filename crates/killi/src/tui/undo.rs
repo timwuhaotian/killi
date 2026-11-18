@@ -79,7 +79,15 @@ impl App {
             .enumerate()
             .map(|(i, (expanded, images))| (typed.get(i).cloned().unwrap_or(expanded), images));
         let draft = self.editor.take_draft();
-        let mut back = vec![(prompt, images)];
+        let mut back = Vec::new();
+        if let Some(id) = self.scheduled {
+            self.notice(&format!(
+                "Skipped scheduled task #{id}; it runs again after its interval."
+            ));
+        } else {
+            back.push((prompt, images));
+        }
+        self.schedules.defer_due(tokio::time::Instant::now());
         back.extend(queued);
         back.extend(Some(draft).filter(|(text, _)| !text.is_empty()));
         restore_steered(&mut self.editor, back);

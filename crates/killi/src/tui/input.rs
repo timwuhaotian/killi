@@ -23,6 +23,9 @@ impl App {
             self.recap = None;
             return Ok(Some(Input::Prompt(text, images)));
         }
+        if let Some(input) = self.take_scheduled() {
+            return Ok(Some(input));
+        }
         // A newer killi found while the last turn ran is offered now that the prompt is back.
         if self.updates.found.is_some() {
             self.offer_update();
@@ -32,7 +35,15 @@ impl App {
         edge.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             let event = tokio::select! {
+                biased;
                 event = keys.next() => event,
+                _ = async { tokio::time::sleep_until(self.schedules.next_due().expect("a task is scheduled")).await }, if self.schedule_ready() && self.schedules.next_due().is_some() => {
+                    // `None` from here would read as quitting, so a miss just waits again.
+                    if let Some(input) = self.take_scheduled() {
+                        return Ok(Some(input));
+                    }
+                    continue;
+                }
                 () = resumed() => {
                     self.draw()?;
                     continue;
