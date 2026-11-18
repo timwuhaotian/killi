@@ -276,6 +276,7 @@ impl Agent {
             sink: forward_sink(&self.sink, role),
             ids: self.ids.clone(),
             repeats: HashMap::new(),
+            awake: self.awake.clone(),
             near_repeats: HashMap::new(),
             deferred_messages: Vec::new(),
             accounted_messages: 0,

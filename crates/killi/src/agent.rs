@@ -162,6 +162,8 @@ pub struct Agent {
     pending_prompt: Option<PendingPrompt>,
     /// Hook commands already reported as failed to run, so each shows one notice.
     hook_notified: RefCell<HashSet<String>>,
+    /// Keeps the machine from idle-sleeping while a top-level turn works.
+    awake: crate::awake::Awake,
     depth: u8,
     children: usize,
     /// The pair this session runs (`/pair`), if one stands: the mentor and executor agents.

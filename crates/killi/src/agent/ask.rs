@@ -118,6 +118,7 @@ impl Agent {
         options: Vec<String>,
         plan: bool,
     ) -> Option<String> {
+        let _asleep_ok = self.awake.pause();
         let (reply, answer) = oneshot::channel();
         (self.sink)(Event::Ask(Question {
             text,

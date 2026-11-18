@@ -208,6 +208,7 @@ impl Agent {
             sink,
             ids: HashSet::new(),
             repeats: HashMap::new(),
+            awake: Default::default(),
             near_repeats: HashMap::new(),
             deferred_messages: Vec::new(),
             accounted_messages: 0,

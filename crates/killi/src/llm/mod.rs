@@ -42,7 +42,7 @@ const MAX_ATTEMPTS: u32 = 10;
 /// Requests that never reach a response head stop early: a refused port or an unresolvable
 /// host won't heal in the time ten attempts take. Once the endpoint has answered this
 /// client, the same failure is the network going away (a Mac waking from sleep resolves
-/// nothing for a few seconds), so it gets the full `MAX_ATTEMPTS` within `MAX_WAIT`.
+/// nothing for a few seconds), so it gets the full `MAX_ATTEMPTS`, about two minutes of backoff.
 const TRANSPORT_ATTEMPTS: u32 = 3;
 
 /// Requests one `complete` may send in all, however many of its waits were shared with other

@@ -18,8 +18,8 @@ pub(super) const SKIPPED_EARLIER: &str = "<system-reminder>Tool calls for an ear
 impl Agent {
     /// Runs one user turn to completion and returns the final reply text.
     pub async fn run(&mut self, user: &str, images: &[Image]) -> Result<(String, Stop)> {
-        // Subagents run inside their parent's turn, which already holds it.
-        let _awake = (self.depth == 0).then(crate::awake::hold);
+        // Subagents share their parent's `awake` and run inside its turn's hold.
+        let _awake = (self.depth == 0).then(|| self.awake.hold());
         // The breaker is for a loop inside one turn; a call the user asks for again is not one.
         self.repeats.clear();
         self.near_repeats.clear();

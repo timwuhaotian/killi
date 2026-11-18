@@ -414,6 +414,7 @@ impl Agent {
             sink,
             ids: self.ids.clone(),
             repeats: HashMap::new(),
+            awake: self.awake.clone(),
             near_repeats: HashMap::new(),
             deferred_messages: Vec::new(),
             accounted_messages: inherited_len,
