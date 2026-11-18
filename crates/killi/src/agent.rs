@@ -5,6 +5,7 @@
 mod ask;
 mod compact;
 mod dispatch;
+mod ending;
 mod lifecycle;
 mod near;
 mod pair;
@@ -52,6 +53,7 @@ pub(crate) use task::task_agent;
 
 use compact::CompactMode;
 use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
+use ending::{ends_with_question, interrupted_note, unfinished};
 use near::{NEAR_BASH_WARN_AT, NEAR_REPEAT_WARN_AT, near_key};
 use request::{is_media, is_overflow, provider_limit, reasoning_evidence};
 use types::{PartialSwarm, PendingPrompt, Repeat, last_plan_state, unanswered};
@@ -73,10 +75,9 @@ use request::hides_reasoning;
 #[cfg(test)]
 use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm};
 #[cfg(test)]
-use turn::{
-    STALE_TASKS_AFTER, ends_with_colon, ends_with_intent, ends_with_question, open_tasks_note,
-    stale_tasks_note,
-};
+use ending::{ends_with_colon, ends_with_intent};
+#[cfg(test)]
+use turn::{STALE_TASKS_AFTER, open_tasks_note, stale_tasks_note};
 #[cfg(test)]
 use types::{
     BTW_NOTE, COMPLETE_MAX, COMPLETE_NOTE, RECAP_CHARS, RECAP_MAX, RECAP_NOTE, SUGGEST_MAX,

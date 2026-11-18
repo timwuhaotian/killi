@@ -1082,7 +1082,7 @@ async fn tree_moving_git_runs_without_a_peer_or_in_another_tree() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_reply_ending_on_a_colon_is_asked_to_go_on_once() {
-    use crate::agent::turn::UNFINISHED;
+    use crate::agent::ending::UNFINISHED;
     let notices = Rc::new(RefCell::new(Vec::new()));
     let seen = notices.clone();
     let sink: Sink = Rc::new(move |event| {
@@ -1126,7 +1126,7 @@ async fn a_reply_ending_on_a_colon_is_asked_to_go_on_once() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_reply_announcing_a_next_step_is_asked_to_go_on_once() {
-    use crate::agent::turn::{ANNOUNCED, UNFINISHED};
+    use crate::agent::ending::{ANNOUNCED, UNFINISHED};
     let notices = Rc::new(RefCell::new(Vec::new()));
     let seen = notices.clone();
     let sink: Sink = Rc::new(move |event| {
@@ -1161,6 +1161,56 @@ async fn a_reply_announcing_a_next_step_is_asked_to_go_on_once() {
         .filter(|m| m["content"] == ANNOUNCED || m["content"] == UNFINISHED)
         .count();
     assert_eq!(reminded, 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_skill_turn_that_ends_before_any_tool_call_is_asked_to_go_on_once() {
+    use crate::agent::ending::UNSTARTED;
+    let skill = "Use the demo skill for this.\n\n<skill name=\"demo\" folder=\"/s\">\nOpen a PR.\n</skill>\n\njust the PR";
+    let url = stub_replies(vec![sse("Sure.", "stop"), sse("Opened #1.", "stop")]).await;
+    let mut agent = idle_agent("skill-unstarted", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, _) = agent.run(skill, &[]).await.unwrap();
+    assert_eq!(text, "Opened #1.");
+    assert_eq!(agent.messages[2]["content"], UNSTARTED);
+
+    // Once a tool ran, the skill has started and a short reply ends its turn.
+    let call = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"todo_write\",\"arguments\":\"{\\\"todos\\\":[]}\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+    let url = stub_replies(vec![call.to_string(), sse("Done.", "stop")]).await;
+    let mut agent = idle_agent("skill-started", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, _) = agent.run(skill, &[]).await.unwrap();
+    assert_eq!(text, "Done.");
+    assert!(!agent.messages.iter().any(|m| m["content"] == UNSTARTED));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_prompt_after_an_interrupted_turn_names_the_request_and_its_open_tasks() {
+    // The open item it names also earns the end-of-turn task reminder, hence two replies.
+    let url = stub_replies(vec![sse("Enabled.", "stop"), sse("Opened the PR.", "stop")]).await;
+    let mut agent = idle_agent("interrupted-note", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "user", "content": "add the models"}))
+        .unwrap();
+    agent
+        .push(json!({"role": "assistant", "content": null, "tool_calls": [
+            {"id": "a", "type": "function", "function": {"name": "bash", "arguments": "{}"}}
+        ]}))
+        .unwrap();
+    let set = agent.todo_write(&json!({"todos": [
+        {"content": "open the PR", "status": "pending"},
+    ]}));
+    assert!(!set.is_error, "{}", set.text);
+    agent.recover().unwrap();
+    agent.run("enable them first", &[]).await.unwrap();
+    let sent = agent.messages[3]["content"].as_str().unwrap();
+    assert!(
+        sent.contains(
+            "while it worked on “add the models”. Its task list still has 1 open: open the PR."
+        ) && sent.ends_with("enable them first"),
+        "{sent}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

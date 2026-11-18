@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- After you interrupt a turn and send something else, the model is told which request it was
+  working on and what its task list still had open. It does the new message first and then
+  finishes the interrupted work, unless the new message drops it. Before, running a second
+  skill after Esc made the model forget the first one.
+- A turn started by a skill no longer ends on a short reply before any of the skill's steps
+  ran, in any language. A short reply whose last clause starts a step with any English `-ing`
+  verb ("On it — opening the PR.") is asked to go on, not only the verbs on a fixed list.
 - The README now says up front that killi is opinionated: its tool list is fixed for a session,
   it runs commands and edits files without approval prompts, and it runs on macOS and Linux only.
   The comparisons with Claude Code and the other agents say these are different trade-offs, not

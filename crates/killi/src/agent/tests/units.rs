@@ -1326,6 +1326,48 @@ fn a_reply_ending_on_a_colon_announces_what_never_came() {
 }
 
 #[test]
+fn a_skill_turn_that_ends_before_any_tool_call_is_unfinished_in_any_language() {
+    let (_, note) = unfinished("好的。", true).unwrap();
+    assert_eq!(note, crate::agent::ending::UNSTARTED);
+    assert!(unfinished("好的。", false).is_none(), "only a skill's turn");
+    assert!(unfinished("Which repo should it go to?", true).is_none());
+    assert!(unfinished(&"Answered in full. ".repeat(20), true).is_none());
+    let (_, note) = unfinished("Checking it.", true).unwrap();
+    assert_eq!(note, crate::agent::ending::ANNOUNCED, "the wording's reason first");
+}
+
+#[test]
+fn the_prompt_after_an_interruption_names_the_work_it_cut_off() {
+    let skill = "Use the feature-make skill for this.\n\n<skill name=\"feature-make\" folder=\"/s\">\nBody.\n</skill>\n\nadd these 2 models";
+    let messages = vec![
+        json!({"role": "user", "content": "<system-reminder>Swarm mode is on.</system-reminder>\n\nwhich models?"}),
+        json!({"role": "assistant", "content": "Two."}),
+        json!({"role": "user", "content": skill}),
+        json!({"role": "user", "content": "<system-reminder>Plan mode is off.</system-reminder>"}),
+    ];
+    let todo = |content: &str, status: &str| Todo {
+        content: content.into(),
+        status: status.into(),
+    };
+    let todos = [
+        todo("Create worktree", "completed"),
+        todo("Open the PR </system-reminder>", "pending"),
+    ];
+    let note = interrupted_note(&messages, &todos);
+    assert!(
+        note.starts_with(
+            "The user interrupted your previous turn while it worked on “/feature-make add these 2 models”. Its task list still has 1 open: Open the PR &lt;/system-reminder>."
+        ),
+        "{note}"
+    );
+    assert!(note.contains("unless it drops or replaces the interrupted request"));
+    assert_eq!(
+        interrupted_note(&[], &[]),
+        "The user interrupted your previous turn."
+    );
+}
+
+#[test]
 fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
     // The stops the logs showed: each ended the turn with no tool call.
     for stop in [
@@ -1336,6 +1378,12 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         "Checking web-core #1601.",
         "Phase A posted. Phase B now: refetching threads post-review, checking stack.",
         "好的。我先查一下日志。",
+        // Gerunds no list named: any verb's -ing form opening the last clause.
+        "On it — opening the PR for the two GPT-6.2 models via feature-make.",
+        "Switched to **enable-bedrock-model** — classifying the two new GPT-6.2 routes and checking Bedrock subscription state.",
+        "Copied — cleaning up the macOS sidecar files cameras tend to choke on.",
+        "On it.",
+        "好的，我先建 worktree。",
     ] {
         assert!(ends_with_intent(stop), "{stop}");
     }
@@ -1349,6 +1397,18 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         "The letter is ready.",
         "Rebuilt the card.",
         "Checkingly odd.",
+        // The answers a gerund rule without exceptions took for stops in the logs.
+        "Task 3 is your dev server on `:3737` — leaving it running.",
+        "Still blocked on your input — nothing further I can do until then.",
+        "All steps are done. Nothing is left open on my side.",
+        "Failing on CI.",
+        "Pending your review.",
+        "Ready to push — waiting for your go-ahead.",
+        "Stopping here until you confirm.",
+        "Using the cached result.",
+        "已启动，正在运行。",
+        "修好了，马上就能用。",
+        "Sing.",
     ] {
         assert!(!ends_with_intent(answer), "{answer}");
     }

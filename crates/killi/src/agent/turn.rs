@@ -5,10 +5,6 @@ const MAX_CONTINUATIONS: u32 = 3;
 /// Told at the end of a turn that leaves commands running, after the list of them.
 const LEFT_RUNNING: &str = "Stop with task_stop what nothing needs anymore, such as a server or watcher started for a test or a check. If one should keep running, say so in your reply.";
 
-/// Told once when a reply ends on a colon with no tool call after it: the sentence promised a
-/// lookup or a list and the turn ended before giving it.
-pub(super) const UNFINISHED: &str = "<system-reminder>Your reply ends with a colon, so something was meant to follow it, but nothing did. If you meant to look something up or run something, do it now with a tool call. If you had nothing more to say, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
-
 /// Appended after messages typed while the agent was working: they were sent mid-turn,
 /// so without this a model can read the newest one as replacing the request it
 /// interrupted and finish having done only that one.
@@ -18,10 +14,6 @@ pub(super) const STEERED: &str = "<system-reminder>The message(s) above arrived 
 /// meanwhile stopped calls for an earlier request, and a reply that covers only the newer
 /// message (even one noting the earlier work undone) must not be the turn's end.
 pub(super) const SKIPPED_EARLIER: &str = "<system-reminder>Tool calls for an earlier user message in this turn were skipped when a newer message arrived, and your reply may cover only the newer one. Before you finish, re-check every user message in this turn: do anything still standing from the earlier ones now, in an order that makes sense, unless a later message told you to drop or replace it. If everything still standing is already done, say so in one short sentence. Don't repeat your last reply.</system-reminder>";
-
-/// Told once when a short reply ends by saying what it will do next ("Let me check that.")
-/// with no tool call after it: the turn ended where the work was meant to start.
-pub(super) const ANNOUNCED: &str = "<system-reminder>Your reply says what you will do next, but the turn ended without a tool call. If you meant to do it, do it now with a tool call. If it is already done or nothing more is needed, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
 
 impl Agent {
     /// Runs one user turn to completion and returns the final reply text.
@@ -41,7 +33,7 @@ impl Agent {
         }
         let mut notes = Vec::new();
         if std::mem::take(&mut self.interrupted) {
-            notes.push("The user interrupted your previous turn.".to_string());
+            notes.push(interrupted_note(&self.messages, &self.todos));
         }
         notes.extend(std::mem::take(&mut self.next_notes));
         notes.extend(self.settings.mcp.take_notes());
@@ -99,6 +91,9 @@ impl Agent {
         // Calls a message typed meanwhile skipped, not yet re-checked at a would-be end
         // of the turn: the work they were for may still be standing.
         let mut skipped_unchecked = false;
+        // A skill's turn that ends before any tool call is asked to go on (`unfinished`).
+        let skill = crate::skills::typed(user).is_some();
+        let mut called = false;
         loop {
             self.before_request().await?;
             let reply = match self.request().await {
@@ -138,7 +133,7 @@ impl Agent {
                 }
                 if !truncated
                     && !told_unfinished
-                    && let Some((notice, note)) = unfinished(&reply.text)
+                    && let Some((notice, note)) = unfinished(&reply.text, skill && !called)
                 {
                     told_unfinished = true;
                     (self.sink)(Event::Notice(notice.into()));
@@ -194,6 +189,7 @@ impl Agent {
                     },
                 ));
             }
+            called = true;
             let ran_from = self.messages.len();
             let stop = self.execute_calls(calls, truncated).await?;
             if self
@@ -345,108 +341,6 @@ impl Agent {
         (self.sink)(Event::Notice(shown));
         Some(live::tree_note(&peers, live::now()))
     }
-}
-
-/// Whether the reply ends by asking the user something: its last non-empty line ends with
-/// `?` (or the full-width `？` of Chinese and Japanese replies). An open task list isn't re-announced then; the question already waits for the user.
-pub(super) fn ends_with_question(text: &str) -> bool {
-    last_line_ends_with(text, &['?', '？'])
-}
-
-/// Whether the reply ends on a colon (or the full-width `：`): it announces something, a lookup
-/// or a list, that the turn stopped before giving.
-pub(super) fn ends_with_colon(text: &str) -> bool {
-    last_line_ends_with(text, &[':', '：'])
-}
-
-/// The notice and the reminder for a reply that stops where it promised more: one that ends
-/// on a colon, or a short one whose last sentence announces a next step.
-fn unfinished(text: &str) -> Option<(&'static str, &'static str)> {
-    if ends_with_colon(text) {
-        Some((
-            "The reply ended on a colon with nothing after it. Asked the agent to go on.",
-            UNFINISHED,
-        ))
-    } else if ends_with_intent(text) {
-        Some((
-            "The reply announced a next step and stopped. Asked the agent to go on.",
-            ANNOUNCED,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Replies longer than this are taken as answers even when they close on a next step: a
-/// summary that ends "I'll keep the old flag for now." is done, a one-liner that says only
-/// "Checking web-core #1601." is not.
-const INTENT_MAX_CHARS: usize = 200;
-
-/// How a sentence that announces the next step starts, lowercased. Gerunds are only those seen
-/// opening such a stop, so "Nothing else." or "Working now." stay answers.
-const INTENT_OPENERS: &[&str] = &[
-    "let me",
-    "let's",
-    "i'll",
-    "i will",
-    "i'm going to",
-    "now i'll",
-    "next i'll",
-    "checking",
-    "looking",
-    "digging",
-    "fixing",
-    "running",
-    "reading",
-    "searching",
-    "fetching",
-    "building",
-    "rebuilding",
-    "refetching",
-    "grabbing",
-    "investigating",
-    "verifying",
-    "我来",
-    "让我",
-    "我先",
-    "我去",
-    "接下来我",
-];
-
-/// Whether a short reply ends by announcing what it will do next ("Got it. Let me ground those
-/// numbers.", "Someone already raised it — checking if it clears.") rather than answering.
-/// "Let me know …" closes an answer and doesn't count.
-pub(super) fn ends_with_intent(text: &str) -> bool {
-    let text = text.trim();
-    if text.chars().count() > INTENT_MAX_CHARS || ends_with_question(text) {
-        return false;
-    }
-    let Some(line) = text.lines().rev().find(|line| !line.trim().is_empty()) else {
-        return false;
-    };
-    let line = line.trim_end_matches(['.', '。', '…', '!', '！', ' ']);
-    let clause = [". ", "! ", "; ", ": ", "— ", "– ", "。", "；", "：", "！"]
-        .iter()
-        .filter_map(|mark| line.rfind(mark).map(|at| at + mark.len()))
-        .max()
-        .map_or(line, |at| &line[at..])
-        .trim()
-        .to_lowercase();
-    if clause.starts_with("let me know") {
-        return false;
-    }
-    INTENT_OPENERS.iter().any(|opener| {
-        clause.strip_prefix(opener).is_some_and(|rest| {
-            rest.is_empty() || !opener.is_ascii() || rest.starts_with([' ', ','])
-        })
-    })
-}
-
-fn last_line_ends_with(text: &str, marks: &[char]) -> bool {
-    text.lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .is_some_and(|line| line.trim_end().ends_with(marks))
 }
 
 /// Tool calls the task list may go unchanged for with an item open before the model is
