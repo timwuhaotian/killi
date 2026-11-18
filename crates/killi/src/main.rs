@@ -1,4 +1,5 @@
 mod agent;
+mod awake;
 mod broker;
 mod config;
 mod fs_atomic;

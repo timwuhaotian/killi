@@ -422,6 +422,27 @@ async fn a_connection_failure_can_recover_on_retry() {
 }
 
 #[tokio::test]
+async fn an_endpoint_that_answered_before_outlasts_the_transport_cap() {
+    let closed = vec![String::new(); TRANSPORT_ATTEMPTS as usize];
+    let replies = [vec![sse_ok()], closed, vec![sse_ok()]].concat();
+    let (url, arrivals) = serve(replies).await;
+    let client = Client::new(test_model(&url)).unwrap();
+    let hi = [serde_json::json!({"role": "user", "content": "hi"})];
+    client.complete(&hi, &[], "k", &mut |_| {}).await.unwrap();
+    let mut retries = 0;
+    client
+        .complete(&hi, &[], "k", &mut |delta| {
+            if matches!(delta, Delta::Retry { .. }) {
+                retries += 1;
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(retries, TRANSPORT_ATTEMPTS);
+    assert_eq!(arrivals.lock().unwrap().len() as u32, TRANSPORT_ATTEMPTS + 2);
+}
+
+#[tokio::test]
 async fn a_refused_connection_names_its_cause_and_stops_early() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());

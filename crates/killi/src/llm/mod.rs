@@ -40,7 +40,9 @@ use tokens::{OUTPUT_SAFETY_TOKENS, estimated_input_tokens};
 const MAX_ATTEMPTS: u32 = 10;
 
 /// Requests that never reach a response head stop early: a refused port or an unresolvable
-/// host won't heal in the time ten attempts take.
+/// host won't heal in the time ten attempts take. Once the endpoint has answered this
+/// client, the same failure is the network going away (a Mac waking from sleep resolves
+/// nothing for a few seconds), so it gets the full `MAX_ATTEMPTS` within `MAX_WAIT`.
 const TRANSPORT_ATTEMPTS: u32 = 3;
 
 /// Requests one `complete` may send in all, however many of its waits were shared with other
@@ -65,6 +67,9 @@ pub struct Client {
     /// Set by a 429 any clone of this client hit: subagents share one client, so a rate
     /// limit paces them together instead of each burning its own retries on the same cap.
     cooldown: Rc<Cell<Option<Instant>>>,
+    /// Whether the endpoint has sent a response head to any clone of this client; from then
+    /// on a connection failure is retried like any transient one, not cut at `TRANSPORT_ATTEMPTS`.
+    answered: Rc<Cell<bool>>,
     /// How long one request may wait between attempts in all; `MAX_WAIT`, or less in a test.
     wait_budget: Duration,
 }
@@ -257,6 +262,7 @@ impl Client {
             http,
             model,
             cooldown: Rc::new(Cell::new(None)),
+            answered: Rc::new(Cell::new(false)),
             wait_budget: MAX_WAIT,
         })
     }
@@ -300,10 +306,13 @@ impl Client {
         loop {
             let (slept, waited_peer) = self.wait_cooldown(mine).await;
             waited += slept;
-            let failure = match self.attempt(&prepared, &mut renewed, on_delta).await {
+            let mut failure = match self.attempt(&prepared, &mut renewed, on_delta).await {
                 Ok(reply) => return Ok(reply),
                 Err(failure) => failure,
             };
+            if self.answered.get() {
+                failure.max_attempts = None;
+            }
             if !waited_peer {
                 burns += 1;
             }
@@ -399,6 +408,7 @@ impl Client {
             request = request.header(name.as_str(), value.as_str());
         }
         let mut response = request.send().await.map_err(transport_failure)?;
+        self.answered.set(true);
         let status = response.status();
         if !status.is_success() {
             let retry_after = response
