@@ -10,8 +10,9 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 - `/mode ultra-concise` makes replies use the fewest words that keep the meaning: no lead-ins,
   hedges or side details, while code, commands, paths and errors stay exact. Ask for detail in
   a message and that reply gives it. `/mode normal` goes back; the choice is saved as
-  `[agent] mode` for later sessions, and the status line shows `concise` while it is on. On ten
-  questions replies came out about half as long; tables and lists shrink much less.
+  `[agent] mode` for later sessions, and the status line shows `concise` while it is on. Tables and
+  lists are kept to a few words per cell or item. On ten questions replies came out about half
+  as long.
 
 ## 0.6.97 — 2026-11-18
 

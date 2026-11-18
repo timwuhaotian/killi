@@ -37,7 +37,7 @@ impl Mode {
     }
 }
 
-pub const ON: &str = "<system-reminder>Ultra-concise mode is on. Use the fewest words that keep the meaning: if 20 words say it, don't use 50; if 50, don't use 100. Lead with the answer. Drop greetings, hedges, restating, transitions, adjectives, background and side details. Keep conclusions, decisions, numbers, names, paths, commands, code and errors exact. Fragments and short lists are fine. When the user's latest message asks for detail, give it this once. This covers only your text to the user, not files, commits, plans or subagent prompts.</system-reminder>";
+pub const ON: &str = "<system-reminder>Ultra-concise mode is on. Use the fewest words that keep the meaning: if 20 words say it, don't use 50; if 50, don't use 100. Lead with the answer. Drop greetings, hedges, restating, transitions, adjectives, background and side details. Keep conclusions, decisions, numbers, names, paths, commands, code and errors exact. Fragments and short lists are fine. Tables and lists count too: a few words per cell or item, no sentence where a phrase does, the shortest unambiguous path, and each point said once. When the user's latest message asks for detail, give it this once. This covers only your text to the user, not files, commits, plans or subagent prompts.</system-reminder>";
 
 pub const OFF: &str =
     "<system-reminder>Ultra-concise mode is off. Answer at your usual length.</system-reminder>";
