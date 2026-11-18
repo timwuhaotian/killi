@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.6.97 — 2026-11-18
+
 - After you interrupt a turn and send something else, the model is told which request it was
   working on and what its task list still had open. It does the new message first and then
   finishes the interrupted work, unless the new message drops it. Before, running a second
