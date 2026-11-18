@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.7.0 — 2026-11-18
+
 - `/mode ultra-concise` makes replies use the fewest words that keep the meaning: no lead-ins,
   hedges or side details, while code, commands, paths and errors stay exact. Ask for detail in
   a message and that reply gives it. `/mode normal` goes back; the choice is saved as
