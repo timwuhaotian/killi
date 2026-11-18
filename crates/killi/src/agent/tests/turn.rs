@@ -1349,3 +1349,48 @@ fn a_session_with_only_reminders_left_is_unused() {
     agent.discard_if_unused();
     assert!(agent.session.log_path.exists());
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn ultra_concise_mode_is_said_after_every_prompt_and_its_end_once() {
+    let url = stub_replies((0..4).map(|_| sse("ok", "stop")).collect()).await;
+    let controls = Controls::default();
+    controls.mode.set(Mode::UltraConcise);
+    let mut agent = idle_agent("mode", controls.clone(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent.run("first", &[]).await.unwrap();
+    agent.run("second", &[]).await.unwrap();
+    controls.mode.set(Mode::Normal);
+    agent.run("third", &[]).await.unwrap();
+    agent.run("fourth", &[]).await.unwrap();
+    let said: Vec<&str> = agent
+        .messages
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .filter_map(|message| message["content"].as_str())
+        .collect();
+    assert_eq!(
+        said,
+        ["first", mode::ON, "second", mode::ON, "third", mode::OFF, "fourth"]
+    );
+    assert_eq!(agent.user_prompts(), ["first", "second", "third", "fourth"]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_prompt_taken_back_takes_its_mode_reminder_with_it() {
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", silent.local_addr().unwrap());
+    let controls = Controls::default();
+    controls.mode.set(Mode::UltraConcise);
+    let mut agent = idle_agent("mode-retract", controls, Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    tokio::select! {
+        _ = agent.run("hello", &[]) => panic!("the stub never answers"),
+        () = tokio::time::sleep(Duration::from_millis(200)) => {}
+    }
+    assert_eq!(agent.messages.len(), 3);
+    assert!(agent.retract().unwrap());
+    assert_eq!(agent.messages.len(), 1);
+}

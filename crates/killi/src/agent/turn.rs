@@ -73,6 +73,11 @@ impl Agent {
         };
         self.push(json!({"role": "user", "content": content}))?;
         self.push_images(images)?;
+        // Said after every prompt, not only when the mode changes: a rule said once fades.
+        if self.depth == 0 && self.controls.mode.get() == Mode::UltraConcise {
+            self.push(json!({"role": "user", "content": mode::ON}))?;
+            self.concise_announced = true;
+        }
         self.pending_prompt = Some(PendingPrompt {
             at,
             count: self.messages.len() - at,
@@ -238,6 +243,11 @@ impl Agent {
             self.push(
                 json!({"role": "user", "content": if swarming { swarm::ON } else { swarm::OFF }}),
             )?;
+        }
+        let concise = self.controls.mode.get() == Mode::UltraConcise;
+        if concise != self.concise_announced && self.depth == 0 {
+            self.concise_announced = concise;
+            self.push(json!({"role": "user", "content": if concise { mode::ON } else { mode::OFF }}))?;
         }
         let goal = self.controls.goal.borrow().clone();
         if goal != self.goal_announced && self.depth == 0 {

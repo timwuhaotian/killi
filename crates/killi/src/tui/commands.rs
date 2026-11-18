@@ -77,7 +77,7 @@ pub(super) fn runs_at_once(menu: &Suggestions, index: usize) -> bool {
 /// The commands that also work while the agent works: they need nothing the running turn holds,
 /// except /effort, which waits for the turn to end (see `App::effort_after_turn`).
 pub(super) const BUSY_COMMANDS: &[&str] = &[
-    "btw", "plan", "swarm", "pair", "later", "sessions", "help", "effort",
+    "btw", "plan", "swarm", "mode", "pair", "later", "sessions", "help", "effort",
 ];
 
 /// The effort `arg` names among those `model` takes, or what to tell the user.
@@ -189,6 +189,12 @@ pub(super) const COMMANDS: &[Command] = &[
         aliases: &[],
         args: "[task|on|off|parallel <n>]",
         about: "Swarm mode: split work across many subagents",
+    },
+    Command {
+        name: "mode",
+        aliases: &[],
+        args: "[normal|ultra-concise]",
+        about: "Switch how long replies run",
     },
     Command {
         name: "pair",
@@ -306,6 +312,8 @@ impl App {
             ("swarm", "") => self.set_swarm(!self.controls.swarm.get(), false),
             ("swarm", "on") => self.set_swarm(true, true),
             ("swarm", "off") => self.set_swarm(false, true),
+            ("mode", "") if self.busy.is_none() => self.open_mode_picker(),
+            ("mode", name) if !name.is_empty() => self.set_mode(name),
             ("later", "") => self.show_later(),
             ("sessions", _) => self.show_sessions(),
             ("pair", "stop") if self.pair_driving && self.pair_ctl.is_some() => {

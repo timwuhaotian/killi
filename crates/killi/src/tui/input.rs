@@ -592,6 +592,23 @@ impl App {
         });
     }
 
+    /// Switches the reply mode named `name` in this session and saves it as `[agent] mode`,
+    /// so later sessions start in it too.
+    pub(super) fn set_mode(&mut self, name: &str) {
+        let Some(mode) = Mode::parse(&name.to_lowercase()) else {
+            let names: Vec<_> = Mode::ALL.iter().map(|m| m.name()).collect();
+            self.error(&format!("No mode “{name}”; choose {}.", names.join(" or ")));
+            return;
+        };
+        self.controls.mode.set(mode);
+        self.notice(&format!("Mode {}: {}.", mode.name(), mode.about()));
+        let path = crate::config::killi_home().join("config.toml");
+        match crate::config::set_mode(&path, mode) {
+            Ok(()) => self.notice(&format!("Saved to {}.", path.display())),
+            Err(e) => self.error_report(&e),
+        }
+    }
+
     /// Toggles swarm mode in this session; `persist` also writes `[agent] swarm`, which only
     /// the explicit `on`/`off` forms do.
     pub(super) fn set_swarm(&mut self, on: bool, persist: bool) {

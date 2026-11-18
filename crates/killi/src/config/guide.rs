@@ -47,6 +47,7 @@ pub(super) const TEMPLATE: &str = r#"# killi's config. Models are named "<provid
 [agent]
 swarm = true                    # start in swarm mode: split work across subagents; false turns it off
 swarm_parallel = 8              # subagents a swarm runs at once
+mode = "normal"                 # how long replies run; "ultra-concise" keeps them to the fewest words
 peers = true                    # other killi sessions here can see this one, ask it and message it
 
 # Keep a provider to the models you want. A provider without an entry keeps every model.

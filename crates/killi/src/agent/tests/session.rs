@@ -1282,3 +1282,34 @@ fn a_task_agent_logs_in_the_session_folder_and_leaves_the_crash_log_alone() {
     let next = task_agent(&controls.aside.borrow(), None, Rc::new(|_| {}), 1).unwrap();
     assert!(next.session.log_path.ends_with("task-2.jsonl"));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_resumed_session_ended_ultra_concise_hears_it_is_off_when_the_config_says_normal() {
+    let dir = crate::test_temp::TempDir::new("killi-resume-mode");
+    let log = dir.join("session.jsonl");
+    let lines = [
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}).to_string(),
+        json!({"type": "message", "message": {"role": "user", "content": "hi"}}).to_string(),
+        json!({"type": "message", "message": {"role": "user", "content": mode::ON}}).to_string(),
+    ];
+    std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+    let (locked, report) = Session::resume(&log).unwrap();
+    let mut agent = Agent::resume_reported(
+        test_client(),
+        None,
+        &dir,
+        locked,
+        report,
+        Vec::new(),
+        Settings::default(),
+        Controls::default(),
+        Rc::new(|_| {}),
+    )
+    .unwrap();
+    assert!(agent.concise_announced, "the log ended ultra-concise");
+    agent.before_request().await.unwrap();
+    assert_eq!(
+        agent.messages.last().unwrap()["content"].as_str(),
+        Some(mode::OFF)
+    );
+}

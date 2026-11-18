@@ -231,6 +231,12 @@ impl App {
             self.effort_after_turn(arg);
             return true;
         }
+        // No picker opens during a turn: the prompt keeps `/mode `, where the menu offers them.
+        if name == "mode" && arg.trim().is_empty() {
+            self.editor.clear();
+            self.editor.insert("/mode ");
+            return false;
+        }
         let ran = self.run_local(name, arg);
         if !ran {
             self.notice(&format!("/{name} runs when the agent is idle: wait for this turn to finish, or press Esc. / lists what runs now."));

@@ -489,6 +489,11 @@ pub fn set_swarm(path: &Path, on: bool) -> Result<()> {
     set_agent_line(path, "swarm", format!("swarm = {on}"))
 }
 
+/// Stores `[agent] mode`, so `/mode` decides how long replies run in every later session too.
+pub fn set_mode(path: &Path, mode: crate::mode::Mode) -> Result<()> {
+    set_agent_line(path, "mode", format!("mode = \"{}\"", mode.name()))
+}
+
 /// Stores `[agent] swarm_parallel`, the subagents a swarm runs at once.
 pub fn set_swarm_parallel(path: &Path, parallel: usize) -> Result<()> {
     set_agent_line(

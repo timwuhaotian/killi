@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- `/mode ultra-concise` makes replies use the fewest words that keep the meaning: no lead-ins,
+  hedges or side details, while code, commands, paths and errors stay exact. Ask for detail in
+  a message and that reply gives it. `/mode normal` goes back; the choice is saved as
+  `[agent] mode` for later sessions, and the status line shows `concise` while it is on. On ten
+  questions replies came out about half as long; tables and lists shrink much less.
+
 ## 0.6.97 — 2026-11-18
 
 - After you interrupt a turn and send something else, the model is told which request it was

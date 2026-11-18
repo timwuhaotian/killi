@@ -634,8 +634,8 @@ impl App {
 
     /// The status line for `width` columns. Parts drop out from the least to the most useful as
     /// the terminal narrows: the cache and token detail, the context bar, the branch, and last
-    /// the context figure, so the model and mode stay on screen at any width. `swarm mode`
-    /// yields before the context figure does.
+    /// the context figure, so the model and mode stay on screen at any width. `swarm mode`,
+    /// then `concise`, yield before the context figure does.
     pub(super) fn status_line(&self, width: usize) -> String {
         if self.needs_provider {
             let mut head = vec!["no provider".to_string()];
@@ -644,6 +644,9 @@ impl App {
             }
             if self.controls.swarm.get() {
                 head.push(format!("{LAGOON}swarm mode{RESET}{DIM}"));
+            }
+            if self.controls.mode.get() == Mode::UltraConcise {
+                head.push(format!("{LAGOON}concise{RESET}{DIM}"));
             }
             return format!("{DIM}{}{RESET}", fit(&head.join(&dot()), width));
         }
@@ -662,24 +665,27 @@ impl App {
         if self.controls.plan.get() {
             head.push(format!("{LAGOON}plan mode{RESET}{DIM}"));
         }
-        let swarm = self
-            .controls
-            .swarm
-            .get()
-            .then(|| format!("{LAGOON}swarm mode{RESET}{DIM}"));
-        if let Some(swarm) = &swarm {
-            head.push(swarm.clone());
-        }
-        let full = head.join(&dot());
-        if let Some(line) = status_layout(&full, &self.status, width) {
-            return line;
-        }
-        if swarm.is_some() {
-            head.pop();
-            if let Some(line) = status_layout(&head.join(&dot()), &self.status, width) {
+        // Shown while there's room, and given up in this order before the context figure.
+        let yielding: Vec<String> = [
+            self.controls
+                .swarm
+                .get()
+                .then(|| format!("{LAGOON}swarm mode{RESET}{DIM}")),
+            (self.controls.mode.get() == Mode::UltraConcise)
+                .then(|| format!("{LAGOON}concise{RESET}{DIM}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let with = |from: usize| {
+            let parts: Vec<_> = head.iter().chain(&yielding[from..]).cloned().collect();
+            parts.join(&dot())
+        };
+        for from in 0..=yielding.len() {
+            if let Some(line) = status_layout(&with(from), &self.status, width) {
                 return line;
             }
         }
-        format!("{DIM}{}{RESET}", fit(&full, width))
+        format!("{DIM}{}{RESET}", fit(&with(0), width))
     }
 }

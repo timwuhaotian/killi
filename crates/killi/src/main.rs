@@ -10,6 +10,7 @@ mod llm;
 mod login;
 mod mcp;
 mod memory;
+mod mode;
 mod plan;
 mod prompt;
 mod session;
@@ -304,6 +305,7 @@ async fn run_once(
     };
     let mut controls = Controls::default();
     controls.swarm.set(setup.config().agent.swarm_on());
+    controls.mode.set(setup.config().agent.mode.unwrap_or_default());
     // A headless run is listed, so sessions in its tree leave its work alone, but takes no
     // questions or messages: nothing would read them while it runs.
     let mut live = setup

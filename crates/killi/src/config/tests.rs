@@ -262,6 +262,21 @@ fn swarm_mode_starts_on_unless_the_config_says_off() {
 }
 
 #[test]
+fn the_reply_mode_is_read_and_saved_by_name() {
+    use crate::mode::Mode;
+    assert_eq!(super::AgentConfig::default().mode, None);
+    let concise: super::Config = toml::from_str("[agent]\nmode = \"ultra-concise\"\n").unwrap();
+    assert_eq!(concise.agent.mode, Some(Mode::UltraConcise));
+    let dir = crate::test_temp::TempDir::new("killi-set-mode");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "[agent]\nswarm = true\n").unwrap();
+    super::set_mode(&path, Mode::UltraConcise).unwrap();
+    super::set_mode(&path, Mode::Normal).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(saved, "[agent]\nmode = \"normal\"\nswarm = true\n");
+}
+
+#[test]
 fn a_missing_key_variable_names_the_variable_and_the_fix() {
     let config: super::Config = toml::from_str(
         "default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n",

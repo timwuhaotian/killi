@@ -99,6 +99,8 @@ pub struct Controls {
     pub plan: Rc<Cell<bool>>,
     /// Swarm mode: the agent is told to split its work across `agent_swarm` subagents.
     pub swarm: Rc<Cell<bool>>,
+    /// How long the model's text to the user runs (`/mode`).
+    pub mode: Rc<Cell<crate::mode::Mode>>,
     /// The session goal set with `/goal`, if any: the model is reminded of it, and
     /// ending the session waits until it is done or cleared.
     pub goal: Rc<RefCell<Option<String>>>,

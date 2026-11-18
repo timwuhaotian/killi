@@ -39,6 +39,7 @@ use crate::llm::{
 };
 use crate::session::Session;
 use crate::skills::Skills;
+use crate::mode::{self, Mode};
 use crate::{goal, live, plan, swarm, tools};
 
 pub use types::{
@@ -146,6 +147,8 @@ pub struct Agent {
     calls_since_todo: usize,
     plan_announced: bool,
     swarm_announced: bool,
+    /// The model was last told ultra-concise mode is on.
+    concise_announced: bool,
     /// What the model was last told about the session goal: its text, or None when told
     /// the goal is over. Announced as an appended reminder, like plan and swarm mode.
     goal_announced: Option<String>,

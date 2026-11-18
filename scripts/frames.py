@@ -11,7 +11,8 @@ The themes are Kil's five (crates/kil/src/theme.rs in the Kil repo): killi asks 
 for its background and foreground, and the pseudo-terminal answers with the theme's. SGR dim is
 drawn as Kil draws it, each channel scaled to two thirds. Scenes: start, menu, files (the `@`
 menu), picker, theme (`/theme` previewing the last theme as its selection lands on it, with the
-specimen of its colors above the prompt), conv (a bug fix with a diff), question, plan, busy (mid-turn), swarm and swarm-big (an
+specimen of its colors above the prompt), conv (a bug fix with a diff), question, plan, mode (`/mode`'s picker), concise (the bug fix
+after `/mode ultra-concise`, its mark on the status line), busy (mid-turn), swarm and swarm-big (an
 `agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), update (a newer
 killi offered from a local release site, its changelog above the question), peers (the banner
 with another session in the repository), sessions (`/sessions`) and peer (that session's question and
@@ -83,6 +84,8 @@ SCENES = {
     "select": dict(keys=[FIX, "IDLE", "MOUSE:press:14:0", "MOUSE:drag:9:40", "MOUSE:wheel-up:9:40", "MOUSE:wheel-up:9:40", "MOUSE:up:9:40"]),
     "question": dict(keys=["QUESTION please\r"], until="Esc dismisses"),
     "plan": dict(keys=["\x1b[Z", "add a flag"]),
+    "mode": dict(keys=["/mode\r"]),
+    "concise": dict(keys=["/mode ultra-concise\r", FIX], until="fills it"),
     "busy": dict(keys=[FIX, "WAIT:1.5", "also keep it small"], settle=0.2),
     "select-prompt": dict(keys=["rename slugify to make_slug in slug.py", "\x1b[1;4D", "\x1b[1;4D", "\x1b[1;4D"]),
     "held": dict(keys=["SLOW what makes a good slug?\r"], settle=0.5),
@@ -187,7 +190,8 @@ class Scratch:
         (self.home / ".killi").mkdir(parents=True)
         (self.home / ".killi" / "command-guide.json").write_text('{"command":"killi"}\n')
         theme = f'theme = "{ui_theme}"\n' if ui_theme else ""
-        (self.home / ".killi" / "config.toml").write_text(CONFIG.format(port=port, theme=theme))
+        self.config = CONFIG.format(port=port, theme=theme)
+        (self.home / ".killi" / "config.toml").write_text(self.config)
         for name, description in SKILLS.items():
             folder = self.home / ".agents" / "skills" / name
             folder.mkdir(parents=True)
@@ -211,7 +215,9 @@ class Scratch:
         subprocess.run([*git, "commit", "-q", "-m", "init"], cwd=self.project, check=True)
 
     def reset(self):
-        """The project as committed, and no sessions: every scene starts the same."""
+        """The project as committed, the config as written (a scene's `/mode` or `/swarm off`
+        saves to it), and no sessions: every scene starts the same."""
+        (self.home / ".killi" / "config.toml").write_text(self.config)
         subprocess.run(["git", "checkout", "-q", "--", "."], cwd=self.project, check=True)
         subprocess.run(["git", "clean", "-qfdx"], cwd=self.project, check=True)
         for name in ("sessions", "snapshots", "live"):

@@ -35,6 +35,8 @@ pub(crate) fn task_agent(
         // A task was sent to be carried out, so it never starts in plan mode.
         plan: Rc::default(),
         swarm: Rc::default(),
+        // Its report goes to another session's model, not to a reader.
+        mode: Rc::default(),
         goal: Rc::default(),
         interactive: false,
         aside: Rc::default(),

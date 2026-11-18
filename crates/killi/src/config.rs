@@ -24,8 +24,8 @@ use serde::Deserialize;
 pub use command::command_guide_if_first;
 pub(crate) use command::{confirm, read_line, read_secret, select};
 pub use edit::{
-    remove_models, remove_provider_key, set_backup_model, set_model_effort, set_search, set_swarm,
-    set_swarm_parallel, set_ui_theme,
+    remove_models, remove_provider_key, set_backup_model, set_model_effort, set_mode, set_search,
+    set_swarm, set_swarm_parallel, set_ui_theme,
 };
 pub use guide::{init, start_if_missing};
 pub use import::import_command;
@@ -202,6 +202,8 @@ pub struct AgentConfig {
     pub swarm_parallel: Option<usize>,
     /// Start every session in swarm mode (default true); `/swarm on|off` still changes it.
     pub swarm: Option<bool>,
+    /// How long replies run: `normal` (default) or `ultra-concise`; `/mode` sets it.
+    pub mode: Option<crate::mode::Mode>,
     /// Let the other killi sessions on this machine see this one, ask it about its work and
     /// leave it messages, and tell the model about those working in its tree (default true).
     pub peers: Option<bool>,

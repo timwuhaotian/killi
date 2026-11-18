@@ -51,6 +51,17 @@ fn swarm_choices() -> Vec<Item> {
     .collect()
 }
 
+/// What `/mode ` offers: every reply mode.
+fn mode_choices() -> Vec<Item> {
+    Mode::ALL
+        .into_iter()
+        .map(|mode| Item {
+            value: mode.name().into(),
+            description: mode.about().into(),
+        })
+        .collect()
+}
+
 /// The /web-search-config flow under way: the service picked (none while its list is open),
 /// whether killi starts a local SearXNG with Docker or the user points at their own, the
 /// instance URL once answered, and the `[search]` the flow started from, for prefilling.
@@ -120,6 +131,7 @@ pub(super) enum PickerChoice {
     PairEffort(Role, String),
     /// Whether to install the newer killi on offer.
     Update(bool),
+    Mode(Mode),
 }
 
 /// The counts `/prune` offers to keep, from fewest to most, each removing something.
@@ -259,6 +271,10 @@ impl App {
                             self.on_update_choice(install);
                             Idle::Continue
                         }
+                        PickerChoice::Mode(mode) => {
+                            self.set_mode(mode.name());
+                            Idle::Continue
+                        }
                         PickerChoice::PairModel(role, alias) => {
                             Idle::Input(Input::PairModel(role, alias))
                         }
@@ -349,6 +365,7 @@ impl App {
                 |command| match command {
                     "effort" | "thinking" => self.effort_choices.clone(),
                     "swarm" => swarm_choices(),
+                    "mode" => mode_choices(),
                     _ => Vec::new(),
                 },
             )
@@ -362,6 +379,7 @@ impl App {
                 "effort" | "thinking" => self.effort_choices.clone(),
                 "theme" => self.theme_choices.clone(),
                 "swarm" => swarm_choices(),
+                "mode" => mode_choices(),
                 _ => Vec::new(),
             },
         )
@@ -802,6 +820,24 @@ impl App {
             .position(|(name, _)| *name == current)
             .unwrap_or(0);
         self.picker = Some(Picker::new("Color theme".into(), options, selected));
+    }
+
+    /// The /mode list: every reply mode, with a mark on the one in use.
+    pub(super) fn open_mode_picker(&mut self) {
+        let current = self.controls.mode.get();
+        let options = Mode::ALL
+            .into_iter()
+            .map(|mode| {
+                let mark = if mode == current { " · current" } else { "" };
+                (
+                    mode.name().to_string(),
+                    format!("{}{mark}", mode.about()),
+                    PickerChoice::Mode(mode),
+                )
+            })
+            .collect();
+        let selected = Mode::ALL.iter().position(|m| *m == current).unwrap_or(0);
+        self.picker = Some(Picker::new("Reply mode".into(), options, selected));
     }
 
     /// A /pair setup's model list for a role, preselected on the remembered pick.

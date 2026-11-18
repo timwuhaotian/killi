@@ -162,10 +162,11 @@ impl Agent {
             self.messages[0].clone(),
             json!({"role": "user", "content": summary}),
         ]);
-        // The reminders for plan mode, swarm mode and the other sessions went with the old
+        // The reminders for plan, swarm and reply mode and the other sessions went with the old
         // messages: the next step tells the model again what is still on.
         self.plan_announced = false;
         self.swarm_announced = false;
+        self.concise_announced = false;
         self.peers_announced.clear();
         self.share();
         self.session.record(&json!({

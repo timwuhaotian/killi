@@ -75,6 +75,7 @@ use crate::config::{Config, Thinking};
 use crate::live;
 use crate::llm::{Client, ErrorKind, ProviderError, Usage};
 use crate::mcp::Mcp;
+use crate::mode::Mode;
 use crate::session::{Choice, Replayed};
 use crate::setup::{Overview, Setup};
 use crate::snapshot::Snapshots;
@@ -166,6 +167,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         ..Controls::default()
     };
     controls.swarm.set(config.agent.swarm_on());
+    controls.mode.set(config.agent.mode.unwrap_or_default());
     let (live, peers) = match config
         .agent
         .peers_on()
