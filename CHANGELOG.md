@@ -5,6 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.7.1 — 2026-11-18
+
+- `/schedule <interval> <task>` repeats a prompt while the session stays open, for example
+  `/schedule 30 mins check the build` or `/schedule 每隔两小时 汇总最近的提交`. The model reads
+  the interval, from 1 minute to 7 days. Each run is an ordinary turn that starts only when the
+  session is idle and the prompt is empty, and the next interval starts when it ends. Esc on a
+  run skips it. `/schedule` lists tasks, `/schedule cancel <id>` removes one, and `/new`,
+  `/resume` or exiting clears them. A task is a prompt: commands, skills and `!` lines can't be
+  scheduled.
+
 ## 0.7.0 — 2026-11-18
 
 - `/mode ultra-concise` makes replies use the fewest words that keep the meaning: no lead-ins,
