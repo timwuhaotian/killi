@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.4 — 2026-11-19
+
+- Subagents and pair children send the provider their session's own cache key instead of one
+  of their own, so their first request reuses the session's cached system prompt and tools on
+  providers that key their cache by it (on Meta, about 19k tokens per subagent).
+- `scripts/sessions.py` counts a session's subagents and tasks, and flags a last prompt no
+  request answered; `scripts/probe.py cache` probes Responses API models and takes
+  `--other-key`.
+
 ## 0.8.3 — 2026-11-19
 
 - A killi session opened in the same repository but never given a prompt no longer counts as
