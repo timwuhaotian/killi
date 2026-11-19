@@ -124,6 +124,8 @@ impl App {
             bg_rx: None,
             bg_running: FuturesUnordered::new(),
             wakes: 0,
+            wake_held: false,
+            undo_wake: false,
         };
         app.refresh_branch();
         app

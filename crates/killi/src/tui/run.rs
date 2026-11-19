@@ -269,12 +269,17 @@ pub(super) async fn handle_command(
                     for change in changes.iter().take(20) {
                         app.commit(format!("  {DIM}{change}{RESET}"));
                     }
-                    let first = agent
-                        .user_prompts()
-                        .last()
-                        .map(|prompt| prompt.lines().next().unwrap_or("").trim().to_string())
-                        .unwrap_or_default();
-                    agent.note_for_next_prompt(undo_note(&first, &undo_paths(&changes)));
+                    let before = if std::mem::take(&mut app.undo_wake) {
+                        "the turn you took when background work ended".to_string()
+                    } else {
+                        let first = agent
+                            .user_prompts()
+                            .last()
+                            .map(|prompt| prompt.lines().next().unwrap_or("").trim().to_string())
+                            .unwrap_or_default();
+                        format!("\"{first}\"")
+                    };
+                    agent.note_for_next_prompt(undo_note(&before, &undo_paths(&changes)));
                 }
                 Err(e) => app.error(&format!("Can't undo: {e:#}")),
             }
@@ -664,7 +669,9 @@ pub(super) async fn prompt_turn(
     // reports started where it was.
     if app.scheduled.is_none() {
         app.wakes = 0;
+        app.wake_held = false;
     }
+    app.undo_wake = false;
     drive_turn(
         app,
         agent,
@@ -687,6 +694,7 @@ pub(super) async fn wake_turn(
     rx: &mut mpsc::UnboundedReceiver<Event>,
 ) -> Result<()> {
     app.wakes += 1;
+    app.undo_wake = true;
     app.drop_suggestion();
     app.notice("Background work ended; the agent reads its report.");
     app.begin_busy();
@@ -742,6 +750,7 @@ async fn drive_turn(
         run_turn(app, keys, rx, start(agent, prompt)).await?
     };
     if matches!(ended, Ended::Interrupted) && app.take_back(agent)? {
+        app.wake_held = true;
         // Nothing ran, so /undo still goes back to the turn before this one.
         snapshots.forget_after(taken);
         app.live_turn(None);

@@ -420,13 +420,13 @@ fn undo_paths_take_the_path_after_the_status() {
 
 #[test]
 fn the_undo_note_names_the_prompt_and_caps_the_paths() {
-    let short = undo_note("Fix the bug", &["a".to_string(), "b".to_string()]);
+    let short = undo_note("\"Fix the bug\"", &["a".to_string(), "b".to_string()]);
     assert_eq!(
         short,
         "The user ran /undo: files were restored to how they were before \"Fix the bug\". Changed back: a, b. Read files again before relying on what you saw."
     );
     let paths: Vec<String> = (1..=35).map(|n| format!("f{n}.rs")).collect();
-    let note = undo_note("Fix the bug", &paths);
+    let note = undo_note("\"Fix the bug\"", &paths);
     assert!(note.contains("Changed back: f1.rs, f2.rs"), "{note}");
     assert!(note.contains("f30.rs, and 5 more"), "{note}");
     assert!(!note.contains("f31.rs"), "{note}");

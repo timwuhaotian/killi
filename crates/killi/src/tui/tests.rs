@@ -177,5 +177,7 @@ pub(super) fn test_app() -> App {
         bg_rx: None,
         bg_running: FuturesUnordered::new(),
         wakes: 0,
+        wake_held: false,
+        undo_wake: false,
     }
 }

@@ -254,7 +254,9 @@ async fn agent_message_reaches_a_background_subagent_and_the_tree_is_guarded() {
     let unknown = vec![tool_call("u", "agent_message", json!({"id": 9, "message": "hi"}))];
     agent.execute_calls(unknown, false).await.unwrap();
     assert!(last_tool(&agent).contains("No subagent works in the background as task 9"));
-    // While it works, the main agent leaves the tree where it is.
+    // While it works, the main agent leaves the tree where it is; nothing polls it here, so
+    // it is marked as having its slot, as the terminal's polling would.
+    controls.background.borrow_mut().tasks.get_mut(&1).unwrap().state = BgState::Running;
     let git = vec![tool_call(
         "g",
         "bash",

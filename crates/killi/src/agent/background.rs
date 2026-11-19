@@ -129,6 +129,30 @@ impl Background {
         self.slots = Arc::new(Semaphore::new(MAX_BACKGROUND));
     }
 
+    /// A task that already ended with `report`, for the terminal's tests.
+    #[cfg(test)]
+    pub fn insert_ended(&mut self, id: u32, label: &str, report: &str) {
+        self.tasks.insert(
+            id,
+            BgTask {
+                label: label.to_string(),
+                members: 1,
+                finished_members: 1,
+                state: BgState::Done,
+                started: Instant::now(),
+                started_ms: 0,
+                ended_ms: Some(0),
+                calls: 0,
+                last: None,
+                report: Some((report.to_string(), false)),
+                stats: Stats::default(),
+                delivered: false,
+                cancel: Rc::default(),
+                steer: None,
+            },
+        );
+    }
+
     /// Ids of tasks that worked in the tree since `since` (ms since the epoch), or still do.
     pub fn worked_since(&self, since: u64) -> Vec<u32> {
         self.tasks
@@ -255,15 +279,17 @@ impl Agent {
     }
 
     /// Another agent of this session working in the tree now, named for a refusal: a background
-    /// subagent other than this one, or the main agent's turn when this one runs in the
-    /// background.
+    /// subagent other than this one (one still waiting for a slot hasn't touched anything), or
+    /// the main agent's turn when this one runs in the background.
     pub(super) fn sibling_at_work(&self) -> Option<String> {
         let registry = self.controls.background.borrow();
         let me = self.route.id();
         if let Some((id, _)) = registry
             .tasks
             .iter()
-            .find(|(id, task)| !task.ended() && Some(**id) != me)
+            .find(|(id, task)| {
+                !task.ended() && task.state != BgState::Queued && Some(**id) != me
+            })
         {
             return Some(format!("background task {id}"));
         }

@@ -376,6 +376,11 @@ pub(super) struct App {
     pub(super) bg_running: FuturesUnordered<crate::agent::BgFuture>,
     /// Turns started by background reports since the user last typed a prompt.
     pub(super) wakes: usize,
+    /// The user interrupted the last turn: reports wait for their next message instead of
+    /// starting a turn by themselves.
+    pub(super) wake_held: bool,
+    /// The last turn /undo would take back is one a background report started.
+    pub(super) undo_wake: bool,
 }
 
 /// A /pair setup between its pickers: each pick advances a step, and the task step waits

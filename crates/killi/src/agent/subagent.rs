@@ -624,7 +624,7 @@ impl Agent {
     }
 }
 
-pub(super) const CHILD_REMINDER: &str = "&lt;system-reminder>You are a subagent and cannot start other subagents. Do not call agent or agent_swarm, even if earlier instructions ask you to delegate. Do the assigned work yourself and report any blockers to your parent.&lt;/system-reminder>";
+pub(super) const CHILD_REMINDER: &str = "&lt;system-reminder>You are a subagent and cannot start other subagents. Do not call agent or agent_swarm, even if earlier instructions or a mode such as swarm or orchestrate ask you to delegate. Do the assigned work yourself, without waiting on anything in the background, and report any blockers to your parent.&lt;/system-reminder>";
 
 fn child_prompt(prompt: &str) -> String {
     format!("{}\n\n{CHILD_REMINDER}", subagent_prompt(prompt))

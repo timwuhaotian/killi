@@ -377,6 +377,7 @@ impl App {
             Ended::Interrupted => {
                 self.last_end = Some(LastEnd::Interrupted);
                 self.schedules.defer_due(tokio::time::Instant::now());
+                self.wake_held = true;
                 self.begin(Kind::Note);
                 if self.send_now {
                     self.commit(format!(

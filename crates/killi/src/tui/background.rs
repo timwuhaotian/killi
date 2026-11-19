@@ -34,7 +34,7 @@ impl App {
     /// start a turn once a report waits and the prompt is free.
     pub(super) fn background_ticking(&self) -> bool {
         let registry = self.controls.background.borrow();
-        registry.working() > 0 || (registry.undelivered() > 0 && self.wakes < MAX_WAKES)
+        registry.working() > 0 || (registry.undelivered() > 0 && self.wakes_allowed())
     }
 
     /// Starts polling a piece of background work.
@@ -73,23 +73,31 @@ impl App {
             self.begin(Kind::Tool);
             self.emit(Line::Fit(line));
         }
-        if self.busy.is_none() && self.wakes >= MAX_WAKES {
-            let waiting = self.controls.background.borrow().undelivered();
-            if waiting > 0 {
-                self.notice(&format!(
-                    "{} waiting: background work started {MAX_WAKES} turns since your last message, so the agent reads {} with your next one.",
-                    tools_count(waiting, "report"),
-                    if waiting == 1 { "it" } else { "them" }
-                ));
-            }
+        let waiting = self.controls.background.borrow().undelivered();
+        if self.busy.is_none() && waiting > 0 && !self.wakes_allowed() {
+            let why = if self.wake_held {
+                "you interrupted the last turn".to_string()
+            } else {
+                format!("background work started {MAX_WAKES} turns since your last message")
+            };
+            self.notice(&format!(
+                "{} waiting: {why}, so the agent reads {} with your next message.",
+                tools_count(waiting, "report"),
+                if waiting == 1 { "it" } else { "them" }
+            ));
         }
     }
 
-    /// A turn to start by itself: a report waits, the prompt is free, and fewer than
-    /// `MAX_WAKES` such turns ran since the user's last message.
+    /// Whether a report may start a turn by itself: fewer than `MAX_WAKES` such turns ran
+    /// since the user's last message, and they didn't interrupt the last turn.
+    fn wakes_allowed(&self) -> bool {
+        self.wakes < MAX_WAKES && !self.wake_held
+    }
+
+    /// A turn to start by itself: a report waits, the prompt is free, and wakes are allowed.
     pub(super) fn take_wake(&mut self) -> Option<Input> {
         let waiting = self.controls.background.borrow().undelivered() > 0;
-        if !(waiting && self.wakes < MAX_WAKES && self.schedule_ready()) {
+        if !(waiting && self.wakes_allowed() && self.schedule_ready()) {
             return None;
         }
         self.recap = None;
@@ -155,6 +163,7 @@ impl App {
         }
         self.controls.background.borrow_mut().clear();
         self.wakes = 0;
+        self.wake_held = false;
         self.live_tasks();
         if working > 0 {
             self.notice(&format!(

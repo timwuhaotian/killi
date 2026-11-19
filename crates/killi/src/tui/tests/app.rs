@@ -1434,3 +1434,25 @@ fn a_held_prompt_is_printed_before_anything_its_turn_prints() {
     assert!(app.held_prompt.is_none());
     assert!(!shows(&app.live().0), "drawn once, in the scrollback");
 }
+
+#[test]
+fn a_report_waits_for_the_users_next_message_after_they_interrupted() {
+    let mut app = test_app();
+    app.controls
+        .background
+        .borrow_mut()
+        .insert_ended(1, "review", "found two bugs");
+    assert!(matches!(app.take_wake(), Some(Input::Wake)), "an idle report starts a turn");
+
+    app.wake_held = true;
+    assert!(app.take_wake().is_none(), "not right after Esc");
+    assert!(!app.background_ticking());
+    app.on_background_done(1);
+    let printed: Vec<String> = app.pending.iter().map(|l| unstyled(l)).collect();
+    assert!(
+        printed
+            .iter()
+            .any(|l| l.contains("you interrupted the last turn")),
+        "{printed:?}"
+    );
+}

@@ -31,8 +31,9 @@ pub(super) fn undo_paths(changes: &[String]) -> Vec<String> {
 }
 
 /// What the model hears after /undo instead of the interruption note: what was restored,
-/// so it reads the files again instead of relying on what it saw.
-pub(super) fn undo_note(first_line: &str, paths: &[String]) -> String {
+/// so it reads the files again instead of relying on what it saw. `before` names the turn
+/// taken back.
+pub(super) fn undo_note(before: &str, paths: &[String]) -> String {
     const MAX_PATHS: usize = 30;
     let listed = if paths.len() > MAX_PATHS {
         format!(
@@ -44,7 +45,7 @@ pub(super) fn undo_note(first_line: &str, paths: &[String]) -> String {
         paths.join(", ")
     };
     format!(
-        "The user ran /undo: files were restored to how they were before \"{first_line}\". Changed back: {listed}. Read files again before relying on what you saw."
+        "The user ran /undo: files were restored to how they were before {before}. Changed back: {listed}. Read files again before relying on what you saw."
     )
 }
 
