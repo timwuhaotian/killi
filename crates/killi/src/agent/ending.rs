@@ -140,12 +140,47 @@ pub(super) fn ends_with_intent(text: &str) -> bool {
     if clause.starts_with("let me know") {
         return false;
     }
-    opens_with_gerund(&clause)
+    let sentence = [". ", "! ", "; ", "。", "；", "！"]
+        .iter()
+        .filter_map(|mark| line.rfind(mark).map(|at| at + mark.len()))
+        .max()
+        .map_or(line, |at| &line[at..])
+        .trim()
+        .to_lowercase();
+    names_a_coming_phase(&sentence)
+        || opens_with_gerund(&clause)
         || INTENT_OPENERS.iter().any(|opener| {
             clause.strip_prefix(opener).is_some_and(|rest| {
                 rest.is_empty() || !opener.is_ascii() || rest.starts_with([' ', ','])
             })
         })
+}
+
+/// Whether a lowercased last sentence, written as a fragment, says the work moves on to a
+/// next phase ("Fix-first phase starting, 3 at a time.", "Phase A next: 12 resolve groups.").
+/// Ultra-concise replies drop the "I'll" and the leading verb, so the opener rules miss them.
+/// "next" counts only where it closes a phrase ("next:", "… next."), not in "next release";
+/// a sentence that addresses the user ("you", "你") is advice to them, not the agent's plan.
+fn names_a_coming_phase(sentence: &str) -> bool {
+    let words: Vec<&str> = sentence
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != ':' && c != ',')
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words
+        .iter()
+        .any(|word| word.trim_end_matches([':', ',']) == "you")
+        || sentence.contains('你')
+    {
+        return false;
+    }
+    let next = words.iter().enumerate().any(|(at, word)| match *word {
+        "next" => at + 1 == words.len(),
+        "next:" | "next," => true,
+        _ => false,
+    });
+    next || words.iter().any(|word| word.trim_end_matches([':', ',']) == "starting")
+        || sentence.contains("接下来")
+        || sentence.contains("下一步")
 }
 
 /// Whether a lowercased clause opens with an English gerund ("opening the PR",

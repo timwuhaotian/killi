@@ -1384,6 +1384,11 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         "Copied — cleaning up the macOS sidecar files cameras tend to choke on.",
         "On it.",
         "好的，我先建 worktree。",
+        // Ultra-concise fragments: the phase named, no verb up front.
+        "27 PRs found. Mine: 11, sorted into 10 stacks. Others: 16. Fix-first phase starting, 3 at a time.",
+        "25 PRs. 13 mine, 12 others. 1 stack (#1131→#1132). Cache warm. Phase A next: 12 resolve groups, batch of 3.",
+        "Lint clean. Tests next.",
+        "已列出 27 个 PR。接下来处理我的 11 个。",
     ] {
         assert!(ends_with_intent(stop), "{stop}");
     }
@@ -1409,6 +1414,13 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         "已启动，正在运行。",
         "修好了，马上就能用。",
         "Sing.",
+        // "next" and "starting" that don't name the agent's coming phase.
+        "Done. Next release will carry it.",
+        "Shipped. Next, you run `killi update`.",
+        "Fixed. The restarting flag is gone.",
+        "Done. In step 1, #1149 and #1152 now show ✅ before \"approved and merged\".",
+        "Renamed — card now holds just `ezviz.dav`. Say the word if you want the next one.",
+        "完成。下一步你可以合并。",
     ] {
         assert!(!ends_with_intent(answer), "{answer}");
     }
