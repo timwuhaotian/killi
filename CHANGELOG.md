@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.3 — 2026-11-19
+
+- A killi session opened in the same repository but never given a prompt no longer counts as
+  another session working there: the agent isn't told to leave its changes alone, git that
+  moves the tree isn't refused for it, and /undo doesn't warn about it. A resumed session still
+  counts from the start.
+
 ## 0.8.2 — 2026-11-19
 
 - A request dropped before it finished (Esc, or a turn abandoned while the provider stalled or
