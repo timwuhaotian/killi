@@ -221,11 +221,27 @@ impl Process {
         self.exit()
     }
 
+    /// Kills the whole group. On macOS a child the shell was forking as the signal went out
+    /// can come up after it and outlive it, so the group is signalled again for a moment
+    /// while anything of it is left.
     pub(super) fn kill(&self) {
-        if self.running() {
-            // SAFETY: killpg only sends a signal to the process group we started.
-            unsafe { libc::killpg(self.pgid as libc::pid_t, libc::SIGKILL) };
+        if !self.running() {
+            return;
         }
+        let pgid = self.pgid;
+        // SAFETY: killpg only sends a signal to the process group we started.
+        unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
+        let exit = self.exit.clone();
+        std::thread::spawn(move || {
+            for _ in 0..20 {
+                std::thread::sleep(Duration::from_millis(50));
+                if !group_running(pgid, exit.borrow().is_some()) {
+                    return;
+                }
+                // SAFETY: as above; the check just made says the group is still ours.
+                unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
+            }
+        });
     }
 }
 
