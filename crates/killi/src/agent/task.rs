@@ -45,6 +45,7 @@ pub(crate) fn task_agent(
         // works in the same tree.
         here,
         peer_notes: Rc::default(),
+        background: Rc::default(),
     };
     let mut agent = Agent::begin(
         (*client).clone(),

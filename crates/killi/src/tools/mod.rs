@@ -9,6 +9,7 @@ mod web;
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use serde_json::{Value, json};
 
@@ -36,8 +37,9 @@ pub struct Context {
     /// Where full outputs go when a result is truncated.
     pub spill_dir: PathBuf,
     pub tasks: RefCell<Tasks>,
-    /// The calls waiting on a command now.
-    pub running: RefCell<Running>,
+    /// The calls waiting on a command now, this agent's and its subagents': `/btw` says what
+    /// the work waits on.
+    pub running: Rc<RefCell<Running>>,
     /// Whether the model can see images.
     pub images: Cell<bool>,
     /// Which service `web_search` asks; /web-search-config swaps it while the session runs.
@@ -54,9 +56,26 @@ impl Context {
             cwd,
             spill_dir,
             tasks: RefCell::new(Tasks::default()),
-            running: RefCell::default(),
+            running: Rc::default(),
             images: Cell::new(true),
             search: RefCell::default(),
+            #[cfg(test)]
+            temp: None,
+        }
+    }
+
+    /// A context for a subagent that runs beside the agent that started it: the same folder,
+    /// spill folder, image support, search service and list of waiting calls, with background
+    /// tasks of its own, so the parent's end-of-turn reminder never lists, and never stops, a
+    /// command the subagent still uses.
+    pub fn detached(&self) -> Self {
+        Self {
+            cwd: self.cwd.clone(),
+            spill_dir: self.spill_dir.clone(),
+            tasks: RefCell::new(Tasks::default()),
+            running: self.running.clone(),
+            images: Cell::new(self.images.get()),
+            search: RefCell::new(self.search.borrow().clone()),
             #[cfg(test)]
             temp: None,
         }
@@ -164,7 +183,7 @@ pub fn summary(name: &str, args: &Value, cwd: &Path) -> String {
         }
         "grep" => format!("{:?} {}", field("pattern"), field("path")),
         "glob" => format!("{} {}", field("pattern"), field("path")),
-        "task_output" | "task_stop" => format!(
+        "task_output" | "task_stop" | "agent_message" => format!(
             "task {}",
             args.get("id").map(Value::to_string).unwrap_or_default()
         ),
@@ -268,6 +287,14 @@ pub fn definitions() -> Vec<Value> {
             json!({"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}),
         ),
         tool(
+            "agent_message",
+            "Tell a background subagent something new: a correction, a needed fact, or a change of course.",
+            json!({"type": "object", "properties": {
+                "id": {"type": "integer"},
+                "message": {"type": "string"}
+            }, "required": ["id", "message"]}),
+        ),
+        tool(
             "grep",
             "Search file contents with a regex (Rust syntax), honoring .gitignore. Returns `path:line: text`; context lines use `-`.",
             json!({"type": "object", "properties": {
@@ -342,7 +369,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "agent",
-            "Run a subagent on a self-contained task and get its final report. It has your tools and model. Several calls in one reply run in parallel. fork: true gives it this whole conversation; otherwise it sees only the prompt, so make the prompt complete. Forward the original request with the facts it needs; don't rewrite it into your own plan.",
+            "Run a subagent on a self-contained task and get its final report. It has your tools and model. Several calls in one reply run in parallel. fork: true gives it this whole conversation, false only the prompt, so make the prompt complete. Forward the original request with the facts it needs; don't rewrite it into your own plan.",
             json!({"type": "object", "properties": {
                 "description": {"type": "string", "description": "3-5 words"},
                 "prompt": {"type": "string"},

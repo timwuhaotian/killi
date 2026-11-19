@@ -121,6 +121,9 @@ impl App {
             pair_setup: None,
             pair_driving: false,
             pair_interrupt: false,
+            bg_rx: None,
+            bg_running: FuturesUnordered::new(),
+            wakes: 0,
         };
         app.refresh_branch();
         app

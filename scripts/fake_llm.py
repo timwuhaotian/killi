@@ -109,6 +109,8 @@ def step_for(messages):
     if draft:
         last = draft.group(1).split("\n")[-1]
         return {"text": last if last.endswith("slug.py") else last.rstrip() + " in slug.py"}
+    if messages and "The user sent nothing" in text_of(messages[-1]):
+        return {"text": "The five reviews are in: nothing blocks a merge."}
     if messages and "A question about your work from" in text_of(messages[-1]):
         return {"text": "Fixing `slugify` in `slug.py`, on master. The tests pass now; nothing is committed yet."}
     real = [i for i, m in enumerate(messages) if m.get("role") == "user" and not text_of(m).lstrip().startswith("<system-reminder>")]

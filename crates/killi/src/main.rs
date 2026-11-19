@@ -591,7 +591,8 @@ impl Printer {
             | Event::Ask(_)
             | Event::Swarm { .. }
             | Event::Started
-            | Event::Finished { .. } => {}
+            | Event::Finished { .. }
+            | Event::Detached => {}
         }
     }
 

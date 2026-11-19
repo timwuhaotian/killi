@@ -143,6 +143,10 @@ pub(super) enum PickerChoice {
     Update(bool),
     Mode(Mode),
     Verbosity(Verbosity),
+    /// Leave with background subagents working: true pauses them, false stops them.
+    Quit(bool),
+    /// Close the list and carry on.
+    Stay,
 }
 
 /// The counts `/prune` offers to keep, from fewest to most, each removing something.
@@ -290,6 +294,8 @@ impl App {
                             self.set_verbosity(verbosity.name());
                             Idle::Continue
                         }
+                        PickerChoice::Quit(pause) => Idle::Input(Input::Quit(pause)),
+                        PickerChoice::Stay => Idle::Continue,
                         PickerChoice::PairModel(role, alias) => {
                             Idle::Input(Input::PairModel(role, alias))
                         }
@@ -863,7 +869,11 @@ impl App {
         let options = Verbosity::ALL
             .into_iter()
             .map(|verbosity| {
-                let mark = if verbosity == current { " · current" } else { "" };
+                let mark = if verbosity == current {
+                    " · current"
+                } else {
+                    ""
+                };
                 (
                     verbosity.name().to_string(),
                     format!("{}{mark}", verbosity.about()),
@@ -871,7 +881,10 @@ impl App {
                 )
             })
             .collect();
-        let selected = Verbosity::ALL.iter().position(|v| *v == current).unwrap_or(0);
+        let selected = Verbosity::ALL
+            .iter()
+            .position(|v| *v == current)
+            .unwrap_or(0);
         self.picker = Some(Picker::new("Verbosity".into(), options, selected));
     }
 

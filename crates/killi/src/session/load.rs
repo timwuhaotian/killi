@@ -14,6 +14,17 @@ pub struct SwarmProgress {
     pub results: Vec<Option<(String, bool)>>,
 }
 
+/// Background subagent work the log left open: started, never reported or stopped. Its
+/// subagents' logs are in the session folder; `sent` is what each was first sent.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BgRecord {
+    pub label: String,
+    /// A swarm's items; empty for an `agent` call.
+    pub items: Vec<String>,
+    pub logs: Vec<String>,
+    pub sent: Vec<String>,
+}
+
 /// What a log holds, replayed.
 pub struct Loaded {
     pub messages: Vec<Value>,
@@ -33,6 +44,9 @@ pub struct Loaded {
     pub goal: Option<String>,
     /// The last recap shown, if any: a side request like `/btw`, never in the messages.
     pub recap: Option<String>,
+    /// Background work still open when the log stopped, by task id. Kept across
+    /// compactions: it belongs to no message.
+    pub background: std::collections::BTreeMap<u32, BgRecord>,
 }
 
 /// A model alias and thinking effort, as `Thinking::label` names it. The effort is what a
@@ -74,6 +88,7 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
         choice: Choice::default(),
         goal: None,
         recap: None,
+        background: Default::default(),
     };
     for chunk in bytes.split(|b| *b == b'\n') {
         if chunk.is_empty() {
@@ -113,6 +128,32 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
                 loaded.messages.push(entry["message"].clone());
             }
             Some("usage") => loaded.context = entry["prompt"].as_u64().unwrap_or(0),
+            Some("bg_start") => {
+                let strings = |key: &str| {
+                    entry[key]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                };
+                if let Some(id) = entry["id"].as_u64() {
+                    loaded.background.insert(
+                        id as u32,
+                        BgRecord {
+                            label: entry["label"].as_str().unwrap_or_default().to_string(),
+                            items: strings("items"),
+                            logs: strings("logs"),
+                            sent: strings("sent"),
+                        },
+                    );
+                }
+            }
+            Some("bg_end") => {
+                if let Some(id) = entry["id"].as_u64() {
+                    loaded.background.remove(&(id as u32));
+                }
+            }
             Some("swarm") => {
                 let strings = |key: &str| {
                     entry[key]

@@ -9,6 +9,7 @@
 //! selects text, which is copied when the button is let go (`select`).
 
 mod app;
+mod background;
 pub(crate) mod banner;
 mod commands;
 mod draw;
@@ -77,11 +78,11 @@ use crate::live;
 use crate::llm::{Client, ErrorKind, ProviderError, Usage};
 use crate::mcp::Mcp;
 use crate::mode::Mode;
-use crate::verbosity::Verbosity;
 use crate::session::{Choice, Replayed};
 use crate::setup::{Overview, Setup};
 use crate::snapshot::Snapshots;
 use crate::tools::{CONTAINER, image_type, image_url};
+use crate::verbosity::Verbosity;
 use editor::Editor;
 use history::{Entry as Line, History};
 use menu::{Entry, Fill, Item, Suggestions};
@@ -101,6 +102,7 @@ use format::{
 };
 use input::newline_key;
 use notify::{copy_to_clipboard, first_line, notify};
+use pair::{pair_kickoff, pair_pick, pair_turn};
 use picker::{Picker, ProviderFlow, SearchFlow};
 use rows::{
     aside_rows, ask_rows, choice_rows, diff_rows, first_sentence, handoff, help_rows, hidden_row,
@@ -108,9 +110,9 @@ use rows::{
     question_rows, queued_row, recap_rows, rule, shorten_path, snapshot_rows, tilde, title_rule,
     tool_summary, tool_text, working_rows, wrap_items,
 };
-use pair::{pair_kickoff, pair_pick, pair_turn};
 use run::{
     flush_recap, handle_command, next_incoming, peer_label, prompt_turn, provider_add, run_turn,
+    wake_turn,
 };
 use schedule::Schedule;
 use select::{InputRows, Selection, Spot};
@@ -182,6 +184,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         None => (None, None),
     };
     controls.here = live.as_ref().map(|l| Rc::new(l.here()));
+    // Subagents the agent moves to the background come here to be polled.
+    let (bg_tx, bg_rx) = mpsc::unbounded_channel();
+    controls.background.borrow_mut().attach(bg_tx);
     let fullscreen = wants_fullscreen(
         config.ui.fullscreen,
         &std::env::var("TERM_PROGRAM").unwrap_or_default(),
@@ -212,6 +217,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     let mut app = App::new(&agent, controls.clone(), &cwd, session.skills().clone());
     app.live = live;
     app.peers = peers;
+    app.bg_rx = Some(bg_rx);
     app.live_sync(&agent);
     app.entries = entries(&session);
     app.show_model(&agent, session.config());
@@ -236,6 +242,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         if let Some(saved) = start_recap.filter(|t| !t.trim().is_empty()) {
             app.show_saved_recap(&saved);
         }
+        app.resume_background(&mut agent);
     }
     if start.pick_session {
         app.open_session_picker(&cwd);
@@ -248,6 +255,11 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             // Ctrl+C twice or Ctrl+D on an empty prompt: leaving still waits for the goal.
             if let Some(note) = crate::goal::blocks("Quitting", agent.goal()) {
                 app.notice(&note);
+                app.draw()?;
+                continue;
+            }
+            if app.background_working() > 0 {
+                app.open_quit_picker();
                 app.draw()?;
                 continue;
             }
@@ -291,10 +303,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 } else if agent.pair_active() {
                     // The pair is paused: interject and drive on.
                     if let Some(ctl) = agent.pair_ctl() {
-                        ctl.interject.borrow_mut().push_back((
-                            mention::expand(&cwd, &prompt),
-                            images.clone(),
-                        ));
+                        ctl.interject
+                            .borrow_mut()
+                            .push_back((mention::expand(&cwd, &prompt), images.clone()));
                         app.pair_ctl = Some(ctl);
                     }
                     agent.pair_interject();
@@ -322,6 +333,22 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     )
                     .await?;
                 }
+            }
+            Input::Wake => {
+                wake_turn(&mut app, &mut agent, &mut snapshots, &mut keys, &mut rx).await?;
+            }
+            Input::Quit(pause) => {
+                if !pause {
+                    let stopped = agent.stop_background();
+                    if stopped > 0 {
+                        app.notice(&format!(
+                            "Stopped {}.",
+                            crate::tools::count(stopped, "background subagent task")
+                        ));
+                    }
+                }
+                flush_recap(&mut app, &mut agent);
+                break;
             }
             Input::Schedule(id, task) => {
                 app.notice(&format!("Scheduled task #{id}:"));
@@ -382,10 +409,12 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     let saved = report.loaded.recap.clone();
                     match session.resume_loaded(locked, report, controls.clone(), sink.clone()) {
                         Ok(resumed) => {
+                            app.pause_background();
                             app.reset_conversation(&mut snapshots, &cwd);
                             let stopped = agent.stop_tasks();
                             agent.discard_if_unused();
                             agent = resumed;
+                            app.resume_background(&mut agent);
                             app.show_model(&agent, session.config());
                             app.status.context = agent.stats.context;
                             app.notice(&format!(
@@ -487,14 +516,15 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 // not a switch to the theme already in use.
                 let previewed_from = app.theme_before_preview.take();
                 if !text::THEMES.iter().any(|(known, _)| *known == name) {
-                    let names: Vec<&str> =
-                        text::THEMES.iter().map(|(known, _)| *known).collect();
+                    let names: Vec<&str> = text::THEMES.iter().map(|(known, _)| *known).collect();
                     app.error(&format!(
                         "Pick one of {}; /theme alone lists them.",
                         names.join(", ")
                     ));
                 } else if name == text::skin_name()
-                    && previewed_from.as_deref().is_none_or(|before| before == name)
+                    && previewed_from
+                        .as_deref()
+                        .is_none_or(|before| before == name)
                 {
                     app.notice(&format!("Already on the {name} theme."));
                 } else {

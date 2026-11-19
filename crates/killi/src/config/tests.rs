@@ -291,8 +291,7 @@ fn an_old_mode_line_still_reads_as_the_verbosity() {
     let both: super::Config =
         toml::from_str("[agent]\nmode = \"ultra-concise\"\nverbosity = \"normal\"\n").unwrap();
     assert_eq!(both.agent.verbosity(), Verbosity::Normal);
-    let orchestrate: super::Config =
-        toml::from_str("[agent]\nmode = \"orchestrate\"\n").unwrap();
+    let orchestrate: super::Config = toml::from_str("[agent]\nmode = \"orchestrate\"\n").unwrap();
     assert_eq!(orchestrate.agent.mode(), Mode::Orchestrate);
     assert_eq!(orchestrate.agent.verbosity(), Verbosity::Normal);
     let wrong = toml::from_str::<super::Config>("[agent]\nmode = \"fast\"\n").unwrap_err();
@@ -321,7 +320,10 @@ fn saving_moves_an_old_mode_line_to_verbosity() {
     // The default mode is stored as no line at all, so an older killi still reads the file.
     super::set_mode(&path, Mode::Focus).unwrap();
     let saved = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(saved, "[agent]\nverbosity = \"ultra-concise\"\nswarm = true\n");
+    assert_eq!(
+        saved,
+        "[agent]\nverbosity = \"ultra-concise\"\nswarm = true\n"
+    );
     let config: super::Config = toml::from_str(&saved).unwrap();
     assert_eq!(config.agent.verbosity(), Verbosity::UltraConcise);
     assert_eq!(config.agent.mode(), Mode::Focus);

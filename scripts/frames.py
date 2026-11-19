@@ -11,9 +11,11 @@ The themes are Kil's five (crates/kil/src/theme.rs in the Kil repo): killi asks 
 for its background and foreground, and the pseudo-terminal answers with the theme's. SGR dim is
 drawn as Kil draws it, each channel scaled to two thirds. Scenes: start, menu, files (the `@`
 menu), picker, theme (`/theme` previewing the last theme as its selection lands on it, with the
-specimen of its colors above the prompt), conv (a bug fix with a diff), question, plan, mode (`/mode`'s picker), concise (the bug fix
-after `/mode ultra-concise`, its mark on the status line), busy (mid-turn), swarm and swarm-big (an
-`agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), update (a newer
+specimen of its colors above the prompt), conv (a bug fix with a diff), question, plan, mode (`/mode`'s picker), verbosity
+(`/verbosity`'s picker), concise (the bug fix after `/verbosity ultra-concise`, its mark on the status line), busy (mid-turn), swarm and swarm-big (an
+`agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), background (that swarm under `/mode orchestrate`, working in
+the background while the prompt is free), background-done (its report starting a turn by itself),
+background-yield (the swarm in focus mode moving to the background when a message is sent), update (a newer
 killi offered from a local release site, its changelog above the question), peers (the banner
 with another session in the repository), sessions (`/sessions`) and peer (that session's question and
 message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
@@ -85,7 +87,8 @@ SCENES = {
     "question": dict(keys=["QUESTION please\r"], until="Esc dismisses"),
     "plan": dict(keys=["\x1b[Z", "add a flag"]),
     "mode": dict(keys=["/mode\r"]),
-    "concise": dict(keys=["/mode ultra-concise\r", FIX], until="fills it"),
+    "verbosity": dict(keys=["/verbosity\r"]),
+    "concise": dict(keys=["/verbosity ultra-concise\r", FIX], until="fills it"),
     "busy": dict(keys=[FIX, "WAIT:1.5", "also keep it small"], settle=0.2),
     "select-prompt": dict(keys=["rename slugify to make_slug in slug.py", "\x1b[1;4D", "\x1b[1;4D", "\x1b[1;4D"]),
     "held": dict(keys=["SLOW what makes a good slug?\r"], settle=0.5),
@@ -94,6 +97,9 @@ SCENES = {
     "swarm": dict(keys=["SWARM review the open PRs\r", "WAIT:4.5"], settle=0.2),
     "swarm-big": dict(keys=["SWARMBIG review every service\r", "WAIT:7"], settle=0.2),
     "swarm-done": dict(keys=["SWARM review the open PRs\r"], until="nothing blocks"),
+    "background": dict(keys=["/mode orchestrate\r", "SWARM review the open PRs\r", "WAIT:3.5"], settle=0.2),
+    "background-done": dict(keys=["/mode orchestrate\r", "SWARM review the open PRs\r"], until="five reviews are in"),
+    "background-yield": dict(keys=["SWARM review the open PRs\r", "WAIT:2", "what is still open?\r", "WAIT:2"], settle=0.2),
     "peers": dict(keys=[], peer=True),
     "sessions": dict(keys=["/sessions\r"], peer=True),
     "update": dict(keys=[], until="Update killi", update=True),

@@ -68,6 +68,8 @@ where
             Some(incoming) = next_incoming(&mut app.peers) => app.on_peer(incoming),
             Some(answered) = app.peer_asks.next(), if !app.peer_asks.is_empty() => app.on_peer_answer(answered),
             Some(done) = app.peer_running.next(), if !app.peer_running.is_empty() => app.on_peer_task_done(done),
+            Some(work) = background::next_work(&mut app.bg_rx) => app.on_background_work(work),
+            Some(id) = app.bg_running.next(), if !app.bg_running.is_empty() => app.on_background_done(id),
             answer = async { aside.as_mut().expect("a question is asked").1.as_mut().await }, if aside.is_some() => {
                 let (question, _) = aside.take().expect("a question is asked");
                 app.show_aside(&question, answer);
@@ -117,6 +119,10 @@ pub(super) async fn handle_command(
         "exit" | "quit" | "q" => {
             if let Some(note) = crate::goal::blocks("Quitting", agent.goal()) {
                 app.notice(&note);
+                return Ok(true);
+            }
+            if app.background_working() > 0 {
+                app.open_quit_picker();
                 return Ok(true);
             }
             return Ok(false);
@@ -214,6 +220,18 @@ pub(super) async fn handle_command(
                 app.notice("Undo waits for the pair: /pair stop ends it first.");
                 return Ok(true);
             }
+            let working = app.background_working();
+            if working > 0 {
+                app.notice(&format!(
+                    "Undo waits: {} still {} in the background, and putting files back would pull them from under {}. Wait for {} to end, or ask the agent to stop {}.",
+                    crate::tools::count(working, "subagent task"),
+                    if working == 1 { "works" } else { "work" },
+                    if working == 1 { "it" } else { "them" },
+                    if working == 1 { "it" } else { "them" },
+                    if working == 1 { "it" } else { "them" },
+                ));
+                return Ok(true);
+            }
             // Said once: the next /undo goes ahead.
             // Other sessions, and the tasks this one ran for them: both change the tree
             // outside this session's turns.
@@ -225,6 +243,7 @@ pub(super) async fn handle_command(
                     .iter()
                     .map(|e| format!("session {}", e.pid))
                     .chain(app.tasks_since(since))
+                    .chain(app.background_since(since))
                     .collect()
             };
             app.undo_warned = !who.is_empty();
@@ -290,6 +309,7 @@ pub(super) async fn handle_command(
             session.refresh_prompt();
             match session.start_on(agent.client(), agent.controls.clone(), agent_sink(agent)) {
                 Ok(fresh) => {
+                    app.pause_background();
                     app.reset_conversation(snapshots, cwd);
                     let saved = !agent.user_prompts().is_empty();
                     let stopped = agent.stop_tasks();
@@ -639,8 +659,62 @@ pub(super) async fn prompt_turn(
 ) -> Result<()> {
     app.begin_turn(shown, images);
     app.draw()?;
-    app.undo_warned = false;
     app.peer_tells = 0;
+    // A scheduled task is no message from the user: it leaves the count of turns background
+    // reports started where it was.
+    if app.scheduled.is_none() {
+        app.wakes = 0;
+    }
+    drive_turn(
+        app,
+        agent,
+        snapshots,
+        keys,
+        rx,
+        shown,
+        Some((prompt, images)),
+    )
+    .await
+}
+
+/// Runs a turn the session starts by itself because background work ended while it sat idle:
+/// no prompt of the user's is shown or sent, and the reports come first.
+pub(super) async fn wake_turn(
+    app: &mut App,
+    agent: &mut Agent,
+    snapshots: &mut Snapshots,
+    keys: &mut EventStream,
+    rx: &mut mpsc::UnboundedReceiver<Event>,
+) -> Result<()> {
+    app.wakes += 1;
+    app.drop_suggestion();
+    app.notice("Background work ended; the agent reads its report.");
+    app.begin_busy();
+    app.draw()?;
+    drive_turn(
+        app,
+        agent,
+        snapshots,
+        keys,
+        rx,
+        "background work ended",
+        None,
+    )
+    .await
+}
+
+/// The body of a turn: snapshot, run, and what follows its end. `prompt` is the user's message
+/// with its images, or none for a turn background reports started.
+async fn drive_turn(
+    app: &mut App,
+    agent: &mut Agent,
+    snapshots: &mut Snapshots,
+    keys: &mut EventStream,
+    rx: &mut mpsc::UnboundedReceiver<Event>,
+    shown: &str,
+    prompt: Option<(&str, &[Image])>,
+) -> Result<()> {
+    app.undo_warned = false;
     app.live_turn(Some(shown));
     let before = Totals::of(agent);
     let taken = snapshots.taken();
@@ -652,7 +726,7 @@ pub(super) async fn prompt_turn(
         app.snapshot_seq += 1;
         let (snap_tx, snap_rx) = oneshot::channel();
         agent.set_snapshot_wait(snap_rx);
-        let turn = run_turn(app, keys, rx, agent.run(prompt, images));
+        let turn = run_turn(app, keys, rx, start(agent, prompt));
         let snap = async {
             let tree = tokio::task::spawn_blocking(move || work.run())
                 .await
@@ -665,7 +739,7 @@ pub(super) async fn prompt_turn(
         app.snapshotting = false;
         ended?
     } else {
-        run_turn(app, keys, rx, agent.run(prompt, images)).await?
+        run_turn(app, keys, rx, start(agent, prompt)).await?
     };
     if matches!(ended, Ended::Interrupted) && app.take_back(agent)? {
         // Nothing ran, so /undo still goes back to the turn before this one.
@@ -700,6 +774,17 @@ pub(super) async fn prompt_turn(
         app.ask_suggestion();
     }
     Ok(())
+}
+
+/// A turn's run of the agent, whichever way it started.
+type TurnRun<'a> = Pin<Box<dyn Future<Output = Result<(String, Stop)>> + 'a>>;
+
+/// The agent's run for a turn: the user's prompt, or a wake when there is none.
+fn start<'a>(agent: &'a mut Agent, prompt: Option<(&'a str, &'a [Image])>) -> TurnRun<'a> {
+    match prompt {
+        Some((prompt, images)) => Box::pin(agent.run(prompt, images)),
+        None => Box::pin(agent.wake()),
+    }
 }
 
 /// Whether a finished turn gets a recap by itself: a turn that only answered is its own recap.

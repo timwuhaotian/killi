@@ -21,21 +21,20 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::Deserialize;
 
+pub use anthropic::{ABOUT as ANTHROPIC_ABOUT, add as add_anthropic, ours as anthropic_ours};
 pub use command::command_guide_if_first;
 pub(crate) use command::{confirm, read_line, read_secret, select};
 pub use edit::{
-    remove_models, remove_provider_key, set_backup_model, set_model_effort, set_mode, set_search,
-    set_verbosity,
-    set_swarm, set_swarm_parallel, set_ui_theme,
+    remove_models, remove_provider_key, set_backup_model, set_mode, set_model_effort, set_search,
+    set_swarm, set_swarm_parallel, set_ui_theme, set_verbosity,
 };
 pub use guide::{init, start_if_missing};
 pub use import::import_command;
-pub use models::{Added, Additions, NewModel, add_models};
-pub(crate) use models::kept_models;
-pub use anthropic::{ABOUT as ANTHROPIC_ABOUT, add as add_anthropic, ours as anthropic_ours};
 pub use kimi::{ABOUT as KIMI_ABOUT, add as add_kimi, ours as kimi_ours};
 pub use mimo::{ABOUT as MIMO_ABOUT, add as add_mimo, ours as mimo_ours};
 pub use minimax::{ABOUT as MINIMAX_ABOUT, add as add_minimax, ours as minimax_ours};
+pub(crate) use models::kept_models;
+pub use models::{Added, Additions, NewModel, add_models};
 pub use muse::{ABOUT as MUSE_ABOUT, add as add_muse, ours as muse_ours};
 pub use qwen::{ABOUT as QWEN_ABOUT, add as add_qwen, ours as qwen_ours};
 pub use stepfun::{ABOUT as STEPFUN_ABOUT, add as add_stepfun, ours as stepfun_ours};
@@ -108,18 +107,26 @@ impl ProviderFilter {
     /// Whether a model alias passes: not excluded, and included when `include` names any.
     pub fn allows(&self, alias: &str) -> bool {
         let id = alias.split_once('/').map_or(alias, |(_, id)| id);
-        !self.exclude.iter().any(|pattern| matches(pattern, alias, id))
+        !self
+            .exclude
+            .iter()
+            .any(|pattern| matches(pattern, alias, id))
             && (self.include.is_empty()
-                || self.include.iter().any(|pattern| matches(pattern, alias, id)))
+                || self
+                    .include
+                    .iter()
+                    .any(|pattern| matches(pattern, alias, id)))
     }
 }
 
 /// Whether `pattern` names `alias` or its model id; a trailing `*` matches a prefix.
 fn matches(pattern: &str, alias: &str, id: &str) -> bool {
-    [alias, id].iter().any(|value| match pattern.strip_suffix('*') {
-        Some(prefix) => value.starts_with(prefix),
-        None => pattern == *value,
-    })
+    [alias, id]
+        .iter()
+        .any(|value| match pattern.strip_suffix('*') {
+            Some(prefix) => value.starts_with(prefix),
+            None => pattern == *value,
+        })
 }
 
 /// `[search]`: the service behind `web_search`. `web_search` tries that service first,

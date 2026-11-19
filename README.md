@@ -120,7 +120,14 @@ Rust 1.94 or later, on macOS (arm64) or Linux (x64/arm64).
   per item of a prompt template, up to 128, several at a time, shown as one live panel (how many,
   which are working on what, how long each has run); swarm mode, on by default and set with
   `[agent] swarm` or `/swarm`, tells the agent to split its work that way, and
-  `[agent] swarm_parallel` (default 8) sets how many run at once. **Background tasks** keep servers and slow builds running. **Undo** puts
+  `[agent] swarm_parallel` (default 8) sets how many run at once. A subagent never holds the
+  conversation hostage: send a message while one works and it moves to the background, your
+  message is answered at once, and its report comes back when it ends, read by the agent on a
+  turn of its own if the session sits idle. `/mode orchestrate` sends every subagent to the
+  background from the start, so the main agent only talks with you and coordinates (forking
+  this conversation into each subagent by default, `agent_message` to correct one mid-task).
+  Quitting asks whether to pause them; resuming the session continues each from its own log.
+  **Background tasks** keep servers and slow builds running. **Undo** puts
   your files back as they were before a turn, including what commands changed.
 - **Sessions that know about each other.** Run several killi at once and each knows where the
   others work and what they are doing. `killi card <pid>` says what a session can be asked to

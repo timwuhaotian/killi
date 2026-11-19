@@ -35,7 +35,8 @@ impl Agent {
         let mut images = Vec::new();
         let mut i = 0;
         while i < calls.len() {
-            if self.pending_steer() {
+            // A subagent's messages come from its parent and wait for its next step.
+            if self.depth == 0 && self.pending_steer() {
                 for (id, _) in &calls[i..] {
                     self.push(
                         json!({"role": "tool", "tool_call_id": id, "content": SKIPPED_FOR_MESSAGE}),
@@ -233,6 +234,14 @@ impl Agent {
         if let Some(output) = self.peer_block(call, &args) {
             return output;
         }
+        if let Some(id) = self.background_id(&args) {
+            match call.name.as_str() {
+                "task_output" => return self.background_output(id, &args).await,
+                "task_stop" => return self.background_stop(id),
+                "agent_message" => return self.background_message(id, &args),
+                _ => {}
+            }
+        }
         match call.name.as_str() {
             "skill" => self.settings.skills.run(&args),
             "mcp" => self.settings.mcp.run(&args, self.ctx.images.get()).await,
@@ -256,9 +265,21 @@ impl Agent {
             }
             "ask_user_question" => self.ask(&args).await,
             "exit_plan_mode" => self.exit_plan(&args).await,
+            "agent" | "agent_swarm" | "agent_message" if self.depth > 0 && !self.pair_exec => {
+                tools::Output::error(
+                    "Subagents can't start or message other subagents. Do the assigned work yourself and report any blockers to your parent.",
+                )
+            }
             "agent" | "agent_swarm" => tools::Output::error(
                 "Subagents can't start other subagents. Do the assigned work yourself and report any blockers to your parent.",
             ),
+            "agent_message" => tools::Output::error(match tools::uint(&args, "id") {
+                Some(id) => format!(
+                    "No subagent works in the background as task {id}; agent_message reaches only those (an agent or agent_swarm result names its task)."
+                ),
+                None => "agent_message needs `id`, the task an agent call moved to the background."
+                    .to_string(),
+            }),
             _ => {
                 // Only the top-level agent hears the user; a subagent waits out its own commands.
                 let steer = (self.depth == 0).then(|| self.controls.steer.clone());
@@ -318,7 +339,6 @@ impl Agent {
         }
         let command = args["command"].as_str().unwrap_or_default();
         let verb = super::peer_guard::moving_verb(command)?;
-        let here = self.controls.here.as_ref()?;
         let base = args["cwd"]
             .as_str()
             .filter(|cwd| !cwd.is_empty())
@@ -327,7 +347,16 @@ impl Agent {
         let dir = super::peer_guard::command_dir(command)
             .map(|target| resolve_target(&target, &base))
             .unwrap_or(base);
-        if live::work_tree(&dir) != here.tree {
+        let tree = live::work_tree(&dir);
+        if tree == live::work_tree(&self.ctx.cwd)
+            && let Some(other) = self.sibling_at_work()
+        {
+            return Some(tools::Output::error(format!(
+                "Not run: {other} of this session works in this tree right now, and `git {verb}` can discard or move its changes. Leave the tree as it is, use a separate git worktree (`git worktree add ../<name>`), or run it once that work has ended."
+            )));
+        }
+        let here = self.controls.here.as_ref()?;
+        if tree != here.tree {
             return None;
         }
         let peer = here.others().into_iter().next()?;

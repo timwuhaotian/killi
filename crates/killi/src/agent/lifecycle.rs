@@ -108,6 +108,7 @@ impl Agent {
         agent.backup = backup.map(Rc::new);
         agent.plan_announced = last_plan_state(&loaded.messages);
         agent.concise_announced = crate::verbosity::last_concise_state(&loaded.messages);
+        agent.orchestrate_announced = crate::mode::last_orchestrate_state(&loaded.messages);
         for message in &loaded.messages {
             for call in message["tool_calls"].as_array().into_iter().flatten() {
                 if let Some(id) = call["id"].as_str() {
@@ -175,6 +176,11 @@ impl Agent {
             }
         }
         agent.partial_agents = loaded.agents;
+        // Ids its background work kept stay taken, and the work waits for the terminal.
+        if let Some(last) = loaded.background.keys().next_back() {
+            agent.ctx.tasks.borrow_mut().reserve_through(*last);
+        }
+        agent.paused = loaded.background;
         agent.recover()?;
         agent.share();
         Ok(agent)
@@ -222,6 +228,7 @@ impl Agent {
             plan_announced: false,
             swarm_announced: false,
             concise_announced: false,
+            orchestrate_announced: false,
             goal_announced: None,
             peers_announced: Vec::new(),
             interrupted: false,
@@ -229,6 +236,8 @@ impl Agent {
             pending_prompt: None,
             hook_notified: RefCell::default(),
             depth: 0,
+            route: Default::default(),
+            paused: Default::default(),
             children: 0,
             pair: None,
             pair_exec: false,

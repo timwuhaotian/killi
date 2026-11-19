@@ -50,6 +50,9 @@ pub enum Event {
     Finished {
         is_error: bool,
     },
+    /// A subagent moved to the background: its events go to the session's registry from
+    /// now on. Only seen inside `Sub`.
+    Detached,
     /// Something a subagent did, labeled with its description, and where it sits in an
     /// `agent_swarm` call when it belongs to one.
     Sub {
@@ -115,6 +118,8 @@ pub struct Controls {
     pub here: Option<Rc<live::Here>>,
     /// Messages from other sessions, as reminders, for the model's next step or prompt.
     pub peer_notes: Rc<RefCell<VecDeque<String>>>,
+    /// Subagents running beside the conversation; the terminal polls them.
+    pub background: Rc<RefCell<Background>>,
 }
 
 /// What a side question needs: the model, the tools (sent unchanged so the cached prefix

@@ -59,6 +59,35 @@ impl Tasks {
         self.next
     }
 
+    /// Takes the next task id without a command behind it, for a background subagent: the
+    /// model reads and stops both kinds with the same tools, so they share one numbering.
+    pub fn reserve_id(&mut self) -> u32 {
+        self.next += 1;
+        self.next
+    }
+
+    /// Moves numbering past `id`, so ids a resumed session's subagents kept aren't handed out
+    /// again.
+    pub fn reserve_through(&mut self, id: u32) {
+        self.next = self.next.max(id);
+    }
+
+    /// Takes over the commands `other` still runs, under new ids here, and gives each as
+    /// `(new id, command)`. A subagent that ends leaves what it started to the session, which
+    /// then hears about it like any task of its own.
+    pub fn adopt(&mut self, other: &mut Tasks) -> Vec<(u32, String)> {
+        let mut adopted = Vec::new();
+        for (_, task) in std::mem::take(&mut other.list) {
+            if !task.process.running() {
+                continue;
+            }
+            self.next += 1;
+            adopted.push((self.next, first_line(&task.command).to_string()));
+            self.list.insert(self.next, task);
+        }
+        adopted
+    }
+
     /// Tasks still running that the model wasn't told about yet at the end of a turn, as
     /// `task N \`command\` (Ns)`. Each comes up once, so one kept on purpose isn't raised again.
     pub fn left_running(&mut self) -> Vec<String> {

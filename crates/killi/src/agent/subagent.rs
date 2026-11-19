@@ -1,23 +1,10 @@
 use super::*;
 
-/// A subagent with its prompt, or the result of a call that couldn't start one.
-type Job = std::result::Result<(Agent, String), tools::Output>;
+mod crew;
 
-/// How one subagent ended: its report, its counts, and the provider limit that ended it when
-/// one did. `stats` is `None` for a subagent that never started.
-struct ChildDone {
-    index: usize,
-    output: tools::Output,
-    stats: Option<Stats>,
-    limited: Option<ErrorKind>,
-}
+pub(super) use crew::{Child, ChildDone, Crew, Job, Unfinished, add_stats, tag};
 
-/// How a group of subagents ended: every report in order, and the items a provider limit kept
-/// from ever starting.
-struct Children {
-    outputs: Vec<tools::Output>,
-    unrun: Vec<usize>,
-}
+use background::{BgStart, BgWork, Route, moved_note};
 
 const MAX_PARALLEL_AGENTS: usize = 4;
 pub(super) const MAX_SWARM_AGENTS_PER_TURN: usize = swarm::MAX_ITEMS;
@@ -35,14 +22,31 @@ fn not_run_note(hit: usize, kind: ErrorKind) -> String {
     )
 }
 
+/// One step of a group running in the foreground: a member ended, or the user sent a message.
+enum Step {
+    Ended(Option<ChildDone>),
+    Steered,
+}
+
+/// Resolves once the user has a message waiting.
+async fn steered(steer: &RefCell<VecDeque<Steered>>) {
+    while steer.borrow().is_empty() {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 impl Agent {
     /// Runs a group of `agent` calls in parallel and returns each one's result as a tool output.
-    /// Hooks see each call like any other: a blocked call reports why instead of starting.
+    /// Hooks see each call like any other: a blocked call reports why instead of starting. In
+    /// orchestrate mode every call starts in the background at once; otherwise the group runs
+    /// in the foreground until the user sends a message, which moves what is left there.
     pub(super) async fn run_subagents(
         &mut self,
         group: &[(String, ToolCall)],
     ) -> Vec<tools::Output> {
+        let orchestrate = self.orchestrating();
         let mut jobs = Vec::new();
+        let mut labels = Vec::new();
         let mut hooked: Vec<Option<Value>> = Vec::new();
         for (id, call) in group {
             self.stats.tool_calls += 1;
@@ -51,6 +55,7 @@ impl Agent {
                 Err(why) => {
                     self.tool_start(id, "agent (invalid arguments)");
                     jobs.push(Err(invalid_arguments(call, &why, false)));
+                    labels.push(String::new());
                     hooked.push(None);
                     continue;
                 }
@@ -59,6 +64,7 @@ impl Agent {
                 .as_str()
                 .unwrap_or("subagent")
                 .to_string();
+            labels.push(label.clone());
             self.tool_start(id, &tools::summary("agent", &args, &self.ctx.cwd));
             let before = self
                 .hook(
@@ -80,19 +86,18 @@ impl Agent {
                 hooked.push(None);
             } else {
                 hooked.push(Some(args.clone()));
-                jobs.push(self.child(
-                    &label,
-                    None,
-                    args["fork"].as_bool().unwrap_or(false),
-                    prompt,
-                ));
+                // In orchestrate mode the main agent keeps the conversation, so a subagent
+                // starts from it unless told otherwise.
+                let fork = args["fork"].as_bool().unwrap_or(orchestrate);
+                jobs.push(self.child(&label, None, fork, prompt));
             }
         }
         let ids: Vec<String> = group.iter().map(|(id, _)| id.clone()).collect();
-        let mut outputs = self
-            .run_children(jobs, MAX_PARALLEL_AGENTS, Some(&ids))
-            .await
-            .outputs;
+        let mut outputs = if orchestrate {
+            self.detach_agents(jobs, &labels)
+        } else {
+            self.run_agent_group(jobs, &labels, &ids).await
+        };
         for ((args, output), id) in hooked.into_iter().zip(outputs.iter_mut()).zip(&ids) {
             if let Some(args) = args {
                 self.post_hook("agent", &args, output).await;
@@ -104,8 +109,175 @@ impl Agent {
         outputs
     }
 
+    /// Whether this call starts its subagents in the background: orchestrate mode in a session
+    /// that takes background work.
+    pub(super) fn orchestrating(&self) -> bool {
+        self.background_ready() && self.controls.mode.get() == crate::mode::Mode::Orchestrate
+    }
+
+    /// Runs `agent` calls in the foreground, `MAX_PARALLEL_AGENTS` at once. A message from the
+    /// user meanwhile moves every member still working to the background.
+    async fn run_agent_group(
+        &mut self,
+        jobs: Vec<Job>,
+        labels: &[String],
+        ids: &[String],
+    ) -> Vec<tools::Output> {
+        let yields = self.background_ready();
+        let steer = self.controls.steer.clone();
+        let since = Instant::now();
+        let mut crew = Crew::new(jobs, MAX_PARALLEL_AGENTS, self.ctx.clone());
+        loop {
+            let step = if yields {
+                tokio::select! {
+                    done = crew.next() => Step::Ended(done),
+                    () = steered(&steer) => Step::Steered,
+                }
+            } else {
+                Step::Ended(crew.next().await)
+            };
+            let done = match step {
+                Step::Ended(Some(done)) => done,
+                Step::Ended(None) => break,
+                Step::Steered => return self.move_agents(crew, labels, since),
+            };
+            let output = self.child_ended(done.output, done.stats.as_ref());
+            if let Some(id) = ids.get(done.index) {
+                self.save_agent_result(id, &output);
+            }
+            crew.store(done.index, output);
+        }
+        crew.finish().outputs
+    }
+
+    /// A member's report with its counts on the screen, its usage added to this agent's.
+    fn child_ended(&mut self, mut output: tools::Output, stats: Option<&Stats>) -> tools::Output {
+        if let Some(stats) = stats {
+            add_stats(&mut self.stats, stats);
+            if !output.is_error {
+                output = output.brief(format!(
+                    "{} requests, {} tool calls",
+                    stats.requests, stats.tool_calls
+                ));
+            }
+        }
+        output
+    }
+
+    /// Moves every member of a foreground `agent` group that hasn't ended to the background,
+    /// each as a task of its own, and returns the group's results: reports for the ones that
+    /// ended, the task for each that moved.
+    fn move_agents(
+        &mut self,
+        mut crew: Crew,
+        labels: &[String],
+        since: Instant,
+    ) -> Vec<tools::Output> {
+        let mut metas = std::mem::take(&mut crew.meta);
+        let (outputs, unfinished) = crew.split();
+        let mut outputs: Vec<tools::Output> = outputs
+            .into_iter()
+            .map(|output| output.unwrap_or_else(|| tools::Output::error("No result.")))
+            .collect();
+        for (index, member) in unfinished {
+            let started = matches!(member, Unfinished::Started(_));
+            let work: BgWork = match member {
+                Unfinished::Started(tagged) => Box::pin(async move { ended(tagged.await) }),
+                Unfinished::Waiting(job) => match *job {
+                    Err(output) => {
+                        outputs[index] = output;
+                        continue;
+                    }
+                    job => {
+                        let parent = self.ctx.clone();
+                        Box::pin(async move { ended(tag(index, job, parent).await) })
+                    }
+                },
+            };
+            outputs[index] = self.detach(
+                labels.get(index).cloned().unwrap_or_default(),
+                metas.get_mut(index),
+                work,
+                started,
+                true,
+                since,
+            );
+        }
+        outputs
+    }
+
+    /// Starts every `agent` call of a group in the background (orchestrate mode).
+    fn detach_agents(&mut self, jobs: Vec<Job>, labels: &[String]) -> Vec<tools::Output> {
+        let mut outputs = Vec::new();
+        for (index, job) in jobs.into_iter().enumerate() {
+            let child = match job {
+                Ok(child) => child,
+                Err(output) => {
+                    outputs.push(output);
+                    continue;
+                }
+            };
+            let mut meta = Some(crew::Meta {
+                route: child.route.clone(),
+                steer: child.agent.controls.steer.clone(),
+                log: log_name(&child.agent),
+                sent: child.sent.clone(),
+            });
+            let parent = self.ctx.clone();
+            let work: BgWork = Box::pin(async move { ended(tag(index, Ok(child), parent).await) });
+            outputs.push(self.detach(
+                labels.get(index).cloned().unwrap_or_default(),
+                Some(&mut meta),
+                work,
+                false,
+                false,
+                Instant::now(),
+            ));
+        }
+        outputs
+    }
+
+    /// Launches one `agent` call's work as a background task, points its events there, and
+    /// returns the call's result.
+    fn detach(
+        &mut self,
+        label: String,
+        meta: Option<&mut Option<crew::Meta>>,
+        work: BgWork,
+        started: bool,
+        by_message: bool,
+        since: Instant,
+    ) -> tools::Output {
+        let meta = meta.and_then(Option::take);
+        let id = self.launch(
+            BgStart {
+                label: label.clone(),
+                members: 1,
+                logs: meta.iter().map(|meta| meta.log.clone()).collect(),
+                sent: meta.iter().map(|meta| meta.sent.clone()).collect(),
+                items: Vec::new(),
+                steer: meta.as_ref().map(|meta| meta.steer.clone()),
+                started,
+                since,
+            },
+            work,
+        );
+        if let Some(meta) = meta {
+            meta.route.detach(&self.controls.background, id);
+        }
+        // Its calls in flight leave the screen's running rows; the registry follows it now.
+        (self.sink)(Event::Sub {
+            label,
+            slot: None,
+            event: Box::new(Event::Detached),
+        });
+        moved_note(id, by_message)
+    }
+
     /// Runs an `agent_swarm` call: one fresh subagent per item, `swarm_parallel` at a time,
-    /// bounded by the turn's total swarm budget, with every report in item order.
+    /// bounded by the turn's total swarm budget, with every report in item order. In
+    /// orchestrate mode, or once the user sends a message, the swarm goes on in the background
+    /// as one task.
     pub(super) async fn run_swarm(&mut self, id: &str, call: &ToolCall) -> tools::Output {
         self.stats.tool_calls += 1;
         let args = match parse_args(call) {
@@ -138,7 +310,8 @@ impl Agent {
             .as_str()
             .map(str::trim)
             .filter(|d| !d.is_empty())
-            .unwrap_or("swarm");
+            .unwrap_or("swarm")
+            .to_string();
         let items: Vec<String> = prompts.iter().map(|(item, _)| item.clone()).collect();
         let mut jobs = Vec::new();
         for (n, (_, prompt)) in prompts.into_iter().enumerate() {
@@ -158,18 +331,20 @@ impl Agent {
         let logs: Vec<String> = jobs
             .iter()
             .map(|job| match job {
-                Ok((agent, _)) => agent
-                    .session
-                    .log_path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
+                Ok(child) => log_name(&child.agent),
                 Err(_) => String::new(),
             })
             .collect();
-        let _ = self.session.record(
-            &json!({"type": "swarm", "id": id, "items": items, "logs": logs}),
-        );
+        let since = Instant::now();
+        let crew = Crew::new(jobs, self.swarm_parallel.get(), self.ctx.clone());
+        if self.orchestrating() {
+            let mut report = self.move_swarm(crew, &description, &items, &logs, false, since);
+            self.post_hook("agent_swarm", &args, &mut report).await;
+            return report;
+        }
+        let _ = self
+            .session
+            .record(&json!({"type": "swarm", "id": id, "items": items, "logs": logs}));
         self.partial_swarm = Some(PartialSwarm {
             id: id.into(),
             items: items.clone(),
@@ -178,75 +353,35 @@ impl Agent {
         });
         (self.sink)(Event::Swarm {
             id: id.into(),
-            description: description.into(),
+            description: description.clone(),
             items: items.clone(),
         });
-        let children = self
-            .run_children(jobs, self.swarm_parallel.get(), None)
-            .await;
-        // An item that never started has an empty log, so the report doesn't point at one.
-        let logs: Vec<String> = logs
-            .into_iter()
-            .enumerate()
-            .map(|(n, log)| {
-                if children.unrun.contains(&n) {
-                    String::new()
-                } else {
-                    log
+        let yields = self.background_ready();
+        let steer = self.controls.steer.clone();
+        let mut crew = crew;
+        loop {
+            let step = if yields {
+                tokio::select! {
+                    done = crew.next() => Step::Ended(done),
+                    () = steered(&steer) => Step::Steered,
                 }
-            })
-            .collect();
-        let mut report = swarm::report(&self.ctx, &items, &children.outputs, &logs, MAX_RESULT_BYTES);
-        self.post_hook("agent_swarm", &args, &mut report).await;
-        report
-    }
-
-    /// Runs subagents, at most `limit` at once, the next starting as soon as one finishes, and
-    /// returns each one's result as a tool output, in order. One that couldn't start reports why.
-    /// A member the provider rate-limits or whose quota is spent stops the queue: the items after
-    /// it would fail the same way, so they report that they were never run.
-    async fn run_children(
-        &mut self,
-        jobs: Vec<Job>,
-        limit: usize,
-        ids: Option<&[String]>,
-    ) -> Children {
-        let count = jobs.len();
-        let mut jobs = jobs.into_iter().enumerate();
-        let mut running = FuturesUnordered::new();
-        for (index, job) in jobs.by_ref().take(limit.max(1)) {
-            running.push(Self::run_child(index, job));
-        }
-        let mut outputs: Vec<Option<tools::Output>> = Vec::new();
-        outputs.resize_with(count, || None);
-        let mut limited: Option<(usize, ErrorKind)> = None;
-        while let Some(done) = running.next().await {
-            if limited.is_none() && let Some(kind) = done.limited {
-                limited = Some((done.index, kind));
-            }
-            if limited.is_none()
-                && let Some((next_index, next_job)) = jobs.next()
-            {
-                running.push(Self::run_child(next_index, next_job));
-            }
+            } else {
+                Step::Ended(crew.next().await)
+            };
+            let done = match step {
+                Step::Ended(Some(done)) => done,
+                Step::Ended(None) => break,
+                Step::Steered => {
+                    // The call is answered by the task it moved to, not by partial results.
+                    self.partial_swarm = None;
+                    let mut report =
+                        self.move_swarm(crew, &description, &items, &logs, true, since);
+                    self.post_hook("agent_swarm", &args, &mut report).await;
+                    return report;
+                }
+            };
             let index = done.index;
-            let mut output = done.output;
-            if let Some(stats) = done.stats {
-                let usage = &stats.usage;
-                let total = &mut self.stats.usage;
-                total.prompt += usage.prompt;
-                total.cached += usage.cached;
-                total.completion += usage.completion;
-                total.reasoning += usage.reasoning;
-                self.stats.requests += stats.requests;
-                self.stats.tool_calls += stats.tool_calls;
-                if !output.is_error {
-                    output = output.brief(format!(
-                        "{} requests, {} tool calls",
-                        stats.requests, stats.tool_calls
-                    ));
-                }
-            }
+            let output = self.child_ended(done.output, done.stats.as_ref());
             if let Some(partial) = &mut self.partial_swarm
                 && let Some(result) = partial.results.get_mut(index)
             {
@@ -259,28 +394,83 @@ impl Agent {
                     "text": output.text,
                 }));
             }
-            if let Some(id) = ids.and_then(|ids| ids.get(index)) {
-                self.save_agent_result(id, &output);
-            }
-            outputs[index] = Some(output);
+            crew.store(index, output);
         }
-        let mut unrun = Vec::new();
-        if let Some((hit, kind)) = limited {
-            let note = not_run_note(hit, kind);
-            for (index, slot) in outputs.iter_mut().enumerate() {
-                if slot.is_none() {
-                    unrun.push(index);
-                    *slot = Some(tools::Output::error(note.clone()));
+        let children = crew.finish();
+        let logs = unrun_logs(logs, &children.unrun);
+        let mut report = swarm::report(
+            &self.ctx,
+            &items,
+            &children.outputs,
+            &logs,
+            MAX_RESULT_BYTES,
+        );
+        self.post_hook("agent_swarm", &args, &mut report).await;
+        report
+    }
+
+    /// Hands a swarm to the background as one task that reports every item in order when the
+    /// last member ends.
+    fn move_swarm(
+        &mut self,
+        mut crew: Crew,
+        description: &str,
+        items: &[String],
+        logs: &[String],
+        by_message: bool,
+        since: Instant,
+    ) -> tools::Output {
+        let metas = std::mem::take(&mut crew.meta);
+        let sent: Vec<String> = metas
+            .iter()
+            .map(|meta| {
+                meta.as_ref()
+                    .map(|meta| meta.sent.clone())
+                    .unwrap_or_default()
+            })
+            .collect();
+        let done_so_far = crew.done();
+        let ctx = self.ctx.clone();
+        let (report_items, report_logs) = (items.to_vec(), logs.to_vec());
+        let work: BgWork = Box::pin(async move {
+            let mut stats = Stats::default();
+            while let Some(done) = crew.next().await {
+                if let Some(used) = &done.stats {
+                    add_stats(&mut stats, used);
                 }
+                crew.store(done.index, done.output);
             }
+            let children = crew.finish();
+            let logs = unrun_logs(report_logs, &children.unrun);
+            let report = swarm::report(
+                &ctx,
+                &report_items,
+                &children.outputs,
+                &logs,
+                MAX_RESULT_BYTES,
+            );
+            (report, stats)
+        });
+        let id = self.launch(
+            BgStart {
+                label: description.to_string(),
+                members: items.len(),
+                logs: logs.to_vec(),
+                sent,
+                items: items.to_vec(),
+                steer: None,
+                started: by_message,
+                since,
+            },
+            work,
+        );
+        if let Some(task) = self.controls.background.borrow_mut().tasks.get_mut(&id) {
+            task.finished_members = done_so_far;
         }
-        Children {
-            outputs: outputs
-                .into_iter()
-                .map(|output| output.expect("every child finished"))
-                .collect(),
-            unrun,
+        for meta in metas.into_iter().flatten() {
+            meta.route.detach(&self.controls.background, id);
         }
+        moved_note(id, by_message)
     }
 
     fn save_agent_result(&mut self, id: &str, output: &tools::Output) {
@@ -295,57 +485,15 @@ impl Agent {
         }
     }
 
-    async fn run_child(index: usize, job: Job) -> ChildDone {
-        let (mut agent, prompt) = match job {
-            Ok(job) => job,
-            Err(output) => {
-                return ChildDone {
-                    index,
-                    output,
-                    stats: None,
-                    limited: None,
-                };
-            }
-        };
-        (agent.sink)(Event::Started);
-        let (output, limited) = match agent.run(&child_prompt(&prompt), &[]).await {
-            Ok((text, Stop::MaxTokens)) if !text.trim().is_empty() => (
-                tools::Output::error(format!(
-                    "The subagent's report was truncated (MaxTokens). Partial report:\n{text}"
-                )),
-                None,
-            ),
-            Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => {
-                (tools::Output::ok(text), None)
-            }
-            Ok((_, stop)) => (
-                tools::Output::error(format!(
-                    "The subagent stopped without a final report ({stop:?})."
-                )),
-                None,
-            ),
-            Err(e) => (
-                tools::Output::error(format!("The subagent failed: {e:#}")),
-                provider_limit(&e),
-            ),
-        };
-        (agent.sink)(Event::Finished {
-            is_error: output.is_error,
-        });
-        // Only its counts outlive it: its conversation and log file are freed here, not
-        // when the slowest sibling of a swarm finishes.
-        ChildDone {
-            index,
-            output,
-            stats: Some(std::mem::take(&mut agent.stats)),
-            limited,
-        }
-    }
-
     /// A subagent ready to run `prompt`, or why it couldn't start.
     fn child(&mut self, label: &str, slot: Option<Slot>, fork: bool, prompt: String) -> Job {
-        self.subagent(label, slot, fork)
-            .map(|agent| (agent, prompt))
+        let route = Route::default();
+        self.subagent(label, slot, fork, &route)
+            .map(|agent| Child {
+                agent,
+                sent: child_prompt(&prompt),
+                route,
+            })
             .map_err(|e| tools::Output::error(format!("Could not start the subagent: {e:#}")))
     }
 
@@ -357,6 +505,7 @@ impl Agent {
         label: &str,
         slot: Option<Slot>,
         fork: bool,
+        route: &Route,
     ) -> Result<Agent> {
         self.children += 1;
         let (mut session, used) = self.session.child(self.children)?;
@@ -374,17 +523,38 @@ impl Agent {
         };
         session.record(&json!({"type": "session", "id": session.id, "version": env!("CARGO_PKG_VERSION"), "model": self.client.model.alias, "context_window": self.client.model.context_window, "tools": *self.tools}))?;
         session.record(&json!({"type": "compaction", "messages": *messages}))?;
-        let parent = self.sink.clone();
-        let label = label.to_string();
-        let sink: Sink = Rc::new(move |event| {
-            parent(Event::Sub {
-                label: label.clone(),
-                slot: slot.clone(),
-                event: Box::new(event),
-            })
-        });
         let announce_plan = !fork && self.controls.plan.get();
-        let mut agent = Agent {
+        let mut agent = self.child_agent(
+            session,
+            messages,
+            label,
+            slot,
+            route,
+            inherited_context,
+            inherited_len,
+        );
+        if announce_plan {
+            agent.push(json!({"role": "user", "content": plan::ON}))?;
+            agent.plan_announced = true;
+        }
+        Ok(agent)
+    }
+
+    /// A subagent on `messages`, logging to `session`: this agent's model, tools and settings,
+    /// one level down. `context` and `accounted` say how much of the history is already billed.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn child_agent(
+        &self,
+        session: Session,
+        messages: Rc<Vec<Value>>,
+        label: &str,
+        slot: Option<Slot>,
+        route: &Route,
+        inherited_context: u64,
+        inherited_len: usize,
+    ) -> Agent {
+        let sink = route.sink(self.sink.clone(), label.to_string(), slot);
+        Agent {
             client: self.client.clone(),
             // A subagent inherits the session's backup, so one the provider rate-limits
             // finishes its work on the backup instead of losing it: the swarm's report
@@ -392,13 +562,17 @@ impl Agent {
             backup: self.backup.clone(),
             tools: self.tools.clone(),
             messages,
-            ctx: self.ctx.clone(),
+            // Its background tasks are its own while it runs; what it leaves running moves to
+            // this agent when it ends.
+            ctx: Rc::new(self.ctx.detached()),
             session,
             stats: Stats {
                 context: inherited_context,
                 ..Stats::default()
             },
             controls: Controls {
+                // The session's registry, so the git guard knows who else works in the tree.
+                background: self.controls.background.clone(),
                 steer: Rc::default(),
                 plan: self.controls.plan.clone(),
                 swarm: Rc::default(),
@@ -429,10 +603,13 @@ impl Agent {
             plan_announced: self.plan_announced,
             swarm_announced: false,
             concise_announced: false,
+            orchestrate_announced: false,
             goal_announced: None,
             peers_announced: Vec::new(),
             interrupted: false,
             depth: self.depth + 1,
+            route: route.clone(),
+            paused: Default::default(),
             children: 0,
             pair: None,
             pair_exec: false,
@@ -443,12 +620,7 @@ impl Agent {
             next_notes: Vec::new(),
             pending_prompt: None,
             hook_notified: RefCell::default(),
-        };
-        if announce_plan {
-            agent.push(json!({"role": "user", "content": plan::ON}))?;
-            agent.plan_announced = true;
         }
-        Ok(agent)
     }
 }
 
@@ -465,6 +637,36 @@ pub(crate) fn subagent_prompt(prompt: &str) -> String {
     format!(
         "{prompt}\n\nEnd your final message with one line: `Status: ready` when the work is done, `blocked` (say what you need), `failed` (say what failed), or `waiting` (say what you wait on)."
     )
+}
+
+/// A subagent's log file name in the session folder.
+fn log_name(agent: &Agent) -> String {
+    agent
+        .session
+        .log_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The swarm's log names with the ones that never started left empty, so the report doesn't
+/// point at a log with nothing in it.
+fn unrun_logs(logs: Vec<String>, unrun: &[usize]) -> Vec<String> {
+    logs.into_iter()
+        .enumerate()
+        .map(|(n, log)| {
+            if unrun.contains(&n) {
+                String::new()
+            } else {
+                log
+            }
+        })
+        .collect()
+}
+
+/// A background member's report and usage, from how it ended.
+fn ended(done: ChildDone) -> (tools::Output, Stats) {
+    (done.output, done.stats.unwrap_or_default())
 }
 
 pub(super) fn reserve_swarm(used: usize, requested: usize) -> Result<(), String> {

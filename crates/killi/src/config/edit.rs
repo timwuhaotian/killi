@@ -476,7 +476,10 @@ fn set_agent_lines(path: &Path, changes: &[(&str, Option<String>)]) -> Result<()
         }
         out.push(text_line.to_string());
     }
-    let added: Vec<String> = changes.iter().filter_map(|(_, line)| line.clone()).collect();
+    let added: Vec<String> = changes
+        .iter()
+        .filter_map(|(_, line)| line.clone())
+        .collect();
     if !added.is_empty() {
         let at = match header {
             Some(at) => at + 1,

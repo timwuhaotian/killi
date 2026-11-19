@@ -225,7 +225,7 @@ impl App {
                 self.swarm = Some(swarm::Swarm::new(id, description, items));
                 self.swarm_send_armed = false;
             }
-            Event::Started | Event::Finished { .. } => {}
+            Event::Started | Event::Finished { .. } | Event::Detached => {}
             Event::Sub { label, slot, event } => self.on_sub(label, slot, *event),
         }
     }
@@ -316,6 +316,10 @@ impl App {
             Event::Ask(question) => {
                 let _ = question.reply.send(String::new());
             }
+            // It went on in the background: its calls in flight no longer end here.
+            Event::Detached => self
+                .running
+                .retain(|r| r.label.as_deref() != Some(label.as_str())),
             _ => {}
         }
     }

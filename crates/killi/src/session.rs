@@ -22,7 +22,7 @@ mod replay;
 
 pub use choice::{last_choice, save_choice};
 pub use list::{Listed, list, list_all};
-pub use load::{Choice, LoadReport, Loaded, load_reported};
+pub use load::{BgRecord, Choice, LoadReport, Loaded, load_reported};
 pub use prune::prune;
 pub use replay::{COMPACTED_MARK, Replayed, replay, user_prompts};
 

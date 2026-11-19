@@ -114,6 +114,10 @@ pub(super) enum Input {
     PairModel(Role, String),
     /// A /pair setup's effort pick for a role.
     PairEffort(Role, String),
+    /// A turn the session starts by itself: background work ended while it sat idle.
+    Wake,
+    /// Leaving while background subagents work: true pauses them for a resume, false stops them.
+    Quit(bool),
 }
 
 pub(super) enum LastEnd {
@@ -367,6 +371,11 @@ pub(super) struct App {
     pub(super) pair_driving: bool,
     /// Typed text or /pair stop armed an interrupt of the driving pair.
     pub(super) pair_interrupt: bool,
+    /// Background subagents' work as the agent hands it over, and the work being polled.
+    pub(super) bg_rx: Option<mpsc::UnboundedReceiver<crate::agent::BgFuture>>,
+    pub(super) bg_running: FuturesUnordered<crate::agent::BgFuture>,
+    /// Turns started by background reports since the user last typed a prompt.
+    pub(super) wakes: usize,
 }
 
 /// A /pair setup between its pickers: each pick advances a step, and the task step waits

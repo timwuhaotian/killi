@@ -26,6 +26,9 @@ impl App {
         if let Some(input) = self.take_scheduled() {
             return Ok(Some(input));
         }
+        if let Some(input) = self.take_wake() {
+            return Ok(Some(input));
+        }
         // A newer killi found while the last turn ran is offered now that the prompt is back.
         if self.updates.found.is_some() {
             self.offer_update();
@@ -66,6 +69,27 @@ impl App {
                 }
                 Some(done) = self.peer_running.next(), if !self.peer_running.is_empty() => {
                     self.on_peer_task_done(done);
+                    self.draw()?;
+                    continue;
+                }
+                Some(work) = background::next_work(&mut self.bg_rx) => {
+                    self.on_background_work(work);
+                    self.draw()?;
+                    continue;
+                }
+                Some(id) = self.bg_running.next(), if !self.bg_running.is_empty() => {
+                    self.on_background_done(id);
+                    if let Some(input) = self.take_wake() {
+                        return Ok(Some(input));
+                    }
+                    self.draw()?;
+                    continue;
+                }
+                () = tokio::time::sleep(Duration::from_secs(1)), if self.background_ticking() => {
+                    self.spinner += 1;
+                    if let Some(input) = self.take_wake() {
+                        return Ok(Some(input));
+                    }
                     self.draw()?;
                     continue;
                 }

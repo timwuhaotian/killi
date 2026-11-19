@@ -33,7 +33,9 @@ impl Verbosity {
     }
 
     pub fn parse(name: &str) -> Option<Verbosity> {
-        Verbosity::ALL.into_iter().find(|verbosity| verbosity.name() == name)
+        Verbosity::ALL
+            .into_iter()
+            .find(|verbosity| verbosity.name() == name)
     }
 }
 

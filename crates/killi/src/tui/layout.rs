@@ -240,6 +240,13 @@ impl App {
             space(&mut rows);
             rows.extend(self.peer_rows(QUARTER[self.spinner % QUARTER.len()], width));
         }
+        let background = self.background_rows(width);
+        if !background.is_empty() {
+            let at = rows.len();
+            space(&mut rows);
+            rows.extend(background);
+            shrink_queue.extend(at..rows.len());
+        }
         if self.todos.iter().any(|t| t.status != "completed") {
             let tasks = rows.len();
             space(&mut rows);

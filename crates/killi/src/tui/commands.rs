@@ -77,7 +77,16 @@ pub(super) fn runs_at_once(menu: &Suggestions, index: usize) -> bool {
 /// The commands that also work while the agent works: they need nothing the running turn holds,
 /// except /effort, which waits for the turn to end (see `App::effort_after_turn`).
 pub(super) const BUSY_COMMANDS: &[&str] = &[
-    "btw", "plan", "swarm", "mode", "verbosity", "pair", "later", "sessions", "help", "effort",
+    "btw",
+    "plan",
+    "swarm",
+    "mode",
+    "verbosity",
+    "pair",
+    "later",
+    "sessions",
+    "help",
+    "effort",
 ];
 
 /// The effort `arg` names among those `model` takes, or what to tell the user.

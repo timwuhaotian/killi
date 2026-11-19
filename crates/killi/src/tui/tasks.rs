@@ -39,9 +39,7 @@ impl App {
         if running >= MAX_PEER_TASKS {
             return refuse(
                 reply,
-                &format!(
-                    "it is running {running} tasks already; ask again when one of them ends"
-                ),
+                &format!("it is running {running} tasks already; ask again when one of them ends"),
             );
         }
         let prompt = match self.task_prompt(&text, after.as_deref()) {
@@ -107,9 +105,16 @@ impl App {
 
     /// `Get`: what a task stands on now, and its report once it ended.
     pub(super) fn on_task_get(&mut self, id: &str, reply: live::Reply) {
-        match self.peer_tasks.iter().find(|task| task.view.borrow().id == id) {
+        match self
+            .peer_tasks
+            .iter()
+            .find(|task| task.view.borrow().id == id)
+        {
             Some(task) => answer(reply, json!({"ok": true, "task": *task.view.borrow()})),
-            None => refuse(reply, &format!("no task {id} here; `killi tasks` lists them")),
+            None => refuse(
+                reply,
+                &format!("no task {id} here; `killi tasks` lists them"),
+            ),
         }
     }
 
@@ -130,7 +135,10 @@ impl App {
             .iter()
             .position(|task| task.view.borrow().id == id)
         else {
-            return refuse(reply, &format!("no task {id} here; `killi tasks` lists them"));
+            return refuse(
+                reply,
+                &format!("no task {id} here; `killi tasks` lists them"),
+            );
         };
         let task = &mut self.peer_tasks[index];
         let stopped = {
@@ -175,7 +183,11 @@ impl App {
     /// `Follow`: a task's events as they happen. A task that already ended sends its last event
     /// and closes; a running one sends where it stands, then each step it takes.
     pub(super) fn on_task_follow(&mut self, id: &str, events: mpsc::UnboundedSender<String>) {
-        let Some(task) = self.peer_tasks.iter_mut().find(|task| task.view.borrow().id == id) else {
+        let Some(task) = self
+            .peer_tasks
+            .iter_mut()
+            .find(|task| task.view.borrow().id == id)
+        else {
             let why = format!("no task {id} here; `killi tasks` lists them");
             let _ = events.send(live::event_line(live::TaskState::Rejected, Some(&why)));
             return;
@@ -277,8 +289,9 @@ impl App {
 
     /// Says in this session's file that a task started or ended, so another session in the
     /// tree knows this one changed files while its own turn sat idle.
-    fn live_tasks(&mut self) {
-        let running = self.tasks_running();
+    pub(super) fn live_tasks(&mut self) {
+        // Background subagents change files while the turn sits idle, as tasks do.
+        let running = self.tasks_running() + self.background_working();
         if let Some(live) = &mut self.live {
             live.update(|e| {
                 e.tasks = running;

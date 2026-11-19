@@ -1,0 +1,412 @@
+use super::*;
+
+use tokio::sync::mpsc;
+
+/// Controls for an interactive session whose background work arrives on the returned receiver,
+/// as the terminal's would.
+fn attached() -> (Controls, mpsc::UnboundedReceiver<BgFuture>) {
+    let controls = Controls {
+        interactive: true,
+        ..Controls::default()
+    };
+    let (tx, rx) = mpsc::unbounded_channel();
+    controls.background.borrow_mut().attach(tx);
+    (controls, rx)
+}
+
+/// Answers each request with the next reply after `delay`, as a slow model would.
+async fn slow_stub(replies: Vec<String>, delay: Duration) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        for reply in replies {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let mut chunk = [0u8; 65536];
+            let _ = socket.read(&mut chunk).await;
+            tokio::time::sleep(delay).await;
+            let body = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{reply}"
+            );
+            let _ = socket.write_all(body.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    url
+}
+
+fn agent_call(id: &str, args: Value) -> (String, ToolCall) {
+    (
+        id.to_string(),
+        ToolCall {
+            id: id.into(),
+            name: "agent".into(),
+            arguments: args.to_string(),
+        },
+    )
+}
+
+fn tool_call(id: &str, name: &str, args: Value) -> (String, ToolCall) {
+    (
+        id.to_string(),
+        ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: args.to_string(),
+        },
+    )
+}
+
+fn last_tool(agent: &Agent) -> String {
+    agent
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "tool")
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn reminders_with(agent: &Agent, needle: &str) -> usize {
+    agent
+        .messages
+        .iter()
+        .filter(|m| m["role"] == "user")
+        .filter_map(|m| m["content"].as_str())
+        .filter(|text| text.contains(needle))
+        .count()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_message_moves_a_running_subagent_to_the_background_and_its_report_comes_once() {
+    let url = slow_stub(
+        vec![sse("found the bug\\nStatus: ready", "stop")],
+        Duration::from_millis(600),
+    )
+    .await;
+    let (controls, mut rx) = attached();
+    let mut agent = idle_agent("bg-focus", controls.clone(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let calls = vec![agent_call(
+        "a",
+        json!({"prompt": "find the bug", "description": "hunt"}),
+    )];
+    let steer = controls.steer.clone();
+    let (ran, ()) = tokio::join!(agent.execute_calls(calls, false), async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        steer.borrow_mut().push_back(("what is 2+2?".into(), Vec::new()));
+    });
+    ran.unwrap();
+    let moved = last_tool(&agent);
+    assert!(
+        moved.contains("Moved to the background as task 1"),
+        "{moved}"
+    );
+    assert_eq!(
+        controls.background.borrow().tasks[&1].state,
+        BgState::Running
+    );
+    // The terminal polls the work to its end.
+    let work = rx.recv().await.expect("the work went to the terminal");
+    assert_eq!(work.await, 1);
+    assert_eq!(controls.background.borrow().tasks[&1].state, BgState::Done);
+    agent.deliver_background().unwrap();
+    agent.deliver_background().unwrap();
+    assert_eq!(reminders_with(&agent, "found the bug"), 1);
+    assert!(controls.background.borrow().tasks[&1].delivered);
+    // Read again, it says the model already has it.
+    let again = agent.background_output(1, &json!({"id": 1})).await;
+    assert!(again.text.contains("already had"), "{}", again.text);
+    let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
+    assert!(log.contains("\"type\":\"bg_start\""), "{log}");
+    assert!(log.contains("\"type\":\"bg_end\""), "{log}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn without_a_terminal_a_subagent_stays_in_the_foreground() {
+    let url = stub_replies(vec![sse("done\\nStatus: ready", "stop")]).await;
+    // Interactive, but nothing polls background work: as in `-p`.
+    let controls = Controls {
+        interactive: true,
+        ..Controls::default()
+    };
+    let mut agent = idle_agent("bg-headless", controls.clone(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    controls.mode.set(crate::mode::Mode::Orchestrate);
+    let calls = vec![agent_call("a", json!({"prompt": "go", "description": "kid"}))];
+    agent.execute_calls(calls, false).await.unwrap();
+    assert!(last_tool(&agent).contains("done"), "{}", last_tool(&agent));
+    assert!(controls.background.borrow().tasks.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn orchestrate_starts_a_forked_subagent_in_the_background_at_once() {
+    let (controls, mut rx) = attached();
+    controls.mode.set(crate::mode::Mode::Orchestrate);
+    let mut agent = idle_agent("bg-orchestrate", controls.clone(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent
+        .push(json!({"role": "user", "content": "the parent's own request"}))
+        .unwrap();
+    agent.current_reply = agent.messages.len();
+    let calls = vec![agent_call(
+        "a",
+        json!({"prompt": "go", "description": "kid"}),
+    )];
+    agent.execute_calls(calls, false).await.unwrap();
+    let moved = last_tool(&agent);
+    assert!(
+        moved.contains("Running in the background as task 1"),
+        "{moved}"
+    );
+    assert!(rx.try_recv().is_ok(), "the work went to the terminal");
+    // Without `fork`, it starts from this conversation.
+    let child_log =
+        std::fs::read_to_string(agent.session.dir.join("agent-1.jsonl")).unwrap();
+    assert!(child_log.contains("the parent's own request"), "{child_log}");
+    // The model hears of the mode once, at its next step.
+    agent.before_request().await.unwrap();
+    agent.before_request().await.unwrap();
+    assert_eq!(reminders_with(&agent, "Orchestrate mode is on"), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_stopped_background_subagent_brings_no_report() {
+    let (controls, mut rx) = attached();
+    controls.mode.set(crate::mode::Mode::Orchestrate);
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut agent = idle_agent("bg-stop", controls.clone(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url =
+        format!("http://{}", silent.local_addr().unwrap());
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let calls = vec![agent_call(
+        "a",
+        json!({"prompt": "go", "description": "kid", "fork": false}),
+    )];
+    agent.execute_calls(calls, false).await.unwrap();
+    let work = rx.recv().await.unwrap();
+    let running = agent.background_output(1, &json!({"id": 1})).await;
+    assert!(running.text.contains("Task 1"), "{}", running.text);
+    let stop = vec![tool_call("s", "task_stop", json!({"id": 1}))];
+    agent.execute_calls(stop, false).await.unwrap();
+    assert!(last_tool(&agent).contains("Stopped task 1"));
+    assert_eq!(work.await, 1);
+    assert_eq!(
+        controls.background.borrow().tasks[&1].state,
+        BgState::Stopped
+    );
+    let before = agent.messages.len();
+    agent.deliver_background().unwrap();
+    assert_eq!(agent.messages.len(), before, "nothing to deliver");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn agent_message_reaches_a_background_subagent_and_the_tree_is_guarded() {
+    let (controls, _rx) = attached();
+    controls.mode.set(crate::mode::Mode::Orchestrate);
+    let mut agent = idle_agent("bg-message", controls.clone(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let calls = vec![agent_call(
+        "a",
+        json!({"prompt": "go", "description": "kid", "fork": false}),
+    )];
+    agent.execute_calls(calls, false).await.unwrap();
+    let message = vec![tool_call(
+        "m",
+        "agent_message",
+        json!({"id": 1, "message": "use the v2 API"}),
+    )];
+    agent.execute_calls(message, false).await.unwrap();
+    assert!(last_tool(&agent).contains("Told task 1"), "{}", last_tool(&agent));
+    let queued = controls.background.borrow().tasks[&1]
+        .steer
+        .as_ref()
+        .unwrap()
+        .borrow()
+        .front()
+        .map(|(text, _)| text.clone())
+        .unwrap();
+    assert!(queued.contains("use the v2 API") && queued.contains("not from the user"));
+    let unknown = vec![tool_call("u", "agent_message", json!({"id": 9, "message": "hi"}))];
+    agent.execute_calls(unknown, false).await.unwrap();
+    assert!(last_tool(&agent).contains("No subagent works in the background as task 9"));
+    // While it works, the main agent leaves the tree where it is.
+    let git = vec![tool_call(
+        "g",
+        "bash",
+        json!({"command": "git checkout -- ."}),
+    )];
+    agent.execute_calls(git, false).await.unwrap();
+    let refused = last_tool(&agent);
+    assert!(
+        refused.contains("background task 1") && refused.starts_with("Not run"),
+        "{refused}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_wake_turn_reads_the_report_before_its_prompt_and_is_no_user_prompt() {
+    let url = stub_replies(vec![
+        sse("report text\\nStatus: ready", "stop"),
+        sse("told the user", "stop"),
+    ])
+    .await;
+    let (controls, mut rx) = attached();
+    controls.mode.set(crate::mode::Mode::Orchestrate);
+    let mut agent = idle_agent("bg-wake", controls.clone(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let calls = vec![agent_call(
+        "a",
+        json!({"prompt": "go", "description": "kid", "fork": false}),
+    )];
+    agent.execute_calls(calls, false).await.unwrap();
+    rx.recv().await.unwrap().await;
+    let (text, _) = agent.wake().await.unwrap();
+    assert_eq!(text, "told the user");
+    let report = agent
+        .messages
+        .iter()
+        .position(|m| m["content"].as_str().is_some_and(|t| t.contains("report text")))
+        .unwrap();
+    let wake = agent
+        .messages
+        .iter()
+        .position(|m| m["content"].as_str() == Some(crate::agent::background::WAKE_PROMPT))
+        .unwrap();
+    assert!(report < wake, "the report comes before the prompt");
+    assert!(agent.user_prompts().is_empty(), "{:?}", agent.user_prompts());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_resumed_session_continues_its_paused_subagents_from_their_logs() {
+    let url = stub_replies(vec![sse("finished after the resume\\nStatus: ready", "stop")]).await;
+    let dir = crate::test_temp::TempDir::new("killi-bg-resume");
+    let log = dir.join("1-1.jsonl");
+    let folder = dir.join("1-1");
+    std::fs::create_dir_all(&folder).unwrap();
+    let sent = "do it\n\nEnd your final message with one line";
+    let line = |value: Value| value.to_string();
+    // One subagent's log ends on its report; the other stopped mid-task.
+    std::fs::write(
+        folder.join("agent-1.jsonl"),
+        [
+            line(json!({"type": "compaction", "messages": [{"role": "system", "content": "sys"}]})),
+            line(json!({"type": "message", "message": {"role": "user", "content": sent}})),
+            line(json!({"type": "message", "message": {"role": "assistant", "content": "already reported"}})),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    std::fs::write(
+        folder.join("agent-2.jsonl"),
+        [
+            line(json!({"type": "compaction", "messages": [{"role": "system", "content": "sys"}]})),
+            line(json!({"type": "message", "message": {"role": "user", "content": sent}})),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &log,
+        [
+            line(json!({"type": "message", "message": {"role": "system", "content": "sys"}})),
+            line(json!({"type": "message", "message": {"role": "user", "content": "hi"}})),
+            line(json!({"type": "bg_start", "id": 4, "label": "done one", "items": [], "logs": ["agent-1.jsonl"], "sent": [sent]})),
+            line(json!({"type": "bg_start", "id": 6, "label": "paused one", "items": [], "logs": ["agent-2.jsonl"], "sent": [sent]})),
+            // A compaction doesn't close background work.
+            line(json!({"type": "compaction", "messages": [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]})),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let (controls, mut rx) = attached();
+    let (locked, report) = Session::resume(&log).unwrap();
+    let mut agent = Agent::resume_reported(
+        test_client_at("test", &url),
+        None,
+        &dir,
+        locked,
+        report,
+        Vec::new(),
+        Settings::default(),
+        controls.clone(),
+        Rc::new(|_| {}),
+    )
+    .unwrap();
+    assert_eq!(agent.resume_background(), 2);
+    // Ids it kept stay taken.
+    assert_eq!(agent.ctx.tasks.borrow_mut().reserve_id(), 7);
+    let mut ended = Vec::new();
+    for _ in 0..2 {
+        ended.push(rx.recv().await.unwrap().await);
+    }
+    ended.sort();
+    assert_eq!(ended, [4, 6]);
+    agent.deliver_background().unwrap();
+    assert_eq!(reminders_with(&agent, "already reported"), 1);
+    assert_eq!(reminders_with(&agent, "finished after the resume"), 1);
+    let continued = std::fs::read_to_string(folder.join("agent-2.jsonl")).unwrap();
+    assert!(
+        continued.contains("stopped while you were working"),
+        "{continued}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_message_moves_a_running_swarm_to_the_background_as_one_task() {
+    let url = slow_stub(
+        vec![sse("one\\nStatus: ready", "stop"), sse("two\\nStatus: ready", "stop")],
+        Duration::from_millis(500),
+    )
+    .await;
+    let (controls, mut rx) = attached();
+    let mut agent = idle_agent("bg-swarm", controls.clone(), Rc::new(|_| {}));
+    agent.swarm_parallel.set(1);
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let calls = vec![tool_call(
+        "s",
+        "agent_swarm",
+        json!({"description": "pair", "prompt_template": "do {{item}}", "items": ["a", "b"]}),
+    )];
+    let steer = controls.steer.clone();
+    let (ran, ()) = tokio::join!(agent.execute_calls(calls, false), async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        steer.borrow_mut().push_back(("hello".into(), Vec::new()));
+    });
+    ran.unwrap();
+    assert!(last_tool(&agent).contains("Moved to the background as task 1"));
+    assert_eq!(controls.background.borrow().tasks[&1].members, 2);
+    assert!(agent.partial_swarm.is_none(), "the call is answered by its task");
+    assert_eq!(rx.recv().await.unwrap().await, 1);
+    let (report, failed) = controls.background.borrow().tasks[&1].report.clone().unwrap();
+    assert!(!failed, "{report}");
+    let (one, two) = (report.find("one").unwrap(), report.find("two").unwrap());
+    assert!(one < two, "items in order: {report}");
+    // A swarm takes no messages: its members each work on their own item.
+    let message = agent.background_message(1, &json!({"id": 1, "message": "hi"}));
+    assert!(message.is_error);
+}

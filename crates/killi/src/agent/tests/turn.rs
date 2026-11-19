@@ -516,7 +516,7 @@ async fn a_subagent_cannot_delegate_and_is_told_how_to_continue() {
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
     for fork in [false, true] {
-        let mut child = parent.subagent("child", None, fork).unwrap();
+        let mut child = parent.subagent("child", None, fork, &Default::default()).unwrap();
         for name in ["agent", "agent_swarm"] {
             let call = ToolCall {
                 id: name.into(),
@@ -560,7 +560,7 @@ async fn a_subagent_leaves_finished_tasks_for_its_parent_to_report() {
         }
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let mut child = agent.subagent("child", None, false).unwrap();
+    let mut child = agent.subagent("child", None, false, &Default::default()).unwrap();
     child.before_request().await.unwrap();
     assert_eq!(
         child.messages.len(),
@@ -636,7 +636,7 @@ async fn the_model_hears_once_when_the_sessions_in_its_tree_change_and_gets_thei
     assert!(last(&agent).contains("No other killi session works in this repository now"));
     assert!(controls.peer_notes.borrow().is_empty());
 
-    let mut child = agent.subagent("child", None, false).unwrap();
+    let mut child = agent.subagent("child", None, false, &Default::default()).unwrap();
     let _again = live::Registration::open_in(&dir, entry(4, "/w")).unwrap();
     child.before_request().await.unwrap();
     assert_eq!(
@@ -822,10 +822,10 @@ fn a_subagent_in_plan_mode_hears_it_first() {
     agent
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
-    let calm = agent.subagent("kid", None, false).unwrap();
+    let calm = agent.subagent("kid", None, false, &Default::default()).unwrap();
     assert_eq!(calm.messages.len(), 1);
     agent.controls.plan.set(true);
-    let child = agent.subagent("kid", None, false).unwrap();
+    let child = agent.subagent("kid", None, false, &Default::default()).unwrap();
     assert_eq!(child.messages.len(), 2);
     assert_eq!(child.messages[1]["content"].as_str(), Some(plan::ON));
     assert!(child.plan_announced);
@@ -1025,7 +1025,7 @@ async fn tree_moving_git_is_refused_while_a_peer_works_here() {
     agent
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
-    let mut child = agent.subagent("kid", None, false).unwrap();
+    let mut child = agent.subagent("kid", None, false, &Default::default()).unwrap();
     assert!(child.controls.here.is_some());
     let call = bash_call("git restore f");
     let output = child
@@ -1370,7 +1370,15 @@ async fn ultra_concise_mode_is_said_after_every_prompt_and_its_end_once() {
         .collect();
     assert_eq!(
         said,
-        ["first", verbosity::ON, "second", verbosity::ON, "third", verbosity::OFF, "fourth"]
+        [
+            "first",
+            verbosity::ON,
+            "second",
+            verbosity::ON,
+            "third",
+            verbosity::OFF,
+            "fourth"
+        ]
     );
     assert_eq!(agent.user_prompts(), ["first", "second", "third", "fourth"]);
 }

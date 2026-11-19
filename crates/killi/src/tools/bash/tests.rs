@@ -603,3 +603,33 @@ async fn a_finished_task_keeps_only_what_the_model_has_not_read() {
     );
     let _ = fs::remove_dir_all(&ctx.spill_dir);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_subagents_running_commands_move_to_its_parent_under_new_ids() {
+    let parent = ctx();
+    let child = parent.detached();
+    let first = parent.tasks.borrow_mut().reserve_id();
+    assert_eq!(first, 1);
+    bash(
+        &child,
+        &json!({"command": "sleep 5", "run_in_background": true}),
+        &never,
+    )
+    .await;
+    bash(
+        &child,
+        &json!({"command": "true", "run_in_background": true}),
+        &never,
+    )
+    .await;
+    let mut done = child.tasks.borrow().list[&2].process.exit.clone();
+    done.wait_for(Option::is_some).await.unwrap();
+    // Only what still runs moves, numbered after the parent's own ids.
+    let adopted = parent
+        .tasks
+        .borrow_mut()
+        .adopt(&mut child.tasks.borrow_mut());
+    assert_eq!(adopted, vec![(2, "sleep 5".to_string())]);
+    assert!(child.tasks.borrow().list.is_empty());
+    assert_eq!(parent.tasks.borrow_mut().stop_all(), vec!["sleep 5"]);
+}

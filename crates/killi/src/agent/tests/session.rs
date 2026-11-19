@@ -184,7 +184,7 @@ async fn compaction_restores_a_childs_delegation_reminder() {
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
     parent.client = Rc::new(test_client_at("primary", &url));
-    let mut child = parent.subagent("child", None, true).unwrap();
+    let mut child = parent.subagent("child", None, true, &Default::default()).unwrap();
     child
         .push(json!({"role": "user", "content": "task"}))
         .unwrap();
@@ -474,7 +474,7 @@ fn a_fork_accounts_its_inherited_history_once() {
         .unwrap();
     agent.stats.context = 5_000;
     agent.current_reply = agent.messages.len();
-    let child = agent.subagent("fork", None, true).unwrap();
+    let child = agent.subagent("fork", None, true, &Default::default()).unwrap();
     assert_eq!(child.stats.context, 5_000);
     assert_eq!(child.accounted_messages, child.messages.len());
     assert!(
@@ -1290,7 +1290,8 @@ async fn a_resumed_session_ended_ultra_concise_hears_it_is_off_when_the_config_s
     let lines = [
         json!({"type": "message", "message": {"role": "system", "content": "sys"}}).to_string(),
         json!({"type": "message", "message": {"role": "user", "content": "hi"}}).to_string(),
-        json!({"type": "message", "message": {"role": "user", "content": verbosity::ON}}).to_string(),
+        json!({"type": "message", "message": {"role": "user", "content": verbosity::ON}})
+            .to_string(),
     ];
     std::fs::write(&log, lines.join("\n") + "\n").unwrap();
     let (locked, report) = Session::resume(&log).unwrap();

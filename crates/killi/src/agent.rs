@@ -3,6 +3,7 @@
 //! Notes from killi to the model are appended as user messages, never edited into old ones.
 
 mod ask;
+mod background;
 mod compact;
 mod dispatch;
 mod ending;
@@ -42,16 +43,16 @@ use crate::skills::Skills;
 use crate::verbosity::{self, Verbosity};
 use crate::{goal, live, plan, swarm, tools};
 
+pub use background::{BgFuture, BgState, BgTask, MAX_BACKGROUND};
+pub use pair::{DONE_MARK, MAX_ROUNDS, Outcome, Pair, PairConfig, PairControls, Role, RoleCounts};
 pub use types::{
     Aside, Controls, Event, Image, Question, Settings, Sink, Slot, Stats, Steered, Stop, Todo,
-};
-pub use pair::{
-    DONE_MARK, MAX_ROUNDS, Outcome, Pair, PairConfig, PairControls, Role, RoleCounts,
 };
 
 pub(crate) use subagent::subagent_prompt;
 pub(crate) use task::task_agent;
 
+use background::Background;
 use compact::CompactMode;
 use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
 use ending::{ends_with_question, interrupted_note, unfinished};
@@ -72,11 +73,11 @@ use dispatch::{
     hash_call, image_parts, parallel_read, repeat_key,
 };
 #[cfg(test)]
+use ending::{ends_with_colon, ends_with_intent};
+#[cfg(test)]
 use request::hides_reasoning;
 #[cfg(test)]
 use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm};
-#[cfg(test)]
-use ending::{ends_with_colon, ends_with_intent};
 #[cfg(test)]
 use turn::{STALE_TASKS_AFTER, open_tasks_note, stale_tasks_note};
 #[cfg(test)]
@@ -149,6 +150,8 @@ pub struct Agent {
     swarm_announced: bool,
     /// The model was last told ultra-concise mode is on.
     concise_announced: bool,
+    /// The model was last told orchestrate mode is on.
+    orchestrate_announced: bool,
     /// What the model was last told about the session goal: its text, or None when told
     /// the goal is over. Announced as an appended reminder, like plan and swarm mode.
     goal_announced: Option<String>,
@@ -165,6 +168,10 @@ pub struct Agent {
     /// Keeps the machine from idle-sleeping while a top-level turn works.
     awake: crate::awake::Awake,
     depth: u8,
+    /// Where this agent's events go, and the background task it runs as once it moved there.
+    route: background::Route,
+    /// Background work a resumed log left open, until `resume_background` takes it up.
+    paused: std::collections::BTreeMap<u32, crate::session::BgRecord>,
     children: usize,
     /// The pair this session runs (`/pair`), if one stands: the mentor and executor agents.
     pair: Option<Pair>,

@@ -18,8 +18,25 @@ pub(super) const SKIPPED_EARLIER: &str = "<system-reminder>Tool calls for an ear
 impl Agent {
     /// Runs one user turn to completion and returns the final reply text.
     pub async fn run(&mut self, user: &str, images: &[Image]) -> Result<(String, Stop)> {
+        self.run_prompt(user, images, true).await
+    }
+
+    /// Runs a turn the terminal starts by itself because background work ended while the
+    /// session sat idle. Its reports come before the prompt; no `UserPromptSubmit` hook runs,
+    /// since the user typed nothing.
+    pub async fn wake(&mut self) -> Result<(String, Stop)> {
+        self.run_prompt(background::WAKE_PROMPT, &[], false).await
+    }
+
+    async fn run_prompt(
+        &mut self,
+        user: &str,
+        images: &[Image],
+        typed: bool,
+    ) -> Result<(String, Stop)> {
         // Subagents share their parent's `awake` and run inside its turn's hold.
         let _awake = (self.depth == 0).then(|| self.awake.hold());
+        let _busy = (self.depth == 0).then(|| background::Busy::new(&self.controls.background));
         // The breaker is for a loop inside one turn; a call the user asks for again is not one.
         self.repeats.clear();
         self.near_repeats.clear();
@@ -27,9 +44,12 @@ impl Agent {
         self.pending_prompt = None;
         // A blocked prompt leaves no trace: the notes below are taken only once this passes,
         // so nothing already consumed is lost to a prompt the model never sees.
-        let submitted = self
-            .hook("UserPromptSubmit", None, json!({"prompt": user}))
-            .await;
+        let submitted = if typed {
+            self.hook("UserPromptSubmit", None, json!({"prompt": user}))
+                .await
+        } else {
+            Default::default()
+        };
         if let Some(reason) = submitted.block {
             return Err(anyhow!("a hook blocked this prompt: {reason}"));
         }
@@ -62,8 +82,10 @@ impl Agent {
         // The notes so far are one-shot; the hook's context comes again with a prompt sent again.
         let carried = notes.clone();
         notes.extend(submitted.context);
-        // Messages left while the session was idle come before the prompt, so it stays last.
+        // Messages left while the session was idle, and reports from background work, come
+        // before the prompt, so it stays last.
         self.push_peer_notes()?;
+        self.deliver_background()?;
         let at = self.messages.len();
         let content = if notes.is_empty() {
             user.to_string()
@@ -251,6 +273,11 @@ impl Agent {
             self.concise_announced = concise;
             self.push(json!({"role": "user", "content": if concise { verbosity::ON } else { verbosity::OFF }}))?;
         }
+        let orchestrate = self.orchestrating();
+        if orchestrate != self.orchestrate_announced && self.depth == 0 {
+            self.orchestrate_announced = orchestrate;
+            self.push(json!({"role": "user", "content": if orchestrate { crate::mode::ON } else { crate::mode::OFF }}))?;
+        }
         let goal = self.controls.goal.borrow().clone();
         if goal != self.goal_announced && self.depth == 0 {
             let note = match goal.clone() {
@@ -262,6 +289,7 @@ impl Agent {
             self.push(json!({"role": "user", "content": note}))?;
         }
         self.push_peer_notes()?;
+        self.deliver_background()?;
         if let Some(note) = self.peers_note() {
             self.push(json!({"role": "user", "content": note}))?;
         }

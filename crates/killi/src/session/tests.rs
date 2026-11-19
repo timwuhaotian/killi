@@ -66,6 +66,7 @@ fn loaded(messages: Vec<Value>) -> Loaded {
         choice: Choice::default(),
         goal: None,
         recap: None,
+        background: Default::default(),
     }
 }
 
@@ -856,4 +857,22 @@ fn load_drops_a_swarm_whose_call_left_the_conversation() {
         "its call is summarized away, so its reports must not graft onto a later call"
     );
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn background_work_stays_open_across_compactions_until_its_end() {
+    let lines = [
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "bg_start", "id": 3, "label": "a", "items": [], "logs": ["agent-1.jsonl"], "sent": ["go"]}),
+        json!({"type": "bg_start", "id": 5, "label": "b", "items": ["x", "y"], "logs": ["agent-2.jsonl", "agent-3.jsonl"], "sent": ["x", "y"]}),
+        json!({"type": "compaction", "messages": [{"role": "system", "content": "sys"}]}),
+        json!({"type": "bg_end", "id": 3}),
+    ];
+    let bytes = lines.iter().map(|line| format!("{line}\n")).collect::<String>();
+    let report = load::load_bytes(Path::new("test.jsonl"), bytes.as_bytes()).unwrap();
+    let open: Vec<u32> = report.loaded.background.keys().copied().collect();
+    assert_eq!(open, [5]);
+    let swarm = &report.loaded.background[&5];
+    assert_eq!(swarm.items, ["x", "y"]);
+    assert_eq!(swarm.logs, ["agent-2.jsonl", "agent-3.jsonl"]);
 }

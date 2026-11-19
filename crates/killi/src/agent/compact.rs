@@ -167,6 +167,7 @@ impl Agent {
         self.plan_announced = false;
         self.swarm_announced = false;
         self.concise_announced = false;
+        self.orchestrate_announced = false;
         self.peers_announced.clear();
         self.share();
         self.session.record(&json!({
