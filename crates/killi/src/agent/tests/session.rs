@@ -170,6 +170,82 @@ async fn retries_are_recorded_in_the_session_log() {
     assert!(log.contains("\"attempt\":1"), "{log}");
     assert!(log.contains("\"wait_ms\":0"), "{log}");
     assert!(log.contains("slow down"), "{log}");
+    assert!(!log.contains("\"type\":\"abort\""), "a settled request is no abort: {log}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_request_dropped_before_it_settles_leaves_an_abort_in_the_log() {
+    let mut agent = unanswered_agent("abort-log", "push changes").await;
+    let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
+    let abort: Value = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|entry| entry["type"] == "abort")
+        .unwrap_or_else(|| panic!("no abort entry: {log}"));
+    assert!(abort["ms"].as_u64().unwrap() >= 100, "{abort}");
+    assert!(abort["first_token_ms"].is_null(), "no token came: {abort}");
+    assert!(agent.retract().unwrap(), "the prompt can still be taken back");
+    let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
+    assert!(log.trim_end().ends_with('}'), "the log still appends whole lines");
+}
+
+#[test]
+fn forks_and_tasks_keep_the_sessions_cache_key_and_other_children_get_their_own() {
+    let controls = Controls::default();
+    let mut parent = idle_agent("cache-key", controls.clone(), Rc::new(|_| {}));
+    parent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    parent.share();
+    assert_eq!(parent.cache_key, parent.session.id);
+    let fresh = parent.subagent("fresh", None, false, &Default::default()).unwrap();
+    assert!(fresh.session.id.starts_with("agent-"), "{}", fresh.session.id);
+    assert_eq!(fresh.cache_key, format!("{}/{}", parent.session.id, fresh.session.id));
+    let fork = parent.subagent("fork", None, true, &Default::default()).unwrap();
+    assert_eq!(fork.cache_key, parent.cache_key, "a fork opens with the parent's history");
+    let task = task_agent(&controls.aside.borrow(), None, Rc::new(|_| {}), 1).unwrap();
+    assert_eq!(task.cache_key, parent.cache_key);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_request_dropped_during_a_retry_backoff_logs_the_retry_then_the_abort() {
+    let limited = "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 30\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"slow down\"}}".to_string();
+    let url = serve_raw(vec![limited]).await;
+    let mut agent = idle_agent("abort-retry", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent
+        .push(json!({"role": "user", "content": "hi"}))
+        .unwrap();
+    tokio::select! {
+        _ = agent.request() => panic!("the backoff outlasts the test"),
+        () = tokio::time::sleep(Duration::from_millis(500)) => {}
+    }
+    let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
+    let kinds: Vec<String> = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["type"].as_str().unwrap().to_string())
+        .filter(|kind| kind == "retry" || kind == "abort")
+        .collect();
+    assert_eq!(kinds, ["retry", "abort"], "{log}");
+    assert!(log.contains("\"wait_ms\":30000"), "{log}");
+}
+
+#[test]
+fn a_log_with_an_abort_resumes_without_skipping_a_line() {
+    let dir = crate::test_temp::TempDir::new("killi-resume-abort");
+    let log = dir.join("session.jsonl");
+    let lines = [
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}).to_string(),
+        json!({"type": "message", "message": {"role": "user", "content": "hi"}}).to_string(),
+        json!({"type": "abort", "ms": 4000, "first_token_ms": null}).to_string(),
+    ];
+    std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+    let (_locked, report) = Session::resume(&log).unwrap();
+    assert_eq!(report.skipped, 0);
+    assert_eq!(report.loaded.messages.len(), 2);
 }
 
 #[tokio::test(flavor = "current_thread")]

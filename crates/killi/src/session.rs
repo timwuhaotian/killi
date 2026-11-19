@@ -176,6 +176,17 @@ impl Session {
         }
     }
 
+    /// A second handle on this log, for a record written where the session can't be borrowed:
+    /// a request dropped before it settled. It shares the lock, so dropping it keeps the log
+    /// held.
+    pub fn try_clone(&self) -> Result<Self> {
+        let file = self
+            .file
+            .try_clone()
+            .with_context(|| format!("could not reopen {}", self.log_path.display()))?;
+        Ok(Self::from_parts(self.log_path.clone(), file))
+    }
+
     /// Deletes the log and its folder, for a session in which nothing happened. A folder that
     /// holds saved files is left alone.
     pub fn discard(&self) {

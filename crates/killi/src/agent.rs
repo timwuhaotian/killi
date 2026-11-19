@@ -111,6 +111,12 @@ pub struct Agent {
     messages: Rc<Vec<Value>>,
     ctx: Rc<tools::Context>,
     pub session: Session,
+    /// The conversation id sent as `prompt_cache_key` and as a provider's `session_header`:
+    /// the session's id. A fork, whose requests open with this history, and a task another
+    /// session sent keep the session's key; any other subagent or pair child is a conversation
+    /// of its own under it, `<session id>/agent-N`. A child's log name alone (`agent-N`) would
+    /// be one id that every session's first subagent shares.
+    cache_key: String,
     pub stats: Stats,
     pub controls: Controls,
     settings: Rc<Settings>,

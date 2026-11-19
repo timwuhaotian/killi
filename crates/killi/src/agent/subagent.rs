@@ -533,6 +533,10 @@ impl Agent {
             inherited_context,
             inherited_len,
         );
+        if fork {
+            // A fork's requests open with this conversation as sent, so they belong under its key.
+            agent.cache_key = self.cache_key.clone();
+        }
         if announce_plan {
             agent.push(json!({"role": "user", "content": plan::ON}))?;
             agent.plan_announced = true;
@@ -565,6 +569,7 @@ impl Agent {
             // Its background tasks are its own while it runs; what it leaves running moves to
             // this agent when it ends.
             ctx: Rc::new(self.ctx.detached()),
+            cache_key: format!("{}/{}", self.cache_key, session.id),
             session,
             stats: Stats {
                 context: inherited_context,

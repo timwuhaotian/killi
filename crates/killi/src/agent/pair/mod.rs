@@ -258,6 +258,7 @@ impl Agent {
             tools: self.tools.clone(),
             messages,
             ctx: self.ctx.clone(),
+            cache_key: format!("{}/{}", self.cache_key, session.id),
             session,
             stats: Stats::default(),
             controls: Controls {

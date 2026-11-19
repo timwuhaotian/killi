@@ -7,10 +7,16 @@ impl Agent {
         // a session that seemed to hang on a rate limit can be traced from its log: when a
         // retry eventually succeeds, the backoff would otherwise leave no trace at all.
         // Entries are buffered here (the closure only forwards to the sink) and recorded
-        // when the request settles, before the usage or error entry that follows it.
-        let retries = Rc::new(RefCell::new(Vec::new()));
-        let logged = retries.clone();
+        // when the request settles, before the usage or error entry that follows it, or
+        // before the `abort` entry if it is dropped first (`Unsettled`).
+        let mut unsettled = Unsettled::new(&self.session, None);
+        let logged = unsettled.retries.clone();
+        let seen = unsettled.first_token.clone();
+        let started = unsettled.started;
         let mut on_delta = |delta: Delta| {
+            if !matches!(delta, Delta::Retry { .. }) && seen.get().is_none() {
+                seen.set(Some(started.elapsed()));
+            }
             match delta {
                 Delta::Text(text) => sink(Event::Text(text.to_string())),
                 Delta::Reasoning(text) => sink(Event::Reasoning(text.to_string())),
@@ -34,10 +40,9 @@ impl Agent {
                 }
             }
         };
-        let started = Instant::now();
         let reply = match self
             .client
-            .complete(&self.messages, &self.tools, &self.session.id, &mut on_delta)
+            .complete(&self.messages, &self.tools, &self.cache_key, &mut on_delta)
             .await
         {
             Ok(reply) => reply,
@@ -67,25 +72,25 @@ impl Agent {
                     (self.sink)(Event::Notice(note));
                     match self
                         .client
-                        .complete(&self.messages, &self.tools, &self.session.id, &mut on_delta)
+                        .complete(&self.messages, &self.tools, &self.cache_key, &mut on_delta)
                         .await
                     {
                         Ok(reply) => reply,
                         Err(error) => {
-                            self.record_retries(&retries)?;
+                            self.settle(&mut unsettled)?;
                             self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
                             return Err(error);
                         }
                     }
                 }
                 None => {
-                    self.record_retries(&retries)?;
+                    self.settle(&mut unsettled)?;
                     self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
                     return Err(error);
                 }
             },
         };
-        self.record_retries(&retries)?;
+        self.settle(&mut unsettled)?;
         let took = started.elapsed();
         self.stats.requests += 1;
         self.account(
@@ -101,9 +106,10 @@ impl Agent {
 
     /// Writes the retry backoffs this request's attempts answered, beside the message and
     /// usage records — never into the history. Old logs have no `retry` entries and read
-    /// unchanged.
-    fn record_retries(&mut self, retries: &RefCell<Vec<Value>>) -> Result<()> {
-        for retry in retries.borrow().iter() {
+    /// unchanged. The request settled, so `unsettled` writes nothing when it drops.
+    fn settle(&mut self, unsettled: &mut Unsettled) -> Result<()> {
+        unsettled.disarm();
+        for retry in unsettled.retries.borrow().iter() {
             self.session.record(retry)?;
         }
         Ok(())
@@ -317,4 +323,57 @@ fn strip_images_from(messages: &mut [Value]) -> usize {
         }
     }
     stripped
+}
+
+/// A request in flight, as the log will tell it if the request is dropped before it settles:
+/// the turn interrupted with Esc, or abandoned while the provider stalled, retried or
+/// streamed. Such a request has no reply, usage or error to record, so without this it left
+/// nothing at all. Dropping it writes the retries it waited through and an `abort` entry with
+/// how long it ran and when its first token came (`null`: none did); settling disarms it.
+/// A compaction's summary request says so in `during`.
+pub(super) struct Unsettled {
+    log: Option<Session>,
+    during: Option<&'static str>,
+    retries: Rc<RefCell<Vec<Value>>>,
+    started: Instant,
+    first_token: Rc<Cell<Option<Duration>>>,
+}
+
+impl Unsettled {
+    /// Armed from now on, writing to a second handle on `session`'s log. A log that can't be
+    /// reopened only loses this entry.
+    pub(super) fn new(session: &Session, during: Option<&'static str>) -> Self {
+        Self {
+            log: session.try_clone().ok(),
+            during,
+            retries: Rc::default(),
+            started: Instant::now(),
+            first_token: Rc::default(),
+        }
+    }
+
+    /// The request settled, with a reply or an error: dropping writes nothing.
+    pub(super) fn disarm(&mut self) {
+        self.log = None;
+    }
+}
+
+impl Drop for Unsettled {
+    fn drop(&mut self) {
+        let Some(mut log) = self.log.take() else {
+            return;
+        };
+        for retry in self.retries.borrow().iter() {
+            let _ = log.record(retry);
+        }
+        let mut entry = json!({
+            "type": "abort",
+            "ms": millis(self.started.elapsed()),
+            "first_token_ms": self.first_token.get().map(millis),
+        });
+        if let Some(during) = self.during {
+            entry["during"] = during.into();
+        }
+        let _ = log.record(&entry);
+    }
 }

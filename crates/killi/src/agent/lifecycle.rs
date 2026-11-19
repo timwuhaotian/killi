@@ -206,6 +206,7 @@ impl Agent {
             tools: Rc::new(tools),
             messages: Rc::default(),
             ctx: Rc::new(ctx),
+            cache_key: session.id.clone(),
             session,
             stats: Stats::default(),
             controls,
@@ -352,7 +353,7 @@ impl Agent {
             settings: Some(self.settings.clone()),
             messages: Rc::downgrade(&self.messages),
             ctx: Rc::downgrade(&self.ctx),
-            cache_key: self.session.id.clone(),
+            cache_key: self.cache_key.clone(),
         };
     }
 

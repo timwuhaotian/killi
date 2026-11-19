@@ -24,6 +24,7 @@ from pathlib import Path
 REPEATED = 3  # identical tool calls in one session before it is reported
 SLEPT = 120  # seconds in commands that open with `sleep N` before a session is reported
 LOW_CACHE = 0.5  # share of input tokens from the cache below which a model is flagged
+STALLED = 30  # seconds a dropped request waited with no first token before it is reported
 FIXED_SLEEP = re.compile(r"\s*sleep\s+(\d+(?:\.\d+)?)")  # a command's opening `sleep N`
 MEASURING = re.compile(r"-T-(bench|eval-)")  # where bench.py and eval.py run killi: a temporary folder
 IDLE_GAP = 300_000  # ms without a log line that end a stretch of activity
@@ -77,7 +78,7 @@ def analyze(path):
          "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0, "version": None,
          "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [],
          "tool_ms": [], "slept": [0, 0], "compactions": [], "per_model": collections.defaultdict(lambda: collections.Counter()),
-         "active": [], "peer_git": [], "peer_refusals": 0, "miss_streak": [], "retries": []}
+         "active": [], "peer_git": [], "peer_refusals": 0, "miss_streak": [], "retries": [], "aborts": []}
     model, awaiting, calls, answered, sleeping, peers = None, None, {}, set(), set(), False
     cwd, moving = None, {}
     streak, grew_from = 0, None
@@ -199,6 +200,10 @@ def analyze(path):
             s["ended"] = "error"
         elif kind == "retry":
             s["retries"].append(entry)
+        elif kind == "abort":
+            # A request dropped before it settled (since 0.8.2): Esc, or a turn abandoned.
+            s["aborts"].append(entry)
+            s["ended"] = "aborted request"
         elif kind == "warn":
             s["warns"].append(str(entry.get("message"))[:160])
     if any(i not in answered for i in calls):
@@ -269,6 +274,11 @@ def findings(sessions, models, versions_of):
             waits = sum(r.get("wait_ms", 0) for r in s["retries"])
             reasons = "; ".join(sorted({str(r.get("reason"))[:140] for r in s["retries"]}))
             found.append(f"{who}`{name}` retried {len(s['retries'])} time(s) ({waits / 1000:.0f}s of backoff): {reasons}")
+        stalled = [a for a in s["aborts"] if a.get("first_token_ms") is None and (a.get("ms") or 0) >= STALLED * 1000]
+        if stalled:
+            longest = max(a["ms"] for a in stalled) / 1000
+            found.append(f"{who}`{name}` dropped {len(stalled)} request(s) that had no first token after {STALLED}s or more "
+                         f"(longest {longest:.0f}s): the provider stalled and the user gave up. Check its other requests' times.")
         for command in s["peer_git"]:
             found.append(f"{who}`{name}` ran `{command}` after being told another session works in its repository, in the session's own folder, "
                          "and it was not refused; versions since 0.6.8 refuse these while a peer shares the tree.")

@@ -59,6 +59,7 @@ pub(crate) fn task_agent(
     )?;
     // A task the provider rate-limits finishes on the backup, like a subagent of this session.
     agent.backup = aside.backup.clone();
+    agent.cache_key = aside.cache_key.clone();
     Ok(agent)
 }
 

@@ -94,9 +94,10 @@ impl Agent {
         }
         let instruction = json!({"role": "user", "content": instruction});
         request.push(instruction.clone());
+        let mut unsettled = super::request::Unsettled::new(&self.session, Some("compaction"));
         let reply = match self
             .client
-            .complete(&request, &self.tools, &self.session.id, &mut |_| {})
+            .complete(&request, &self.tools, &self.cache_key, &mut |_| {})
             .await
         {
             // Too long to be read even to summarize it: summarize it with its bulk cut.
@@ -104,11 +105,13 @@ impl Agent {
                 request = reduced(&self.messages);
                 request.push(instruction);
                 self.client
-                    .complete(&request, &self.tools, &self.session.id, &mut |_| {})
-                    .await?
+                    .complete(&request, &self.tools, &self.cache_key, &mut |_| {})
+                    .await
             }
-            reply => reply?,
+            reply => reply,
         };
+        unsettled.disarm();
+        let reply = reply?;
         self.stats.requests += 1;
         self.account(
             &reply.usage,
