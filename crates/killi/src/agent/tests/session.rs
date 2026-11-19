@@ -85,7 +85,8 @@ async fn a_spent_quota_switches_to_the_backup() {
         "429 Too Many Requests",
         "{\"error\":{\"message\":\"usage limit reached\"}}",
     );
-    let (agent, reply) = request_with_backup("backup-quota", Some(vec![spent])).await;
+    // A spent quota is tried once more before the switch.
+    let (agent, reply) = request_with_backup("backup-quota", Some(vec![spent; 2])).await;
     assert_eq!(reply.unwrap().text, "from backup");
     assert_eq!(agent.model_alias(), "backup");
 }

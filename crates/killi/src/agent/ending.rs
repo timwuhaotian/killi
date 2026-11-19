@@ -208,16 +208,28 @@ fn last_line_ends_with(text: &str, marks: &[char]) -> bool {
 /// The note the prompt after an interrupted turn carries: which request the turn was working
 /// on and what its task list still had open. Without them a model reads the new prompt as
 /// replacing the work it cut off, rewrites the task list and never comes back to it. Read from
-/// the history, so it also holds for a turn interrupted before a resume.
-pub(super) fn interrupted_note(messages: &[Value], todos: &[Todo]) -> String {
-    let mut note = "The user interrupted your previous turn.".to_string();
+/// the history, so it also holds for a turn interrupted before a resume. `failed_on` is the
+/// error a turn stopped on when no one interrupted it.
+pub(super) fn interrupted_note(messages: &[Value], todos: &[Todo], failed_on: Option<&str>) -> String {
+    let (cut, after) = match failed_on {
+        None => ("The user interrupted your previous turn", String::new()),
+        Some(error) => {
+            let error = error.split_whitespace().collect::<Vec<_>>().join(" ");
+            let error = neutralize_reminder_tags(truncate(&error, 200)).into_owned();
+            (
+                "Your previous turn stopped on an error",
+                format!("; the user didn't interrupt it (the error: {error})"),
+            )
+        }
+    };
+    let mut note = format!("{cut}{after}.");
     let prompts = crate::session::user_prompts(messages);
     let Some(request) = prompts.last() else {
         return note;
     };
     let request = request.split_whitespace().collect::<Vec<_>>().join(" ");
     let request = neutralize_reminder_tags(truncate(&request, 300)).into_owned();
-    note = format!("The user interrupted your previous turn while it worked on “{request}”.");
+    note = format!("{cut} while it worked on “{request}”{after}.");
     let open: Vec<&str> = todos
         .iter()
         .filter(|t| t.status != "completed")

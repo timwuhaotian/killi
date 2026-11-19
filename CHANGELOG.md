@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.6 — 2026-11-20
+
+- A 429 that says a quota ran out gets one more attempt 30 s later before it counts as a spent
+  plan. Some gateways word a per-minute token limit that way, and it used to kill subagents
+  after a single attempt while the same model kept answering the others.
+- A `task_output` wait on a background subagent also returns when another background task
+  ends, so that report isn't held back, and a wait that runs out reminds the model the report
+  comes by itself, so it can end its turn instead of waiting again.
+- After a turn that stopped on an error, the next prompt tells the model it stopped on an
+  error, naming it, instead of saying the user interrupted it.
+- A resumed session numbers new tasks past every task id its history already names.
+
 ## 0.8.5 — 2026-11-19
 
 - `killi login chatgpt` no longer calls your same ChatGPT account a different one. A credentials

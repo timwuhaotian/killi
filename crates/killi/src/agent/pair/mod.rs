@@ -297,6 +297,7 @@ impl Agent {
             goal_announced: None,
             peers_announced: Vec::new(),
             interrupted: false,
+            failed_on: None,
             depth: self.depth + 1,
             route: Default::default(),
             paused: Default::default(),

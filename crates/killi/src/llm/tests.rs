@@ -1,35 +1,52 @@
 use super::*;
+use error::QUOTA_RECHECK;
+
+/// A spent quota gets one more attempt after `QUOTA_RECHECK`, never the ten a rate limit gets.
+fn rechecked_once(failure: &Failure) -> bool {
+    failure.kind == ErrorKind::Quota
+        && failure.retryable
+        && failure.max_attempts == Some(2)
+        && failure.retry_after == Some(QUOTA_RECHECK)
+}
 
 #[test]
-fn a_spent_quota_is_not_retried() {
+fn a_spent_quota_is_tried_once_more() {
     let body = r#"{"error":{"code":"1308","message":"Usage limit reached for 5 hour. Your limit will reset at 2026-10-22 16:06:02"}}"#;
     let failure = classify(StatusCode::TOO_MANY_REQUESTS, None, body);
-    assert!(!failure.retryable);
+    assert!(rechecked_once(&failure), "{failure:?}");
     assert!(failure.message.contains("reset at 2026-10-22 16:06:02"));
 }
 
 #[test]
-fn a_spent_chatgpt_plan_is_not_retried() {
+fn a_spent_chatgpt_plan_is_tried_once_more() {
     let body = r#"{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"Try again later"}}"#;
-    assert!(!classify(StatusCode::TOO_MANY_REQUESTS, None, body).retryable);
+    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, body)));
 }
 
 #[test]
-fn a_spent_budget_is_not_retried() {
+fn a_spent_budget_is_tried_once_more() {
     let body = r#"{"error":{"type":"budget_exceeded","message":"Budget has been exceeded"}}"#;
-    let failure = classify(StatusCode::TOO_MANY_REQUESTS, None, body);
-    assert_eq!(failure.kind, ErrorKind::Quota);
-    assert!(!failure.retryable);
+    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, body)));
 }
 
 #[test]
-fn a_spent_chinese_token_plan_is_not_retried() {
+fn a_spent_chinese_token_plan_is_tried_once_more() {
     let body = r#"{"type":"error","error":{"type":"rate_limit_error","message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)"}}"#;
-    let failure = classify(StatusCode::TOO_MANY_REQUESTS, None, body);
-    assert_eq!(failure.kind, ErrorKind::Quota);
-    assert!(!failure.retryable);
+    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, body)));
     let variant = r#"{"error":{"message":"已达到使用上限，请稍后再试"}}"#;
-    assert!(!classify(StatusCode::TOO_MANY_REQUESTS, None, variant).retryable);
+    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, variant)));
+}
+
+/// The body qwen's gateway sent for a per-minute token limit: the same model answered within
+/// 27 s every time, so it must not end the request on the first attempt.
+#[test]
+fn a_quota_worded_rate_limit_is_tried_again() {
+    let body = r#"{"error":{"message":"Allocated quota exceeded, please increase your quota limit. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit","type":"insufficient_quota","code":"insufficient_quota"}}"#;
+    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, body)));
+    // A server that names its own wait is taken at its word, unless it is too long to sit out.
+    let named = classify(StatusCode::TOO_MANY_REQUESTS, Some(Duration::from_secs(5)), body);
+    assert_eq!(named.retry_after, Some(Duration::from_secs(5)));
+    assert!(!classify(StatusCode::TOO_MANY_REQUESTS, Some(Duration::from_secs(3600)), body).retryable);
 }
 
 #[test]
@@ -625,4 +642,32 @@ async fn a_request_gives_up_once_it_has_waited_out_its_budget() {
         3,
         "the answer that came later is never asked for"
     );
+}
+
+/// A 429 worded as a spent quota, with the wait the server names.
+fn quota_429(retry_after: u32) -> String {
+    format!(
+        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: {retry_after}\r\nconnection: close\r\n\r\n{{\"error\":{{\"message\":\"Allocated quota exceeded, please increase your quota limit.\",\"code\":\"insufficient_quota\"}}}}"
+    )
+}
+
+#[tokio::test]
+async fn a_quota_429_that_clears_gets_its_answer_and_one_that_stays_fails_after_two() {
+    // A per-minute limit worded as a quota: the second attempt is answered.
+    let (url, arrivals) = serve(vec![quota_429(0), sse_ok()]).await;
+    let client = Client::new(test_model(&url)).unwrap();
+    let message = [serde_json::json!({"role": "user", "content": "hi"})];
+    client.complete(&message, &[], "k", &mut |_| {}).await.unwrap();
+    assert_eq!(arrivals.lock().unwrap().len(), 2);
+    // A plan that is really spent fails on its second attempt, not its tenth.
+    let (url, arrivals) = serve(vec![quota_429(0), quota_429(0), sse_ok()]).await;
+    let client = Client::new(test_model(&url)).unwrap();
+    let error = client
+        .complete(&message, &[], "k", &mut |_| {})
+        .await
+        .unwrap_err();
+    let provider = error.downcast_ref::<ProviderError>().unwrap();
+    assert_eq!(provider.kind, ErrorKind::Quota);
+    assert_eq!(provider.attempts, 2);
+    assert_eq!(arrivals.lock().unwrap().len(), 2);
 }

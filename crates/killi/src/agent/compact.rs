@@ -267,6 +267,14 @@ impl Agent {
         Ok(())
     }
 
+    /// `recover` after a turn that stopped on `error` rather than by the user, so the next
+    /// prompt's note names the error instead of an interruption nobody made.
+    pub fn recover_failed(&mut self, error: &str) -> Result<()> {
+        self.recover()?;
+        self.failed_on = self.interrupted.then(|| error.to_string());
+        Ok(())
+    }
+
     /// Queues a note for the model's next prompt, through the same channel as the
     /// interruption note. After /undo the terminal calls this with what changed instead of
     /// `mark_interrupted`, so the model hears what was restored.

@@ -164,8 +164,16 @@ pub(super) fn spent_quota(text: &str) -> bool {
     QUOTA_WORDS.iter().any(|w| lower.contains(w))
 }
 
-/// What a failed HTTP response means: retried, unless waiting won't help. A spent quota
-/// (a 5-hour or monthly limit) resets in hours, so it fails at once with the server's message.
+/// How long a 429 that reads as a spent quota waits before its one more attempt. Some
+/// gateways word a per-minute token limit as a quota ("Allocated quota exceeded"): in the logs
+/// the same model answered 0 to 27 s after each of those, so one attempt half a minute later
+/// tells the two apart, and a plan that is really spent costs one request more, not ten.
+pub(super) const QUOTA_RECHECK: Duration = Duration::from_secs(30);
+
+/// What a failed HTTP response means: retried, unless waiting won't help. A 429 that reads as a
+/// spent quota (a 5-hour or monthly limit resets in hours) gets one more attempt after
+/// `QUOTA_RECHECK`, in case it was a rate limit worded as one, and then fails with the server's
+/// message.
 pub(super) fn classify(status: StatusCode, retry_after: Option<Duration>, body: &str) -> Failure {
     let lower = body.to_lowercase();
     let quota = status == StatusCode::TOO_MANY_REQUESTS && spent_quota(body);
@@ -182,9 +190,13 @@ pub(super) fn classify(status: StatusCode, retry_after: Option<Duration>, body: 
     Failure {
         kind,
         status: Some(status.as_u16()),
-        retryable: retryable_status(status) && !quota && !too_long,
-        retry_after,
-        max_attempts: None,
+        retryable: retryable_status(status) && !too_long,
+        retry_after: if quota {
+            Some(retry_after.unwrap_or(QUOTA_RECHECK))
+        } else {
+            retry_after
+        },
+        max_attempts: quota.then_some(2),
         message: format!("HTTP {status}: {}", truncate(body, 2000)),
     }
 }

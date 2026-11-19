@@ -176,10 +176,15 @@ impl Agent {
             }
         }
         agent.partial_agents = loaded.agents;
-        // Ids its background work kept stay taken, and the work waits for the terminal.
-        if let Some(last) = loaded.background.keys().next_back() {
-            agent.ctx.tasks.borrow_mut().reserve_through(*last);
-        }
+        // Every id the history names stays taken, ended work's included: a new task 1 would
+        // read as the old one wherever the history mentions it. Paused work waits for the
+        // terminal under its own id.
+        let last = loaded.background.keys().next_back().copied().unwrap_or(0);
+        agent
+            .ctx
+            .tasks
+            .borrow_mut()
+            .reserve_through(last.max(loaded.last_task));
         agent.paused = loaded.background;
         agent.recover()?;
         agent.share();
@@ -233,6 +238,7 @@ impl Agent {
             goal_announced: None,
             peers_announced: Vec::new(),
             interrupted: false,
+            failed_on: None,
             next_notes: Vec::new(),
             pending_prompt: None,
             hook_notified: RefCell::default(),

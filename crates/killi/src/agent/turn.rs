@@ -54,8 +54,13 @@ impl Agent {
             return Err(anyhow!("a hook blocked this prompt: {reason}"));
         }
         let mut notes = Vec::new();
+        let failed_on = self.failed_on.take();
         if std::mem::take(&mut self.interrupted) {
-            notes.push(interrupted_note(&self.messages, &self.todos));
+            notes.push(interrupted_note(
+                &self.messages,
+                &self.todos,
+                failed_on.as_deref(),
+            ));
         }
         notes.extend(std::mem::take(&mut self.next_notes));
         notes.extend(self.settings.mcp.take_notes());

@@ -2,6 +2,8 @@ use super::*;
 
 use tokio::sync::mpsc;
 
+use crate::agent::background::BgStart;
+
 /// Controls for an interactive session whose background work arrives on the returned receiver,
 /// as the terminal's would.
 fn attached() -> (Controls, mpsc::UnboundedReceiver<BgFuture>) {
@@ -501,4 +503,112 @@ async fn a_reply_announcing_background_work_ends_the_turn() {
     assert_eq!(stop, Stop::Completed);
     assert!(text.contains("in the background"), "{text}");
     assert_eq!(agent.stats.requests, 2, "no extra request to go on");
+}
+
+/// What a test task starts as: already running, so it needs no slot.
+fn running_start(label: &str) -> BgStart {
+    BgStart {
+        label: label.into(),
+        members: 1,
+        logs: Vec::new(),
+        sent: Vec::new(),
+        items: Vec::new(),
+        steer: None,
+        started: true,
+        since: Instant::now(),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_wait_ends_when_another_task_does_and_a_timed_out_one_says_not_to_poll() {
+    let (controls, mut rx) = attached();
+    let mut agent = idle_agent("bg-wait", controls.clone(), Rc::new(|_| {}));
+    let slow = agent.launch(
+        running_start("slow"),
+        Box::pin(std::future::pending::<(tools::Output, Stats)>()),
+    );
+    let quick = agent.launch(
+        running_start("quick"),
+        Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            (tools::Output::ok("quick report"), Stats::default())
+        }),
+    );
+    let _slow_work = rx.recv().await.unwrap();
+    let quick_work = rx.recv().await.unwrap();
+    // A wait on the slow task stops once the quick one ends, long before its 30 s.
+    let begun = Instant::now();
+    let args = json!({"id": slow, "wait": 30});
+    let (waited, ended) = tokio::join!(agent.background_output(slow, &args), quick_work);
+    assert_eq!(ended, quick);
+    assert!(begun.elapsed() < Duration::from_secs(5));
+    assert!(
+        waited
+            .text
+            .contains(&format!("[Stopped waiting: background task {quick} ended")),
+        "{}",
+        waited.text
+    );
+    assert!(!waited.text.contains("Rather than waiting again"));
+    // Its report reaches the model at the next step.
+    agent.deliver_background().unwrap();
+    assert_eq!(reminders_with(&agent, "quick report"), 1);
+    // A wait that runs out says the report comes by itself; a plain look doesn't.
+    let timed_out = agent
+        .background_output(slow, &json!({"id": slow, "wait": 1}))
+        .await;
+    assert!(
+        timed_out.text.contains("is still running")
+            && timed_out.text.contains("Rather than waiting again"),
+        "{}",
+        timed_out.text
+    );
+    let look = agent.background_output(slow, &json!({"id": slow})).await;
+    assert!(!look.text.contains("Rather than waiting again"), "{}", look.text);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_resume_numbers_past_every_task_the_log_named() {
+    let dir = crate::test_temp::TempDir::new("killi-bg-ids");
+    let log = dir.join("1-1.jsonl");
+    std::fs::create_dir_all(dir.join("1-1")).unwrap();
+    let line = |value: Value| value.to_string();
+    let call = |id: &str, name: &str| {
+        json!({"role": "assistant", "content": "", "tool_calls": [
+            {"id": id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+        ]})
+    };
+    std::fs::write(
+        &log,
+        [
+            line(json!({"type": "message", "message": {"role": "system", "content": "sys"}})),
+            line(json!({"type": "message", "message": {"role": "user", "content": "hi"}})),
+            line(json!({"type": "message", "message": call("a", "agent_swarm")})),
+            line(json!({"type": "bg_start", "id": 1, "label": "swarm", "items": [], "logs": [], "sent": []})),
+            line(json!({"type": "message", "message": {"role": "tool", "tool_call_id": "a", "content": "Running in the background as task 1. Its report arrives as a reminder when it ends."}})),
+            line(json!({"type": "bg_end", "id": 1})),
+            line(json!({"type": "message", "message": call("b", "bash")})),
+            line(json!({"type": "message", "message": {"role": "tool", "tool_call_id": "b", "content": "Started background task 4. Read its output with task_output."}})),
+            line(json!({"type": "message", "message": {"role": "assistant", "content": "done"}})),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let (controls, _rx) = attached();
+    let (locked, report) = Session::resume(&log).unwrap();
+    let agent = Agent::resume_reported(
+        test_client_at("test", "http://127.0.0.1:9"),
+        None,
+        &dir,
+        locked,
+        report,
+        Vec::new(),
+        Settings::default(),
+        controls,
+        Rc::new(|_| {}),
+    )
+    .unwrap();
+    // Task 1 ended and bash task 4 died with the old process; neither id is handed out again.
+    assert_eq!(agent.ctx.tasks.borrow_mut().reserve_id(), 5);
 }

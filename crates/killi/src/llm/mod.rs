@@ -310,7 +310,7 @@ impl Client {
                 Ok(reply) => return Ok(reply),
                 Err(failure) => failure,
             };
-            if self.answered.get() {
+            if self.answered.get() && failure.kind == ErrorKind::Transport {
                 failure.max_attempts = None;
             }
             if !waited_peer {

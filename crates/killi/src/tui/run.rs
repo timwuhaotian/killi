@@ -763,14 +763,20 @@ async fn drive_turn(
     // A turn that ended with the model's answer leaves the prompt empty, so it can offer
     // what to ask next.
     let answered = matches!(ended, Ended::Done(Ok(_)));
+    let failed_on = match &ended {
+        Ended::Done(Err(error)) => Some(first_line(&gist(&format!("{error:#}")), 200)),
+        _ => None,
+    };
     let after = Totals::of(agent);
     app.finish_turn(agent, ended, before, after);
     app.live_turn(None);
     if !app.controls.peer_notes.borrow().is_empty() {
         app.notice("A message from another session came as the turn ended; the agent gets it with your next prompt.");
     }
-    if !matches!(app.last_end, Some(LastEnd::Done)) {
-        agent.recover()?;
+    match failed_on {
+        Some(error) => agent.recover_failed(&error)?,
+        None if !matches!(app.last_end, Some(LastEnd::Done)) => agent.recover()?,
+        None => {}
     }
     if wants_recap(
         app.auto_recap,

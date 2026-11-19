@@ -502,17 +502,28 @@ impl Agent {
     }
 
     /// `task_output` on a background subagent: its report once it ended, else where it is.
-    /// `wait` waits for it to end, as long as the user doesn't send a message meanwhile.
+    /// `wait` waits for it to end, as long as the user doesn't send a message and no other
+    /// background task ends meanwhile: that one's report is delivered at the next step, so a
+    /// wait on one task never holds back another's.
     pub(super) async fn background_output(&mut self, id: u32, args: &Value) -> tools::Output {
         let wait = tools::uint(args, "wait").unwrap_or(0).min(300);
         let deadline = Instant::now() + Duration::from_secs(wait);
+        let ended_before = self.ended_others(id);
         let mut interrupted = false;
+        let mut other = None;
         loop {
             if self.background_ended(id) || Instant::now() >= deadline {
                 break;
             }
             if self.pending_steer() {
                 interrupted = true;
+                break;
+            }
+            other = self
+                .ended_others(id)
+                .into_iter()
+                .find(|ended| !ended_before.contains(ended));
+            if other.is_some() {
                 break;
             }
             tokio::time::sleep(POLL).await;
@@ -580,8 +591,28 @@ impl Agent {
         };
         if interrupted {
             text.push_str("\n[Stopped waiting: a message from the user is waiting. Read it first; task_output with `wait` picks the wait up again.]");
+        } else if let Some(other) = other {
+            text.push_str(&format!(
+                "\n[Stopped waiting: background task {other} ended, and its report follows.]"
+            ));
+        } else if wait > 0 && task.state != BgState::Queued {
+            // Models told not to wait polled anyway, one 300 s wait after another for hours,
+            // which kept the turn open so no report could start one of its own.
+            text.push_str("\n[Its report comes to you by itself when it ends, and starts a turn of its own if you are idle then. Rather than waiting again, tell the user what is still running and end your turn.]");
         }
         tools::Output::ok(text).brief(format!("task {id} running"))
+    }
+
+    /// Background tasks other than `id` that ended and whose report the model hasn't had.
+    fn ended_others(&self, id: u32) -> Vec<u32> {
+        self.controls
+            .background
+            .borrow()
+            .tasks
+            .iter()
+            .filter(|(other, task)| **other != id && task.ended() && !task.delivered)
+            .map(|(other, _)| *other)
+            .collect()
     }
 
     fn background_ended(&self, id: u32) -> bool {

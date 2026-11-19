@@ -165,6 +165,9 @@ pub struct Agent {
     /// The other sessions in this tree the model was last told about, by pid.
     peers_announced: Vec<u32>,
     interrupted: bool,
+    /// The error the last turn stopped on, when it stopped on one rather than by the user:
+    /// the note after it says so instead of "the user interrupted".
+    failed_on: Option<String>,
     /// Notes queued for the model's next prompt (`note_for_next_prompt`, e.g. after /undo).
     next_notes: Vec<String>,
     /// The turn's prompt while no reply or rewrite has come after it, so `retract` can take

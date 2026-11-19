@@ -47,6 +47,9 @@ pub struct Loaded {
     /// Background work still open when the log stopped, by task id. Kept across
     /// compactions: it belongs to no message.
     pub background: std::collections::BTreeMap<u32, BgRecord>,
+    /// The highest task id the log ever handed out, bash or background, so a resume numbers
+    /// past it and an id the history already names is never given to new work.
+    pub last_task: u32,
 }
 
 /// A model alias and thinking effort, as `Thinking::label` names it. The effort is what a
@@ -89,6 +92,7 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
         goal: None,
         recap: None,
         background: Default::default(),
+        last_task: 0,
     };
     for chunk in bytes.split(|b| *b == b'\n') {
         if chunk.is_empty() {
@@ -125,6 +129,11 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
                     };
                     loaded.tools.insert(id.to_string(), end);
                 }
+                if entry["message"]["role"] == "tool"
+                    && let Some(text) = entry["message"]["content"].as_str()
+                {
+                    loaded.last_task = loaded.last_task.max(named_task(text));
+                }
                 loaded.messages.push(entry["message"].clone());
             }
             Some("usage") => loaded.context = entry["prompt"].as_u64().unwrap_or(0),
@@ -138,6 +147,7 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
                         .collect::<Vec<_>>()
                 };
                 if let Some(id) = entry["id"].as_u64() {
+                    loaded.last_task = loaded.last_task.max(id as u32);
                     loaded.background.insert(
                         id as u32,
                         BgRecord {
@@ -292,4 +302,23 @@ fn repair_dangling_calls(messages: &mut Vec<Value>) -> usize {
         messages.splice(index + 1..index + 1, placeholders);
     }
     repaired
+}
+
+/// The highest task id a tool result names in killi's own words for one ("Started background
+/// task 3", "Running in the background as task 4", "moved to background task 5"), or 0.
+fn named_task(text: &str) -> u32 {
+    let mut last = 0;
+    for phrase in ["background task ", "as task "] {
+        for (at, _) in text.match_indices(phrase) {
+            let digits: String = text[at + phrase.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .take(6)
+                .collect();
+            if let Ok(id) = digits.parse::<u32>() {
+                last = last.max(id);
+            }
+        }
+    }
+    last
 }

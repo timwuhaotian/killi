@@ -67,6 +67,7 @@ fn loaded(messages: Vec<Value>) -> Loaded {
         goal: None,
         recap: None,
         background: Default::default(),
+        last_task: 0,
     }
 }
 
@@ -875,4 +876,21 @@ fn background_work_stays_open_across_compactions_until_its_end() {
     let swarm = &report.loaded.background[&5];
     assert_eq!(swarm.items, ["x", "y"]);
     assert_eq!(swarm.logs, ["agent-2.jsonl", "agent-3.jsonl"]);
+}
+
+#[test]
+fn a_log_names_its_highest_task_id() {
+    let dir = crate::test_temp::TempDir::new("killi-last-task");
+    let log = dir.join("1-1.jsonl");
+    let entries = [
+        json!({"type": "message", "message": {"role": "system", "content": "sys"}}),
+        json!({"type": "message", "message": {"role": "tool", "tool_call_id": "a", "content": "(no output) [A message from the user is waiting, so it moved to background task 7 after 0s.]"}}),
+        // Only killi's own tool results count, not what the user typed.
+        json!({"type": "message", "message": {"role": "user", "content": "see background task 900"}}),
+        json!({"type": "bg_start", "id": 3, "label": "a", "items": [], "logs": [], "sent": []}),
+        json!({"type": "bg_end", "id": 3}),
+    ];
+    let text: String = entries.iter().map(|e| format!("{e}\n")).collect();
+    std::fs::write(&log, text).unwrap();
+    assert_eq!(load_reported(&log).unwrap().loaded.last_task, 7);
 }
