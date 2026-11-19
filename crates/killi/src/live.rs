@@ -81,10 +81,19 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Whether it has worked in its tree at all: a turn now or before (a resumed session
+    /// carries its last prompt), or a task another session sent it. A session opened and left
+    /// at an empty prompt has changed nothing, so it is no peer to guard or warn about.
+    pub fn has_worked(&self) -> bool {
+        self.working || self.tasks > 0 || !self.prompt.is_empty() || self.task_since > 0
+    }
+
     /// Whether it worked since `since` (ms since the epoch) or still does, on a turn of its own
     /// or on a task another session sent it.
     pub fn worked_since(&self, since: u64) -> bool {
-        self.working || self.tasks > 0 || self.since.max(self.task_since) >= since
+        self.working
+            || self.tasks > 0
+            || (self.has_worked() && self.since.max(self.task_since) >= since)
     }
 }
 
@@ -248,11 +257,12 @@ pub struct Here {
 }
 
 impl Here {
-    /// The other sessions working in this tree now, oldest first.
+    /// The other sessions working in this tree now, oldest first: those that have worked in
+    /// it, not one still at its first prompt.
     pub fn others(&self) -> Vec<Entry> {
         list_in(&self.dir)
             .into_iter()
-            .filter(|e| e.pid != self.pid && e.tree == self.tree)
+            .filter(|e| e.pid != self.pid && e.tree == self.tree && e.has_worked())
             .collect()
     }
 }

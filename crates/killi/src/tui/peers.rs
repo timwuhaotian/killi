@@ -149,7 +149,8 @@ impl App {
             .collect()
     }
 
-    /// Brings this session's file up to date with its model, log and branch.
+    /// Brings this session's file up to date with its model, log and branch. A resumed
+    /// conversation's last prompt stands in until a turn runs, so peers know it has worked here.
     pub(super) fn live_sync(&mut self, agent: &Agent) {
         let branch = self
             .status
@@ -157,10 +158,19 @@ impl App {
             .as_ref()
             .map(|b| b.trim_end_matches('*').to_string());
         if let Some(live) = &mut self.live {
+            let resumed = live
+                .entry
+                .prompt
+                .is_empty()
+                .then(|| agent.user_prompts().pop())
+                .flatten();
             live.update(|e| {
                 e.model = agent.model_alias().to_string();
                 e.log = agent.session.log_path.clone();
                 e.branch = branch;
+                if let Some(prompt) = resumed {
+                    e.prompt = first_line(&prompt, 200);
+                }
             });
         }
     }

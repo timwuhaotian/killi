@@ -582,6 +582,7 @@ async fn the_model_hears_once_when_the_sessions_in_its_tree_change_and_gets_thei
         pid,
         tree: tree.into(),
         cwd: tree.into(),
+        prompt: "fix it".into(),
         ..live::Entry::default()
     };
     let me = live::Registration::open_in(&dir, entry(1, "/w")).unwrap();
@@ -963,6 +964,7 @@ fn peered_agent(name: &str) -> (Agent, live::Registration, crate::test_temp::Tem
             pid: 2,
             tree: tree.clone(),
             cwd: tree.clone(),
+            prompt: "fix it".into(),
             ..live::Entry::default()
         },
     )

@@ -391,6 +391,7 @@ async fn a_followed_task_shows_its_report_and_an_error_is_not_an_event() {
 fn a_session_running_a_task_worked_since_then() {
     let idle = Entry {
         since: 100,
+        prompt: "fix it".into(),
         ..Entry::default()
     };
     assert!(!idle.worked_since(200));
@@ -410,4 +411,29 @@ fn a_session_running_a_task_worked_since_then() {
     // A file from a release before tasks reads as a session that runs none.
     let old: Entry = serde_json::from_str(r#"{"pid":7,"since":100}"#).unwrap();
     assert_eq!((old.tasks, old.task_since), (0, 0));
+}
+
+#[test]
+fn a_session_still_at_its_first_prompt_is_no_peer() {
+    let dir = scratch("unprompted");
+    let me = Registration::open_in(&dir, entry(21, "/w")).unwrap();
+    let mut fresh = Registration::open_in(
+        &dir,
+        Entry {
+            prompt: String::new(),
+            ..entry(22, "/w")
+        },
+    )
+    .unwrap();
+    let here = me.here();
+    assert!(here.others().is_empty(), "opened and left at an empty prompt");
+    assert_eq!(list_in(&dir).len(), 2, "`killi sessions` still lists it");
+    assert!(!list_in(&dir)[1].worked_since(0), "nothing of it for undo to warn about");
+    fresh.update(|e| e.working = true);
+    assert_eq!(here.others().iter().map(|e| e.pid).collect::<Vec<_>>(), [22]);
+    fresh.update(|e| {
+        e.working = false;
+        e.prompt = "fix it".into();
+    });
+    assert_eq!(here.others().len(), 1, "a finished turn still worked here");
 }

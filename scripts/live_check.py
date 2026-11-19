@@ -282,6 +282,12 @@ recap = false
               and shown["capabilities"]["streaming"] is True and shown["state"] in ("idle", "working")
               and len(shown["skills"]) == 3 and shown["endpoint"] and shown["description"], shown)
 
+        # A session still at its first prompt has changed nothing: no peer to the other one.
+        b.type("warm up\r", 0.5)
+        b.until("Done: warm up")
+        check("a session still at its first prompt isn't announced",
+              not any(f"session works in this repository too: {a.pid}" in u for u in contents(turn_request())),
+              contents(turn_request()))
         a.type("hello there\r", 0.5)
         a.until("Done: hello there")
         told = [u for u in contents(turn_request()) if f"Another killi session works in this repository too: {b.pid}" in u]
