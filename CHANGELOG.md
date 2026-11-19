@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.7.3 — 2026-11-19
+
+- A short reply that names the next phase as a fragment, such as "Fix-first phase starting, 3
+  at a time." or "Phase A next: 12 resolve groups.", no longer ends the turn with the work
+  undone: the agent is asked once to go on. Ultra-concise replies wrote announcements this
+  way, and two `/pr-handle-all` runs stopped on them.
+
 ## 0.7.2 — 2026-11-19
 
 - A connection lost mid-session, such as when a Mac wakes from sleep and its network isn't
