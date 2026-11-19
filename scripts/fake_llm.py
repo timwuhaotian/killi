@@ -10,7 +10,8 @@ one containing "QUESTION" is an `ask_user_question`, "AGENTS" six `agent` calls 
 ("SWARMBIG": forty) whose prompts say "SWARMCHILD" and that each run a few slow commands,
 a question from another session (`killi ask`) a line about the work, "SLOW" a one-line answer
 that starts only after three seconds (time to press Esc first), the next-prompt suggestion
-a short line to offer in the empty prompt, a paused draft its last line with " in slug.py" added,
+a short line to offer in the empty prompt, a paused draft its last line with " in slug.py" added
+(both thirty seconds late in a conversation that said "carefully"),
 anything else a one-line answer. The
 step is the number of assistant messages since the last real user message, so the reminders
 killi appends as user messages (`<system-reminder>`) don't restart the script.
@@ -112,12 +113,15 @@ def text_of(message):
 
 
 def step_for(messages):
+    # A conversation that asked for "carefully" keeps its suggestions on their way for a while,
+    # so the island the prompt carries meanwhile can be drawn.
+    wait = 30 if any("carefully" in text_of(m) for m in messages) else 0
     if messages and "The user's turn is over" in text_of(messages[-1]):
-        return {"text": "test the empty title"}
+        return {"wait": wait, "text": "test the empty title"}
     draft = re.search(r"<draft>\n(.*)\n</draft>", text_of(messages[-1]), re.S) if messages else None
     if draft:
         last = draft.group(1).split("\n")[-1]
-        return {"text": last if last.endswith("slug.py") else last.rstrip() + " in slug.py"}
+        return {"wait": wait, "text": last if last.endswith("slug.py") else last.rstrip() + " in slug.py"}
     if messages and "The user sent nothing" in text_of(messages[-1]):
         return {"text": "The five reviews are in: nothing blocks a merge."}
     if messages and "A question about your work from" in text_of(messages[-1]):

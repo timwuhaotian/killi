@@ -1456,3 +1456,92 @@ fn a_report_waits_for_the_users_next_message_after_they_interrupted() {
         "{printed:?}"
     );
 }
+
+/// A suggestion request that never answers, as one still on its way.
+fn on_its_way() -> crate::tui::state::PendingSuggestion {
+    Box::pin(std::future::pending())
+}
+
+#[test]
+fn the_empty_prompt_carries_an_island_while_the_next_prompt_is_asked() {
+    let mut app = test_app();
+    app.suggesting = Some(on_its_way());
+    let (rows, _, _) = app.live();
+    let at = rows
+        .iter()
+        .position(|r| unstyled(r).starts_with("❯  suggesting… "))
+        .expect("the island stands in the placeholder's place");
+    assert!(rows[at].contains(&SELECT.to_string()), "on the island's ground: {:?}", rows[at]);
+    assert!(!unstyled(&rows[at]).contains("ask, / for commands"), "{:?}", rows[at]);
+    // The answer lands: the suggestion replaces the island.
+    app.suggesting = None;
+    app.suggestion = Some("run the tests".into());
+    let shown = shown(&mut app);
+    assert!(shown.contains("run the tests · Tab or → fills it"), "{shown}");
+    assert!(!shown.contains("suggesting"), "{shown}");
+}
+
+#[test]
+fn the_usual_placeholder_is_back_once_no_request_is_on_its_way() {
+    let mut app = test_app();
+    app.suggesting = Some(on_its_way());
+    assert!(shown(&mut app).contains("suggesting"));
+    app.suggesting = None;
+    let shown = shown(&mut app);
+    assert!(!shown.contains("suggesting"), "{shown}");
+    assert!(shown.contains("ask, / for commands and skills"), "{shown}");
+}
+
+#[test]
+fn a_paused_draft_carries_the_island_a_cell_after_the_cursor() {
+    let mut app = test_app();
+    app.editor.insert("fix the bu");
+    app.suggesting = Some(on_its_way());
+    let (rows, row, column) = app.live();
+    assert_eq!(unstyled(&rows[row]), "❯ fix the bu  suggesting… ");
+    assert_eq!(column, 2 + "fix the bu".len(), "the cursor stays where the draft ends");
+    let before = rows.len();
+    app.suggesting = None;
+    let (rows, _, _) = app.live();
+    assert_eq!(rows.len(), before, "the island takes no row of its own");
+}
+
+#[test]
+fn a_draft_with_no_room_left_on_its_row_goes_without_the_island() {
+    let mut app = test_app();
+    app.width = 60;
+    // 2 for the caret, then 45 of draft: 47 + 1 + 13 is past 60 columns.
+    let draft = "x".repeat(45);
+    app.editor.insert(&draft);
+    app.suggesting = Some(on_its_way());
+    let (rows, row, _) = app.live();
+    assert_eq!(unstyled(&rows[row]), format!("❯ {draft}"));
+    // One column fewer of draft and it fits exactly.
+    let mut app = test_app();
+    app.width = 60;
+    app.editor.insert(&"x".repeat(44));
+    app.suggesting = Some(on_its_way());
+    let (rows, row, _) = app.live();
+    assert!(unstyled(&rows[row]).ends_with(" suggesting… "), "{:?}", rows[row]);
+    assert_eq!(text::width(&rows[row]), 60);
+}
+
+#[test]
+fn the_island_waits_for_the_ask_and_hides_where_no_suggestion_would_show() {
+    let mut app = test_app();
+    app.editor.insert("fix the bu");
+    app.edited();
+    assert!(app.complete_at.is_some() && !app.completing(), "not during the pause");
+    app.suggesting = Some(on_its_way());
+    assert!(app.completing());
+    app.edit_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert!(!app.completing(), "the cursor left the end");
+    assert!(!shown(&mut app).contains("suggesting"));
+    app.edit_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert!(app.completing(), "back at the end");
+    app.busy = Some(Instant::now());
+    assert!(!app.completing(), "not while the agent works");
+    app.busy = None;
+    app.suggestion = Some("fix the bug".into());
+    assert!(!app.completing(), "a continuation already shows");
+}

@@ -333,6 +333,14 @@ impl App {
             self.editor.render(&prompt, width, &known, ghost);
         if let Some(hint) = self.placeholder() {
             input[0] = fit(&format!("{FIN}❯{RESET} {hint}"), width);
+        } else if self.completing() {
+            // A paused draft carries the island a cell after the cursor, where the
+            // continuation will show; with no room left on that row it goes without.
+            let island = self.completing_island();
+            if cursor_col + 1 + text::width(&island) <= width {
+                input[cursor_row].push(' ');
+                input[cursor_row].push_str(&island);
+            }
         }
         let first = self
             .input_first
@@ -591,6 +599,9 @@ impl App {
             return Some(format!(
                 "{FAINT}{suggestion}{RESET}{DIM} · Tab or → fills it{RESET}"
             ));
+        }
+        if self.completing() {
+            return Some(self.completing_island());
         }
         Some(format!(
             "{FAINT}{}{RESET}",

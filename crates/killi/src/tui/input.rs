@@ -36,6 +36,8 @@ impl App {
         }
         let mut edge = tokio::time::interval(Duration::from_millis(50));
         edge.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut frames = tokio::time::interval(Duration::from_millis(100));
+        frames.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             let event = tokio::select! {
                 biased;
@@ -79,6 +81,16 @@ impl App {
                 }
                 Some(id) = self.bg_running.next(), if !self.bg_running.is_empty() => {
                     self.on_background_done(id);
+                    if let Some(input) = self.take_wake() {
+                        return Ok(Some(input));
+                    }
+                    self.draw()?;
+                    continue;
+                }
+                // The suggestion island shimmers while the model is asked. Its tick comes
+                // before the 1 s ones, which it would starve, so it does what they do.
+                _ = frames.tick(), if self.completing() => {
+                    self.spinner += 1;
                     if let Some(input) = self.take_wake() {
                         return Ok(Some(input));
                     }

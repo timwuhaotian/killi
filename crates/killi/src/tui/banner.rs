@@ -174,6 +174,12 @@ pub fn steady_island(frame: usize, word: &str) -> String {
     island(format!("{} {}", ice_cube(frame), steady_word(frame, word)))
 }
 
+/// An island of `word` alone, shown whole and shimmering: the prompt's sign that the model is
+/// working out what it could become, quieter than the working line's cube.
+pub fn word_island(frame: usize, word: &str) -> String {
+    island(steady_word(frame, word))
+}
+
 /// `word` fading in letter by letter beside the icon, each letter taking the logo's
 /// gradient as it flows with `frame`; letters not yet there are dim dots. Two sparkles
 /// travel across the letters against each other, so the word shimmers while it works.

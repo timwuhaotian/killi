@@ -26,6 +26,24 @@ impl App {
         (!rest.is_empty()).then_some(rest)
     }
 
+    /// Whether a suggestion for the prompt as it stands is on its way and its answer would show:
+    /// the prompt then carries an island until it lands. Not while typing pauses, only once
+    /// the model is asked.
+    pub(super) fn completing(&self) -> bool {
+        self.suggesting.is_some()
+            && self.busy.is_none()
+            && self.asking.is_none()
+            && self.picker.is_none()
+            && self.editor.at_end()
+            && self.ghost().is_none()
+    }
+
+    /// The island the prompt carries while `completing`, shimmering with the spinner. The
+    /// ellipsis says it is under way where no color can, so it never reads as typed text.
+    pub(super) fn completing_island(&self) -> String {
+        banner::word_island(self.spinner, "suggesting…")
+    }
+
     /// Asks the model what the prompt as it stands could become: what to ask next when it is
     /// empty, else the draft continued. A draft that is a command, a shell line or a history
     /// entry, or that a menu is completing, isn't asked about.
