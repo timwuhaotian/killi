@@ -5,7 +5,9 @@
 
 Logs are ~/.killi/sessions/<project>/<time>-<pid>.jsonl (--home changes ~/.killi). For each
 session it counts turns, input tokens and how much came from the cache, tool calls, repeated
-calls, errors and how the session ended. Per model it shows the cache hit rate and whether the
+calls, errors and how the session ended. A session's subagents and the tasks other sessions sent
+it log beside it (<time>-<pid>/agent-N.jsonl, task-N.jsonl): their requests and tool calls count
+in the per-model, tool and time totals, the table gives their share, and the findings cover them. Per model it shows the cache hit rate and whether the
 reasoning the provider billed was kept. Logs written since 0.2.16 also carry timestamps and
 durations, which add the slowest requests and tools, and how often sessions ran side by side. Findings
 at the end are the things to look at first; each is a lead to confirm in the log, not a verdict. The sessions that scripts/bench.py
@@ -73,7 +75,9 @@ def parse_args(arguments):
     return args if isinstance(args, dict) else {}
 
 
-def analyze(path):
+def analyze(path, child=False):
+    """One log's numbers. A top-level session also reads its subagents' and tasks' logs into
+    `children`; a child is named `<session id>/agent-N` under its session's project."""
     s = {"path": str(path), "project": path.parent.name, "id": path.stem, "models": [], "turns": 0, "prompt": 0,
          "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0, "version": None,
          "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [],
@@ -83,6 +87,7 @@ def analyze(path):
     cwd, moving = None, {}
     streak, grew_from = 0, None
     seen_models = set()
+    waiting = None  # a typed prompt no request has answered yet
     for entry in read(path):
         kind = entry.get("type")
         if isinstance(entry.get("ts"), int):
@@ -102,6 +107,7 @@ def analyze(path):
             role = message.get("role")
             if role == "user" and isinstance(message.get("content"), str) and not message["content"].startswith("<system-reminder>"):
                 s["prompts"] += 1
+                waiting = message["content"]
             if role == "user" and isinstance(message.get("content"), str):
                 peers = message["content"].startswith(PEERS_ON) or (peers and not message["content"].startswith(PEERS_OFF))
             if role == "assistant":
@@ -140,6 +146,7 @@ def analyze(path):
                         s["slept"][1] += meta["ms"]
             s["ended"] = role or ""
         elif kind == "usage":
+            waiting = None
             s["turns"] += 1
             s["prompt"] += entry.get("prompt", 0)
             s["cached"] += entry.get("cached", 0)
@@ -195,6 +202,8 @@ def analyze(path):
             # is recorded the same way and is no compaction.
             if entry.get("cause") and "retracted" not in entry["cause"]:
                 s["compactions"].append(entry["cause"])
+            if "retracted" in (entry.get("cause") or {}):
+                waiting = None
         elif kind == "error":
             s["errors"].append(str(entry.get("message"))[:160])
             s["ended"] = "error"
@@ -209,8 +218,38 @@ def analyze(path):
     if any(i not in answered for i in calls):
         s["ended"] = "unanswered tool call"
     s["repeats"] = {f"{n} {a[:90]}": c for (n, a), c in s["repeats"].items() if c >= REPEATED}
+    # The last prompt typed got no request at all: an abort entry (since 0.8.2) or nothing says
+    # what happened to it. A session still waiting on its first token reads the same.
+    s["unanswered"] = waiting[:80] if waiting and not child else None
+    s["children"] = []
+    if child:
+        return s
     s["started"] = datetime.fromtimestamp(int(path.stem.split("-")[0])).strftime("%Y-%m-%d %H:%M")
+    folder = path.with_suffix("")
+    for log in sorted(folder.glob("agent-*.jsonl")) + sorted(folder.glob("task-*.jsonl")) if folder.is_dir() else []:
+        c = analyze(log, child=True)
+        if c["turns"]:
+            c["project"], c["id"], c["started"] = s["project"], f"{s['id']}/{log.stem}", s["started"]
+            s["children"].append(c)
     return s
+
+
+def with_children(sessions):
+    """The sessions and, after each, its subagents and tasks."""
+    return [x for s in sessions for x in (s, *s["children"])]
+
+
+def tokens(n):
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k"
+
+
+def children_cell(s):
+    """A session's subagents and tasks: how many, their requests, input and cache share."""
+    kids = s["children"]
+    if not kids:
+        return "–"
+    prompt = sum(c["prompt"] for c in kids)
+    return f"{len(kids)}: {sum(c['turns'] for c in kids)} req, {tokens(prompt)} in, {pct(sum(c['cached'] for c in kids), prompt)} cached"
 
 
 def pct(part, whole):
@@ -244,9 +283,12 @@ def findings(sessions, models, versions_of):
                          + (f"Lost turns: {split}. " if split else "")
                          + "Probe with `scripts/probe.py stream` and `responses`; a provider that hides it on chat/completions may return "
                          "it on the Responses API (`type = \"openai_responses\"`).")
-    for s in sessions:
+    for s in with_children(sessions):
         name = f"{s['project'][-24:]}/{s['id']}"
         who = tag([s["version"]])
+        if s["unanswered"]:
+            found.append(f"{who}`{name}` ended on a prompt no request answered (“{s['unanswered']}”): the turn was dropped before its "
+                         "first reply, or the session was closed waiting. An `abort` entry (since 0.8.2) says how long it waited.")
         for call, count in s["repeats"].items():
             found.append(f"{who}`{name}` made `{call}` {count} times.")
         count, ms = s["slept"]
@@ -321,7 +363,7 @@ def main():
     sessions = [s for s in sessions if s["turns"] and s["started"] >= args.since]
     models = collections.defaultdict(collections.Counter)
     versions_of = collections.defaultdict(set)
-    for s in sessions:
+    for s in with_children(sessions):
         for model, stats in s["per_model"].items():
             models[model].update(stats)
             versions_of[model].add(s["version"] or "?")
@@ -330,10 +372,11 @@ def main():
         return
 
     print(f"# killi sessions: {len(sessions)} with requests, {len(logs) - len(sessions)} empty or filtered out\n")
-    print(table(["started", "project", "models", "turns", "input", "cached", "max ctx", "out", "prompts", "ended"],
+    print(table(["started", "project", "models", "turns", "input", "cached", "max ctx", "out", "prompts", "ended", "subagents"],
                 [(s["started"], s["project"][-22:], ", ".join(s["models"]), s["turns"], f"{s['prompt']:,}", pct(s["cached"], s["prompt"]),
-                  f"{s['max_context']:,}", f"{s['completion']:,}", s["prompts"], s["ended"]) for s in sessions]))
-    print("\n## By model\n")
+                  f"{s['max_context']:,}", f"{s['completion']:,}", s["prompts"], s["ended"], children_cell(s)) for s in sessions]))
+    print("\nThe session columns count its own requests; `subagents` counts the requests of its subagents and tasks.")
+    print("\n## By model (subagents included)\n")
     print(table(["model", "turns", "cached", "reasoning billed", "…and kept"],
                 [(m, c["turns"], pct(c["cached"], c["prompt"]), c["billed_reasoning"], c["billed_reasoning"] - c["reasoning_lost"])
                  for m, c in sorted(models.items(), key=lambda kv: -kv[1]["turns"])]))
@@ -341,18 +384,21 @@ def main():
     for s in sessions:
         row = by_version[s["version"] or "?"]
         row[0] += 1
-        row[1] += s["turns"]
-        row[2] += s["tool_errors"]
+        for x in (s, *s["children"]):
+            row[1] += x["turns"]
+            row[2] += x["tool_errors"]
     print("\n## By version\n")
-    print(table(["version", "sessions", "turns", "failed tool calls"],
+    print(table(["version", "sessions", "turns (with subagents)", "failed tool calls"],
                 [(v, *row) for v, row in sorted(by_version.items())]))
-    tools, errors = collections.Counter(), 0
-    for s in sessions:
+    tools, errors, by_children = collections.Counter(), 0, 0
+    for s in with_children(sessions):
         tools.update(s["tools"])
         errors += s["tool_errors"]
-    print(f"\n## Tools\n\n{sum(tools.values())} calls, {errors} that failed: " + ", ".join(f"{n} {c}" for n, c in tools.most_common()))
-    requests = [ms for s in sessions for ms in s["request_ms"]]
-    runs = sorted((ms, name) for s in sessions for ms, name in s["tool_ms"])
+        by_children += sum(s["tools"].values()) if "/" in s["id"] else 0
+    print(f"\n## Tools\n\n{sum(tools.values())} calls ({by_children} by subagents and tasks), {errors} that failed: "
+          + ", ".join(f"{n} {c}" for n, c in tools.most_common()))
+    requests = [ms for s in with_children(sessions) for ms in s["request_ms"]]
+    runs = sorted((ms, name) for s in with_children(sessions) for ms, name in s["tool_ms"])
     if requests:
         print(f"\n## Time\n\nRequests: median {statistics.median(requests) / 1000:.1f} s, slowest {max(requests) / 1000:.1f} s over {len(requests)}.")
     if runs:

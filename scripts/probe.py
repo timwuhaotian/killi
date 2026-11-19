@@ -3,13 +3,17 @@
 
   python3 scripts/probe.py stream    <model> [--effort E]   which fields a chat/completions reply streams, and its raw usage
   python3 scripts/probe.py responses <model>                does the Responses API return reasoning items to replay
-  python3 scripts/probe.py cache     <model> [--cache-control]   two identical requests: does the second read from the cache
+  python3 scripts/probe.py cache     <model> [--cache-control] [--other-key]
+                                                           two identical requests: does the second read from the cache
 
 <model> is an alias from ~/.killi/config.toml (--config changes the file), such as meta/muse-wonder-1.0-contributor.
 Each probe sends two or three small synthetic requests (`cache` sends about 6k tokens twice) with the
 provider's own key, which is never printed. Providers of type `anthropic` aren't probed: killi already
 speaks their cache protocol. Providers of type `commandcode` are probed on the CLI gateway's own
-NDJSON API (the wire format of `llm/commandcode.rs`); `responses` doesn't apply to them.
+NDJSON API (the wire format of `llm/commandcode.rs`); `responses` doesn't apply to them. `cache` on an
+`openai_responses` model sends Responses requests shaped as `llm/responses.rs` sends them
+(`instructions`, `prompt_cache_key`). `--other-key` sends the second request under another
+`prompt_cache_key`: a read then means the provider's cache isn't keyed by it.
 """
 
 import argparse
@@ -212,41 +216,76 @@ def cache_commandcode(model, base, headers, system, tag):
         print("VERDICT: no cache read on the second request, in the same gateway thread as the first.")
 
 
-def cache(model, kind, base, headers, cache_control):
+def cache_reads(send, key, other_key):
+    """Sends the same request twice, the second under another `prompt_cache_key` when
+    `other_key`, and says whether the second read from the cache. `send(key, retries)` returns
+    the request's usage and the tokens it read from the cache."""
+    reads = []
+    for attempt in (1, 2):
+        try:
+            # The second request is the answer, so it alone retries a rate limit (20/40/60 s);
+            # the first stands as sent, like the request it stands in for.
+            usage, read = send(key + ("-other" if other_key and attempt == 2 else ""), 3 if attempt == 2 else 0)
+        except RateLimited:
+            print("inconclusive: provider rate-limited, so the cache can't be judged this run. Try again later.")
+            return
+        print(f"request {attempt}:", json.dumps(usage))
+        reads.append(read)
+        time.sleep(2)
+    if reads[1] and other_key:
+        print(f"VERDICT: the second request read {reads[1]} tokens under another prompt_cache_key: the cache isn't keyed by it.")
+    elif reads[1]:
+        print(f"VERDICT: the second request read {reads[1]} tokens from the cache.")
+    elif other_key:
+        print("VERDICT: no cache read under another prompt_cache_key. Run it again without --other-key: a read there means the key routes the cache.")
+    else:
+        print("VERDICT: no cache read on the second request. Compare the two `cost` fields if the gateway reports one; "
+              "if the first request wrote a cache (cache_creation > 0) and the second billed in full, the gateway doesn't serve reads.")
+
+
+def cache_responses(model, base, headers, system, key, other_key):
+    def send(cache_key, retries):
+        body = {"model": model, "stream": True, "store": False, "max_output_tokens": 20, "instructions": system,
+                "input": [{"role": "user", "content": "Say ok."}], "prompt_cache_key": cache_key}
+        usage = None
+        for event in post(base + "/responses", headers, body, rate_limit_retries=retries):
+            # 20 output tokens can run out mid-reasoning: an incomplete reply bills usage too.
+            if event.get("type") in ("response.completed", "response.incomplete"):
+                usage = event["response"].get("usage")
+        return usage, ((usage or {}).get("input_tokens_details") or {}).get("cached_tokens", 0)
+    cache_reads(send, key, other_key)
+
+
+def cache(model, kind, base, headers, cache_control, other_key=False):
     rules = " ".join(f"Rule {i}: keep answers short and precise, and cite the rule number when it applies." for i in range(1, 330))
     tag = f"[probe {int(time.time())}] "
     if kind == "commandcode":
         if cache_control:
             raise SystemExit("--cache-control marks a chat/completions system message; the Command Code gateway has no such marking")
+        if other_key:
+            raise SystemExit("--other-key changes prompt_cache_key; the Command Code gateway keys its cache by thread")
         return cache_commandcode(model, base, headers, tag + rules, tag)
+    if kind == "openai_responses":
+        if cache_control:
+            raise SystemExit("--cache-control marks a chat/completions system message; the Responses API has no such marking")
+        return cache_responses(model, base, headers, tag + rules, "probe-" + tag, other_key)
     if kind != "openai":
-        raise SystemExit("the cache probe speaks chat/completions; use it on a provider of type `openai` (or `commandcode`)")
+        raise SystemExit("the cache probe speaks chat/completions and Responses; use it on a provider of type `openai`, "
+                         "`openai_responses` or `commandcode`")
     system = tag + rules
     if cache_control:
         system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-    body = {"model": model, "stream": True, "stream_options": {"include_usage": True}, "max_tokens": 20,
-            "prompt_cache_key": "probe-" + tag, "messages": [{"role": "system", "content": system}, {"role": "user", "content": "Say ok."}]}
-    reads = []
-    for attempt in (1, 2):
+
+    def send(cache_key, retries):
+        body = {"model": model, "stream": True, "stream_options": {"include_usage": True}, "max_tokens": 20,
+                "prompt_cache_key": cache_key, "messages": [{"role": "system", "content": system}, {"role": "user", "content": "Say ok."}]}
         usage = None
-        try:
-            # The second request is the answer, so it alone retries a rate limit (20/40/60 s);
-            # the first stands as sent, like the request it stands in for.
-            for event in post(base + "/chat/completions", headers, body, rate_limit_retries=3 if attempt == 2 else 0):
-                usage = event.get("usage") or usage
-        except RateLimited:
-            print("inconclusive: provider rate-limited, so the cache can't be judged this run. Try again later.")
-            return
-        print(f"request {attempt}:", json.dumps(usage))
+        for event in post(base + "/chat/completions", headers, body, rate_limit_retries=retries):
+            usage = event.get("usage") or usage
         details = (usage or {}).get("prompt_tokens_details") or {}
-        reads.append(max(details.get("cached_tokens", 0), (usage or {}).get("cache_read_input_tokens", 0),
-                         (usage or {}).get("prompt_cache_hit_tokens", 0)))
-        time.sleep(2)
-    if reads[1]:
-        print(f"VERDICT: the second request read {reads[1]} tokens from the cache.")
-    else:
-        print("VERDICT: no cache read on the second request. Compare the two `cost` fields if the gateway reports one; "
-              "if the first request wrote a cache (cache_creation > 0) and the second billed in full, the gateway doesn't serve reads.")
+        return usage, max(details.get("cached_tokens", 0), (usage or {}).get("cache_read_input_tokens", 0),
+                          (usage or {}).get("prompt_cache_hit_tokens", 0))
+    cache_reads(send, "probe-" + tag, other_key)
 
 
 def main():
@@ -256,6 +295,7 @@ def main():
     parser.add_argument("--config", default=str(Path.home() / ".killi/config.toml"))
     parser.add_argument("--effort")
     parser.add_argument("--cache-control", action="store_true", help="cache: mark the system message with cache_control")
+    parser.add_argument("--other-key", action="store_true", help="cache: send the second request under another prompt_cache_key")
     args = parser.parse_args()
     config = tomllib.loads(Path(args.config).read_text())
     model, kind, base, headers = provider_of(config, args.model)
@@ -265,7 +305,7 @@ def main():
     elif args.probe == "responses":
         responses(model, kind, base, headers)
     else:
-        cache(model, kind, base, headers, args.cache_control)
+        cache(model, kind, base, headers, args.cache_control, args.other_key)
 
 
 if __name__ == "__main__":
