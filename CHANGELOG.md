@@ -5,6 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.2 — 2026-11-19
+
+- A request dropped before it finished (Esc, or a turn abandoned while the provider stalled or
+  retried) now leaves an `abort` entry in the session log, with how long it ran and whether a
+  first token came, after the retries it waited through. `scripts/sessions.py` reports dropped
+  requests that got no token for 30 s.
+- A subagent or pair child sends the provider a conversation id of its own,
+  `<session id>/agent-N`, instead of `agent-N`, which every session's first subagent shared.
+  Forks and tasks from other sessions keep the session's id.
+
 ## 0.8.1 — 2026-11-19
 
 - While the model works out a suggestion, the prompt shows a shimmering `suggesting…` island
