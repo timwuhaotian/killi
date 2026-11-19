@@ -5,6 +5,22 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.0 — 2026-11-19
+
+- A subagent no longer holds the conversation. Type while one works and it moves to the
+  background as a task: the agent reads your message at once, can tell the subagent about a
+  change with the new `agent_message` tool, and gets its report when it ends. A report that
+  arrives while the session is idle starts a turn by itself (at most 10 between your messages,
+  and none right after you press Esc).
+- `/mode` now picks how subagents run: `focus` (the default, described above) or
+  `orchestrate`, where every subagent starts in the background and the agent stays free to
+  talk. Set it for good with `mode = "orchestrate"` under `[agent]`.
+- Reply length moved from `/mode` to `/verbosity` (`[agent] verbosity`). An existing
+  `mode = "ultra-concise"` line keeps working and moves to `verbosity` the next time either
+  setting is saved.
+- Quitting while background subagents work asks whether to pause or stop them; resuming the
+  session continues paused ones from where they were. `/undo` waits while they work.
+
 ## 0.7.3 — 2026-11-19
 
 - A short reply that names the next phase as a fragment, such as "Fix-first phase starting, 3
