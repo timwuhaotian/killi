@@ -147,7 +147,7 @@ impl Agent {
         }
         let route = Route::default();
         let len = messages.len();
-        let agent = self.child_agent(
+        let mut agent = self.child_agent(
             session,
             Rc::new(messages),
             label,
@@ -156,6 +156,11 @@ impl Agent {
             context,
             len,
         );
+        // Calls it made as the session stopped get their results first, or the note below
+        // would wait behind them; the note itself says what happened, so the interruption's
+        // own, which speaks of the user, stays unsaid.
+        agent.recover()?;
+        agent.interrupted = false;
         Ok(Paused::Child(Box::new(Child {
             agent,
             sent: if got {

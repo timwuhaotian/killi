@@ -28,12 +28,8 @@ impl Mode {
 
     pub fn about(self) -> &'static str {
         match self {
-            Mode::Focus => {
-                "subagents run in the foreground; a message you send moves them to the background"
-            }
-            Mode::Orchestrate => {
-                "every subagent runs in the background while you keep talking to the main agent"
-            }
+            Mode::Focus => "subagents yield to your messages",
+            Mode::Orchestrate => "all subagents run in the background",
         }
     }
 

@@ -160,8 +160,11 @@ impl Agent {
                     self.push(json!({"role": "user", "content": SKIPPED_EARLIER}))?;
                     continue;
                 }
+                // A reply that says what runs in the background and ends is how a turn should end
+                // while that work goes on: its report comes back by itself.
                 if !truncated
                     && !told_unfinished
+                    && !self.background_working()
                     && let Some((notice, note)) = unfinished(&reply.text, skill && !called)
                 {
                     told_unfinished = true;

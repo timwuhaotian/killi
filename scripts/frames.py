@@ -15,7 +15,9 @@ specimen of its colors above the prompt), conv (a bug fix with a diff), question
 (`/verbosity`'s picker), concise (the bug fix after `/verbosity ultra-concise`, its mark on the status line), busy (mid-turn), swarm and swarm-big (an
 `agent_swarm` of 5 and of 40 subagents, mid-run), swarm-done (the same five, finished), background (that swarm under `/mode orchestrate`, working in
 the background while the prompt is free), background-done (its report starting a turn by itself),
-background-yield (the swarm in focus mode moving to the background when a message is sent), update (a newer
+background-many (six `agent` calls under orchestrate: four working, two waiting for a slot),
+quit (`/exit` while that swarm works: pause, stop or stay), background-yield (the swarm in focus
+mode moving to the background when a message is sent), update (a newer
 killi offered from a local release site, its changelog above the question), peers (the banner
 with another session in the repository), sessions (`/sessions`) and peer (that session's question and
 message arriving through `killi ask` and `killi tell`) and select (a drag held across the conversation, its
@@ -99,6 +101,8 @@ SCENES = {
     "swarm-done": dict(keys=["SWARM review the open PRs\r"], until="nothing blocks"),
     "background": dict(keys=["/mode orchestrate\r", "SWARM review the open PRs\r", "WAIT:3.5"], settle=0.2),
     "background-done": dict(keys=["/mode orchestrate\r", "SWARM review the open PRs\r"], until="five reviews are in"),
+    "background-many": dict(keys=["/mode orchestrate\r", "AGENTS review the open PRs\r", "WAIT:2.5"], settle=0.2),
+    "quit": dict(keys=["/mode orchestrate\r", "SWARM review the open PRs\r", "WAIT:2", "/exit\r"], settle=0.3),
     "background-yield": dict(keys=["SWARM review the open PRs\r", "WAIT:2", "what is still open?\r", "WAIT:2"], settle=0.2),
     "peers": dict(keys=[], peer=True),
     "sessions": dict(keys=["/sessions\r"], peer=True),

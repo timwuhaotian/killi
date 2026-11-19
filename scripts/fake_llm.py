@@ -6,7 +6,7 @@ without a model (see frames.py).
 
 The prompt picks the scenario: one containing "FIX" or "slugify" is a bug fix (a task list, a
 read, a failing run, a thought, an edit with a diff, a passing run and a Markdown answer),
-one containing "QUESTION" is an `ask_user_question`, "SWARM" an `agent_swarm` of five subagents
+one containing "QUESTION" is an `ask_user_question`, "AGENTS" six `agent` calls in one reply, "SWARM" an `agent_swarm` of five subagents
 ("SWARMBIG": forty) whose prompts say "SWARMCHILD" and that each run a few slow commands,
 a question from another session (`killi ask`) a line about the work, "SLOW" a one-line answer
 that starts only after three seconds (time to press Esc first), the next-prompt suggestion
@@ -86,6 +86,15 @@ def swarm(items):
             {"text": f"All {len(items)} reviewed; nothing blocks a merge."}]
 
 
+def agents(items):
+    """Six `agent` calls in one reply, each a slow review: under `/mode orchestrate` four run
+    in the background and two wait for a slot."""
+    return [{"calls": [call(i, "agent", {"description": f"Review {item}",
+                                         "prompt": f"SWARMCHILD review {item} and report what you find."})
+                       for i, item in enumerate(items, 1)]},
+            {"text": f"{len(items)} reviews are running in the background; I'll report as they land."}]
+
+
 def child(prompt):
     """Each subagent's pace follows its item, so a screen drawn mid-swarm has all four states."""
     n = sum(i * ord(c) for i, c in enumerate(prompt.split("review ")[1].split(" ")[0]))
@@ -118,6 +127,8 @@ def step_for(messages):
     prompt = text_of(messages[start]) if messages else ""
     if "SWARMCHILD" in prompt:
         steps = child(prompt)
+    elif "AGENTS" in prompt:
+        steps = agents(PRS + ["pr-1620"])
     elif "SWARMBIG" in prompt:
         steps = swarm(MODULES)
     elif "SWARM" in prompt:

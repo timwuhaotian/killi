@@ -340,7 +340,7 @@ killi -p "..." --json        # one JSON summary: tokens, cache hits, time
 | Shift+Enter, Ctrl+J | new line |
 | ! | run a shell command without involving the model; a bare `!` opens your shell |
 | Esc | interrupt; before the reply begins, your message comes back to the prompt as if never sent |
-| Ctrl+S | while the agent works, interrupt it and send your message now; during a swarm the first press only queues it |
+| Ctrl+S | while the agent works, interrupt it and send your message now; during a swarm the first press moves the swarm to the background and your message is read at once |
 | Ctrl+C | copy the prompt's selection, else clear the prompt; on an empty prompt, interrupt, twice to quit |
 | Shift+Tab | plan mode |
 | Ctrl+V | paste an image from the clipboard as `[Image #1]` (Cmd+V too in [Kil](https://github.com/timwuhaotian/kil)) |

@@ -98,7 +98,7 @@ impl App {
                     && !self.swarm_send_armed
                 {
                     self.swarm_send_armed = true;
-                    self.notice("Swarm running: queued for the next step. Ctrl+S again sends now and stops the swarm.");
+                    self.notice("Swarm running: it moves to the background and your message is read at once. Ctrl+S again stops the turn now.");
                     return false;
                 }
                 self.send_now = !self.controls.steer.borrow().is_empty();

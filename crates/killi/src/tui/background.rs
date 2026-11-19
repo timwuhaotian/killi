@@ -89,7 +89,11 @@ impl App {
     /// `MAX_WAKES` such turns ran since the user's last message.
     pub(super) fn take_wake(&mut self) -> Option<Input> {
         let waiting = self.controls.background.borrow().undelivered() > 0;
-        (waiting && self.wakes < MAX_WAKES && self.schedule_ready()).then_some(Input::Wake)
+        if !(waiting && self.wakes < MAX_WAKES && self.schedule_ready()) {
+            return None;
+        }
+        self.recap = None;
+        Some(Input::Wake)
     }
 
     /// The live rows: one per background task still working, oldest first.
@@ -120,9 +124,9 @@ impl App {
                         .map(|last| format!(" · {}", gist(last)))
                         .unwrap_or_default();
                     format!(
-                        "  {LAGOON}{frame}{RESET} {DIM}task {id} · {label} · {}{members} · {} calls{last}{RESET}",
+                        "  {LAGOON}{frame}{RESET} {DIM}task {id} · {label} · {}{members} · {}{last}{RESET}",
                         clock(task.started.elapsed()),
-                        task.calls
+                        tools_count(task.calls as usize, "call")
                     )
                 }
             };
@@ -145,6 +149,10 @@ impl App {
     pub(super) fn pause_background(&mut self) {
         let working = self.background_working();
         self.bg_running = FuturesUnordered::new();
+        // Work handed over but not polled yet belongs to the same conversation.
+        if let Some(rx) = &mut self.bg_rx {
+            while rx.try_recv().is_ok() {}
+        }
         self.controls.background.borrow_mut().clear();
         self.wakes = 0;
         self.live_tasks();

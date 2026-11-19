@@ -270,6 +270,11 @@ impl Agent {
         (me.is_some() && registry.main_busy).then(|| "the main agent".to_string())
     }
 
+    /// Whether the main agent has background work still running, which reports back by itself.
+    pub(super) fn background_working(&self) -> bool {
+        self.depth == 0 && self.controls.background.borrow().working() > 0
+    }
+
     /// Registers a background task and hands its work to the terminal. The work's result is
     /// stored when it ends; the model hears of it at its next step.
     pub(super) fn launch(&mut self, start: BgStart, work: BgWork) -> u32 {

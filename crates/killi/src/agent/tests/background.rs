@@ -59,6 +59,15 @@ fn tool_call(id: &str, name: &str, args: Value) -> (String, ToolCall) {
     )
 }
 
+/// One SSE reply that calls `name` with `args`.
+fn tool_reply(id: &str, name: &str, args: Value) -> String {
+    let chunk = json!({"choices": [{"delta": {"tool_calls": [{
+        "index": 0, "id": id, "type": "function",
+        "function": {"name": name, "arguments": args.to_string()}
+    }]}, "finish_reason": "tool_calls"}]});
+    format!("data: {chunk}\n\ndata: [DONE]\n\n")
+}
+
 fn last_tool(agent: &Agent) -> String {
     agent
         .messages
@@ -409,4 +418,85 @@ async fn a_message_moves_a_running_swarm_to_the_background_as_one_task() {
     // A swarm takes no messages: its members each work on their own item.
     let message = agent.background_message(1, &json!({"id": 1, "message": "hi"}));
     assert!(message.is_error);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_subagent_paused_mid_call_answers_the_call_and_goes_on() {
+    let url = stub_replies(vec![sse("went on\\nStatus: ready", "stop")]).await;
+    let dir = crate::test_temp::TempDir::new("killi-bg-midcall");
+    let log = dir.join("1-1.jsonl");
+    let folder = dir.join("1-1");
+    std::fs::create_dir_all(&folder).unwrap();
+    let sent = "build it";
+    let line = |value: Value| value.to_string();
+    // It stopped with two calls out, one answered.
+    std::fs::write(
+        folder.join("agent-1.jsonl"),
+        [
+            line(json!({"type": "compaction", "messages": [{"role": "system", "content": "sys"}]})),
+            line(json!({"type": "message", "message": {"role": "user", "content": sent}})),
+            line(json!({"type": "message", "message": {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "r1", "type": "function", "function": {"name": "read", "arguments": "{\"path\":\"a\"}"}},
+                {"id": "b1", "type": "function", "function": {"name": "bash", "arguments": "{\"command\":\"make\"}"}}
+            ]}})),
+            line(json!({"type": "message", "message": {"role": "tool", "tool_call_id": "r1", "content": "a's text"}})),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &log,
+        [
+            line(json!({"type": "message", "message": {"role": "system", "content": "sys"}})),
+            line(json!({"type": "message", "message": {"role": "user", "content": "hi"}})),
+            line(json!({"type": "bg_start", "id": 2, "label": "build", "items": [], "logs": ["agent-1.jsonl"], "sent": [sent]})),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let (controls, mut rx) = attached();
+    let (locked, report) = Session::resume(&log).unwrap();
+    let mut agent = Agent::resume_reported(
+        test_client_at("test", &url),
+        None,
+        &dir,
+        locked,
+        report,
+        Vec::new(),
+        Settings::default(),
+        controls.clone(),
+        Rc::new(|_| {}),
+    )
+    .unwrap();
+    assert_eq!(agent.resume_background(), 1);
+    assert_eq!(rx.recv().await.unwrap().await, 2);
+    let (report, failed) = controls.background.borrow().tasks[&2].report.clone().unwrap();
+    assert!(!failed && report.contains("went on"), "{report}");
+    let continued = std::fs::read_to_string(folder.join("agent-1.jsonl")).unwrap();
+    let b1 = continued.find("\"tool_call_id\":\"b1\"").expect("the open call is answered");
+    let note = continued.find("stopped while you were working").expect("the note is sent");
+    assert!(b1 < note, "the call's result comes before the note: {continued}");
+    assert!(!continued.contains("The user interrupted"), "{continued}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_reply_announcing_background_work_ends_the_turn() {
+    let url = stub_replies(vec![
+        tool_reply("a", "agent", json!({"prompt": "go", "description": "kid", "fork": false})),
+        sse("Started the review in the background; next I'll report what it finds.", "stop"),
+    ])
+    .await;
+    let (controls, _rx) = attached();
+    controls.mode.set(crate::mode::Mode::Orchestrate);
+    let mut agent = idle_agent("bg-announce", controls.clone(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let (text, stop) = agent.run("review it", &[]).await.unwrap();
+    assert_eq!(stop, Stop::Completed);
+    assert!(text.contains("in the background"), "{text}");
+    assert_eq!(agent.stats.requests, 2, "no extra request to go on");
 }
