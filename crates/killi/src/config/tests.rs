@@ -262,18 +262,74 @@ fn swarm_mode_starts_on_unless_the_config_says_off() {
 }
 
 #[test]
-fn the_reply_mode_is_read_and_saved_by_name() {
-    use crate::mode::Mode;
-    assert_eq!(super::AgentConfig::default().mode, None);
-    let concise: super::Config = toml::from_str("[agent]\nmode = \"ultra-concise\"\n").unwrap();
-    assert_eq!(concise.agent.mode, Some(Mode::UltraConcise));
-    let dir = crate::test_temp::TempDir::new("killi-set-mode");
+fn the_verbosity_is_read_and_saved_by_name() {
+    use crate::verbosity::Verbosity;
+    assert_eq!(super::AgentConfig::default().verbosity(), Verbosity::Normal);
+    let concise: super::Config =
+        toml::from_str("[agent]\nverbosity = \"ultra-concise\"\n").unwrap();
+    assert_eq!(concise.agent.verbosity(), Verbosity::UltraConcise);
+    let dir = crate::test_temp::TempDir::new("killi-set-verbosity");
     let path = dir.join("config.toml");
     std::fs::write(&path, "[agent]\nswarm = true\n").unwrap();
-    super::set_mode(&path, Mode::UltraConcise).unwrap();
-    super::set_mode(&path, Mode::Normal).unwrap();
+    super::set_verbosity(&path, Verbosity::UltraConcise).unwrap();
+    super::set_verbosity(&path, Verbosity::Normal).unwrap();
     let saved = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(saved, "[agent]\nmode = \"normal\"\nswarm = true\n");
+    assert_eq!(saved, "[agent]\nverbosity = \"normal\"\nswarm = true\n");
+}
+
+#[test]
+fn an_old_mode_line_still_reads_as_the_verbosity() {
+    use crate::mode::Mode;
+    use crate::verbosity::Verbosity;
+    let old: super::Config = toml::from_str("[agent]\nmode = \"ultra-concise\"\n").unwrap();
+    assert_eq!(old.agent.verbosity(), Verbosity::UltraConcise);
+    assert_eq!(old.agent.mode(), Mode::Focus);
+    let normal: super::Config = toml::from_str("[agent]\nmode = \"normal\"\n").unwrap();
+    assert_eq!(normal.agent.verbosity(), Verbosity::Normal);
+    assert_eq!(normal.agent.mode(), Mode::Focus);
+    // A verbosity line of its own wins over the old one.
+    let both: super::Config =
+        toml::from_str("[agent]\nmode = \"ultra-concise\"\nverbosity = \"normal\"\n").unwrap();
+    assert_eq!(both.agent.verbosity(), Verbosity::Normal);
+    let orchestrate: super::Config =
+        toml::from_str("[agent]\nmode = \"orchestrate\"\n").unwrap();
+    assert_eq!(orchestrate.agent.mode(), Mode::Orchestrate);
+    assert_eq!(orchestrate.agent.verbosity(), Verbosity::Normal);
+    let wrong = toml::from_str::<super::Config>("[agent]\nmode = \"fast\"\n").unwrap_err();
+    assert!(wrong.to_string().contains("focus"), "{wrong}");
+}
+
+#[test]
+fn saving_moves_an_old_mode_line_to_verbosity() {
+    use crate::mode::Mode;
+    use crate::verbosity::Verbosity;
+    let dir = crate::test_temp::TempDir::new("killi-migrate-mode");
+    let path = dir.join("config.toml");
+    // /verbosity replaces the old line.
+    std::fs::write(&path, "[agent]\nmode = \"ultra-concise\"\nswarm = true\n").unwrap();
+    super::set_verbosity(&path, Verbosity::Normal).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(saved, "[agent]\nverbosity = \"normal\"\nswarm = true\n");
+    // /mode keeps what the old line meant as `verbosity`.
+    std::fs::write(&path, "[agent]\nmode = \"ultra-concise\"\nswarm = true\n").unwrap();
+    super::set_mode(&path, Mode::Orchestrate).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        saved,
+        "[agent]\nverbosity = \"ultra-concise\"\nmode = \"orchestrate\"\nswarm = true\n"
+    );
+    // The default mode is stored as no line at all, so an older killi still reads the file.
+    super::set_mode(&path, Mode::Focus).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(saved, "[agent]\nverbosity = \"ultra-concise\"\nswarm = true\n");
+    let config: super::Config = toml::from_str(&saved).unwrap();
+    assert_eq!(config.agent.verbosity(), Verbosity::UltraConcise);
+    assert_eq!(config.agent.mode(), Mode::Focus);
+    // Focus over an old line with nothing else to keep leaves the table as it was.
+    std::fs::write(&path, "[agent]\nmode = \"normal\"\n").unwrap();
+    super::set_mode(&path, Mode::Focus).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(saved, "[agent]\nverbosity = \"normal\"\n");
 }
 
 #[test]

@@ -402,6 +402,7 @@ impl Agent {
                 steer: Rc::default(),
                 plan: self.controls.plan.clone(),
                 swarm: Rc::default(),
+                verbosity: Rc::default(),
                 mode: Rc::default(),
                 goal: Rc::default(),
                 interactive: false,

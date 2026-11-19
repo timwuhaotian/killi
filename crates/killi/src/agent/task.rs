@@ -36,6 +36,7 @@ pub(crate) fn task_agent(
         plan: Rc::default(),
         swarm: Rc::default(),
         // Its report goes to another session's model, not to a reader.
+        verbosity: Rc::default(),
         mode: Rc::default(),
         goal: Rc::default(),
         interactive: false,

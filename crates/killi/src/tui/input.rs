@@ -603,18 +603,49 @@ impl App {
         });
     }
 
-    /// Switches the reply mode named `name` in this session and saves it as `[agent] mode`,
-    /// so later sessions start in it too.
+    /// Switches the working mode named `name` in this session and saves it as `[agent] mode`,
+    /// so later sessions start in it too. The agent hears of it at its next step.
     pub(super) fn set_mode(&mut self, name: &str) {
         let Some(mode) = Mode::parse(&name.to_lowercase()) else {
             let names: Vec<_> = Mode::ALL.iter().map(|m| m.name()).collect();
-            self.error(&format!("No mode “{name}”; choose {}.", names.join(" or ")));
+            let hint = match Verbosity::parse(&name.to_lowercase()) {
+                Some(_) => format!(" Reply length moved to /verbosity {name}."),
+                None => String::new(),
+            };
+            self.error(&format!(
+                "No mode “{name}”; choose {}.{hint}",
+                names.join(" or ")
+            ));
             return;
         };
         self.controls.mode.set(mode);
         self.notice(&format!("Mode {}: {}.", mode.name(), mode.about()));
         let path = crate::config::killi_home().join("config.toml");
         match crate::config::set_mode(&path, mode) {
+            Ok(()) => self.notice(&format!("Saved to {}.", path.display())),
+            Err(e) => self.error_report(&e),
+        }
+    }
+
+    /// Switches the reply verbosity named `name` in this session and saves it as
+    /// `[agent] verbosity`, so later sessions start with it too.
+    pub(super) fn set_verbosity(&mut self, name: &str) {
+        let Some(verbosity) = Verbosity::parse(&name.to_lowercase()) else {
+            let names: Vec<_> = Verbosity::ALL.iter().map(|v| v.name()).collect();
+            self.error(&format!(
+                "No verbosity “{name}”; choose {}.",
+                names.join(" or ")
+            ));
+            return;
+        };
+        self.controls.verbosity.set(verbosity);
+        self.notice(&format!(
+            "Verbosity {}: {}.",
+            verbosity.name(),
+            verbosity.about()
+        ));
+        let path = crate::config::killi_home().join("config.toml");
+        match crate::config::set_verbosity(&path, verbosity) {
             Ok(()) => self.notice(&format!("Saved to {}.", path.display())),
             Err(e) => self.error_report(&e),
         }

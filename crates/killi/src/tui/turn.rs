@@ -231,10 +231,11 @@ impl App {
             self.effort_after_turn(arg);
             return true;
         }
-        // No picker opens during a turn: the prompt keeps `/mode `, where the menu offers them.
-        if name == "mode" && arg.trim().is_empty() {
+        // No picker opens during a turn: the prompt keeps `/mode ` or `/verbosity `, where the
+        // menu offers them.
+        if matches!(name, "mode" | "verbosity") && arg.trim().is_empty() {
             self.editor.clear();
-            self.editor.insert("/mode ");
+            self.editor.insert(&format!("/{name} "));
             return false;
         }
         let ran = self.run_local(name, arg);

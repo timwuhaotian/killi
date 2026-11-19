@@ -62,6 +62,16 @@ fn mode_choices() -> Vec<Item> {
         .collect()
 }
 
+fn verbosity_choices() -> Vec<Item> {
+    Verbosity::ALL
+        .into_iter()
+        .map(|verbosity| Item {
+            value: verbosity.name().into(),
+            description: verbosity.about().into(),
+        })
+        .collect()
+}
+
 /// The /web-search-config flow under way: the service picked (none while its list is open),
 /// whether killi starts a local SearXNG with Docker or the user points at their own, the
 /// instance URL once answered, and the `[search]` the flow started from, for prefilling.
@@ -132,6 +142,7 @@ pub(super) enum PickerChoice {
     /// Whether to install the newer killi on offer.
     Update(bool),
     Mode(Mode),
+    Verbosity(Verbosity),
 }
 
 /// The counts `/prune` offers to keep, from fewest to most, each removing something.
@@ -275,6 +286,10 @@ impl App {
                             self.set_mode(mode.name());
                             Idle::Continue
                         }
+                        PickerChoice::Verbosity(verbosity) => {
+                            self.set_verbosity(verbosity.name());
+                            Idle::Continue
+                        }
                         PickerChoice::PairModel(role, alias) => {
                             Idle::Input(Input::PairModel(role, alias))
                         }
@@ -366,6 +381,7 @@ impl App {
                     "effort" | "thinking" => self.effort_choices.clone(),
                     "swarm" => swarm_choices(),
                     "mode" => mode_choices(),
+                    "verbosity" => verbosity_choices(),
                     _ => Vec::new(),
                 },
             )
@@ -380,6 +396,7 @@ impl App {
                 "theme" => self.theme_choices.clone(),
                 "swarm" => swarm_choices(),
                 "mode" => mode_choices(),
+                "verbosity" => verbosity_choices(),
                 _ => Vec::new(),
             },
         )
@@ -822,7 +839,7 @@ impl App {
         self.picker = Some(Picker::new("Color theme".into(), options, selected));
     }
 
-    /// The /mode list: every reply mode, with a mark on the one in use.
+    /// The /mode list: every working mode, with a mark on the one in use.
     pub(super) fn open_mode_picker(&mut self) {
         let current = self.controls.mode.get();
         let options = Mode::ALL
@@ -837,7 +854,25 @@ impl App {
             })
             .collect();
         let selected = Mode::ALL.iter().position(|m| *m == current).unwrap_or(0);
-        self.picker = Some(Picker::new("Reply mode".into(), options, selected));
+        self.picker = Some(Picker::new("Working mode".into(), options, selected));
+    }
+
+    /// The /verbosity list: every reply length, with a mark on the one in use.
+    pub(super) fn open_verbosity_picker(&mut self) {
+        let current = self.controls.verbosity.get();
+        let options = Verbosity::ALL
+            .into_iter()
+            .map(|verbosity| {
+                let mark = if verbosity == current { " · current" } else { "" };
+                (
+                    verbosity.name().to_string(),
+                    format!("{}{mark}", verbosity.about()),
+                    PickerChoice::Verbosity(verbosity),
+                )
+            })
+            .collect();
+        let selected = Verbosity::ALL.iter().position(|v| *v == current).unwrap_or(0);
+        self.picker = Some(Picker::new("Verbosity".into(), options, selected));
     }
 
     /// A /pair setup's model list for a role, preselected on the remembered pick.

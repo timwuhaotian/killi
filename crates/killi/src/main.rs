@@ -24,6 +24,7 @@ mod test_temp;
 mod tools;
 mod tui;
 mod update;
+mod verbosity;
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -306,7 +307,8 @@ async fn run_once(
     };
     let mut controls = Controls::default();
     controls.swarm.set(setup.config().agent.swarm_on());
-    controls.mode.set(setup.config().agent.mode.unwrap_or_default());
+    controls.verbosity.set(setup.config().agent.verbosity());
+    controls.mode.set(setup.config().agent.mode());
     // A headless run is listed, so sessions in its tree leave its work alone, but takes no
     // questions or messages: nothing would read them while it runs.
     let mut live = setup

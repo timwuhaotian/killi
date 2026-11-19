@@ -1290,7 +1290,7 @@ async fn a_resumed_session_ended_ultra_concise_hears_it_is_off_when_the_config_s
     let lines = [
         json!({"type": "message", "message": {"role": "system", "content": "sys"}}).to_string(),
         json!({"type": "message", "message": {"role": "user", "content": "hi"}}).to_string(),
-        json!({"type": "message", "message": {"role": "user", "content": mode::ON}}).to_string(),
+        json!({"type": "message", "message": {"role": "user", "content": verbosity::ON}}).to_string(),
     ];
     std::fs::write(&log, lines.join("\n") + "\n").unwrap();
     let (locked, report) = Session::resume(&log).unwrap();
@@ -1310,6 +1310,6 @@ async fn a_resumed_session_ended_ultra_concise_hears_it_is_off_when_the_config_s
     agent.before_request().await.unwrap();
     assert_eq!(
         agent.messages.last().unwrap()["content"].as_str(),
-        Some(mode::OFF)
+        Some(verbosity::OFF)
     );
 }

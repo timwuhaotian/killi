@@ -25,6 +25,7 @@ pub use command::command_guide_if_first;
 pub(crate) use command::{confirm, read_line, read_secret, select};
 pub use edit::{
     remove_models, remove_provider_key, set_backup_model, set_model_effort, set_mode, set_search,
+    set_verbosity,
     set_swarm, set_swarm_parallel, set_ui_theme,
 };
 pub use guide::{init, start_if_missing};
@@ -202,8 +203,11 @@ pub struct AgentConfig {
     pub swarm_parallel: Option<usize>,
     /// Start every session in swarm mode (default true); `/swarm on|off` still changes it.
     pub swarm: Option<bool>,
-    /// How long replies run: `normal` (default) or `ultra-concise`; `/mode` sets it.
-    pub mode: Option<crate::mode::Mode>,
+    /// How long replies run: `normal` (default) or `ultra-concise`; `/verbosity` sets it.
+    pub verbosity: Option<crate::verbosity::Verbosity>,
+    /// How the session uses subagents: `focus` (default) or `orchestrate`; `/mode` sets it.
+    /// This line used to hold the verbosity, and those values still read as one.
+    pub mode: Option<ModeLine>,
     /// Let the other killi sessions on this machine see this one, ask it about its work and
     /// leave it messages, and tell the model about those working in its tree (default true).
     pub peers: Option<bool>,
@@ -218,6 +222,47 @@ impl AgentConfig {
     /// Whether a session joins the live sessions (`live.rs`).
     pub fn peers_on(&self) -> bool {
         self.peers.unwrap_or(true)
+    }
+
+    /// The reply verbosity a session starts with: `verbosity`, else an old `mode` line that
+    /// set it.
+    pub fn verbosity(&self) -> crate::verbosity::Verbosity {
+        match (self.verbosity, self.mode) {
+            (Some(verbosity), _) => verbosity,
+            (None, Some(ModeLine::Legacy(verbosity))) => verbosity,
+            _ => Default::default(),
+        }
+    }
+
+    /// The working mode a session starts in; an old verbosity value in `mode` leaves the default.
+    pub fn mode(&self) -> crate::mode::Mode {
+        match self.mode {
+            Some(ModeLine::Work(mode)) => mode,
+            _ => Default::default(),
+        }
+    }
+}
+
+/// What `[agent] mode` holds: a working mode, or a reply verbosity written before `/verbosity`
+/// took that over. The names don't overlap, so each value means one thing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModeLine {
+    Work(crate::mode::Mode),
+    Legacy(crate::verbosity::Verbosity),
+}
+
+impl<'de> Deserialize<'de> for ModeLine {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        if let Some(mode) = crate::mode::Mode::parse(&name) {
+            return Ok(ModeLine::Work(mode));
+        }
+        if let Some(verbosity) = crate::verbosity::Verbosity::parse(&name) {
+            return Ok(ModeLine::Legacy(verbosity));
+        }
+        Err(serde::de::Error::custom(format!(
+            "unknown mode `{name}`, expected `focus` or `orchestrate`"
+        )))
     }
 }
 

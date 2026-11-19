@@ -107,7 +107,7 @@ impl Agent {
         let mut agent = Self::assemble(client, cwd, tools, settings, controls, sink, session);
         agent.backup = backup.map(Rc::new);
         agent.plan_announced = last_plan_state(&loaded.messages);
-        agent.concise_announced = crate::mode::last_concise_state(&loaded.messages);
+        agent.concise_announced = crate::verbosity::last_concise_state(&loaded.messages);
         for message in &loaded.messages {
             for call in message["tool_calls"].as_array().into_iter().flatten() {
                 if let Some(id) = call["id"].as_str() {

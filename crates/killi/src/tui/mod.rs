@@ -77,6 +77,7 @@ use crate::live;
 use crate::llm::{Client, ErrorKind, ProviderError, Usage};
 use crate::mcp::Mcp;
 use crate::mode::Mode;
+use crate::verbosity::Verbosity;
 use crate::session::{Choice, Replayed};
 use crate::setup::{Overview, Setup};
 use crate::snapshot::Snapshots;
@@ -169,7 +170,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         ..Controls::default()
     };
     controls.swarm.set(config.agent.swarm_on());
-    controls.mode.set(config.agent.mode.unwrap_or_default());
+    controls.verbosity.set(config.agent.verbosity());
+    controls.mode.set(config.agent.mode());
     let (live, peers) = match config
         .agent
         .peers_on()

@@ -75,7 +75,8 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   `notify_after` (seconds a turn takes before a desktop notification, default 10),
   `swarm_parallel` (subagents one `agent_swarm` call runs at once, default 8; `/swarm parallel <n>` writes it),
   `swarm = false` (start sessions with swarm mode off; it is on by default, and `/swarm on|off` writes it),
-  `mode = "ultra-concise"` (replies in the fewest words that keep the meaning; `"normal"` by default, and `/mode` writes it),
+  `verbosity = "ultra-concise"` (replies in the fewest words that keep the meaning; `"normal"` by default, and `/verbosity` writes it; an older `mode = "ultra-concise"` line still reads as the verbosity),
+  `mode = "orchestrate"` (every `agent` and `agent_swarm` call runs in the background while the user keeps talking to the main agent; `"focus"` by default, where they run in the foreground and move to the background when the user sends a message; `/mode` writes it, and picking `focus` removes the line),
   `peers = false` (keep this machine's other killi sessions from seeing this one, asking it about its work and messaging it, and don't tell the model about the sessions in its repository; on by default).
 - `[skills] dirs = ["~/other/skills"]`: skill folders used instead of `~/.agents/skills`; the
   project's own folders are always read.

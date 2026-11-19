@@ -446,6 +446,12 @@ fn sets_key(line: &str, key: &str) -> bool {
 /// `agent.<key>` line before the tables counts too), or adding the table at the end. The rest
 /// of the file, comments included, is left as it is.
 fn set_agent_line(path: &Path, key: &str, line: String) -> Result<()> {
+    set_agent_lines(path, &[(key, Some(line))])
+}
+
+/// Sets or drops several `[agent]` keys in one write: each key's old line goes, and a `Some`
+/// line takes its place at the top of the table (which is added at the end when missing).
+fn set_agent_lines(path: &Path, changes: &[(&str, Option<String>)]) -> Result<()> {
     let text =
         fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
     let spans = table_spans(&text);
@@ -453,7 +459,6 @@ fn set_agent_line(path: &Path, key: &str, line: String) -> Result<()> {
         .iter()
         .find(|(name, _)| name == "agent")
         .map(|(_, span)| span.start);
-    let dotted = format!("agent.{key}");
     let mut out: Vec<String> = Vec::new();
     let mut header = None;
     for (n, text_line) in text.lines().enumerate() {
@@ -461,26 +466,55 @@ fn set_agent_line(path: &Path, key: &str, line: String) -> Result<()> {
             header = Some(out.len());
         }
         let trimmed = text_line.trim();
-        let in_agent = table_of(&spans, n) == Some("agent") && sets_key(trimmed, key);
-        let dotted_line = table_of(&spans, n).is_none() && sets_key(trimmed, &dotted);
-        if in_agent || dotted_line {
+        let table = table_of(&spans, n);
+        let replaced = changes.iter().any(|(key, _)| {
+            (table == Some("agent") && sets_key(trimmed, key))
+                || (table.is_none() && sets_key(trimmed, &format!("agent.{key}")))
+        });
+        if replaced {
             continue;
         }
         out.push(text_line.to_string());
     }
-    let at = match header {
-        Some(at) => at + 1,
-        None => {
-            out.push(String::new());
-            out.push("[agent]".to_string());
-            out.len()
+    let added: Vec<String> = changes.iter().filter_map(|(_, line)| line.clone()).collect();
+    if !added.is_empty() {
+        let at = match header {
+            Some(at) => at + 1,
+            None => {
+                out.push(String::new());
+                out.push("[agent]".to_string());
+                out.len()
+            }
+        };
+        for (offset, line) in added.into_iter().enumerate() {
+            out.insert(at + offset, line);
         }
-    };
-    out.insert(at, line);
+    }
     let new = format!("{}\n", out.join("\n"));
     toml::from_str::<Config>(&new).context("setting [agent] would break the config")?;
     crate::fs_atomic::write(path, new.as_bytes(), None)
         .with_context(|| format!("could not write {}", path.display()))
+}
+
+/// The `[agent]` settings the file at `path` holds now; an unreadable file counts as empty, so
+/// the write that follows reports the real problem.
+fn agent_now(path: &Path) -> super::AgentConfig {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str::<Config>(&text).ok())
+        .map(|config| config.agent)
+        .unwrap_or_default()
+}
+
+/// A `verbosity` line carrying over what an old `mode = "ultra-concise"` line meant, when the
+/// file has that line and no `verbosity` of its own: rewriting `mode` must not lose it.
+fn legacy_verbosity_line(agent: &super::AgentConfig) -> Option<String> {
+    match (agent.verbosity, agent.mode) {
+        (None, Some(super::ModeLine::Legacy(verbosity))) => {
+            Some(format!("verbosity = \"{}\"", verbosity.name()))
+        }
+        _ => None,
+    }
 }
 
 /// Stores `[agent] swarm`, so `/swarm on` and `/swarm off` decide the default for every
@@ -489,9 +523,27 @@ pub fn set_swarm(path: &Path, on: bool) -> Result<()> {
     set_agent_line(path, "swarm", format!("swarm = {on}"))
 }
 
-/// Stores `[agent] mode`, so `/mode` decides how long replies run in every later session too.
+/// Stores `[agent] verbosity`, so `/verbosity` decides how long replies run in every later
+/// session too. An old `mode` line that held the verbosity goes in the same write.
+pub fn set_verbosity(path: &Path, verbosity: crate::verbosity::Verbosity) -> Result<()> {
+    let legacy = matches!(agent_now(path).mode, Some(super::ModeLine::Legacy(_)));
+    let line = Some(format!("verbosity = \"{}\"", verbosity.name()));
+    if legacy {
+        set_agent_lines(path, &[("verbosity", line), ("mode", None)])
+    } else {
+        set_agent_lines(path, &[("verbosity", line)])
+    }
+}
+
+/// Stores `[agent] mode`, so `/mode` decides how later sessions use subagents too. The default,
+/// `focus`, is stored by removing the line, so a killi from before modes still reads the file.
+/// An old verbosity in that line moves to `verbosity` in the same write.
 pub fn set_mode(path: &Path, mode: crate::mode::Mode) -> Result<()> {
-    set_agent_line(path, "mode", format!("mode = \"{}\"", mode.name()))
+    let line = (mode != crate::mode::Mode::Focus).then(|| format!("mode = \"{}\"", mode.name()));
+    match legacy_verbosity_line(&agent_now(path)) {
+        Some(verbosity) => set_agent_lines(path, &[("verbosity", Some(verbosity)), ("mode", line)]),
+        None => set_agent_lines(path, &[("mode", line)]),
+    }
 }
 
 /// Stores `[agent] swarm_parallel`, the subagents a swarm runs at once.

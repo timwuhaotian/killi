@@ -39,7 +39,7 @@ use crate::llm::{
 };
 use crate::session::Session;
 use crate::skills::Skills;
-use crate::mode::{self, Mode};
+use crate::verbosity::{self, Verbosity};
 use crate::{goal, live, plan, swarm, tools};
 
 pub use types::{

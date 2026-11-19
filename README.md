@@ -353,7 +353,10 @@ Commands: `/provider [name]` (add a provider from a pasted key), `/model [alias]
 `/new` (or `/clear`), `/resume`, `/btw <question>` (a side question, never kept),
 `/schedule <interval> <task>`, `/compact [focus]`, `/recap`, `/undo`, `/plan`,
 `/swarm [task|on|off|parallel <n>]`,
-`/mode [normal|ultra-concise]` (ultra-concise: replies in the fewest words that keep the meaning),
+`/mode [focus|orchestrate]` (focus: subagents run in the foreground and move to the background
+when you send a message; orchestrate: every subagent runs in the background while you keep
+talking to the main agent), `/verbosity [normal|ultra-concise]` (ultra-concise: replies in the
+fewest words that keep the meaning),
 `/goal [<text>|done|clear]` (a session goal: `/exit`, `/new` and `/resume` wait until it is
 `/goal done`, or `/goal clear` when it is truly impossible or no longer wanted), `/usage`, `/session`
 (copies the session's id, log path and summary for another agent to read), `/sessions` (the

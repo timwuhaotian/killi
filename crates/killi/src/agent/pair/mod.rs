@@ -264,6 +264,7 @@ impl Agent {
                 steer: Rc::default(),
                 plan: Rc::new(Cell::new(role == Role::Mentor)),
                 swarm: Rc::default(),
+                verbosity: Rc::default(),
                 mode: Rc::default(),
                 goal: Rc::default(),
                 interactive: false,

@@ -1354,12 +1354,12 @@ fn a_session_with_only_reminders_left_is_unused() {
 async fn ultra_concise_mode_is_said_after_every_prompt_and_its_end_once() {
     let url = stub_replies((0..4).map(|_| sse("ok", "stop")).collect()).await;
     let controls = Controls::default();
-    controls.mode.set(Mode::UltraConcise);
+    controls.verbosity.set(Verbosity::UltraConcise);
     let mut agent = idle_agent("mode", controls.clone(), Rc::new(|_| {}));
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
     agent.run("first", &[]).await.unwrap();
     agent.run("second", &[]).await.unwrap();
-    controls.mode.set(Mode::Normal);
+    controls.verbosity.set(Verbosity::Normal);
     agent.run("third", &[]).await.unwrap();
     agent.run("fourth", &[]).await.unwrap();
     let said: Vec<&str> = agent
@@ -1370,7 +1370,7 @@ async fn ultra_concise_mode_is_said_after_every_prompt_and_its_end_once() {
         .collect();
     assert_eq!(
         said,
-        ["first", mode::ON, "second", mode::ON, "third", mode::OFF, "fourth"]
+        ["first", verbosity::ON, "second", verbosity::ON, "third", verbosity::OFF, "fourth"]
     );
     assert_eq!(agent.user_prompts(), ["first", "second", "third", "fourth"]);
 }
@@ -1380,7 +1380,7 @@ async fn a_prompt_taken_back_takes_its_mode_reminder_with_it() {
     let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", silent.local_addr().unwrap());
     let controls = Controls::default();
-    controls.mode.set(Mode::UltraConcise);
+    controls.verbosity.set(Verbosity::UltraConcise);
     let mut agent = idle_agent("mode-retract", controls, Rc::new(|_| {}));
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
     agent

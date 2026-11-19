@@ -645,7 +645,10 @@ impl App {
             if self.controls.swarm.get() {
                 head.push(format!("{LAGOON}swarm mode{RESET}{DIM}"));
             }
-            if self.controls.mode.get() == Mode::UltraConcise {
+            if self.controls.mode.get() == Mode::Orchestrate {
+                head.push(format!("{LAGOON}orchestrate{RESET}{DIM}"));
+            }
+            if self.controls.verbosity.get() == Verbosity::UltraConcise {
                 head.push(format!("{LAGOON}concise{RESET}{DIM}"));
             }
             return format!("{DIM}{}{RESET}", fit(&head.join(&dot()), width));
@@ -671,7 +674,9 @@ impl App {
                 .swarm
                 .get()
                 .then(|| format!("{LAGOON}swarm mode{RESET}{DIM}")),
-            (self.controls.mode.get() == Mode::UltraConcise)
+            (self.controls.mode.get() == Mode::Orchestrate)
+                .then(|| format!("{LAGOON}orchestrate{RESET}{DIM}")),
+            (self.controls.verbosity.get() == Verbosity::UltraConcise)
                 .then(|| format!("{LAGOON}concise{RESET}{DIM}")),
         ]
         .into_iter()
