@@ -190,7 +190,7 @@ async fn a_request_dropped_before_it_settles_leaves_an_abort_in_the_log() {
 }
 
 #[test]
-fn forks_and_tasks_keep_the_sessions_cache_key_and_other_children_get_their_own() {
+fn subagents_forks_and_tasks_share_the_sessions_cache_key() {
     let controls = Controls::default();
     let mut parent = idle_agent("cache-key", controls.clone(), Rc::new(|_| {}));
     parent
@@ -200,7 +200,7 @@ fn forks_and_tasks_keep_the_sessions_cache_key_and_other_children_get_their_own(
     assert_eq!(parent.cache_key, parent.session.id);
     let fresh = parent.subagent("fresh", None, false, &Default::default()).unwrap();
     assert!(fresh.session.id.starts_with("agent-"), "{}", fresh.session.id);
-    assert_eq!(fresh.cache_key, format!("{}/{}", parent.session.id, fresh.session.id));
+    assert_eq!(fresh.cache_key, parent.cache_key, "its requests open with the session's prefix");
     let fork = parent.subagent("fork", None, true, &Default::default()).unwrap();
     assert_eq!(fork.cache_key, parent.cache_key, "a fork opens with the parent's history");
     let task = task_agent(&controls.aside.borrow(), None, Rc::new(|_| {}), 1).unwrap();
