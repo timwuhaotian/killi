@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.5 — 2026-11-19
+
+- `killi login chatgpt` no longer calls your same ChatGPT account a different one. A credentials
+  file that stored the whole ID token in its `subject` field never matched the fresh `sub` claim,
+  so signing in again always refused. The stored subject is now read as that token's `sub`, and a
+  successful sign-in rewrites it as the bare claim.
+
 ## 0.8.4 — 2026-11-19
 
 - Subagents and pair children send the provider their session's own cache key instead of one

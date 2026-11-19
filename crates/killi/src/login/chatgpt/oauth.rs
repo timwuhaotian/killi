@@ -132,6 +132,28 @@ pub(super) fn issued_client(saved: &str, returned: Option<&str>) -> Result<Strin
     }
 }
 
+/// The claims of a JWT's payload, without checking anything.
+fn claims_of(token: &str) -> Option<Value> {
+    token
+        .split('.')
+        .nth(1)
+        .and_then(|payload| URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok())
+        .and_then(|json| serde_json::from_slice::<Value>(&json).ok())
+}
+
+/// The subject a saved registration names: the `sub` itself, or — in a credentials file an
+/// older killi wrote a whole ID token into — that token's `sub`, which is still the same
+/// account's subject. Anything that isn't a token stands as written.
+pub(super) fn prior_subject(stored: &str) -> String {
+    match claims_of(stored) {
+        Some(claims) => claims["sub"]
+            .as_str()
+            .filter(|subject| !subject.is_empty())
+            .map_or_else(|| stored.to_string(), String::from),
+        None => stored.to_string(),
+    }
+}
+
 /// The ID token's subject and email, after checking its issuer, audience, expiry and nonce.
 /// Its signature isn't checked: the token came straight from the token endpoint over TLS,
 /// which OpenID Connect accepts instead (Core 1.0, 3.1.3.7), and killi uses it only to name
@@ -142,12 +164,7 @@ pub(super) fn identity(
     nonce: &str,
     now: u64,
 ) -> Result<(String, String)> {
-    let claims = id_token
-        .split('.')
-        .nth(1)
-        .and_then(|payload| URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok())
-        .and_then(|json| serde_json::from_slice::<Value>(&json).ok())
-        .ok_or_else(|| anyhow!("the ID token can't be read"))?;
+    let claims = claims_of(id_token).ok_or_else(|| anyhow!("the ID token can't be read"))?;
     let for_killi = match &claims["aud"] {
         Value::Array(audiences) => audiences.iter().any(|audience| audience == client_id),
         audience => audience == client_id,

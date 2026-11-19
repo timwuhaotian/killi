@@ -227,6 +227,15 @@ fn the_id_token_must_be_for_this_sign_in() {
 }
 
 #[test]
+fn a_saved_id_token_names_its_subject() {
+    let token = jwt(serde_json::json!({"sub": "user-1", "email": "a@b.c"}));
+    assert_eq!(prior_subject(&token), "user-1");
+    assert_eq!(prior_subject("user-1"), "user-1");
+    assert_eq!(prior_subject(""), "");
+    assert_eq!(prior_subject("not-a-jwt"), "not-a-jwt");
+}
+
+#[test]
 fn a_token_is_refreshed_five_minutes_before_it_expires() {
     let credentials = signed_in_at_time(10_000);
     assert!(credentials.fresh(10_000 + 3600 - REFRESH_EARLY - 1));

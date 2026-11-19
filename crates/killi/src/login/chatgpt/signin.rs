@@ -84,7 +84,8 @@ pub async fn login() -> Result<()> {
         .as_str()
         .ok_or_else(|| anyhow!("the token response has no id_token"))?;
     let (subject, email) = identity(id_token, &saved.client_id, &attempt.nonce, now())?;
-    if !saved.subject.is_empty() && saved.subject != subject {
+    let prior = prior_subject(&saved.subject);
+    if !prior.is_empty() && prior != subject {
         bail!(
             "that is a different ChatGPT account than killi's registration ({}); to switch accounts, delete {} and run `killi login chatgpt` again",
             saved.email,

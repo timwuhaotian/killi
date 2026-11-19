@@ -27,7 +27,7 @@ use tokio::net::TcpListener;
 use crate::config::killi_home;
 
 use models::plan_models;
-use oauth::{authorize_url, identity, issued_client, wait_for_callback};
+use oauth::{authorize_url, identity, issued_client, prior_subject, wait_for_callback};
 
 pub use signin::{login, logout, offer};
 pub use token::{access_token, advice, signed_in};
