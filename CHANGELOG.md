@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.7.2 — 2026-11-19
+
+- A connection lost mid-session, such as when a Mac wakes from sleep and its network isn't
+  back yet, is now retried for about two minutes instead of failing after three quick tries,
+  once the provider has answered in that session. A provider that has never answered still
+  fails fast.
+- On macOS a running turn keeps the system from idle-sleeping (`caffeinate -i`), and lets it
+  sleep again while a question waits for your answer. Closing the lid still sleeps the machine.
+
 ## 0.7.1 — 2026-11-18
 
 - `/schedule <interval> <task>` repeats a prompt while the session stays open, for example
