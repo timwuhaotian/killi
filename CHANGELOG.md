@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.1 — 2026-11-19
+
+- While the model works out a suggestion, the prompt shows a shimmering `suggesting…` island
+  until it lands: in place of the empty prompt's hint after a turn, and just after the cursor
+  when a typed draft pauses.
+
 ## 0.8.0 — 2026-11-19
 
 - A subagent no longer holds the conversation. Type while one works and it moves to the
