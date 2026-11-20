@@ -148,6 +148,7 @@ fn stored_arguments_that_arent_json_are_repaired_on_the_copy_being_sent() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "gpt".into(),
+        display_name: None,
         protocol: crate::config::Protocol::OpenAi,
         base_url: "http://localhost".into(),
         api_key: String::new(),
@@ -311,6 +312,7 @@ fn prepare_marks_breakpoints_only_when_the_model_asks() {
     let mut model = ResolvedModel {
         alias: "m".into(),
         model: "claude".into(),
+        display_name: None,
         protocol: crate::config::Protocol::OpenAi,
         base_url: "http://localhost".into(),
         api_key: String::new(),
@@ -346,6 +348,7 @@ fn images_become_text_when_the_model_cannot_see_them() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "text".into(),
+        display_name: None,
         protocol: crate::config::Protocol::OpenAi,
         base_url: "http://localhost".into(),
         api_key: String::new(),
@@ -393,6 +396,7 @@ fn prepare_caps_output_from_context_and_preserves_string_reasoning() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "gpt-4".into(),
+        display_name: None,
         protocol: crate::config::Protocol::OpenAi,
         base_url: "http://localhost".into(),
         api_key: String::new(),
@@ -450,6 +454,7 @@ fn mapped_tool_names_go_out_and_come_back() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "gpt".into(),
+        display_name: None,
         protocol: crate::config::Protocol::OpenAi,
         base_url: "http://localhost".into(),
         api_key: String::new(),

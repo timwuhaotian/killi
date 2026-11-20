@@ -23,6 +23,7 @@ pub(super) fn test_client_at(alias: &str, base_url: &str) -> Client {
     let model = crate::config::ResolvedModel {
         alias: alias.into(),
         model: "test".into(),
+        display_name: None,
         protocol: crate::config::Protocol::OpenAi,
         base_url: base_url.into(),
         api_key: "test-key".into(),

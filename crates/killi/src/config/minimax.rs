@@ -50,7 +50,7 @@ fn flash() -> NewModel {
         more_capabilities: vec!["video_in"],
         display: Some("MiniMax-M3.1-Flash"),
         default_effort: Some("max".into()),
-        efforts: vec!["max".into()],
+        efforts: ["low", "medium", "high", "xhigh", "max"].into_iter().map(Into::into).collect(),
         ..NewModel::default()
     }
 }

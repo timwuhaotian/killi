@@ -63,6 +63,7 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   the provider's, for a gateway with a URL per API), `cache_control = true`
   (Chat Completions only: mark the system message and the newest message for a gateway that
   passes it to Claude on Bedrock; without it that model re-bills the whole prompt each turn),
+  `display_name` (the short name the UI shows; without it the alias),
   `max_context_size`
   and `max_output_size` (tokens), `capabilities` (`"image_in"` lets the model take images;
   other entries are kept but unused), `default_effort` (the model's own thinking level; `/effort`

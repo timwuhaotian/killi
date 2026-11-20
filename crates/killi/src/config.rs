@@ -334,6 +334,9 @@ pub struct Model {
     pub default_effort: Option<String>,
     #[serde(default)]
     pub support_efforts: Vec<String>,
+    /// The short name shown in the UI; `None` falls back to the alias.
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -348,6 +351,7 @@ pub struct ThinkingConfig {
 pub struct ResolvedModel {
     pub alias: String,
     pub model: String,
+    pub display_name: Option<String>,
     pub protocol: Protocol,
     pub base_url: String,
     pub api_key: String,
@@ -375,6 +379,7 @@ impl ResolvedModel {
         Self {
             alias: String::new(),
             model: String::new(),
+            display_name: None,
             protocol: Protocol::OpenAi,
             base_url: String::new(),
             api_key: String::new(),
@@ -402,6 +407,7 @@ impl std::fmt::Debug for ResolvedModel {
         f.debug_struct("ResolvedModel")
             .field("alias", &self.alias)
             .field("model", &self.model)
+            .field("display_name", &self.display_name)
             .field("protocol", &self.protocol)
             .field("base_url", &self.base_url)
             .field("api_key", &key)

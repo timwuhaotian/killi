@@ -5,6 +5,15 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.7 — 2026-11-20
+
+- The model on the banner and status line, and in `/model` / `/backup-model`, is now its
+  `display_name` (e.g. `Claude Sonnet 5.5`) instead of the full `provider/model` alias, which
+  ellipsised mid-id at narrow widths; the alias stays the identity for `-m`, `/model` and the log.
+- `/provider` presets now declare the full thinking levels their models actually take
+  (GLM-5.3: `low/high/max`; Claude Sonnet 5.5, MiniMax: five levels; Kimi: three), so `/effort`
+  lists them all; already-added models keep their old list until re-added.
+
 ## 0.8.6 — 2026-11-20
 
 - A 429 that says a quota ran out gets one more attempt 30 s later before it counts as a spent

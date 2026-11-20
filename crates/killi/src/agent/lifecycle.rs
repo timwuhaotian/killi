@@ -409,6 +409,22 @@ impl Agent {
         &self.client.model.alias
     }
 
+    /// The name to show for the model: its `display_name` when set, else the alias.
+    pub fn model_display(&self) -> &str {
+        self.client
+            .model
+            .display_name
+            .as_deref()
+            .unwrap_or(&self.client.model.alias)
+    }
+
+    /// The name to show for the backup model, when it has a display name.
+    pub fn backup_display(&self) -> Option<&str> {
+        self.backup
+            .as_ref()
+            .and_then(|c| c.model.display_name.as_deref())
+    }
+
     /// Why the primary can't be asked right now, when the backup should take over: after the
     /// retries it still rate-limits, has spent its quota, rejects the key or the request (any
     /// 4xx), fails on its side (5xx), can't be reached or answers with garbage. Only overflow

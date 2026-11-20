@@ -78,6 +78,7 @@ impl Config {
         Ok(ResolvedModel {
             alias: alias.to_string(),
             model: model.model.clone(),
+            display_name: model.display_name.clone(),
             protocol,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
@@ -177,6 +178,14 @@ impl Config {
             .as_deref()
             .filter(|text| !text.trim().is_empty())
             .unwrap_or(crate::prompt::DEFAULT)
+    }
+
+    /// The name to show for `alias`: its `display_name` when set, else the alias itself.
+    pub fn display_name<'a>(&'a self, alias: &'a str) -> &'a str {
+        self.models
+            .get(alias)
+            .and_then(|m| m.display_name.as_deref())
+            .unwrap_or(alias)
     }
 
     /// The efforts `/effort` offers for a model, as Kimi Code lists them: off, then the

@@ -540,7 +540,7 @@ impl App {
                 } else {
                     PickerChoice::Model(alias.clone())
                 };
-                (alias.clone(), format!("{}{current}", model.provider), pick)
+                (config.display_name(alias).to_string(), format!("{}{current}", model.provider), pick)
             })
             .collect();
         if options.is_empty() {

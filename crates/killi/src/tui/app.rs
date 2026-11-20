@@ -60,7 +60,7 @@ impl App {
             detail_back: 0,
             ctrl_o_taught: false,
             status: Status {
-                model: agent.model_alias().to_string(),
+                model: agent.model_display().to_string(),
                 thinking: agent.thinking().label().to_string(),
                 window: agent.context_window(),
                 context: agent.stats.context,
@@ -158,7 +158,7 @@ impl App {
             format!(
                 "{}{BOLD}{}{RESET}{thinking}",
                 label("model"),
-                agent.model_alias()
+                agent.model_display()
             )
         };
         let setup = overview_rows(&overview);
@@ -318,8 +318,8 @@ impl App {
     /// Shows the model and effort the agent runs on in the status line and the slash menu.
     pub(super) fn show_model(&mut self, agent: &Agent, config: &Config) {
         self.sees_images = agent.sees_images();
-        self.status.model = agent.model_alias().to_string();
-        self.status.backup = agent.backup_alias().map(String::from);
+        self.status.model = agent.model_display().to_string();
+        self.status.backup = agent.backup_display().or_else(|| agent.backup_alias()).map(str::to_string);
         self.status.thinking = agent.thinking().label().to_string();
         self.status.window = agent.context_window();
         self.needs_provider =

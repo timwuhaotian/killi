@@ -186,6 +186,7 @@ fn max_tokens_is_capped_by_remaining_context() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "compatible".into(),
+        display_name: None,
         protocol: crate::config::Protocol::Anthropic,
         base_url: String::new(),
         api_key: String::new(),
@@ -254,6 +255,7 @@ fn mapped_tool_names_go_out_and_come_back() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "claude-haiku-5-5".into(),
+        display_name: None,
         protocol: crate::config::Protocol::Anthropic,
         base_url: "http://localhost".into(),
         api_key: String::new(),

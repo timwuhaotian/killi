@@ -109,10 +109,20 @@ fn additions(key_field: (&str, &str), ids: Vec<String>) -> Additions {
 }
 
 fn glm(id: &str) -> NewModel {
-    let context = if id.starts_with("glm-5.3") {
+    let context = if id.starts_with("glm-5.3") || id.starts_with("glm-5.2") {
         1_000_000
     } else {
         128_000
+    };
+    // Z.ai's /models returns ids only, so efforts are per family from the docs:
+    // 5.3 always thinks at low/high/max (default max), 5.2 at high/max, older
+    // models take thinking on/off only.
+    let (efforts, default_effort) = if id.starts_with("glm-5.3") {
+        (["low", "high", "max"].to_vec(), Some("max"))
+    } else if id.starts_with("glm-5.2") {
+        (["high", "max"].to_vec(), Some("max"))
+    } else {
+        (Vec::new(), None)
     };
     NewModel {
         id: id.into(),
@@ -120,8 +130,8 @@ fn glm(id: &str) -> NewModel {
         output: Some(128_000),
         thinking: true,
         tools: true,
-        default_effort: Some("high".into()),
-        efforts: vec!["high".into()],
+        default_effort: default_effort.map(Into::into),
+        efforts: efforts.into_iter().map(Into::into).collect(),
         ..NewModel::default()
     }
 }
@@ -257,7 +267,7 @@ mod tests {
         let config: Config = toml::from_str(&out).unwrap();
         let model = &config.models["zai/glm-5.3"];
         assert_eq!(model.capabilities, ["thinking", "tool_use"]);
-        assert_eq!(model.default_effort.as_deref(), Some("high"));
-        assert_eq!(model.support_efforts, ["high"]);
+        assert_eq!(model.default_effort.as_deref(), Some("max"));
+        assert_eq!(model.support_efforts, ["low", "high", "max"]);
     }
 }

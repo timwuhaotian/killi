@@ -143,6 +143,7 @@ fn reasoning_without_encrypted_content_is_not_replayed() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "gpt-5".into(),
+        display_name: None,
         protocol: crate::config::Protocol::Responses,
         base_url: "http://localhost".into(),
         api_key: String::new(),
@@ -192,6 +193,7 @@ fn prepare_caps_output_from_remaining_context() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "gpt-5".into(),
+        display_name: None,
         protocol: crate::config::Protocol::Responses,
         base_url: "http://localhost".into(),
         api_key: String::new(),
@@ -217,6 +219,7 @@ fn a_chatgpt_plan_request_has_no_output_cap_and_no_key() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "gpt-5".into(),
+        display_name: None,
         protocol: crate::config::Protocol::Responses,
         base_url: "https://api.openai.com/v1".into(),
         api_key: String::new(),
@@ -272,6 +275,7 @@ fn mapped_tool_names_go_out_and_come_back() {
     let model = ResolvedModel {
         alias: "m".into(),
         model: "muse".into(),
+        display_name: None,
         protocol: crate::config::Protocol::Responses,
         base_url: "https://api.meta.ai/v1".into(),
         api_key: String::new(),

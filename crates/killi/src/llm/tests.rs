@@ -276,6 +276,7 @@ fn output_cap_reserves_estimated_input_and_never_reaches_zero() {
     let model = ResolvedModel {
         alias: String::new(),
         model: String::new(),
+        display_name: None,
         protocol: Protocol::OpenAi,
         base_url: String::new(),
         api_key: String::new(),
@@ -349,6 +350,7 @@ fn test_model(base_url: &str) -> ResolvedModel {
     ResolvedModel {
         alias: "m".into(),
         model: "gpt-test".into(),
+        display_name: None,
         protocol: Protocol::OpenAi,
         base_url: base_url.into(),
         api_key: "test-key".into(),

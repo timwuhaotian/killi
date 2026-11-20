@@ -56,10 +56,14 @@ fn wonder(id: &'static str, display: &'static str) -> NewModel {
         output: Some(128_000),
         images: true,
         tools: true,
+        thinking: true,
         more_capabilities: vec!["video_in", "audio_in", "always_thinking"],
         display: Some(display),
         default_effort: Some("high".into()),
-        efforts: vec!["high".into()],
+        efforts: ["minimal", "low", "medium", "high", "xhigh", "max"]
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         ..NewModel::default()
     }
 }
@@ -183,6 +187,7 @@ mod tests {
             model.capabilities,
             [
                 "image_in",
+                "thinking",
                 "tool_use",
                 "video_in",
                 "audio_in",

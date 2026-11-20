@@ -510,6 +510,7 @@ mod tests {
         ResolvedModel {
             alias: "commandcode/spark".into(),
             model: "meta/muse-spark-1.3-contributor".into(),
+            display_name: None,
             protocol: crate::config::Protocol::CommandCode,
             base_url: "https://api.commandcode.ai".into(),
             api_key: "user_key".into(),

@@ -47,8 +47,8 @@ fn u2(id: &'static str, display: &'static str) -> NewModel {
         tools: true,
         more_capabilities: vec!["always_thinking"],
         display: Some(display),
-        default_effort: Some("high".into()),
-        efforts: vec!["high".into()],
+        default_effort: None,
+        efforts: Vec::new(),
         ..NewModel::default()
     }
 }
@@ -150,6 +150,6 @@ mod tests {
             model.capabilities,
             ["thinking", "tool_use", "always_thinking"]
         );
-        assert_eq!(model.default_effort.as_deref(), Some("high"));
+        assert!(model.default_effort.is_none(), "{out}");
     }
 }

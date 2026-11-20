@@ -36,7 +36,7 @@ fn additions(api_key: &str) -> Additions {
         provider,
         models: vec![
             qwen("qwen3.8-max", "Qwen3.8 Max", "xhigh"),
-            qwen("qwen3.8-flash", "Qwen3.8 Flash", "high"),
+            qwen("qwen3.8-flash", "Qwen3.8 Flash", "xhigh"),
         ],
         comment: "Qwen, added with /provider qwen.",
     }
@@ -52,7 +52,7 @@ fn qwen(id: &'static str, display: &'static str, effort: &'static str) -> NewMod
         tools: true,
         display: Some(display),
         default_effort: Some(effort.into()),
-        efforts: vec![effort.into()],
+        efforts: ["low", "medium", "xhigh"].into_iter().map(Into::into).collect(),
         ..NewModel::default()
     }
 }
@@ -157,6 +157,6 @@ mod tests {
         assert_eq!(model.default_effort.as_deref(), Some("xhigh"));
         let flash = &config.models["qwen/qwen3.8-flash"];
         assert_eq!(flash.capabilities, ["image_in", "thinking", "tool_use"]);
-        assert_eq!(flash.default_effort.as_deref(), Some("high"));
+        assert_eq!(flash.default_effort.as_deref(), Some("xhigh"));
     }
 }
