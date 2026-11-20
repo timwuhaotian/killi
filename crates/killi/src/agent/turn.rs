@@ -227,6 +227,8 @@ impl Agent {
                 ));
             }
             called = true;
+            // A reminder that was followed by tool calls worked; a later stop earns its own.
+            told_unfinished = false;
             let ran_from = self.messages.len();
             let stop = self.execute_calls(calls, truncated).await?;
             if self

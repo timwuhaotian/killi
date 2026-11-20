@@ -186,6 +186,11 @@ fn names_a_coming_phase(sentence: &str) -> bool {
 /// Whether a lowercased clause opens with an English gerund ("opening the PR",
 /// "classifying the routes"): the shape of a step being started, whichever verb it is.
 fn opens_with_gerund(clause: &str) -> bool {
+    let clause = ["now ", "then "]
+        .iter()
+        .find_map(|lead| clause.strip_prefix(lead))
+        .unwrap_or(clause)
+        .trim_start();
     let word = clause
         .split(|c: char| !c.is_ascii_alphabetic())
         .next()

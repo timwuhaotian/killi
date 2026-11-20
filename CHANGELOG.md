@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.9 — 2026-11-20
+
+- A reply ending "… — now verifying the edge cases." (or "Then pushing.") is taken as an announced
+  next step, like one that opens with the verb. A reminder that led to tool calls no longer uses
+  up the turn's one reminder, so a later stop is asked to go on too.
+
 ## 0.8.8 — 2026-11-20
 
 - `killi "<prompt>"` (or `--prompt`) starts the interactive session and sends the prompt as its

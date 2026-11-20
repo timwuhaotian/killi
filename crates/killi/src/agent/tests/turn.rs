@@ -1163,6 +1163,26 @@ async fn a_reply_announcing_a_next_step_is_asked_to_go_on_once() {
         .filter(|m| m["content"] == ANNOUNCED || m["content"] == UNFINISHED)
         .count();
     assert_eq!(reminded, 1);
+
+    // A reminder that led to tool calls was heeded: the next stop earns its own.
+    let call = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"todo_write\",\"arguments\":\"{\\\"todos\\\":[]}\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+    let url = stub_replies(vec![
+        sse("Checking it.", "stop"),
+        call.to_string(),
+        sse("Trimming.", "stop"),
+        sse("Done.", "stop"),
+    ])
+    .await;
+    let mut agent = idle_agent("announced-twice", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, _) = agent.run("why?", &[]).await.unwrap();
+    assert_eq!(text, "Done.");
+    let reminded = agent
+        .messages
+        .iter()
+        .filter(|m| m["content"] == ANNOUNCED)
+        .count();
+    assert_eq!(reminded, 2);
 }
 
 #[tokio::test(flavor = "current_thread")]

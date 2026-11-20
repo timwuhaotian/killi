@@ -1402,6 +1402,10 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         "27 PRs found. Mine: 11, sorted into 10 stacks. Others: 16. Fix-first phase starting, 3 at a time.",
         "25 PRs. 13 mine, 12 others. 1 stack (#1131→#1132). Cache warm. Phase A next: 12 resolve groups, batch of 3.",
         "Lint clean. Tests next.",
+        // "now"/"then" before the gerund, as subagents wrote it in the logs.
+        "Core display paths are mapped — now verifying the edge cases and layout limits.",
+        "Reviews posted. Now syncing #1131 root-first in its worktree.",
+        "Gates pass. Now replying to both threads, then pushing.",
         "已列出 27 个 PR。接下来处理我的 11 个。",
     ] {
         assert!(ends_with_intent(stop), "{stop}");
@@ -1425,6 +1429,8 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         "Ready to push — waiting for your go-ahead.",
         "Stopping here until you confirm.",
         "Using the cached result.",
+        "Reviewed. Now using the cached result.",
+        "Fixed. It is now failing on CI.",
         "已启动，正在运行。",
         "修好了，马上就能用。",
         "Sing.",
