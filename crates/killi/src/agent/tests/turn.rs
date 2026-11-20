@@ -261,11 +261,11 @@ async fn a_message_typed_during_a_call_goes_ahead_of_the_calls_after_it() {
     );
     agent.before_request().await.unwrap();
     assert_eq!(
-        agent.messages[agent.messages.len() - 2],
+        agent.messages[agent.messages.len() - 3],
         json!({"role": "user", "content": "stop"})
     );
     assert_eq!(
-        agent.messages.last().unwrap()["content"],
+        agent.messages[agent.messages.len() - 2]["content"],
         crate::agent::turn::STEERED,
         "the queued message is marked as adding to the request it interrupted"
     );
@@ -482,7 +482,7 @@ async fn the_model_hears_the_session_goal_until_it_ends() {
     agent.set_goal("ship v2").unwrap();
     assert_eq!(agent.goal().as_deref(), Some("ship v2"));
     agent.before_request().await.unwrap();
-    let said = agent.messages.last().unwrap()["content"]
+    let said = agent.messages[agent.messages.len() - 2]["content"]
         .as_str()
         .unwrap()
         .to_string();
@@ -490,12 +490,9 @@ async fn the_model_hears_the_session_goal_until_it_ends() {
         said.contains("Session goal: ship v2") && said.contains("/goal done"),
         "{said}"
     );
+    let len = agent.messages.len();
     agent.before_request().await.unwrap();
-    assert_eq!(
-        agent.messages.last().unwrap()["content"].as_str().unwrap(),
-        said,
-        "announced once"
-    );
+    assert_eq!(agent.messages.len(), len, "announced once");
     agent.clear_goal().unwrap();
     assert_eq!(agent.goal(), None);
     agent.before_request().await.unwrap();
@@ -619,7 +616,7 @@ async fn the_model_hears_once_when_the_sessions_in_its_tree_change_and_gets_thei
     );
     assert_eq!(notices.borrow().len(), 1);
     agent.before_request().await.unwrap();
-    assert_eq!(agent.messages.len(), 1, "nothing new while nothing changes");
+    assert_eq!(agent.messages.len(), 2, "nothing new while nothing changes");
 
     controls.peer_notes.borrow_mut().push_back(live::tell_note(
         "killi session 2",
@@ -629,7 +626,7 @@ async fn the_model_hears_once_when_the_sessions_in_its_tree_change_and_gets_thei
     drop(other);
     agent.before_request().await.unwrap();
     assert!(
-        agent.messages[1]["content"]
+        agent.messages[2]["content"]
             .as_str()
             .unwrap()
             .contains("<message>\npushed\n</message>")
@@ -1106,8 +1103,8 @@ async fn a_reply_ending_on_a_colon_is_asked_to_go_on_once() {
         .iter()
         .map(|m| m["role"].as_str().unwrap())
         .collect();
-    assert_eq!(roles, ["user", "assistant", "user", "assistant"]);
-    assert_eq!(agent.messages[2]["content"], UNFINISHED);
+    assert_eq!(roles, ["user", "user", "assistant", "user", "assistant"]);
+    assert_eq!(agent.messages[3]["content"], UNFINISHED);
     assert_eq!(notices.borrow().len(), 1);
 
     // A second colon ends the turn: it is asked once, not until it gives in.
@@ -1148,7 +1145,7 @@ async fn a_reply_announcing_a_next_step_is_asked_to_go_on_once() {
         (text.as_str(), stop),
         ("Search uses 101 MB.", Stop::Completed)
     );
-    assert_eq!(agent.messages[2]["content"], ANNOUNCED);
+    assert_eq!(agent.messages[3]["content"], ANNOUNCED);
     assert_eq!(notices.borrow().len(), 1);
 
     // One reminder per turn, whichever ending earned it.
@@ -1194,7 +1191,7 @@ async fn a_skill_turn_that_ends_before_any_tool_call_is_asked_to_go_on_once() {
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
     let (text, _) = agent.run(skill, &[]).await.unwrap();
     assert_eq!(text, "Opened #1.");
-    assert_eq!(agent.messages[2]["content"], UNSTARTED);
+    assert_eq!(agent.messages[3]["content"], UNSTARTED);
 
     // Once a tool ran, the skill has started and a short reply ends its turn.
     let call = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"todo_write\",\"arguments\":\"{\\\"todos\\\":[]}\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
@@ -1256,12 +1253,12 @@ async fn a_prompt_taken_back_before_any_reply_leaves_no_trace() {
     }
     assert_eq!(
         agent.messages.len(),
-        3,
+        4,
         "the prompt and its image were sent"
     );
 
     assert!(agent.retract().unwrap());
-    assert_eq!(agent.messages.len(), 1);
+    assert_eq!(agent.messages.len(), 2);
     assert!(agent.user_prompts().is_empty());
     assert_eq!(
         agent.next_notes,
@@ -1390,11 +1387,13 @@ async fn ultra_concise_mode_is_said_after_every_prompt_and_its_end_once() {
         .filter(|message| message["role"] == "user")
         .filter_map(|message| message["content"].as_str())
         .collect();
+    let model = model_note(&agent.client).unwrap();
     assert_eq!(
         said,
         [
             "first",
             verbosity::ON,
+            model.as_str(),
             "second",
             verbosity::ON,
             "third",
@@ -1403,6 +1402,37 @@ async fn ultra_concise_mode_is_said_after_every_prompt_and_its_end_once() {
         ]
     );
     assert_eq!(agent.user_prompts(), ["first", "second", "third", "fourth"]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_model_is_told_its_id_and_effort_once_and_again_when_they_change() {
+    let url = stub_replies((0..3).map(|_| sse("ok", "stop")).collect()).await;
+    let mut agent = idle_agent("model-note", Controls::default(), Rc::new(|_| {}));
+    let client = Rc::get_mut(&mut agent.client).unwrap();
+    client.model.base_url = url;
+    client.model.thinking = Thinking::Effort("high".into());
+    agent.run("first", &[]).await.unwrap();
+    agent.run("second", &[]).await.unwrap();
+    agent.set_thinking(Thinking::Effort("low".into())).unwrap();
+    agent.run("third", &[]).await.unwrap();
+    let said: Vec<&str> = agent
+        .messages
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .filter_map(|message| message["content"].as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [
+            "first",
+            "<system-reminder>Your model id is `test` and your thinking effort is `high`. Report exactly these when a skill asks for the model and effort.</system-reminder>",
+            "second",
+            "third",
+            "<system-reminder>Your model id is `test` and your thinking effort is `low`. Report exactly these when a skill asks for the model and effort.</system-reminder>",
+        ],
+        "{said:?}"
+    );
+    assert_eq!(last_model_state(&agent.messages).as_deref(), Some(said[4]));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1420,7 +1450,7 @@ async fn a_prompt_taken_back_takes_its_mode_reminder_with_it() {
         _ = agent.run("hello", &[]) => panic!("the stub never answers"),
         () = tokio::time::sleep(Duration::from_millis(200)) => {}
     }
-    assert_eq!(agent.messages.len(), 3);
+    assert_eq!(agent.messages.len(), 4);
     assert!(agent.retract().unwrap());
-    assert_eq!(agent.messages.len(), 1);
+    assert_eq!(agent.messages.len(), 2);
 }

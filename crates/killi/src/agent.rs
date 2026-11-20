@@ -58,7 +58,7 @@ use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
 use ending::{ends_with_question, interrupted_note, unfinished};
 use near::{NEAR_BASH_WARN_AT, NEAR_REPEAT_WARN_AT, near_key};
 use request::{is_media, is_overflow, provider_limit, reasoning_evidence};
-use types::{PartialSwarm, PendingPrompt, Repeat, last_plan_state, unanswered};
+use types::{PartialSwarm, PendingPrompt, Repeat, last_model_state, last_plan_state, model_note, unanswered};
 
 #[cfg(test)]
 use ask::question_args;
@@ -162,6 +162,9 @@ pub struct Agent {
     /// What the model was last told about the session goal: its text, or None when told
     /// the goal is over. Announced as an appended reminder, like plan and swarm mode.
     goal_announced: Option<String>,
+    /// The model id and thinking effort the model was last told about, as a reminder:
+    /// skills that report who reviewed a change get these values from it, not by guessing.
+    model_announced: Option<String>,
     /// The other sessions in this tree the model was last told about, by pid.
     peers_announced: Vec<u32>,
     interrupted: bool,

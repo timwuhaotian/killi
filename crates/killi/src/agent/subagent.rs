@@ -606,6 +606,7 @@ impl Agent {
             concise_announced: false,
             orchestrate_announced: false,
             goal_announced: None,
+            model_announced: self.model_announced.clone(),
             peers_announced: Vec::new(),
             interrupted: false,
             failed_on: None,

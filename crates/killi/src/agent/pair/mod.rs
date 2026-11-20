@@ -295,6 +295,7 @@ impl Agent {
             concise_announced: false,
             orchestrate_announced: false,
             goal_announced: None,
+            model_announced: None,
             peers_announced: Vec::new(),
             interrupted: false,
             failed_on: None,

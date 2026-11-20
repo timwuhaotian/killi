@@ -1267,7 +1267,7 @@ async fn compaction_runs_before_steered_messages_are_pushed() {
         .borrow_mut()
         .push_back(("meanwhile this".into(), Vec::new()));
     agent.before_request().await.unwrap();
-    assert_eq!(agent.messages.len(), 4);
+    assert_eq!(agent.messages.len(), 5);
     assert!(
         agent.messages[1]["content"]
             .as_str()
@@ -1387,7 +1387,7 @@ async fn a_resumed_session_ended_ultra_concise_hears_it_is_off_when_the_config_s
     assert!(agent.concise_announced, "the log ended ultra-concise");
     agent.before_request().await.unwrap();
     assert_eq!(
-        agent.messages.last().unwrap()["content"].as_str(),
+        agent.messages[agent.messages.len() - 2]["content"].as_str(),
         Some(verbosity::OFF)
     );
 }

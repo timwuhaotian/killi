@@ -337,6 +337,40 @@ pub(super) fn side_request(
     request
 }
 
+/// The reminder the model hears about which model it is and how hard it reasons: the exact
+/// API model id and the `/effort` label, the two values skills report. None before the
+/// session has a model, so an unconfigured start hears nothing.
+pub(super) fn model_note(client: &Client) -> Option<String> {
+    let model = &client.model;
+    if model.model.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "<system-reminder>Your model id is `{}` and your thinking effort is `{}`. Report exactly these when a skill asks for the model and effort.</system-reminder>",
+        model.model,
+        model.thinking.label()
+    ))
+}
+
+/// The prefix every model reminder starts with, so a resumed session can tell what it was
+/// last told instead of announcing the same values again.
+pub(super) const MODEL_NOTE_START: &str = "<system-reminder>Your model id is";
+
+/// What the log's last model reminder said, as the note itself: a resumed session keeps
+/// hearing the values it ended on.
+pub(super) fn last_model_state(messages: &[Value]) -> Option<String> {
+    messages
+        .iter()
+        .rev()
+        .filter(|message| message["role"] == "user")
+        .find_map(|message| {
+            message["content"]
+                .as_str()
+                .filter(|text| text.starts_with(MODEL_NOTE_START))
+                .map(String::from)
+        })
+}
+
 /// What the log's last plan reminder said, so a resumed session keeps hearing the mode it
 /// ended in instead of announcing a change on its first step.
 pub(super) fn last_plan_state(messages: &[Value]) -> bool {

@@ -107,6 +107,7 @@ impl Agent {
         let mut agent = Self::assemble(client, cwd, tools, settings, controls, sink, session);
         agent.backup = backup.map(Rc::new);
         agent.plan_announced = last_plan_state(&loaded.messages);
+        agent.model_announced = last_model_state(&loaded.messages);
         agent.concise_announced = crate::verbosity::last_concise_state(&loaded.messages);
         agent.orchestrate_announced = crate::mode::last_orchestrate_state(&loaded.messages);
         for message in &loaded.messages {
@@ -236,6 +237,7 @@ impl Agent {
             concise_announced: false,
             orchestrate_announced: false,
             goal_announced: None,
+            model_announced: None,
             peers_announced: Vec::new(),
             interrupted: false,
             failed_on: None,

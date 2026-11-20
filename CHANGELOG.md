@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.10 — 2026-11-20
+
+- The model is now told its API model id and thinking effort in one reminder on its first step
+  and again whenever they change (`/model`, `/effort`, a backup fallback, or after compaction),
+  so a skill that reports who did the work no longer has to guess and print `unknown` for the
+  model (and sometimes the effort). The reminder is appended like the mode notes, so the
+  system prompt and its cache are untouched; a resumed session keeps the values it ended on.
+
 ## 0.8.9 — 2026-11-20
 
 - A reply ending "… — now verifying the edge cases." (or "Then pushing.") is taken as an announced
