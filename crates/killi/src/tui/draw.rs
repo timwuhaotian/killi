@@ -142,10 +142,30 @@ impl App {
             .sum()
     }
 
+    /// The terminal title for hosts that read it (agent managers): the folder, the model and
+    /// whether killi is working. Written only when it changes.
+    fn sync_title(&self) {
+        let folder = self
+            .cwd
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let state = if self.busy.is_some() { "working" } else { "idle" };
+        let model = self.status.model.trim();
+        let title = match (folder.as_str(), model) {
+            ("", "") => format!("killi · {state}"),
+            ("", _) => format!("killi · {model} · {state}"),
+            (_, "") => format!("killi · {folder} · {state}"),
+            _ => format!("killi · {folder} · {model} · {state}"),
+        };
+        start::set_title(&title);
+    }
+
     /// Paints the live area, in one write inside a synchronized update so no half-drawn frame
     /// is ever shown. When only rows changed, as on a spinner tick, just those are rewritten;
     /// a committed line scrolls the area, so then it is painted whole.
     pub(super) fn draw(&mut self) -> Result<()> {
+        self.sync_title();
         self.sync_files();
         if self.fullscreen {
             return self.draw_screen();

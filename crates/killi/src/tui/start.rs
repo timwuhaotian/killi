@@ -102,6 +102,27 @@ fn parse_osc_color(reply: &str, code: u8) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
+/// The terminal's title as last set, so an unchanged repaint writes nothing.
+static TITLE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Sets the terminal's title (OSC 0) for hosts that read it: an agent manager's tabs and
+/// status dots. Control bytes are dropped so a model name or path can't close the sequence.
+/// The title of a title-less host is its own business; the escape is harmless elsewhere.
+pub(super) fn set_title(text: &str) {
+    let mut last = TITLE.lock().unwrap_or_else(|e| e.into_inner());
+    if last.as_deref() == Some(text) {
+        return;
+    }
+    *last = Some(text.to_string());
+    let text: String = text
+        .chars()
+        .filter(|c| !matches!(c, '\u{1b}' | '\u{7}' | '\n' | '\r'))
+        .collect();
+    let mut out = stdout();
+    let _ = write!(out, "\x1b]0;{text}\x07");
+    let _ = out.flush();
+}
+
 /// Whether the terminal is already gone: hung up, or a read gives back nothing or fails. A
 /// pty closed during startup would otherwise leave crossterm's reader spinning on EOF at 100%
 /// CPU, ignoring SIGHUP and SIGTERM while a blocking read holds the runtime's thread.

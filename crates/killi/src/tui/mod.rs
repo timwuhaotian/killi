@@ -159,6 +159,8 @@ pub struct Start {
     pub resume: Option<PathBuf>,
     /// Open the session picker first.
     pub pick_session: bool,
+    /// A prompt to send as the first turn, from `killi "<prompt>"`.
+    pub initial_prompt: Option<String>,
 }
 
 pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
@@ -250,6 +252,23 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     app.draw()?;
 
     let mut keys = EventStream::new();
+    // A caller (an agent manager) may have started killi with a prompt: send it as the first
+    // turn instead of waiting for a key. With no model configured yet, or when the session
+    // picker is open, it waits in the prompt instead.
+    if let Some(prompt) = start
+        .initial_prompt
+        .as_ref()
+        .filter(|p| !p.trim().is_empty())
+    {
+        if app.needs_provider || start.pick_session {
+            app.editor.insert(prompt);
+            app.draw()?;
+        } else {
+            let sent = mention::expand(&cwd, prompt);
+            prompt_turn(&mut app, &mut agent, &mut snapshots, &mut keys, &mut rx, prompt, &sent, &[])
+                .await?;
+        }
+    }
     loop {
         let Some(input) = app.read_input(&mut keys).await? else {
             // Ctrl+C twice or Ctrl+D on an empty prompt: leaving still waits for the goal.

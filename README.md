@@ -330,7 +330,12 @@ killi -c                     # continue the last session in this folder
 killi -r                     # pick an earlier session
 killi -p "fix the failing test in src/lib.rs"   # run one task and exit
 killi -p "..." --json        # one JSON summary: tokens, cache hits, time
+killi "fix the failing test"  # start a session and send this as the first turn
 ```
+
+Agent managers that launch killi (for example Orca, which detects a `killi` binary on the
+PATH and runs it in a terminal): a positional prompt starts the interactive session with that
+prompt already sent. The terminal title shows the folder, model and working/idle state.
 
 | Key | |
 |---|---|

@@ -45,6 +45,7 @@ killi — a minimal coding agent
 
 Usage:
   killi [-m <provider/model>]                  Start the interactive session
+  killi <prompt> [-m <model>] [-c]            Start interactive and send the first prompt
   killi -c | --continue                        Continue the latest session in this folder
   killi -r | --resume [<log>]                  Pick an earlier session (or open a log) and continue it
   killi -p <prompt> [-m <model>] [-c] [--json] Run one task, print the answer and exit
@@ -69,6 +70,9 @@ Config: ~/.killi/config.toml";
 #[derive(Default)]
 struct Options {
     prompt: Option<String>,
+    /// A prompt to send as the first turn of an interactive session, from a positional
+    /// argument or `--prompt`: what agent managers (Orca et al.) pass when they launch killi.
+    initial_prompt: Option<String>,
     model: Option<String>,
     json: bool,
     continue_last: bool,
@@ -138,7 +142,7 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
             let options = parse(args)?;
             // The first-run guides read stdin with the terminal's own Ctrl+C and end of
             // input, before the signal handlers below replace them.
-            if options.prompt.is_none() {
+            if options.prompt.is_none() && options.initial_prompt.is_none() {
                 config::start_if_missing()?;
                 login::chatgpt::offer(options.model.as_deref()).await?;
                 login::commandcode_offer(options.model.as_deref()).await?;
@@ -166,6 +170,7 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
                             model: options.model,
                             resume,
                             pick_session,
+                            initial_prompt: options.initial_prompt,
                         },
                     )
                     .await
@@ -264,6 +269,13 @@ fn parse(args: Vec<String>) -> Result<Options> {
                 )
             }
             "-m" | "--model" => options.model = args.next(),
+            "--prompt" => {
+                options.initial_prompt = Some(
+                    args.next()
+                        .filter(|p| !p.trim().is_empty())
+                        .ok_or_else(|| anyhow::anyhow!("--prompt needs a prompt"))?,
+                )
+            }
             "--json" => options.json = true,
             "-c" | "--continue" => options.continue_last = true,
             "-r" | "--resume" => {
@@ -272,8 +284,24 @@ fn parse(args: Vec<String>) -> Result<Options> {
                     .map(PathBuf::from);
                 options.resume = Some(path);
             }
+            other if !other.starts_with('-') => {
+                let word = other.trim();
+                if word.is_empty() {
+                    continue;
+                }
+                match &mut options.initial_prompt {
+                    Some(prompt) => {
+                        prompt.push(' ');
+                        prompt.push_str(word);
+                    }
+                    slot @ None => *slot = Some(word.to_string()),
+                }
+            }
             other => bail!("unknown argument `{other}`\n\n{USAGE}"),
         }
+    }
+    if options.prompt.is_some() && options.initial_prompt.is_some() {
+        bail!("use either -p or a positional prompt, not both\n\n{USAGE}");
     }
     Ok(options)
 }

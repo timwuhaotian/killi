@@ -5,6 +5,16 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.8 — 2026-11-20
+
+- `killi "<prompt>"` (or `--prompt`) starts the interactive session and sends the prompt as its
+  first turn, so agent managers that launch `killi` with a prompt — Orca detects the binary on the
+  PATH and runs it in a terminal — open straight into work instead of an empty prompt. It is the
+  interactive counterpart of `-p`, and the two are refused together.
+- The terminal title (OSC 0) now shows `killi · <folder> · <model> · working/idle`, updated only
+  when it changes and stripped of control bytes, so an agent manager's tabs and status read the
+  session's state without parsing its screen.
+
 ## 0.8.7 — 2026-11-20
 
 - The model on the banner and status line, and in `/model` / `/backup-model`, is now its

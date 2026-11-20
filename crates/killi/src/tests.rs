@@ -52,3 +52,26 @@ fn a_locked_log_counts_as_running_and_is_skipped_by_continue() {
     );
     assert_eq!(newest_available(Vec::new()), None);
 }
+
+#[test]
+fn a_positional_prompt_starts_an_interactive_session_with_that_first_turn() {
+    let options = parse(vec!["fix the bug".to_string()]).unwrap();
+    assert_eq!(options.initial_prompt.as_deref(), Some("fix the bug"));
+    assert_eq!(options.prompt, None);
+    let options = parse(vec![
+        "-m".to_string(),
+        "openai/gpt".to_string(),
+        "part".to_string(),
+        "one".to_string(),
+    ])
+    .unwrap();
+    assert_eq!(options.initial_prompt.as_deref(), Some("part one"));
+    assert_eq!(options.model.as_deref(), Some("openai/gpt"));
+    let options = parse(vec!["--prompt".to_string(), "hello".to_string()]).unwrap();
+    assert_eq!(options.initial_prompt.as_deref(), Some("hello"));
+}
+
+#[test]
+fn a_one_shot_and_an_interactive_prompt_are_not_both_accepted() {
+    assert!(parse(vec!["-p".to_string(), "once".to_string(), "interactive".to_string()]).is_err());
+}
