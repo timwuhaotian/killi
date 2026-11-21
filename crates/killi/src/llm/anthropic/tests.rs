@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn signature_retry_omits_only_the_named_block() {
+    let request = json!({"messages": [{"role": "assistant", "content": [
+        {"type": "thinking", "signature": "bad"},
+        {"type": "thinking", "signature": "keep"},
+        {"type": "text", "text": "answer"}
+    ]}]});
+    let mut body = serde_json::to_vec(&request).unwrap();
+    assert!(!omit_rejected_thinking(
+        &mut body,
+        "messages.0.content.2: Invalid `signature` in `thinking` block",
+    ));
+    assert!(omit_rejected_thinking(
+        &mut body,
+        "messages.0.content.0: Invalid `signature` in `thinking` block",
+    ));
+    let retry: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(retry["messages"][0]["content"], json!([
+        request["messages"][0]["content"][1],
+        request["messages"][0]["content"][2]
+    ]));
+}
+
+#[test]
 fn claude_versions_pick_thinking_and_limits() {
     let opus = ClaudeVersion::parse("claude-opus-5-5").unwrap();
     assert!(!opus.budget_thinking());

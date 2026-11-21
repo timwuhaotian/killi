@@ -97,6 +97,7 @@ impl Agent {
             &reply.usage,
             Some(&reply.finish_reason),
             Some(took),
+            seen.get(),
             reply.reasoning_kept(),
             reasoning_evidence(&reply),
         )?;
@@ -190,6 +191,7 @@ impl Agent {
         usage: &Usage,
         finish_reason: Option<&Option<String>>,
         took: Option<Duration>,
+        first_token: Option<Duration>,
         reasoning_kept: bool,
         reasoning_seen: Option<Value>,
     ) -> Result<()> {
@@ -212,6 +214,7 @@ impl Agent {
             "reasoning_kept": reasoning_kept,
             "finish_reason": finish_reason.cloned().flatten(),
             "ms": took.map(millis),
+            "first_token_ms": first_token.map(millis),
         });
         if let Some(seen) = reasoning_seen {
             record["reasoning_seen"] = seen;

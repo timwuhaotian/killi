@@ -5,6 +5,13 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.11 — 2026-11-20
+
+- An Anthropic Messages request rejected for one named thinking signature retries once without
+  that block in the retry payload; the saved conversation stays intact.
+- Session usage records include time to first output; `scripts/sessions.py` reports it when present.
+- `scripts/probe.py` explains why a provider without an API key cannot be probed instead of crashing.
+
 ## 0.8.10 — 2026-11-20
 
 - The model is now told its API model id and thinking effort in one reminder on its first step

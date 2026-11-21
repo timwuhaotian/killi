@@ -366,6 +366,39 @@ fn test_model(base_url: &str) -> ResolvedModel {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn a_named_thinking_signature_rejection_is_retried_once() {
+    let rejection = concat!(
+        "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n",
+        "{\"error\":{\"message\":\"messages.1.content.0: Invalid `signature` in `thinking` block\"}}"
+    );
+    let (url, arrivals) = serve(vec![rejection.into(), rejection.into()]).await;
+    let mut model = test_model(&url);
+    model.protocol = Protocol::Anthropic;
+    let client = Client::new(model).unwrap();
+    let history = serde_json::json!([
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi", "reasoning_items": [
+            {"type": "thinking", "thinking": "hello", "signature": "sig"}
+        ]},
+        {"role": "user", "content": "continue"}
+    ]);
+    let mut retries = 0;
+    let error = client
+        .complete(history.as_array().unwrap(), &[], "test", &mut |delta| {
+            if let Delta::Retry { wait, .. } = delta {
+                assert_eq!(wait, Duration::ZERO);
+                retries += 1;
+            }
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.downcast_ref::<ProviderError>().unwrap().attempts, 2);
+    assert_eq!(arrivals.lock().unwrap().len(), 2);
+    assert_eq!(retries, 1);
+    assert_eq!(history[1]["reasoning_items"][0]["signature"], "sig");
+}
+
 fn sse_ok() -> String {
     "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
          data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n\

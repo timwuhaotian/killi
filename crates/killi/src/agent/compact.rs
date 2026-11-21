@@ -117,6 +117,7 @@ impl Agent {
             &reply.usage,
             None,
             None,
+            None,
             reply.reasoning_kept(),
             reasoning_evidence(&reply),
         )?;

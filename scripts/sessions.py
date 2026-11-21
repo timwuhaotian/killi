@@ -80,7 +80,8 @@ def analyze(path, child=False):
     `children`; a child is named `<session id>/agent-N` under its session's project."""
     s = {"path": str(path), "project": path.parent.name, "id": path.stem, "models": [], "turns": 0, "prompt": 0,
          "cached": 0, "completion": 0, "max_context": 0, "tools": collections.Counter(), "tool_errors": 0, "version": None,
-         "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [],
+         "repeats": collections.Counter(), "errors": [], "warns": [], "prompts": 0, "ended": "", "request_ms": [], "first_ms": [],
+         "model_first": collections.defaultdict(list),
          "tool_ms": [], "slept": [0, 0], "compactions": [], "per_model": collections.defaultdict(lambda: collections.Counter()),
          "active": [], "peer_git": [], "peer_refusals": 0, "miss_streak": [], "retries": [], "aborts": []}
     model, awaiting, calls, answered, sleeping, peers = None, None, {}, set(), set(), False
@@ -163,6 +164,10 @@ def analyze(path, child=False):
             if entry.get("ms") is not None:
                 s["request_ms"].append(entry["ms"])
             current = entry.get("model") or model or "unknown"
+            # Elapsed to the first output delta, including any waits before it.
+            if entry.get("first_token_ms") is not None:
+                s["first_ms"].append(entry["first_token_ms"])
+                s["model_first"][current].append(entry["first_token_ms"])
             stats = s["per_model"][current]
             stats["turns"] += 1
             stats["prompt"] += entry.get("prompt", 0)
@@ -362,11 +367,14 @@ def main():
     sessions = [analyze(p) for p in logs]
     sessions = [s for s in sessions if s["turns"] and s["started"] >= args.since]
     models = collections.defaultdict(collections.Counter)
+    models_first = collections.defaultdict(list)
     versions_of = collections.defaultdict(set)
     for s in with_children(sessions):
         for model, stats in s["per_model"].items():
             models[model].update(stats)
             versions_of[model].add(s["version"] or "?")
+        for model, firsts in s["model_first"].items():
+            models_first[model].extend(firsts)
     if args.json:
         print(json.dumps({"sessions": sessions, "models": models, "findings": findings(sessions, models, versions_of)}, indent=1))
         return
@@ -377,8 +385,9 @@ def main():
                   f"{s['max_context']:,}", f"{s['completion']:,}", s["prompts"], s["ended"], children_cell(s)) for s in sessions]))
     print("\nThe session columns count its own requests; `subagents` counts the requests of its subagents and tasks.")
     print("\n## By model (subagents included)\n")
-    print(table(["model", "turns", "cached", "reasoning billed", "…and kept"],
-                [(m, c["turns"], pct(c["cached"], c["prompt"]), c["billed_reasoning"], c["billed_reasoning"] - c["reasoning_lost"])
+    print(table(["model", "turns", "cached", "reasoning billed", "…and kept", "median first token"],
+                [(m, c["turns"], pct(c["cached"], c["prompt"]), c["billed_reasoning"], c["billed_reasoning"] - c["reasoning_lost"],
+                  f"{statistics.median(models_first[m]) / 1000:.1f} s" if models_first.get(m) else "–")
                  for m, c in sorted(models.items(), key=lambda kv: -kv[1]["turns"])]))
     by_version = collections.defaultdict(lambda: [0, 0, 0])
     for s in sessions:
@@ -400,7 +409,11 @@ def main():
     requests = [ms for s in with_children(sessions) for ms in s["request_ms"]]
     runs = sorted((ms, name) for s in with_children(sessions) for ms, name in s["tool_ms"])
     if requests:
-        print(f"\n## Time\n\nRequests: median {statistics.median(requests) / 1000:.1f} s, slowest {max(requests) / 1000:.1f} s over {len(requests)}.")
+        firsts = [ms for s in with_children(sessions) for ms in s["first_ms"]]
+        line = f"\n## Time\n\nRequests: median {statistics.median(requests) / 1000:.1f} s, slowest {max(requests) / 1000:.1f} s over {len(requests)}."
+        if firsts:
+            line += f" First token: median {statistics.median(firsts) / 1000:.1f} s, slowest {max(firsts) / 1000:.1f} s over {len(firsts)} measured requests."
+        print(line)
     if runs:
         print("Slowest tool calls: " + ", ".join(f"{name} {ms / 1000:.1f} s" for ms, name in runs[-5:][::-1]))
     if not requests and not runs:

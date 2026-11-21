@@ -300,6 +300,7 @@ impl Client {
         }
         let mut attempt = 1;
         let mut renewed = false;
+        let mut retried_signature = false;
         let mut burns = 0;
         let mut mine = None;
         let mut waited = Duration::ZERO;
@@ -310,6 +311,22 @@ impl Client {
                 Ok(reply) => return Ok(reply),
                 Err(failure) => failure,
             };
+            if !retried_signature
+                && attempt < HARD_ATTEMPTS
+                && self.model.protocol == Protocol::Anthropic
+                && failure.status == Some(400)
+                && failure.message.contains("Invalid `signature` in `thinking` block")
+                && anthropic::omit_rejected_thinking(&mut prepared.body, &failure.message)
+            {
+                retried_signature = true;
+                on_delta(Delta::Retry {
+                    attempt,
+                    wait: Duration::ZERO,
+                    reason: &failure.message,
+                });
+                attempt += 1;
+                continue;
+            }
             if self.answered.get() && failure.kind == ErrorKind::Transport {
                 failure.max_attempts = None;
             }

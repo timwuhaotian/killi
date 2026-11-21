@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn a_settled_request_accounts_its_first_token() {
+    let mut agent = idle_agent("usage-first-token", Controls::default(), Rc::new(|_| {}));
+    agent
+        .account(
+            &Usage::default(),
+            None,
+            Some(Duration::from_millis(9000)),
+            Some(Duration::from_millis(8000)),
+            true,
+            None,
+        )
+        .unwrap();
+    let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
+    assert!(
+        log.contains("\"first_token_ms\":8000"),
+        "beside the request's own ms: {log}"
+    );
+}
+
+#[test]
 fn reasoning_that_was_billed_but_never_sent_is_noticed() {
     let mut reply = Reply::default();
     assert!(!hides_reasoning(&reply));
@@ -84,6 +104,7 @@ fn hidden_reasoning_is_recorded_with_evidence_and_worded_by_case() {
             &reply.usage,
             None,
             None,
+            None,
             reply.reasoning_kept(),
             reasoning_evidence(&reply),
         )
@@ -110,6 +131,7 @@ fn hidden_reasoning_is_recorded_with_evidence_and_worded_by_case() {
     agent
         .account(
             &reply.usage,
+            None,
             None,
             None,
             reply.reasoning_kept(),
@@ -139,6 +161,7 @@ fn hidden_reasoning_is_recorded_with_evidence_and_worded_by_case() {
     agent
         .account(
             &reply.usage,
+            None,
             None,
             None,
             reply.reasoning_kept(),

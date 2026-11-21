@@ -40,7 +40,15 @@ def provider_of(config, alias):
     kind = model.get("protocol") or provider["type"]
     if kind == "anthropic":
         raise SystemExit(f"{alias} uses the Anthropic API; killi already handles its caching and thinking")
-    key = os.environ[provider["api_key_env"]] if provider.get("api_key_env") else provider["api_key"]
+    if provider.get("api_key_env"):
+        key = os.environ.get(provider["api_key_env"])
+        if key is None:
+            raise SystemExit(f"{alias}'s provider keeps its key in ${provider['api_key_env']}, which isn't set")
+    elif "api_key" in provider:
+        key = provider["api_key"]
+    else:
+        raise SystemExit(f"{alias}'s provider has no api_key or api_key_env in config.toml (it signs in another way,"
+                         " e.g. a subscription); the probe needs a key-bearing provider")
     base = provider.get("base_url", "https://api.openai.com/v1").rstrip("/")
     headers = {"authorization": "Bearer " + key, "content-type": "application/json", **provider.get("custom_headers", {})}
     return model["model"], kind, base, headers

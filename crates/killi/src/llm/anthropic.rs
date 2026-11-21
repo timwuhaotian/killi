@@ -59,6 +59,34 @@ pub(super) fn prepare(
     })
 }
 
+/// Removes only the block named by a signature rejection, from the retry body alone.
+pub(super) fn omit_rejected_thinking(body: &mut Vec<u8>, error: &str) -> bool {
+    fn retry_body(body: &[u8], error: &str) -> Option<Vec<u8>> {
+        let (path, _) = error.split_once(": Invalid `signature` in `thinking` block")?;
+        let (message, block) = path.rsplit_once("messages.")?.1.split_once(".content.")?;
+        let message = message.parse::<usize>().ok()?;
+        let block = block.parse::<usize>().ok()?;
+        let mut request: Value = serde_json::from_slice(body).ok()?;
+        let messages = request["messages"].as_array_mut()?;
+        let entry = messages.get_mut(message)?;
+        if entry["role"] != "assistant" {
+            return None;
+        }
+        let content = entry["content"].as_array_mut()?;
+        if content.len() < 2 || content.get(block)?["type"] != "thinking" {
+            return None;
+        }
+        content.remove(block);
+        serde_json::to_vec(&request).ok()
+    }
+    if let Some(retry) = retry_body(body, error) {
+        *body = retry;
+        true
+    } else {
+        false
+    }
+}
+
 /// Recognizes Claude model names, whose thinking rules differ from compatible providers'.
 #[derive(Debug, Clone, Copy)]
 struct ClaudeVersion {
