@@ -298,8 +298,7 @@ impl Agent {
             self.goal_announced = goal;
             self.push(json!({"role": "user", "content": note}))?;
         }
-        if self.depth == 0
-            && let Some(note) = model_note(&self.client)
+        if let Some(note) = model_note(&self.client)
             && self.model_announced.as_deref() != Some(&note)
         {
             self.model_announced = Some(note.clone());

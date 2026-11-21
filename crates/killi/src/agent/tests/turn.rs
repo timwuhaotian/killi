@@ -507,6 +507,31 @@ async fn the_model_hears_the_session_goal_until_it_ends() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_subagent_is_told_its_model_and_effort() {
+    let url = stub_replies(vec![sse("ok", "stop")]).await;
+    let mut parent = idle_agent("child-model-note", Controls::default(), Rc::new(|_| {}));
+    let client = Rc::get_mut(&mut parent.client).unwrap();
+    client.model.base_url = url;
+    client.model.thinking = Thinking::Effort("high".into());
+    parent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let mut child = parent.subagent("child", None, false, &Default::default()).unwrap();
+    child.run("review it", &[]).await.unwrap();
+    let said: Vec<&str> = child
+        .messages
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .filter_map(|message| message["content"].as_str())
+        .collect();
+    assert!(
+        said.iter().any(|text| text.contains("Your model id is `test`")
+            && text.contains("thinking effort is `high`")),
+        "{said:?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_subagent_cannot_delegate_and_is_told_how_to_continue() {
     let mut parent = idle_agent("child-delegation", Controls::default(), Rc::new(|_| {}));
     parent
@@ -559,10 +584,16 @@ async fn a_subagent_leaves_finished_tasks_for_its_parent_to_report() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     let mut child = agent.subagent("child", None, false, &Default::default()).unwrap();
     child.before_request().await.unwrap();
-    assert_eq!(
-        child.messages.len(),
-        1,
-        "a subagent hears nothing about background tasks"
+    assert!(
+        child.messages.len() == 2
+            && !child
+                .messages
+                .iter()
+                .any(|message| message["content"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Background task"))),
+        "a subagent hears nothing about background tasks: {:?}",
+        child.messages
     );
     agent.before_request().await.unwrap();
     let reported = agent.messages.last().unwrap()["content"].as_str().unwrap();
@@ -637,10 +668,13 @@ async fn the_model_hears_once_when_the_sessions_in_its_tree_change_and_gets_thei
     let mut child = agent.subagent("child", None, false, &Default::default()).unwrap();
     let _again = live::Registration::open_in(&dir, entry(4, "/w")).unwrap();
     child.before_request().await.unwrap();
-    assert_eq!(
-        child.messages.len(),
-        1,
-        "a subagent is never told: only its system prompt"
+    assert!(
+        child.messages.len() == 2
+            && !child.messages.iter().any(|message| message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("<message>"))),
+        "a subagent is never told about other sessions: {:?}",
+        child.messages
     );
 }
 
@@ -1425,10 +1459,10 @@ async fn the_model_is_told_its_id_and_effort_once_and_again_when_they_change() {
         said,
         [
             "first",
-            "<system-reminder>Your model id is `test` and your thinking effort is `high`. Report exactly these when a skill asks for the model and effort.</system-reminder>",
+            "<system-reminder>Your model id is `test` (display name `test`) and your thinking effort is `high`. Report exactly these when a skill asks for the model and effort.</system-reminder>",
             "second",
             "third",
-            "<system-reminder>Your model id is `test` and your thinking effort is `low`. Report exactly these when a skill asks for the model and effort.</system-reminder>",
+            "<system-reminder>Your model id is `test` (display name `test`) and your thinking effort is `low`. Report exactly these when a skill asks for the model and effort.</system-reminder>",
         ],
         "{said:?}"
     );

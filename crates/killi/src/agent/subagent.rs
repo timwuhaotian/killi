@@ -537,6 +537,11 @@ impl Agent {
             agent.push(json!({"role": "user", "content": plan::ON}))?;
             agent.plan_announced = true;
         }
+        if !fork {
+            // A child that starts from the system prompt alone has never heard which model
+            // and effort it runs on, so it says them itself on its first step.
+            agent.model_announced = None;
+        }
         Ok(agent)
     }
 

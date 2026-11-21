@@ -5,6 +5,14 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.12 — 2026-11-21
+
+- A subagent is told which model and effort it runs on, like the session that spawned it: the
+  model reminder is no longer kept to the top level, so a review (or any skill) that runs in a
+  subagent — the `pr-review-all` fan-out, for one — knows what to report instead of printing
+  the runner's name and `unknown` for the effort. The reminder also names the model's display
+  name, so a footer can show it rather than an API id.
+
 ## 0.8.11 — 2026-11-20
 
 - An Anthropic Messages request rejected for one named thinking signature retries once without

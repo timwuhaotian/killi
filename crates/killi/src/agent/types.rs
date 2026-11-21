@@ -345,9 +345,19 @@ pub(super) fn model_note(client: &Client) -> Option<String> {
     if model.model.is_empty() {
         return None;
     }
+    let display = model
+        .display_name
+        .as_deref()
+        .unwrap_or(model.alias.as_str());
+    let display = if display.is_empty() {
+        model.model.as_str()
+    } else {
+        display
+    };
     Some(format!(
-        "<system-reminder>Your model id is `{}` and your thinking effort is `{}`. Report exactly these when a skill asks for the model and effort.</system-reminder>",
+        "<system-reminder>Your model id is `{}` (display name `{}`) and your thinking effort is `{}`. Report exactly these when a skill asks for the model and effort.</system-reminder>",
         model.model,
+        display,
         model.thinking.label()
     ))
 }
