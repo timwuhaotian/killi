@@ -111,7 +111,7 @@ async fn install_with(
         .with_context(|| format!("could not write {}", staging.display()))?;
     let (sha256, version) = (sha256.to_string(), version.to_string());
     let (staged, target) = (staging.clone(), exe.clone());
-    // Checking runs `shasum` and the staged binary: off the runtime's thread, so a session's
+    // Checking hashes the staged binary and runs it: off the runtime's thread, so a session's
     // screen keeps answering while it does.
     let result = tokio::task::spawn_blocking(move || {
         verify_and_install(&staged, &sha256, &version, &target)
@@ -339,14 +339,10 @@ fn verify_and_install(
     version: &str,
     exe: &std::path::Path,
 ) -> Result<()> {
-    let output = Command::new("shasum")
-        .arg("-a")
-        .arg("256")
-        .arg(staging)
-        .output()
-        .or_else(|_| Command::new("sha256sum").arg(staging).output())?;
-    let actual = String::from_utf8_lossy(&output.stdout);
-    let actual = actual.split_whitespace().next().unwrap_or_default();
+    let bytes = fs::read(staging)
+        .with_context(|| format!("could not read {}", staging.display()))?;
+    let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
+    let actual: String = digest.as_ref().iter().map(|byte| format!("{byte:02x}")).collect();
     if !actual.eq_ignore_ascii_case(sha256) {
         bail!("checksum mismatch: expected {sha256}, downloaded {actual}");
     }

@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.13 — 2026-11-21
+
+- `killi update` no longer depends on `shasum`/`sha256sum` being present and working: the downloaded binary is hashed in-process, so an update on a minimal Linux install (where a broken `shasum` made the checksum come back empty) now completes. `install.sh` falls back through `openssl` and `python3` and says which tool is missing.
+
 ## 0.8.12 — 2026-11-21
 
 - A subagent is told which model and effort it runs on, like the session that spawned it: the

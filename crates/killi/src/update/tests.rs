@@ -160,6 +160,25 @@ async fn a_newer_release_comes_with_the_changelog_above_the_releases_folder() {
 }
 
 #[test]
+fn a_wrong_checksum_names_the_downloaded_hash() {
+    let tmp = crate::test_temp::TempDir::new("killi-update-checksum");
+    let staging = tmp.join("staged");
+    let target = tmp.join("killi");
+    std::fs::write(&staging, "abc").unwrap();
+    let err = super::verify_and_install(&staging, "00", "9.9.9", &target)
+        .unwrap_err()
+        .to_string();
+    // SHA-256 of "abc": the downloaded side is the file's hash, never empty.
+    assert!(
+        err.contains("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+            && err.contains("expected 00"),
+        "{err}"
+    );
+    assert!(!target.exists());
+    assert!(staging.exists(), "a refused install leaves the staged file to the caller");
+}
+
+#[test]
 fn versions_compare_numerically() {
     assert!(super::parse("0.10.0") > super::parse("0.9.3"));
     assert!(super::parse("0.1.0") == super::parse("0.1.0"));

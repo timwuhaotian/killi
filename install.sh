@@ -23,8 +23,14 @@ if [ "$binary" = "killi-arm64" ] && [ -z "$expected" ]; then
 fi
 if command -v shasum >/dev/null 2>&1; then
   actual=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
-else
+elif command -v sha256sum >/dev/null 2>&1; then
   actual=$(sha256sum "$tmp" | cut -d' ' -f1)
+elif command -v openssl >/dev/null 2>&1; then
+  actual=$(openssl dgst -sha256 "$tmp" | sed 's/.*= //')
+elif command -v python3 >/dev/null 2>&1; then
+  actual=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmp")
+else
+  echo "no sha256 tool found (need shasum, sha256sum, openssl or python3); not installing" >&2; exit 1
 fi
 [ -n "$expected" ] && [ "$expected" = "$actual" ] || { echo "checksum mismatch; not installing" >&2; exit 1; }
 
