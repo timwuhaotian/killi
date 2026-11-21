@@ -137,7 +137,7 @@ pub(super) const COMMANDS: &[Command] = &[
         name: "web-search-config",
         aliases: &[],
         args: "",
-        about: "Set what web_search asks: brave, tavily or your own searxng",
+        about: "Set what web_search asks: brave, tavily, keenable or your own searxng",
     },
     Command {
         name: "effort",

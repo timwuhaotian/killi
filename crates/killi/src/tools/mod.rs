@@ -25,7 +25,7 @@ pub const MAX_BYTES: usize = 50 * 1024;
 /// Which service `web_search` asks, from `[search]` in the config.
 #[derive(Clone, Default)]
 pub struct SearchSettings {
-    /// "brave" (the default), "tavily" or "searxng".
+    /// "brave" (the default), "tavily", "keenable" or "searxng".
     pub provider: String,
     pub api_key: Option<String>,
     /// The SearXNG instance; only "searxng" reads it.

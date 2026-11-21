@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- `web_search` can ask Keenable: `provider = "keenable"` under `[search]`, or pick it in `/web-search-config`. Without a key it uses Keenable's public endpoint (rate limited per IP); with `api_key` or `api_key_env` it uses the keyed endpoint. Brave stays the default, and the fallback chain after the provider is unchanged.
+
 ## 0.8.13 — 2026-11-21
 
 - `killi update` no longer depends on `shasum`/`sha256sum` being present and working: the downloaded binary is hashed in-process, so an update on a minimal Linux install (where a broken `shasum` made the checksum come back empty) now completes. `install.sh` falls back through `openssl` and `python3` and says which tool is missing.

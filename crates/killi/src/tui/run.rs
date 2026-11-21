@@ -356,7 +356,7 @@ pub(super) async fn handle_command(
         "web-search-config" if arg.is_empty() => app.open_search_picker(session.config()),
         "web-search-config" => {
             let provider = arg.to_lowercase();
-            if ["brave", "tavily", "searxng"].contains(&provider.as_str()) {
+            if ["brave", "tavily", "keenable", "searxng"].contains(&provider.as_str()) {
                 app.search = Some(SearchFlow {
                     provider: None,
                     docker: None,
@@ -365,7 +365,9 @@ pub(super) async fn handle_command(
                 });
                 app.search_pick(&provider);
             } else {
-                app.error("Pick brave, tavily or searxng; /web-search-config alone lists them.");
+                app.error(
+                    "Pick brave, tavily, keenable or searxng; /web-search-config alone lists them.",
+                );
             }
         }
         "model" if arg.is_empty() => app.open_model_picker(session.config(), false),

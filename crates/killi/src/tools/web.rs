@@ -31,7 +31,7 @@ use fetch::{fetch_error, raw_github, shown};
 #[cfg(test)]
 use readable::readable;
 #[cfg(test)]
-use search::{Source, brave_page, hits, retryable, search, search_chain, sources};
+use search::{Source, brave_page, hits, keenable, retryable, search, search_chain, sources};
 
 const MAX_DOWNLOAD: usize = 10 * 1024 * 1024;
 /// Readable text shorter than this suggests a page built by JavaScript.
