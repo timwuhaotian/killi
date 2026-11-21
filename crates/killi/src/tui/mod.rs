@@ -580,6 +580,9 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                             ("brave", _, false) => {
                                 "Brave, reading its public results page".to_string()
                             }
+                            ("keenable", _, false) => {
+                                "Keenable, on its public endpoint".to_string()
+                            }
                             (other, _, true) => format!("{other}, with an API key"),
                             (other, _, false) => other.to_string(),
                         };

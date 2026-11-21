@@ -502,7 +502,7 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
 - **Web:** `web_search` finds pages and `fetch_url` reads them. Without setup, search reads
   Brave's public results page, which can turn automated requests away. `/web-search-config`
   asks for the service and what it needs, writes `[search]` and applies it at once; by hand
-  (`provider` is `"brave"`, `"tavily"` or `"searxng"`):
+  (`provider` is `"brave"`, `"tavily"`, `"keenable"` or `"searxng"`):
 
   ```toml
   [search]
@@ -517,6 +517,14 @@ most three between two prompts. `[agent] peers = false` keeps a session to itsel
   [search]
   provider = "searxng"
   url = "http://localhost:8888"
+  ```
+
+  `"keenable"` works with no key (its public endpoint, rate limited per IP) or with one:
+
+  ```toml
+  [search]
+  provider = "keenable"
+  api_key_env = "KEENABLE_API_KEY"   # optional
   ```
 
   `fetch_url` also renders pages that need JavaScript, takes screenshots of them (`screenshot`,

@@ -317,14 +317,19 @@ fn search_options_list_the_services_and_mark_the_one_in_use() {
             .collect::<Vec<_>>()
     };
     let options = search_options(&crate::config::SearchConfig::default());
-    assert_eq!(names(&options), ["brave", "tavily", "searxng"]);
+    assert_eq!(names(&options), ["brave", "tavily", "keenable", "searxng"]);
     assert!(options[0].1.contains("in use"));
     let searxng = crate::config::SearchConfig {
         provider: Some("searxng".into()),
         ..Default::default()
     };
-    assert!(search_options(&searxng)[2].1.contains("in use"));
+    assert!(search_options(&searxng)[3].1.contains("in use"));
     assert!(!search_options(&searxng)[0].1.contains("in use"));
+    let keenable = crate::config::SearchConfig {
+        provider: Some("keenable".into()),
+        ..Default::default()
+    };
+    assert!(search_options(&keenable)[2].1.contains("in use"));
 }
 
 #[test]

@@ -54,6 +54,8 @@ pub(super) struct Hit {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Source {
     Tavily(String),
+    /// Keenable: with a key its keyed endpoint, without one its public endpoint.
+    Keenable(Option<String>),
     BraveApi(String),
     BravePage,
     Searxng { base: String, key: Option<String> },
@@ -63,6 +65,7 @@ impl Source {
     fn name(&self) -> &'static str {
         match self {
             Source::Tavily(_) => "Tavily",
+            Source::Keenable(_) => "Keenable",
             Source::BraveApi(_) | Source::BravePage => "Brave",
             Source::Searxng { .. } => "SearXNG",
         }
@@ -91,6 +94,7 @@ pub(super) fn sources(settings: &SearchSettings) -> Result<Vec<Source>, String> 
         ("tavily", None, _) => {
             return Err("web_search with Tavily needs an API key: set `api_key` or `api_key_env` under [search].".into())
         }
+        ("keenable", key, _) => Source::Keenable(key.map(str::to_string)),
         ("brave", Some(key), _) => Source::BraveApi(key.to_string()),
         ("brave", None, _) => Source::BravePage,
         ("searxng", _, Some(base)) => Source::Searxng { base: base.to_string(), key: key.map(str::to_string) },
@@ -98,7 +102,7 @@ pub(super) fn sources(settings: &SearchSettings) -> Result<Vec<Source>, String> 
             return Err("web_search with SearXNG needs the instance: set `url` under [search].".into())
         }
         (other, _, _) => {
-            return Err(format!("Unknown search provider `{other}`; use \"brave\", \"tavily\" or \"searxng\"."))
+            return Err(format!("Unknown search provider `{other}`; use \"brave\", \"tavily\", \"keenable\" or \"searxng\"."))
         }
     };
     let mut chain = vec![primary];
@@ -184,6 +188,7 @@ async fn search_once(
             let json = json_reply(reply, "Tavily").await?;
             Ok(hits(&json["results"], "title", "url", "content", limit))
         }
+        Source::Keenable(key) => keenable(client, KEENABLE_API, key.as_deref(), query, limit).await,
         Source::BraveApi(key) => {
             let reply = client
                 .get("https://api.search.brave.com/res/v1/web/search")
@@ -240,6 +245,41 @@ async fn search_once(
             Ok(hits(&json["results"], "title", "url", "content", limit))
         }
     }
+}
+
+const KEENABLE_API: &str = "https://api.keenable.ai";
+
+/// Keenable's search API under `base`: `/v1/search` with the key in `X-API-Key`, or
+/// `/v1/search/public` without one, which needs the `X-Keenable-Title` header and is
+/// rate limited per IP. Cards (answers Keenable writes at short-lived URLs) are left out.
+pub(super) async fn keenable(
+    client: &reqwest::Client,
+    base: &str,
+    key: Option<&str>,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<Hit>, String> {
+    let path = if key.is_some() {
+        "v1/search"
+    } else {
+        "v1/search/public"
+    };
+    let body = serde_json::json!({
+        "query": query,
+        "max_results": limit,
+        "snippet_max_length": 400,
+        "disable_cards": true,
+    });
+    let mut request = client
+        .post(format!("{}/{path}", base.trim_end_matches('/')))
+        .header("content-type", "application/json")
+        .header("X-Keenable-Title", "killi")
+        .body(body.to_string());
+    if let Some(key) = key {
+        request = request.header("X-API-Key", key);
+    }
+    let json = json_reply(request.send().await, "Keenable").await?;
+    Ok(hits(&json["results"], "title", "url", "snippet", limit))
 }
 
 async fn json_reply(reply: reqwest::Result<reqwest::Response>, who: &str) -> Result<Value, String> {

@@ -556,3 +556,82 @@ async fn an_instance_that_never_answers_times_out() {
     .unwrap_err();
     assert!(err.contains("never answered"), "{err}");
 }
+
+/// Serves one JSON `body` and sends back the request it read.
+async fn serve_capturing(body: &'static str) -> (String, tokio::sync::oneshot::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap_or(0);
+        let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+        let head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n";
+        let _ = socket.write_all(head.as_bytes()).await;
+        let _ = socket.write_all(body.as_bytes()).await;
+    });
+    (url, rx)
+}
+
+const KEENABLE_BODY: &str = r#"{"results":[{"title":"A","url":"https://a.test","snippet":"about a","description":""},{"title":"no url"}]}"#;
+
+#[tokio::test(flavor = "current_thread")]
+async fn keenable_without_a_key_asks_the_public_endpoint() {
+    let (base, request) = serve_capturing(KEENABLE_BODY).await;
+    let client = reqwest::Client::new();
+    let found = super::keenable(&client, &base, None, "a", 5).await.unwrap();
+    assert_eq!(
+        (
+            found.len(),
+            found[0].title.as_str(),
+            found[0].snippet.as_str()
+        ),
+        (1, "A", "about a")
+    );
+    let request = request.await.unwrap().to_ascii_lowercase();
+    assert!(request.starts_with("post /v1/search/public "), "{request}");
+    assert!(request.contains("x-keenable-title: killi"), "{request}");
+    assert!(!request.contains("x-api-key"), "{request}");
+    assert!(request.contains(r#""disable_cards":true"#), "{request}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn keenable_with_a_key_asks_the_keyed_endpoint() {
+    let (base, request) = serve_capturing(KEENABLE_BODY).await;
+    let client = reqwest::Client::new();
+    super::keenable(&client, &base, Some("k"), "a", 5)
+        .await
+        .unwrap();
+    let request = request.await.unwrap().to_ascii_lowercase();
+    assert!(request.starts_with("post /v1/search "), "{request}");
+    assert!(request.contains("x-api-key: k"), "{request}");
+}
+
+#[test]
+fn keenable_needs_no_key_and_keeps_the_fallbacks() {
+    let keyless = super::SearchSettings {
+        provider: "keenable".into(),
+        ..super::SearchSettings::default()
+    };
+    assert_eq!(
+        super::sources(&keyless).unwrap(),
+        vec![super::Source::Keenable(None), super::Source::BravePage]
+    );
+    let keyed = super::SearchSettings {
+        provider: "keenable".into(),
+        api_key: Some("k".into()),
+        url: Some("http://localhost:8888".into()),
+    };
+    assert_eq!(
+        super::sources(&keyed).unwrap(),
+        vec![
+            super::Source::Keenable(Some("k".into())),
+            super::Source::Searxng {
+                base: "http://localhost:8888".into(),
+                key: None
+            },
+            super::Source::BravePage
+        ]
+    );
+}
