@@ -162,9 +162,10 @@ pub(super) async fn search_chain(
 }
 
 /// A failure another attempt or another source may get past: rate limits, server errors
-/// and the network itself. A refusal (4xx other than 429) is final for that source.
+/// (including the 529 Keenable sends when it is overloaded) and the network itself. A
+/// refusal (4xx other than 429) is final for that source.
 pub(super) fn retryable(error: &str) -> bool {
-    ["429", "500", "502", "503", "504", "failed:", "timed out"]
+    ["429", "500", "502", "503", "504", "529", "failed:", "timed out"]
         .iter()
         .any(|mark| error.contains(mark))
 }

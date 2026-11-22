@@ -446,6 +446,21 @@ fn only_transient_failures_are_retryable() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn keenable_overload_is_retried() {
+    let base = serve_body(
+        "HTTP/1.1 529 Site Overloaded\r\ncontent-type: application/json\r\n\r\n",
+        r#"{"error":"search_overloaded"}"#,
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let err = super::keenable(&client, &base, None, "a", 5)
+        .await
+        .unwrap_err();
+    assert!(err.contains("529"), "{err}");
+    assert!(super::retryable(&err), "{err}");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn searxng_points_at_the_format_setting_when_refused() {
     let url = serve_body(
         "HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\n\r\n",
