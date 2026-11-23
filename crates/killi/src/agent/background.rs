@@ -30,6 +30,17 @@ pub const MAX_BACKGROUND: usize = 4;
 /// How often a wait on a background subagent asks whether it ended or the user spoke.
 const POLL: Duration = Duration::from_millis(100);
 
+/// Starts the result of a wait that stopped because the user sent a message.
+pub(super) const STOPPED_FOR_MESSAGE: &str =
+    "[Stopped waiting: a message from the user is waiting.";
+
+/// Starts the result of a wait refused because that message still has no reply.
+pub(super) const UNANSWERED_MESSAGE: &str =
+    "[Not waited: a message from the user is still waiting for your reply.";
+
+/// A subagent's own message queue, for `agent_message`.
+pub(super) type Steer = Rc<RefCell<VecDeque<Steered>>>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BgState {
     /// Waiting for one of the `MAX_BACKGROUND` slots.
@@ -63,8 +74,9 @@ pub struct BgTask {
     /// The model has the report, or stopped the task itself.
     pub delivered: bool,
     cancel: Rc<Cell<bool>>,
-    /// The subagent's own message queue, for `agent_message`; none for a swarm.
-    pub(super) steer: Option<Rc<RefCell<VecDeque<Steered>>>>,
+    /// The message queues of its subagents still working: one for an `agent` call, one per
+    /// member for a swarm. A member's leaves here when it ends.
+    pub(super) steers: Vec<Steer>,
 }
 
 impl BgTask {
@@ -148,7 +160,7 @@ impl Background {
                 stats: Stats::default(),
                 delivered: false,
                 cancel: Rc::default(),
-                steer: None,
+                steers: Vec::new(),
             },
         );
     }
@@ -162,8 +174,9 @@ impl Background {
             .collect()
     }
 
-    /// Notes what a background subagent just did, from its events.
-    fn progress(&mut self, id: u32, event: &Event) {
+    /// Notes what a background subagent just did, from its events; `steer` is that
+    /// subagent's message queue, which no one reads once it ended.
+    fn progress(&mut self, id: u32, event: &Event, steer: Option<&Steer>) {
         let Some(task) = self.tasks.get_mut(&id) else {
             return;
         };
@@ -172,7 +185,12 @@ impl Background {
                 task.calls += 1;
                 task.last = Some(summary.clone());
             }
-            Event::Finished { .. } => task.finished_members += 1,
+            Event::Finished { .. } => {
+                task.finished_members += 1;
+                if let Some(steer) = steer {
+                    task.steers.retain(|other| !Rc::ptr_eq(other, steer));
+                }
+            }
             _ => {}
         }
     }
@@ -200,8 +218,9 @@ impl Drop for Busy {
 #[derive(Clone, Default)]
 pub(super) struct Route(Rc<RefCell<Option<Detached>>>);
 
-/// The registry a subagent's events go to once it moved there, and its task there.
-type Detached = (Rc<RefCell<Background>>, u32);
+/// The registry a subagent's events go to once it moved there, its task there, and its own
+/// message queue, which the registry forgets when it ends.
+type Detached = (Rc<RefCell<Background>>, u32, Option<Steer>);
 
 impl Route {
     /// The sink for a subagent labeled `label`: `Sub` events to `parent` until `detach`.
@@ -210,7 +229,9 @@ impl Route {
         Rc::new(move |event| {
             let target = route.borrow().clone();
             match target {
-                Some((background, id)) => background.borrow_mut().progress(id, &event),
+                Some((background, id, steer)) => {
+                    background.borrow_mut().progress(id, &event, steer.as_ref())
+                }
                 None => parent(Event::Sub {
                     label: label.clone(),
                     slot: slot.clone(),
@@ -220,13 +241,14 @@ impl Route {
         })
     }
 
-    pub(super) fn detach(&self, background: &Rc<RefCell<Background>>, id: u32) {
-        *self.0.borrow_mut() = Some((background.clone(), id));
+    /// `steer` is the subagent's message queue, when it has one to answer `agent_message`.
+    pub(super) fn detach(&self, background: &Rc<RefCell<Background>>, id: u32, steer: Option<Steer>) {
+        *self.0.borrow_mut() = Some((background.clone(), id, steer));
     }
 
     /// The background task this subagent runs as, once it moved there.
     pub(super) fn id(&self) -> Option<u32> {
-        self.0.borrow().as_ref().map(|(_, id)| *id)
+        self.0.borrow().as_ref().map(|(_, id, _)| *id)
     }
 }
 
@@ -242,7 +264,8 @@ pub(super) struct BgStart {
     pub(super) sent: Vec<String>,
     /// Swarm items, for the log; empty for an `agent` call.
     pub(super) items: Vec<String>,
-    pub(super) steer: Option<Rc<RefCell<VecDeque<Steered>>>>,
+    /// The message queues of the subagents still working, for `agent_message`.
+    pub(super) steers: Vec<Steer>,
     /// Work already under way when it moved here: it keeps running without waiting for a slot.
     pub(super) started: bool,
     /// When its call started, so the clock of work that moved here doesn't start over.
@@ -335,7 +358,7 @@ impl Agent {
                     stats: Stats::default(),
                     delivered: false,
                     cancel: cancel.clone(),
-                    steer: start.steer.clone(),
+                    steers: start.steers,
                 },
             );
             (registry.spawn.clone(), registry.slots.clone())
@@ -590,7 +613,7 @@ impl Agent {
             }
         };
         if interrupted {
-            text.push_str("\n[Stopped waiting: a message from the user is waiting. Read it first; task_output with `wait` picks the wait up again.]");
+            text.push_str("\n[Stopped waiting: a message from the user is waiting. Read it first; reply to it, then task_output with `wait` picks the wait up again.]");
         } else if let Some(other) = other {
             text.push_str(&format!(
                 "\n[Stopped waiting: background task {other} ended, and its report follows.]"
@@ -601,6 +624,45 @@ impl Agent {
             text.push_str("\n[Its report comes to you by itself when it ends, and starts a turn of its own if you are idle then. Rather than waiting again, tell the user what is still running and end your turn.]");
         }
         tools::Output::ok(text).brief(format!("task {id} running"))
+    }
+
+    /// `task_output` with a `wait`, made right after a wait that stopped for a message from
+    /// the user: not run, since the model has yet to say anything back. Models re-waited
+    /// without answering, once per message the user typed meanwhile. The refusal holds for the
+    /// rest of that reply's calls; a reply that says something counts as answered, and a plain
+    /// look, with no `wait`, always runs.
+    pub(super) fn unanswered_wait(&self, call: &ToolCall, args: &Value) -> Option<tools::Output> {
+        if call.name != "task_output" || tools::uint(args, "wait").unwrap_or(0) == 0 {
+            return None;
+        }
+        let reply_at = self
+            .messages
+            .iter()
+            .rposition(|message| message["role"] == "assistant")?;
+        let reply = &self.messages[reply_at];
+        let at = self.messages[..=reply_at]
+            .iter()
+            .rposition(|message| message["role"] == "tool")?;
+        let text = self.messages[at]["content"].as_str().unwrap_or_default();
+        let in_reply = |id: &str| {
+            reply["tool_calls"].as_array().is_some_and(|calls| {
+                calls.iter().any(|made| made["id"] == id)
+            })
+        };
+        let stopped = text.contains(STOPPED_FOR_MESSAGE)
+            && !in_reply(self.messages[at]["tool_call_id"].as_str().unwrap_or_default())
+            && self.messages[at + 1..reply_at]
+                .iter()
+                .any(|message| message["role"] == "user")
+            && !reply["content"].as_str().is_some_and(|text| !text.trim().is_empty());
+        // A refusal earlier in this same reply: nothing was answered since either.
+        let refused_again = text.contains(UNANSWERED_MESSAGE) && in_reply(&call.id);
+        (stopped || refused_again).then(|| {
+            tools::Output::error(format!(
+                "{UNANSWERED_MESSAGE} Reply to it in text first; then task_output with `wait` picks the wait up again.]"
+            ))
+            .brief("not waited: the user's message is unanswered".to_string())
+        })
     }
 
     /// Background tasks other than `id` that ended and whose report the model hasn't had.
@@ -624,36 +686,47 @@ impl Agent {
             .is_none_or(BgTask::ended)
     }
 
-    /// `agent_message`: queues `message` for a background subagent's next step, marked as
-    /// coming from the agent that started it.
+    /// `agent_message`: queues `message` for each subagent of a background task still working
+    /// (every member of a swarm) before its next step, marked as coming from the agent that
+    /// started them.
     pub(super) fn background_message(&mut self, id: u32, args: &Value) -> tools::Output {
         let message = args["message"].as_str().unwrap_or_default().trim();
         if message.is_empty() {
             return tools::Output::error("agent_message needs a `message`.");
         }
-        let registry = self.controls.background.borrow();
-        let Some(task) = registry.tasks.get(&id) else {
-            return tools::Output::error(format!("No background task {id}."));
+        let steers: Vec<Steer> = {
+            let registry = self.controls.background.borrow();
+            let Some(task) = registry.tasks.get(&id) else {
+                return tools::Output::error(format!("No background task {id}."));
+            };
+            if task.ended() {
+                return tools::Output::error(format!(
+                    "Task {id} has already ended; its report comes as a reminder, or now with task_output."
+                ));
+            }
+            task.steers.clone()
         };
-        if task.ended() {
+        if steers.is_empty() {
             return tools::Output::error(format!(
-                "Task {id} has already ended; its report comes as a reminder, or now with task_output."
+                "No subagent of task {id} is still working to read it; its report comes as a reminder, or now with task_output."
             ));
         }
-        let Some(steer) = &task.steer else {
-            return tools::Output::error(format!(
-                "Task {id} is a swarm, whose subagents each work on their own item; stop it with task_stop and start what should run instead."
-            ));
-        };
-        steer.borrow_mut().push_back((
+        let note = format!(
+            "<system-reminder>A message from the agent that started you, not from the user: {}</system-reminder>",
+            neutralize_reminder_tags(message)
+        );
+        for steer in &steers {
+            steer.borrow_mut().push_back((note.clone(), Vec::new()));
+        }
+        let told = if steers.len() == 1 {
+            format!("Told task {id}; it reads it before its next step.")
+        } else {
             format!(
-                "<system-reminder>A message from the agent that started you, not from the user: {}</system-reminder>",
-                neutralize_reminder_tags(message)
-            ),
-            Vec::new(),
-        ));
-        tools::Output::ok(format!("Told task {id}; it reads it before its next step."))
-            .brief(format!("→ task {id}"))
+                "Told the {} subagents of task {id} still working; each reads it before its next step.",
+                steers.len()
+            )
+        };
+        tools::Output::ok(told).brief(format!("→ task {id}"))
     }
 
     /// Stops every background task still working, as the session ends: the log says they're

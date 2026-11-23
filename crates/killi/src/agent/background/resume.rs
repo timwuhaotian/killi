@@ -63,14 +63,15 @@ impl Agent {
                 }
             }
         }
-        let routes: Vec<Route> = jobs
+        let routes: Vec<(Route, Steer)> = jobs
             .iter()
-            .filter_map(|job| job.as_ref().ok().map(|child| child.route.clone()))
+            .filter_map(|job| {
+                job.as_ref().ok().map(|child| {
+                    (child.route.clone(), child.agent.controls.steer.clone())
+                })
+            })
             .collect();
-        let steer = match (swarm, jobs.first()) {
-            (false, Some(Ok(child))) => Some(child.agent.controls.steer.clone()),
-            _ => None,
-        };
+        let steers = routes.iter().map(|(_, steer)| steer.clone()).collect();
         let ctx = self.ctx.clone();
         let work: BgWork = if swarm {
             let limit = self.swarm_parallel.get();
@@ -107,7 +108,7 @@ impl Agent {
                 logs: record.logs.clone(),
                 sent: record.sent.clone(),
                 items: record.items.clone(),
-                steer,
+                steers,
                 started: false,
                 since: Instant::now(),
             },
@@ -116,8 +117,8 @@ impl Agent {
         if let Some(task) = self.controls.background.borrow_mut().tasks.get_mut(&id) {
             task.finished_members = reported;
         }
-        for route in routes {
-            route.detach(&self.controls.background, id);
+        for (route, steer) in routes {
+            route.detach(&self.controls.background, id, Some(steer));
         }
     }
 

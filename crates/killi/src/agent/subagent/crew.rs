@@ -8,6 +8,8 @@ use std::task::{Context as TaskContext, Poll};
 
 use super::*;
 
+use crate::agent::background::Steer;
+
 /// A subagent ready to run: the agent, the text it is sent, and where its events go.
 pub(in crate::agent) struct Child {
     pub(in crate::agent) agent: Agent,
@@ -180,6 +182,18 @@ impl Crew {
         );
         unfinished.sort_by_key(|(index, _)| *index);
         (self.outputs, unfinished)
+    }
+
+    /// The message queues of the members not ended yet, for `agent_message` to the group.
+    pub(in crate::agent) fn live_steers(&self) -> Vec<Steer> {
+        let running = self.running.iter().map(|tagged| tagged.index);
+        let waiting = self.pending.iter().map(|(index, _)| *index);
+        running
+            .chain(waiting)
+            .filter_map(|index| {
+                self.meta.get(index).and_then(Option::as_ref).map(|meta| meta.steer.clone())
+            })
+            .collect()
     }
 }
 

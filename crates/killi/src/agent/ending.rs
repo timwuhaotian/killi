@@ -149,6 +149,7 @@ pub(super) fn ends_with_intent(text: &str) -> bool {
         .to_lowercase();
     names_a_coming_phase(&sentence)
         || opens_with_gerund(&clause)
+        || opens_with_zh_step(&sentence)
         || INTENT_OPENERS.iter().any(|opener| {
             clause.strip_prefix(opener).is_some_and(|rest| {
                 rest.is_empty() || !opener.is_ascii() || rest.starts_with([' ', ','])
@@ -201,6 +202,24 @@ fn opens_with_gerund(clause: &str) -> bool {
         && !word.ends_with("thing")
         && !NOT_STEPS.contains(&word)
         && (rest.is_empty() || rest.starts_with([' ', ',']))
+}
+
+/// How a clause in Chinese says a step is under way ("正在验证…", "正做隔离验证") or opening
+/// ("最后一轮核对…"), wherever it stands in the last sentence: what follows is often the
+/// reason ("正在验证…的覆盖顺序，避免误改。"), which would hide it from the last clause.
+const ZH_STEPS: &[&str] = &["正在", "正做", "最后一轮"];
+
+/// What a clause that opens on "正在" says is going on without being a step the agent takes:
+/// a state the system is in ("正在运行的只有 nginx。"), as "Working now." is for the gerund.
+const ZH_NOT_STEPS: &[&str] = &["正在运行", "正在等待", "正在使用", "正在占用", "正在挂起"];
+
+/// Whether any clause of a lowercased last sentence, split at `，`, opens on a step in Chinese.
+fn opens_with_zh_step(sentence: &str) -> bool {
+    sentence.split('，').any(|clause| {
+        let clause = clause.trim_start();
+        !ZH_NOT_STEPS.iter().any(|state| clause.starts_with(state))
+            && ZH_STEPS.iter().any(|step| clause.starts_with(step))
+    })
 }
 
 fn last_line_ends_with(text: &str, marks: &[char]) -> bool {

@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+- A command with a pipe reports the failure a later stage hides: `npm test 2>&1 | tail -40` failed, and the result now says so instead of the exit code of `tail`. A background task that fails this way reports the failure too.
+- `agent_message` reaches every subagent of a running swarm, not only a single subagent, so a redirect sent to a swarm lands.
+- A `task_output` with `wait` is refused right after the user sent a message that has no reply yet; answer the user first.
+- `write` no longer refuses a new file in a folder macOS tags (`~/Downloads`), and `com.apple.macl` never counts as an attribute a replacement would lose.
+- A subagent's short final reply in Chinese that announces a step under way ("正在验证…") gets the same reminder an English one does, so a swarm item reports a result instead of a next step.
+- Plan mode no longer refuses read-only commands for a false reason: a `|`, `;` or `&` inside quotes is text (`grep -E 'agent|run'`), `git -C <dir> log` counts as `git log`, and `xargs wc -l` as `wc`. Writers behind those names (`git -C <dir> checkout`, `xargs sort -o out`) and `git -c <name>=… <command>` are still refused.
 ## 0.9.0 — 2026-11-23
 
 - `/provider custom` adds any OpenAI- or Anthropic-compatible endpoint: pick the protocol, paste its base URL and API key, name the provider (prefilled from the URL's host), then tick the models to write from the list the endpoint serves. Anthropic endpoints have a trailing `/v1` normalized away, and their model list is read in full rather than the first page of 20. Models land as `[models."<name>/<id>"]` with tool use, the key in `config.toml` readable only by you.

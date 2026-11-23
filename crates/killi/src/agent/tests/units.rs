@@ -1430,6 +1430,10 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         "Reviews posted. Now syncing #1131 root-first in its worktree.",
         "Gates pass. Now replying to both threads, then pushing.",
         "已列出 27 个 PR。接下来处理我的 11 个。",
+        // Stops from the swarm logs: a step under way in Chinese, not at the last clause.
+        "发现一处疑似真问题：`button.tsx:21` 的 `destructive-soft` 只有 `dark:bg-destructive/20`、没有 `dark:hover:bg-*`，与同文件其他 variant 的写法不一致。正在验证 Tailwind 里 `dark:` 对 `hover:` 的覆盖顺序，避免误改。",
+        "`text-background!` 语法需确认对 Tailwind v4 编译成 `!important` 才采用，正做隔离验证。",
+        "最后一轮核对 console 直打错误对象的路径。",
     ] {
         assert!(ends_with_intent(stop), "{stop}");
     }
@@ -1464,6 +1468,11 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         "Done. In step 1, #1149 and #1152 now show ✅ before \"approved and merged\".",
         "Renamed — card now holds just `ezviz.dav`. Say the word if you want the next one.",
         "完成。下一步你可以合并。",
+        // A state in progress or a result stated, not a step the agent is on.
+        "正在运行的只有 nginx。",
+        "服务都在，正在运行的有 2 个。",
+        "`text-background!` 在 Tailwind v4 下编译成 `!important`，可以采用。",
+        "console 直打错误对象的路径没有问题。",
     ] {
         assert!(!ends_with_intent(answer), "{answer}");
     }

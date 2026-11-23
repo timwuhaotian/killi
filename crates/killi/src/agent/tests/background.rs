@@ -2,7 +2,7 @@ use super::*;
 
 use tokio::sync::mpsc;
 
-use crate::agent::background::BgStart;
+use crate::agent::background::{BgStart, STOPPED_FOR_MESSAGE, UNANSWERED_MESSAGE};
 
 /// Controls for an interactive session whose background work arrives on the returned receiver,
 /// as the terminal's would.
@@ -245,8 +245,8 @@ async fn agent_message_reaches_a_background_subagent_and_the_tree_is_guarded() {
     agent.execute_calls(message, false).await.unwrap();
     assert!(last_tool(&agent).contains("Told task 1"), "{}", last_tool(&agent));
     let queued = controls.background.borrow().tasks[&1]
-        .steer
-        .as_ref()
+        .steers
+        .first()
         .unwrap()
         .borrow()
         .front()
@@ -388,8 +388,14 @@ async fn a_resumed_session_continues_its_paused_subagents_from_their_logs() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_message_moves_a_running_swarm_to_the_background_as_one_task() {
+    // The member about to end reads the message and takes one more step; the other starts
+    // with it.
     let url = slow_stub(
-        vec![sse("one\\nStatus: ready", "stop"), sse("two\\nStatus: ready", "stop")],
+        vec![
+            sse("one\\nStatus: ready", "stop"),
+            sse("one, with the new emphasis\\nStatus: ready", "stop"),
+            sse("two\\nStatus: ready", "stop"),
+        ],
         Duration::from_millis(500),
     )
     .await;
@@ -414,14 +420,32 @@ async fn a_message_moves_a_running_swarm_to_the_background_as_one_task() {
     assert!(last_tool(&agent).contains("Moved to the background as task 1"));
     assert_eq!(controls.background.borrow().tasks[&1].members, 2);
     assert!(agent.partial_swarm.is_none(), "the call is answered by its task");
+    // The message reaches every member still working, the one running and the one waiting
+    // for its turn alike.
+    let message = agent.background_message(1, &json!({"id": 1, "message": "focus on security"}));
+    assert!(!message.is_error, "{}", message.text);
+    assert!(
+        message.text.contains("2 subagents of task 1"),
+        "{}",
+        message.text
+    );
+    for steer in &controls.background.borrow().tasks[&1].steers {
+        let queued = steer.borrow().front().map(|(text, _)| text.clone()).unwrap();
+        assert!(queued.contains("focus on security") && queued.contains("not from the user"));
+    }
     assert_eq!(rx.recv().await.unwrap().await, 1);
+    assert!(
+        controls.background.borrow().tasks[&1].steers.is_empty(),
+        "a member that ended no longer takes messages"
+    );
+    let second = std::fs::read_to_string(agent.session.dir.join("agent-2.jsonl")).unwrap();
+    assert!(second.contains("focus on security"), "{second}");
     let (report, failed) = controls.background.borrow().tasks[&1].report.clone().unwrap();
     assert!(!failed, "{report}");
     let (one, two) = (report.find("one").unwrap(), report.find("two").unwrap());
     assert!(one < two, "items in order: {report}");
-    // A swarm takes no messages: its members each work on their own item.
-    let message = agent.background_message(1, &json!({"id": 1, "message": "hi"}));
-    assert!(message.is_error);
+    let late = agent.background_message(1, &json!({"id": 1, "message": "hi"}));
+    assert!(late.is_error && late.text.contains("already ended"), "{}", late.text);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -513,7 +537,7 @@ fn running_start(label: &str) -> BgStart {
         logs: Vec::new(),
         sent: Vec::new(),
         items: Vec::new(),
-        steer: None,
+        steers: Vec::new(),
         started: true,
         since: Instant::now(),
     }
@@ -565,6 +589,96 @@ async fn a_wait_ends_when_another_task_does_and_a_timed_out_one_says_not_to_poll
     );
     let look = agent.background_output(slow, &json!({"id": slow})).await;
     assert!(!look.text.contains("Rather than waiting again"), "{}", look.text);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_wait_right_after_one_stopped_for_a_message_is_refused_until_the_model_replies() {
+    let (controls, mut rx) = attached();
+    let mut agent = idle_agent("bg-rewait", controls.clone(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let slow = agent.launch(
+        running_start("slow"),
+        Box::pin(std::future::pending::<(tools::Output, Stats)>()),
+    );
+    let _work = rx.recv().await.unwrap();
+    // A wait stops for a message from the user, which then reaches the model.
+    controls
+        .steer
+        .borrow_mut()
+        .push_back(("the plan first, please".into(), Vec::new()));
+    let stopped = agent
+        .background_output(slow, &json!({"id": slow, "wait": 30}))
+        .await;
+    assert!(stopped.text.contains(STOPPED_FOR_MESSAGE), "{}", stopped.text);
+    agent
+        .push(json!({"role": "tool", "tool_call_id": "w0", "content": stopped.text}))
+        .unwrap();
+    agent.before_request().await.unwrap();
+    let reply = |ids: &[&str], args: Value, text: &str| {
+        json!({"role": "assistant", "content": text, "tool_calls": ids
+            .iter()
+            .map(|id| json!({"id": id, "type": "function", "function": {
+                "name": "task_output", "arguments": args.to_string()
+            }}))
+            .collect::<Vec<_>>()})
+    };
+    let results = |agent: &Agent, from: usize| -> Vec<String> {
+        agent.messages[from..]
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .filter_map(|m| m["content"].as_str().map(String::from))
+            .collect()
+    };
+    // Waiting again without a word back is refused, for every wait of that reply, at once.
+    let wait = json!({"id": slow, "wait": 30});
+    agent.push(reply(&["w1", "w2"], wait.clone(), "")).unwrap();
+    let from = agent.messages.len();
+    let begun = Instant::now();
+    let calls = vec![
+        tool_call("w1", "task_output", wait.clone()),
+        tool_call("w2", "task_output", wait),
+    ];
+    agent.execute_calls(calls, false).await.unwrap();
+    assert!(begun.elapsed() < Duration::from_secs(5));
+    let refused = results(&agent, from);
+    assert_eq!(refused.len(), 2, "{refused:?}");
+    assert!(
+        refused
+            .iter()
+            .all(|text| text.contains(UNANSWERED_MESSAGE) && text.contains("Reply to it")),
+        "{refused:?}"
+    );
+    // A plain look still runs, and so does a wait once the model has replied.
+    agent.push(reply(&["l"], json!({"id": slow}), "")).unwrap();
+    let from = agent.messages.len();
+    agent
+        .execute_calls(vec![tool_call("l", "task_output", json!({"id": slow}))], false)
+        .await
+        .unwrap();
+    assert!(
+        results(&agent, from)[0].contains("is still running"),
+        "{:?}",
+        results(&agent, from)
+    );
+    agent
+        .push(reply(
+            &["w3"],
+            json!({"id": slow, "wait": 1}),
+            "The plan, as asked:",
+        ))
+        .unwrap();
+    let from = agent.messages.len();
+    agent
+        .execute_calls(
+            vec![tool_call("w3", "task_output", json!({"id": slow, "wait": 1}))],
+            false,
+        )
+        .await
+        .unwrap();
+    let waited = &results(&agent, from)[0];
+    assert!(waited.contains("is still running") && !waited.contains(UNANSWERED_MESSAGE), "{waited}");
 }
 
 #[tokio::test(flavor = "current_thread")]

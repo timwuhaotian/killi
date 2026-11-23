@@ -256,14 +256,15 @@ impl Agent {
                 logs: meta.iter().map(|meta| meta.log.clone()).collect(),
                 sent: meta.iter().map(|meta| meta.sent.clone()).collect(),
                 items: Vec::new(),
-                steer: meta.as_ref().map(|meta| meta.steer.clone()),
+                steers: meta.iter().map(|meta| meta.steer.clone()).collect(),
                 started,
                 since,
             },
             work,
         );
         if let Some(meta) = meta {
-            meta.route.detach(&self.controls.background, id);
+            meta.route
+                .detach(&self.controls.background, id, Some(meta.steer.clone()));
         }
         // Its calls in flight leave the screen's running rows; the registry follows it now.
         (self.sink)(Event::Sub {
@@ -420,6 +421,7 @@ impl Agent {
         by_message: bool,
         since: Instant,
     ) -> tools::Output {
+        let steers = crew.live_steers();
         let metas = std::mem::take(&mut crew.meta);
         let sent: Vec<String> = metas
             .iter()
@@ -458,7 +460,7 @@ impl Agent {
                 logs: logs.to_vec(),
                 sent,
                 items: items.to_vec(),
-                steer: None,
+                steers,
                 started: by_message,
                 since,
             },
@@ -468,7 +470,8 @@ impl Agent {
             task.finished_members = done_so_far;
         }
         for meta in metas.into_iter().flatten() {
-            meta.route.detach(&self.controls.background, id);
+            meta.route
+                .detach(&self.controls.background, id, Some(meta.steer.clone()));
         }
         moved_note(id, by_message)
     }

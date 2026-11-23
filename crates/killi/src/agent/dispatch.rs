@@ -234,6 +234,9 @@ impl Agent {
         if let Some(output) = self.peer_block(call, &args) {
             return output;
         }
+        if let Some(output) = self.unanswered_wait(call, &args) {
+            return output;
+        }
         if let Some(id) = self.background_id(&args) {
             match call.name.as_str() {
                 "task_output" => return self.background_output(id, &args).await,

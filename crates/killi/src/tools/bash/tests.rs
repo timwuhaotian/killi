@@ -124,6 +124,98 @@ async fn task_output_marks_failed_exits_as_errors() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_failed_stage_of_the_last_pipeline_fails_the_command() {
+    let out = bash(&ctx(), &json!({"command": "false | true"}), &never).await;
+    assert!(out.is_error);
+    assert_eq!(
+        out.text,
+        "(no output)\n[Command exited with code 0 but an earlier stage of its pipeline exited with 1]"
+    );
+    assert_eq!(
+        out.brief,
+        "exited with code 0 but an earlier stage of its pipeline exited with 1"
+    );
+    let out = bash(
+        &ctx(),
+        &json!({"command": "(echo 'error: bad'; exit 2) | tail -40"}),
+        &never,
+    )
+    .await;
+    assert!(out.is_error);
+    assert_eq!(
+        out.text,
+        "error: bad\n[Command exited with code 0 but an earlier stage of its pipeline exited with 2]"
+    );
+    for command in [
+        "true | head -1",
+        "yes | head -2",
+        "false | true; echo after",
+        "sh -c 'exit 3' | grep x; exit 4",
+    ] {
+        let out = bash(&ctx(), &json!({"command": command}), &never).await;
+        assert_eq!(out.is_error, command.contains("exit 4"), "{command}: {}", out.text);
+    }
+    let out = bash(&ctx(), &json!({"command": "yes | head -2"}), &never).await;
+    assert_eq!(out.text, "y\ny");
+    assert_eq!(
+        bash(&ctx(), &json!({"command": "false | true | true"}), &never)
+            .await
+            .text,
+        "(no output)\n[Command exited with code 0 but an earlier stage of its pipeline exited with 1]"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_failed_pipeline_stage_fails_a_background_task() {
+    let ctx = ctx();
+    bash(
+        &ctx,
+        &json!({"command": "false | true", "run_in_background": true}),
+        &never,
+    )
+    .await;
+    let mut exit = ctx.tasks.borrow().list[&1].process.exit.clone();
+    exit.wait_for(Option::is_some).await.unwrap();
+    assert_eq!(
+        ctx.tasks.borrow_mut().newly_finished(),
+        vec!["Background task 1 (`false | true`) exited with code 0 but an earlier stage of its pipeline exited with 1.".to_string()]
+    );
+    let out = task_output(&ctx, &json!({"id": 1}), &never).await;
+    assert!(out.is_error);
+    assert_eq!(
+        out.text,
+        "Task 1 exited with code 0 but an earlier stage of its pipeline exited with 1.\n(no new output)"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_command_without_a_pipe_or_with_its_own_exit_trap_is_judged_by_its_exit_code() {
+    let out = bash(&ctx(), &json!({"command": "trap -p EXIT"}), &never).await;
+    assert_eq!(out.text, "(no output, exit code 0)");
+    let out = bash(
+        &ctx(),
+        &json!({"command": "trap 'echo own' EXIT; false | true"}),
+        &never,
+    )
+    .await;
+    assert!(!out.is_error);
+    assert_eq!(out.text, "own");
+    let out = bash(&ctx(), &json!({"command": "false | true; exec true"}), &never).await;
+    assert!(!out.is_error, "{}", out.text);
+    let out = bash(
+        &ctx(),
+        &json!({"command": "set -u; false | true; exit"}),
+        &never,
+    )
+    .await;
+    assert!(out.is_error);
+    assert_eq!(
+        out.text,
+        "(no output)\n[Command exited with code 0 but an earlier stage of its pipeline exited with 1]"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_message_from_the_user_ends_the_wait_and_keeps_the_command_running() {
     let ctx = ctx();
     let sent = std::cell::Cell::new(false);

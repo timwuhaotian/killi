@@ -46,10 +46,12 @@ fn xattr_names(fd: libc::c_int) -> io::Result<Vec<u8>> {
 }
 
 /// The first attribute in a NUL-separated name list that a replacement would lose.
+/// `com.apple.macl` is macOS's record of which apps may open the file (TCC tags Downloads with
+/// it): access control, not user data, so it is never a reason to refuse.
 fn foreign_xattr(names: &[u8]) -> Option<&[u8]> {
-    names
-        .split(|&b| b == 0)
-        .find(|name| !name.is_empty() && *name != LABEL.to_bytes())
+    names.split(|&b| b == 0).find(|name| {
+        !name.is_empty() && *name != LABEL.to_bytes() && *name != b"com.apple.macl"
+    })
 }
 
 // Resolve the final symlink ourselves so a dangling link is preserved too.
@@ -84,7 +86,10 @@ fn target(path: &Path) -> io::Result<PathBuf> {
     ))
 }
 
-fn check_metadata(file: &File) -> io::Result<()> {
+/// Refuses a file whose metadata a replacement would lose. Extended attributes are only
+/// checked on `replacing`: the new file's temp carries whatever the directory gives it, and
+/// nothing is lost when a file that did not exist appears.
+fn check_metadata(file: &File, replacing: bool) -> io::Result<()> {
     let meta = file.metadata()?;
     if !meta.is_file() {
         return Err(unsupported("not a regular file"));
@@ -93,7 +98,7 @@ fn check_metadata(file: &File) -> io::Result<()> {
         return Err(unsupported("cannot safely replace a file with hard links"));
     }
     let fd = file.as_raw_fd();
-    if let Some(name) = foreign_xattr(&xattr_names(fd)?) {
+    if replacing && let Some(name) = foreign_xattr(&xattr_names(fd)?) {
         return Err(unsupported(format!(
             "cannot safely replace a file with extended attribute {}",
             String::from_utf8_lossy(name)
@@ -223,7 +228,7 @@ pub(in crate::tools) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .open(&path)
     {
         Ok(file) => {
-            check_metadata(&file)?;
+            check_metadata(&file, true)?;
             Some(file)
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
@@ -249,7 +254,7 @@ pub(in crate::tools) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
             Err(e) => return Err(e),
         }
     };
-    check_metadata(&file)?;
+    check_metadata(&file, original.is_some())?;
     if let Some(original) = &original {
         let old = original.metadata()?;
         let new = file.metadata()?;
@@ -265,7 +270,7 @@ pub(in crate::tools) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         if file.metadata()?.mode() & 0o7777 != mode {
             return Err(unsupported("cannot preserve file permissions"));
         }
-        check_metadata(&original)?;
+        check_metadata(&original, true)?;
         let old = original.metadata()?;
         let initial = initial.as_ref().unwrap();
         let current = fs::symlink_metadata(&path)?;
@@ -299,10 +304,72 @@ mod tests {
             foreign_xattr(&[label, b"\0user.x\0"].concat()),
             Some(&b"user.x"[..])
         );
+        assert_eq!(foreign_xattr(b"com.apple.macl\0"), None);
+        assert_eq!(
+            foreign_xattr(b"com.apple.macl\0user.x\0"),
+            Some(&b"user.x"[..])
+        );
         assert_eq!(
             foreign_xattr(b"system.posix_acl_access\0"),
             Some(&b"system.posix_acl_access"[..])
         );
+    }
+
+    /// Gives `path` a user attribute, or `None` where the filesystem refuses it.
+    fn tagged(path: &Path) -> Option<File> {
+        let file = File::open(path).unwrap();
+        let value = b"1";
+        #[cfg(target_os = "macos")]
+        let set = unsafe {
+            libc::fsetxattr(
+                file.as_raw_fd(),
+                c"user.killi-test".as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let set = unsafe {
+            libc::fsetxattr(
+                file.as_raw_fd(),
+                c"user.killi-test".as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+            )
+        };
+        (set == 0).then_some(file)
+    }
+
+    #[test]
+    fn a_new_file_may_carry_extended_attributes() {
+        let dir = crate::test_temp::TempDir::new("killi-write-new");
+        let path = dir.join("file");
+        fs::write(&path, "tagged").unwrap();
+        let Some(file) = tagged(&path) else {
+            eprintln!("skipped: cannot give a file a user attribute here");
+            return;
+        };
+        check_metadata(&file, false).unwrap();
+        let error = check_metadata(&file, true).unwrap_err();
+        assert!(error.to_string().contains("user.killi-test"), "{error}");
+    }
+
+    #[test]
+    fn replacing_a_file_with_extended_attributes_is_refused() {
+        let dir = crate::test_temp::TempDir::new("killi-write-xattr");
+        let path = dir.join("file");
+        fs::write(&path, "original").unwrap();
+        if tagged(&path).is_none() {
+            eprintln!("skipped: cannot give a file a user attribute here");
+            return;
+        }
+        let error = write(&path, b"changed").unwrap_err();
+        assert!(error.to_string().contains("user.killi-test"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use super::*;
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -54,8 +54,15 @@ impl Captured {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Exit {
     Code(i32),
+    /// The shell exited 0, but an earlier stage of its last pipeline (`false | true`) ended
+    /// with this code, so what the command was after failed. Only the last pipeline is seen:
+    /// one that ran before a closing `echo` or `&&` is gone by the time the shell exits.
+    Pipeline(i32),
     Signal,
 }
+
+/// How a stage killed by SIGPIPE shows in `PIPESTATUS`; `yes | head` always ends that way.
+const SIGPIPE: i32 = 128 + libc::SIGPIPE;
 
 /// The process group of every live `Process`, with its leader's exit, so `kill_all` can end
 /// them when killi is told to quit and nothing gets dropped.
@@ -110,8 +117,68 @@ impl Exit {
     pub(super) fn describe(self) -> String {
         match self {
             Exit::Code(code) => format!("exited with code {code}"),
+            Exit::Pipeline(code) => format!(
+                "exited with code 0 but an earlier stage of its pipeline exited with {code}"
+            ),
             Exit::Signal => "was killed by a signal".into(),
         }
+    }
+}
+
+/// Where the EXIT trap of a piped command leaves `PIPESTATUS`; no two commands share one.
+/// The file is created here, so no one else can hold that name and have the shell write to
+/// it: the name is only used when this process could take it.
+fn status_file() -> Option<PathBuf> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let path = std::env::temp_dir().join(format!(
+        "killi-pipestatus-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .ok()
+        .map(|_| path)
+}
+
+/// `path` inside double quotes within the EXIT trap.
+fn quoted(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('`', "\\`")
+}
+
+/// How a shell that ended with `code` exited, given the `PIPESTATUS` its EXIT trap wrote to
+/// `path`, which is removed. `pipefail` would do this job, but it also fails `| head` on the
+/// SIGPIPE its first stage dies of, so a stage killed that way doesn't count here.
+fn shell_exit(code: Option<i32>, path: Option<&Path>) -> Exit {
+    let failed_stage = path.and_then(|path| {
+        let statuses = std::fs::read_to_string(path).ok();
+        let _ = std::fs::remove_file(path);
+        statuses.and_then(|statuses| {
+            let codes = statuses
+                .split_whitespace()
+                .map(|code| code.parse::<i32>().ok())
+                .collect::<Option<Vec<_>>>()?;
+            let (last, earlier) = codes.split_last()?;
+            if *last != 0 {
+                return None;
+            }
+            earlier
+                .iter()
+                .copied()
+                .find(|&code| code != 0 && code != SIGPIPE)
+        })
+    });
+    match (code, failed_stage) {
+        (Some(0), Some(code)) => Exit::Pipeline(code),
+        (Some(code), _) => Exit::Code(code),
+        (None, _) => Exit::Signal,
     }
 }
 
@@ -152,9 +219,21 @@ impl OwnSession for std::process::Command {
 
 impl Process {
     pub(super) fn spawn(dir: &Path, command: &str) -> std::io::Result<Self> {
-        let mut child = Command::new("/bin/bash")
+        // A command with a pipe gets an EXIT trap that saves `PIPESTATUS`, so a failure before
+        // the last stage (`npm test | tail`) isn't hidden by the last stage's exit 0. One without
+        // runs as it was written. A command that sets its own EXIT trap, or `exec`s, loses the
+        // trap and is judged by its exit code alone, as every command used to be.
+        let status_file = command.contains('|').then(status_file).flatten();
+        let script = match &status_file {
+            Some(path) => format!(
+                "exec 2>&1\ntrap 'echo \"${{PIPESTATUS[@]}}\" >\"{}\"' EXIT\n{command}",
+                quoted(path)
+            ),
+            None => format!("exec 2>&1\n{command}"),
+        };
+        let spawned = Command::new("/bin/bash")
             .arg("-c")
-            .arg(format!("exec 2>&1\n{command}"))
+            .arg(script)
             .current_dir(dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -165,7 +244,16 @@ impl Process {
             .env("GIT_PAGER", "cat")
             .env(crate::live::PID_VAR, std::process::id().to_string())
             .own_session()
-            .spawn()?;
+            .spawn();
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(error) => {
+                if let Some(path) = &status_file {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(error);
+            }
+        };
         let pgid = child.id().unwrap_or_default();
         let mut stdout = child.stdout.take().expect("stdout is piped");
         let output = Arc::new(Mutex::new(Captured::default()));
@@ -194,10 +282,10 @@ impl Process {
                                 Err(_) => break,
                             }
                         }
-                        let _ = tx.send(Some(match status.ok().and_then(|s| s.code()) {
-                            Some(code) => Exit::Code(code),
-                            None => Exit::Signal,
-                        }));
+                        let _ = tx.send(Some(shell_exit(
+                            status.ok().and_then(|s| s.code()),
+                            status_file.as_deref(),
+                        )));
                     }
                 }
             }

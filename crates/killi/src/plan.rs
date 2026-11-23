@@ -81,6 +81,56 @@ const READ_ONLY: &[&str] = &[
     "killi ask",
 ];
 
+/// The parts of `command` between its control operators (`|`, `;`, `&`, a newline) that bash
+/// would act on: one outside quotes and past a backslash is text to the command instead, as
+/// in `grep -E 'a|b'`. `$'…'` is like `'…'` with backslash escapes; `'…'` has none.
+fn segments(command: &str) -> Vec<&str> {
+    #[derive(PartialEq)]
+    enum Quote {
+        None,
+        Single,
+        Double,
+        Ansi,
+    }
+    let bytes = command.as_bytes();
+    let mut parts = Vec::new();
+    let (mut start, mut at, mut quote) = (0, 0, Quote::None);
+    while at < bytes.len() {
+        let byte = bytes[at];
+        match quote {
+            Quote::None => match byte {
+                b'\\' => at += 1,
+                b'\'' => quote = Quote::Single,
+                b'"' => quote = Quote::Double,
+                b'$' if matches!(bytes.get(at + 1), Some(b'\'' | b'"')) => {
+                    quote = if bytes[at + 1] == b'\'' { Quote::Ansi } else { Quote::Double };
+                    at += 1;
+                }
+                b'|' | b';' | b'&' | b'\n' => {
+                    parts.push(&command[start..at]);
+                    start = at + 1;
+                }
+                _ => {}
+            },
+            Quote::Single if byte == b'\'' => quote = Quote::None,
+            Quote::Double => match byte {
+                b'\\' => at += 1,
+                b'"' => quote = Quote::None,
+                _ => {}
+            },
+            Quote::Ansi => match byte {
+                b'\\' => at += 1,
+                b'\'' => quote = Quote::None,
+                _ => {}
+            },
+            _ => {}
+        }
+        at += 1;
+    }
+    parts.push(&command[start..]);
+    parts
+}
+
 /// The first segment of `command` plan mode refuses, if any, so the refusal can name it.
 /// `extra` holds additional allowed prefixes from config.
 /// The segment comes from the cleaned command, so a let-through redirect (`2>&1`,
@@ -90,8 +140,8 @@ pub fn bash_refused(command: &str, extra: &[String]) -> Option<String> {
         .replace("2>&1", "")
         .replace(">/dev/null", "")
         .replace("> /dev/null", "");
-    cleaned
-        .split(['|', ';', '&', '\n'])
+    segments(&cleaned)
+        .into_iter()
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
         .find(|segment| {
@@ -104,15 +154,63 @@ pub fn bash_refused(command: &str, extra: &[String]) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The command a segment runs, for the checks: `git -C <dir> log` is `git log`, and `xargs
+/// wc -l` runs `wc` on what it reads (`xargs` alone runs `echo`). `git -c` stays in view,
+/// since a config value can name a command to run.
+fn command_words(segment: &str) -> Vec<&str> {
+    let mut words = segment.split_whitespace().peekable();
+    if words.peek() == Some(&"git") {
+        words.next();
+        while let Some(word) = words.peek().copied() {
+            match word {
+                "-C" | "--git-dir" | "--work-tree" => {
+                    words.next();
+                    words.next();
+                }
+                "--no-pager" | "--no-optional-locks" => {
+                    words.next();
+                }
+                _ if word.starts_with("-C")
+                    || word.starts_with("--git-dir=")
+                    || word.starts_with("--work-tree=") =>
+                {
+                    words.next();
+                }
+                _ => break,
+            }
+        }
+        return std::iter::once("git").chain(words).collect();
+    }
+    if words.peek() == Some(&"xargs") {
+        words.next();
+        while let Some(word) = words.peek().copied() {
+            if word == "--" || !word.starts_with('-') {
+                break;
+            }
+            // The flags that take their value as the next word; `-e` takes it only attached.
+            let takes_value = matches!(
+                word,
+                "-I" | "-J" | "-n" | "-N" | "-d" | "-a" | "-P" | "-s" | "-S" | "-L" | "-E" | "-R"
+            );
+            words.next();
+            if takes_value {
+                words.next();
+            }
+        }
+        if words.peek().is_none() {
+            return vec!["echo"];
+        }
+    }
+    words.collect()
+}
+
 fn segment_allowed(segment: &str, extra: &[String]) -> bool {
-    let words: Vec<&str> = segment.split_whitespace().collect();
+    let words = command_words(segment);
     let normalized = words.join(" ");
     let starts =
         |prefix: &str| normalized == prefix || normalized.starts_with(&format!("{prefix} "));
     if words.first() == Some(&"find")
-        && words
-            .iter()
-            .any(|w| matches!(*w, "-delete" | "-exec" | "-execdir" | "-ok" | "-fprint"))
+        && words.iter().any(|w| matches!(*w, "-delete" | "-exec" | "-execdir" | "-ok" | "-fprint"))
     {
         return false;
     }
@@ -368,124 +466,4 @@ pub const OFF: &str =
     "<system-reminder>Plan mode is off. You may change files again.</system-reminder>";
 
 #[cfg(test)]
-mod tests {
-    use super::bash_refused;
-
-    fn bash_allowed(command: &str, extra: &[String]) -> bool {
-        bash_refused(command, extra).is_none()
-    }
-
-    #[test]
-    fn read_only_commands_pass() {
-        for command in [
-            "ls -la",
-            "cd sub && rg slugify src | head -20",
-            "cd /tmp; cat notes.txt | wc -l",
-            "rg slugify src | head -20",
-            "git log --oneline -5 && git status",
-            "cargo check 2>&1 | tail -30",
-            "find . -name '*.rs'",
-            "sed -n 1,40p src/lib.rs",
-            "killi sessions",
-            "killi ask 4321 \"which files are you changing?\"",
-        ] {
-            assert!(bash_allowed(command, &[]), "{command}");
-        }
-    }
-
-    #[test]
-    fn writes_are_refused() {
-        for command in [
-            "rm -rf target",
-            "echo hi > notes.txt",
-            "cat a | tee b",
-            "find . -name '*.tmp' -delete",
-            "sed -i 's/a/b/' x",
-            "git checkout -- .",
-            "ls $(touch x)",
-            "cargo test",
-            "npm install",
-            "killi tell 4321 'I pushed the base'",
-        ] {
-            assert!(!bash_allowed(command, &[]), "{command}");
-        }
-    }
-
-    #[test]
-    fn the_refusal_names_the_segment() {
-        assert_eq!(
-            bash_refused("cd sub && rm x | head -1", &[]),
-            Some("rm x".to_string())
-        );
-        assert_eq!(
-            bash_refused("ls | tee out", &[]),
-            Some("tee out".to_string())
-        );
-        assert_eq!(
-            bash_refused("echo hi > notes.txt", &[]).as_deref(),
-            Some("echo hi > notes.txt")
-        );
-        assert_eq!(bash_refused("cd sub && ls 2>&1 | head -1", &[]), None);
-    }
-
-    #[test]
-    fn config_can_allow_more() {
-        assert!(bash_allowed("make -n all", &["make -n".to_string()]));
-    }
-
-    #[test]
-    fn writers_behind_read_only_names_are_refused() {
-        for command in [
-            "fd . -x rm",
-            "fd . --exec rm {}",
-            "rg --pre cat pattern",
-            "sort -o out f",
-            "sort --output=out f",
-            "sort -ro out f",
-            "uniq in out",
-            "tree -o out",
-            "git branch -D old",
-            "git branch -m old new",
-            "git branch feature",
-            "git tag v1.0",
-            "git tag -a v1.0 -m x",
-            "git tag -d v1.0",
-            "git diff --output=patch HEAD",
-            "cargo clippy --fix",
-            "cargo check --fix",
-            "sed -n '/x/w out' f",
-            "sed -n 's/a/b/w out' f",
-            "sed -n '1w out' f",
-            "sed -n 's/a/b/w' f",
-            "sed -n 's|a|b|w out' f",
-            "git branch --set-upstream-to=origin/main",
-            "git branch -u origin/main",
-        ] {
-            assert!(!bash_allowed(command, &[]), "{command}");
-        }
-        for command in [
-            "fd . -t f",
-            "rg pattern",
-            "sort f | uniq -c",
-            "uniq f",
-            "uniq -s 2 f",
-            "tree -L 2",
-            "git branch",
-            "git branch -a",
-            "git branch --contains HEAD",
-            "git branch --list 'feat/*'",
-            "git tag -l --contains HEAD",
-            "git tag --contains HEAD",
-            "git tag",
-            "git tag -l 'v*'",
-            "git diff HEAD",
-            "cargo clippy -- -D warnings",
-            "sed -n 1,40p src/lib.rs",
-            "sed -n '/x/p' f",
-            "sed -n 's/a/w/' f",
-            "sed -n 's/a/b/p' words.txt",
-        ] {
-            assert!(bash_allowed(command, &[]), "{command}");
-        }
-    }
-}
+mod tests;
