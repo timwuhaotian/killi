@@ -17,6 +17,7 @@ pub(super) fn search_options(
     vec![
         option("brave", "an API key, or the public results page"),
         option("tavily", "an API key"),
+        option("keenable", "an API key, or its public endpoint"),
         option("searxng", "your own instance: a URL with the json format"),
     ]
 }
@@ -595,7 +596,7 @@ impl App {
     /// needs; the pick is written to the config and applies at once.
     pub(super) fn open_search_picker(&mut self, config: &Config) {
         let in_use = config.search.provider.as_deref().unwrap_or("brave");
-        let selected = ["brave", "tavily", "searxng"]
+        let selected = ["brave", "tavily", "keenable", "searxng"]
             .iter()
             .position(|name| *name == in_use)
             .unwrap_or(0);
@@ -645,6 +646,11 @@ impl App {
                 }
             }
             "tavily" => self.search_ask("Tavily API key:", key.as_deref(), true),
+            "keenable" => self.search_ask(
+                "Keenable API key (Enter for none: killi then uses Keenable's public endpoint):",
+                key.as_deref(),
+                true,
+            ),
             _ => self.search_ask(
                 "Brave API key (Enter for none: killi then reads Brave's public page):",
                 key.as_deref(),

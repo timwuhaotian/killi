@@ -135,7 +135,7 @@ fn matches(pattern: &str, alias: &str, id: &str) -> bool {
 /// page last, which needs nothing and can turn automated requests away.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct SearchConfig {
-    /// "brave" (default), "tavily" or "searxng".
+    /// "brave" (default), "tavily", "keenable" or "searxng".
     pub provider: Option<String>,
     /// The SearXNG instance, such as "http://localhost:8888"; only "searxng" reads it.
     pub url: Option<String>,
