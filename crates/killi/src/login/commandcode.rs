@@ -67,7 +67,7 @@ pub(crate) async fn add(api_key: &str) -> Result<Outcome> {
     provider.insert("base_url".into(), BASE_URL.into());
     provider.insert("api_key".into(), api_key.into());
     let added = crate::config::add_models(&Additions {
-        name: "commandcode",
+        name: "commandcode".into(),
         ours,
         provider,
         models,

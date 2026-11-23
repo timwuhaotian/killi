@@ -108,7 +108,7 @@ async fn add_with(key: Option<&str>, env: Option<(&str, &str)>) -> Result<Outcom
     }
     let ids: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
     let mut added = crate::config::add_models(&Additions {
-        name: "opencode-go",
+        name: "opencode-go".into(),
         ours,
         provider,
         models,

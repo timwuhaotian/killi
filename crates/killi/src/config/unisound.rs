@@ -30,7 +30,7 @@ fn additions(api_key: &str) -> Additions {
     provider.insert("base_url".into(), BASE_URL.into());
     provider.insert("api_key".into(), api_key.into());
     Additions {
-        name: "unisound",
+        name: "unisound".into(),
         ours,
         provider,
         models: vec![u2("u2-flash", "U2 Flash (Unisound)")],

@@ -121,7 +121,7 @@ pub async fn login() -> Result<()> {
         Ok(models) if !models.is_empty() => println!(
             "{}",
             crate::config::add_models(&Additions {
-                name: "chatgpt",
+                name: "chatgpt".into(),
                 ours: |provider| provider.kind == "chatgpt",
                 provider: toml::Table::from_iter([(
                     "type".to_string(),

@@ -30,7 +30,7 @@ fn additions(api_key: &str) -> Additions {
     provider.insert("base_url".into(), BASE_URL.into());
     provider.insert("api_key".into(), api_key.into());
     Additions {
-        name: "kimi",
+        name: "kimi".into(),
         ours,
         provider,
         models: vec![k3("k3.1-pro", "K3.1 Pro")],

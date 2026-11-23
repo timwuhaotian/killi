@@ -103,7 +103,7 @@ use format::{
 use input::newline_key;
 use notify::{copy_to_clipboard, first_line, notify};
 use pair::{pair_kickoff, pair_pick, pair_turn};
-use picker::{Picker, ProviderFlow, SearchFlow};
+use picker::{CustomFlow, Picker, PickerChoice, ProviderFlow, SearchFlow};
 use rows::{
     aside_rows, ask_rows, choice_rows, diff_rows, first_sentence, handoff, help_rows, hidden_row,
     hint_row, is_bookkeeping, key_hints, label, overview_rows, placeholder, prompt_rows,
@@ -111,8 +111,8 @@ use rows::{
     tool_summary, tool_text, working_rows, wrap_items,
 };
 use run::{
-    flush_recap, handle_command, next_incoming, peer_label, prompt_turn, provider_add, run_turn,
-    wake_turn,
+    flush_recap, handle_command, next_incoming, peer_label, prompt_turn, provider_add,
+    provider_custom, provider_custom_add, run_turn, wake_turn,
 };
 use schedule::Schedule;
 use select::{InputRows, Selection, Spot};
@@ -608,6 +608,13 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     &key,
                 )
                 .await?;
+            }
+            Input::CustomFetch(flow) => {
+                provider_custom(&mut app, &mut keys, &mut rx, flow).await?;
+            }
+            Input::CustomProvider(flow, models) => {
+                provider_custom_add(&mut app, &mut session, &mut agent, &mut keys, &mut rx, flow, models)
+                    .await?;
             }
             Input::Mcp(name, from_list) => match session.mcp().toggle(&name) {
                 Ok(on) => {

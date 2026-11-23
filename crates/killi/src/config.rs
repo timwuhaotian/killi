@@ -1,5 +1,6 @@
 mod anthropic;
 mod command;
+mod custom;
 mod edit;
 mod guide;
 mod import;
@@ -24,6 +25,10 @@ use serde::Deserialize;
 pub use anthropic::{ABOUT as ANTHROPIC_ABOUT, add as add_anthropic, ours as anthropic_ours};
 pub use command::command_guide_if_first;
 pub(crate) use command::{confirm, read_line, read_secret, select};
+pub use custom::{
+    ABOUT as CUSTOM_ABOUT, add as add_custom, name as custom_name,
+    served as custom_served, suggested_name as custom_suggested_name,
+};
 pub use edit::{
     remove_models, remove_provider_key, set_backup_model, set_mode, set_model_effort, set_search,
     set_swarm, set_swarm_parallel, set_ui_theme, set_verbosity,

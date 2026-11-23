@@ -30,7 +30,7 @@ fn additions(api_key: &str) -> Additions {
     provider.insert("type".into(), "anthropic".into());
     provider.insert("api_key".into(), api_key.into());
     Additions {
-        name: "anthropic",
+        name: "anthropic".into(),
         ours,
         provider,
         models: vec![sonnet("claude-sonnet-5-5", "Claude Sonnet 5.5")],

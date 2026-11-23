@@ -31,7 +31,7 @@ fn additions(api_key: &str) -> Additions {
     provider.insert("base_url".into(), BASE_URL.into());
     provider.insert("api_key".into(), api_key.into());
     Additions {
-        name: "stepfun",
+        name: "stepfun".into(),
         ours,
         provider,
         models: vec![step("step-5-preview", "Step-5-Preview (StepFun)")],

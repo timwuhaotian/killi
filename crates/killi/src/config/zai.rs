@@ -100,7 +100,7 @@ fn additions(key_field: (&str, &str), ids: Vec<String>) -> Additions {
     provider.insert("base_url".into(), BASE_URL.into());
     provider.insert(field.into(), value.into());
     Additions {
-        name: "zai",
+        name: "zai".into(),
         ours,
         provider,
         models: ids.into_iter().map(|id| glm(&id)).collect(),

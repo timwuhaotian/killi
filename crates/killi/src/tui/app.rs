@@ -38,6 +38,7 @@ impl App {
             theme_before_preview: None,
             search: None,
             provider: None,
+            custom: None,
             searxng: None,
             updates: Updates::new(),
             next_input: None,

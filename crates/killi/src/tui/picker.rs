@@ -32,6 +32,10 @@ pub(super) struct Picker {
     pub(super) shown: Vec<usize>,
     /// Position in `shown`.
     pub(super) selected: usize,
+    /// Space ticks several options instead of picking one (the custom models list).
+    pub(super) multi: bool,
+    /// Indexes into `options` that are ticked.
+    pub(super) ticked: std::collections::BTreeSet<usize>,
 }
 
 /// What `/swarm ` offers: its two modes and a few subagent counts, each chosen into the prompt.
@@ -84,10 +88,22 @@ pub(super) struct SearchFlow {
     pub(super) current: crate::config::SearchConfig,
 }
 
-/// A /provider flow between its questions: the preset being added. Only its key is asked,
-/// so the preset's name is all it holds.
+/// A /provider flow between its questions: the preset being added. A preset needs only its
+/// key; `custom` also collects its protocol, endpoint and name before the key.
 pub(super) struct ProviderFlow {
     pub(super) preset: String,
+    /// /provider custom's answers so far: the protocol, then the endpoint, then its name.
+    pub(super) protocol: Option<String>,
+    pub(super) endpoint: Option<String>,
+    pub(super) name: Option<String>,
+}
+
+/// A /provider custom flow's answers: the provider's name, protocol, endpoint and key.
+pub(super) struct CustomFlow {
+    pub(super) name: String,
+    pub(super) protocol: String,
+    pub(super) endpoint: String,
+    pub(super) key: String,
 }
 impl Picker {
     pub(super) fn new(
@@ -102,6 +118,8 @@ impl Picker {
             query: String::new(),
             shown,
             selected,
+            multi: false,
+            ticked: std::collections::BTreeSet::new(),
         }
     }
 
@@ -172,6 +190,7 @@ fn provider_question(preset: &str) -> &'static str {
         "stepfun" => "StepFun API key:",
         "unisound" => "Unisound API key:",
         "zai" => "Z.AI API key:",
+        "custom" => "API protocol:",
         _ => "",
     }
 }
@@ -193,6 +212,7 @@ fn provider_setup(preset: &str) -> (&'static str, &'static str) {
         "stepfun" => crate::config::STEPFUN_ABOUT,
         "unisound" => crate::config::UNISOUND_ABOUT,
         "zai" => crate::config::ZAI_ABOUT,
+        "custom" => crate::config::CUSTOM_ABOUT,
         _ => crate::config::MUSE_ABOUT,
     };
     (note, provider_question(preset))
@@ -222,6 +242,7 @@ impl App {
             KeyCode::Esc => {
                 self.picker = None;
                 self.update_dismissed();
+                self.custom_cancelled();
                 if let Some(before) = self.theme_before_preview.take() {
                     text::set_theme(&before);
                     follow = true;
@@ -230,6 +251,7 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.picker = None;
                 self.update_dismissed();
+                self.custom_cancelled();
                 if let Some(before) = self.theme_before_preview.take() {
                     text::set_theme(&before);
                     follow = true;
@@ -243,6 +265,28 @@ impl App {
                     picker.preview_theme();
                     follow = true;
                 }
+            }
+            KeyCode::Char(' ') if picker.multi => {
+                if let Some(&i) = picker.shown.get(picker.selected)
+                    && !picker.ticked.insert(i)
+                {
+                    picker.ticked.remove(&i);
+                }
+            }
+            KeyCode::Enter | KeyCode::Tab if picker.multi => {
+                let ticked: Vec<String> = (0..picker.options.len())
+                    .filter(|i| picker.ticked.contains(i))
+                    .map(|i| picker.options[i].0.clone())
+                    .collect();
+                if ticked.is_empty() {
+                    self.notice("Tick the models to add with Space; Enter saves them.");
+                    return Idle::Continue;
+                }
+                self.picker = None;
+                let Some(flow) = self.custom.take() else {
+                    return Idle::Continue;
+                };
+                return Idle::Input(Input::CustomProvider(flow, ticked));
             }
             KeyCode::Char(c)
                 if !key
@@ -687,6 +731,11 @@ impl App {
             ("stepfun", "StepFun, with your API key", has(crate::config::stepfun_ours)),
             ("unisound", "Unisound, with your API key", has(crate::config::unisound_ours)),
             ("zai", "Zhipu's Z.AI, with your API key", has(crate::config::zai_ours)),
+            (
+                "custom",
+                "any OpenAI- or Anthropic-compatible endpoint; its models are picked from the list it serves",
+                false,
+            ),
         ]
         .into_iter()
         .map(|(name, blurb, on)| {
@@ -701,24 +750,40 @@ impl App {
     }
 
     /// `/provider <name>`: the preset's one question — its API key, pasted unseen. What the
-    /// preset writes is said first, so the key's owner knows where it goes.
+    /// preset writes is said first, so the key's owner knows where it goes. `custom` asks
+    /// its protocol, endpoint and key, then reads the models the endpoint lists.
     pub(super) fn provider_pick(&mut self, preset: &str) {
         if provider_question(preset).is_empty() {
             return self.error(
-                "Pick one of the presets: /provider anthropic, kimi, mimo, minimax, qwen, stepfun, unisound, zai, muse-code, opencode-go or command-code.",
+                "Pick one of: /provider anthropic, kimi, mimo, minimax, qwen, stepfun, unisound, zai, muse-code, opencode-go, command-code or custom.",
             );
         }
         let (note, question) = provider_setup(preset);
         self.provider = Some(ProviderFlow {
             preset: preset.to_string(),
+            protocol: None,
+            endpoint: None,
+            name: None,
         });
         self.begin(Kind::Note);
         self.emit(Line::Words(format!("{DIM}{note}{RESET}"), 2));
-        self.search_ask(question, None, true);
+        if preset == "custom" {
+            self.custom_protocol_question();
+        } else {
+            self.search_ask(question, None, true);
+        }
+    }
+
+    /// The custom flow's first question: which protocol the endpoint speaks.
+    fn custom_protocol_question(&mut self) {
+        self.search_question("API protocol:", vec!["openai".into(), "anthropic".into()]);
     }
 
     /// The preset's key: it goes to the config as the next input applies it.
     pub(super) fn provider_answer(&mut self, flow: ProviderFlow, answer: &str) {
+        if flow.preset == "custom" {
+            return self.custom_answer(flow, answer);
+        }
         let answer = answer.trim();
         if answer.is_empty() {
             let preset = flow.preset.clone();
@@ -728,6 +793,91 @@ impl App {
         }
         self.commit(format!("  {FIN}↳{RESET} (set)"));
         self.next_input = Some(Input::Provider(flow.preset, answer.to_string()));
+    }
+
+    /// `/provider custom` between its questions: the protocol, the endpoint's URL, a name
+    /// for the provider (prefilled from the URL), then the key, pasted unseen. Each answer
+    /// is echoed; the key's list call runs as the next input applies it.
+    pub(super) fn custom_answer(&mut self, mut flow: ProviderFlow, answer: &str) {
+        let answer = answer.trim();
+        if flow.protocol.is_none() {
+            if answer != "openai" && answer != "anthropic" {
+                self.error("Pick openai or anthropic.");
+                self.provider = Some(flow);
+                return self.custom_protocol_question();
+            }
+            self.commit(format!("  {FIN}↳{RESET} {answer}"));
+            flow.protocol = Some(answer.to_string());
+            self.provider = Some(flow);
+            let question = if answer == "anthropic" {
+                "Base URL, such as https://api.anthropic.com:"
+            } else {
+                "Base URL, such as https://api.openai.com/v1:"
+            };
+            return self.search_ask(question, None, false);
+        }
+        if flow.endpoint.is_none() {
+            let protocol = flow.protocol.clone().expect("the protocol was answered");
+            let question = if protocol == "anthropic" {
+                "Base URL, such as https://api.anthropic.com:"
+            } else {
+                "Base URL, such as https://api.openai.com/v1:"
+            };
+            if !(answer.starts_with("http://") || answer.starts_with("https://")) {
+                self.error("The endpoint is its URL, starting http:// or https://.");
+                self.provider = Some(flow);
+                return self.search_ask(question, Some(answer), false);
+            }
+            // Anthropic's paths start at /v1, which killi adds itself; a base ending in it
+            // would double up.
+            let url = answer.trim_end_matches('/');
+            let url = if protocol == "anthropic" {
+                url.strip_suffix("/v1").unwrap_or(url)
+            } else {
+                url
+            };
+            self.commit(format!("  {FIN}↳{RESET} {}", text::sanitize(url)));
+            flow.endpoint = Some(url.to_string());
+            self.provider = Some(flow);
+            let suggested = crate::config::custom_suggested_name(url);
+            return self.search_ask(
+                "Provider name, as /model lists its models:",
+                Some(&suggested),
+                false,
+            );
+        }
+        if flow.name.is_none() {
+            let suggested =
+                crate::config::custom_suggested_name(flow.endpoint.as_deref().expect("the endpoint was answered"));
+            let name = if answer.is_empty() {
+                suggested
+            } else {
+                crate::config::custom_name(answer)
+            };
+            self.commit(format!("  {FIN}↳{RESET} {}", text::sanitize(&name)));
+            flow.name = Some(name);
+            self.provider = Some(flow);
+            return self.search_ask("API key:", None, true);
+        }
+        if answer.is_empty() {
+            self.error("Paste the key; nothing was changed.");
+            self.provider = Some(flow);
+            return self.search_ask("API key:", None, true);
+        }
+        self.commit(format!("  {FIN}↳{RESET} (set)"));
+        self.next_input = Some(Input::CustomFetch(CustomFlow {
+            name: flow.name.clone().expect("the name was answered"),
+            protocol: flow.protocol.clone().expect("the protocol was answered"),
+            endpoint: flow.endpoint.clone().expect("the endpoint was answered"),
+            key: answer.to_string(),
+        }));
+    }
+
+    /// Closes the custom models list without writing: Esc or Ctrl+C on its picker.
+    fn custom_cancelled(&mut self) {
+        if self.custom.take().is_some() {
+            self.notice("/provider custom cancelled; nothing was changed.");
+        }
     }
 
     /// One question of the flow, shown as the ask tool's questions are, with the answer typed

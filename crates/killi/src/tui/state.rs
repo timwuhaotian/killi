@@ -110,6 +110,10 @@ pub(super) enum Input {
     Search(String, Option<String>, Option<String>),
     /// Applies a /provider pick: the preset's name and its pasted API key.
     Provider(String, String),
+    /// `/provider custom` reads the endpoint's model list: the flow's answers.
+    CustomFetch(CustomFlow),
+    /// `/provider custom`'s write: the flow's answers and the ticked model ids.
+    CustomProvider(CustomFlow, Vec<String>),
     /// A /pair setup's model pick for a role.
     PairModel(Role, String),
     /// A /pair setup's effort pick for a role.
@@ -219,6 +223,8 @@ pub(super) struct App {
     pub(super) search: Option<SearchFlow>,
     /// A /provider flow between its questions: the preset being added.
     pub(super) provider: Option<ProviderFlow>,
+    /// A /provider custom flow after its list call, while its models are ticked.
+    pub(super) custom: Option<CustomFlow>,
     /// The SearXNG instance Docker is starting for that flow, when one is.
     pub(super) searxng: Option<PendingSearxng>,
     /// Checks for a newer killi, the offer to install it, and the install.

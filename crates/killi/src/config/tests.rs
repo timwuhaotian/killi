@@ -133,7 +133,7 @@ fn plan_model(id: &str) -> super::NewModel {
 
 fn chatgpt(models: Vec<super::NewModel>) -> super::Additions {
     super::Additions {
-        name: "chatgpt",
+        name: "chatgpt".into(),
         ours: |provider| provider.kind == "chatgpt",
         provider: toml::Table::from_iter([("type".to_string(), toml::Value::from("chatgpt"))]),
         models,

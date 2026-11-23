@@ -487,7 +487,7 @@ fn every_provider_preset_asks_its_key() {
         .iter()
         .map(|(name, _, _)| name.clone())
         .collect();
-    assert_eq!(presets.len(), 11, "{presets:?}");
+    assert_eq!(presets.len(), 12, "{presets:?}");
     for preset in &presets {
         app.provider_pick(preset);
         assert!(
@@ -1544,4 +1544,103 @@ fn the_island_waits_for_the_ask_and_hides_where_no_suggestion_would_show() {
     app.busy = None;
     app.suggestion = Some("fix the bug".into());
     assert!(!app.completing(), "a continuation already shows");
+}
+
+#[test]
+fn the_custom_flow_collects_its_answers_and_the_tick_picker_saves_them() {
+    let key = |code: KeyCode| KeyEvent::new(code, KeyModifiers::NONE);
+    let mut app = test_app();
+    app.provider_pick("custom");
+    // The protocol comes from the options; openai is first.
+    app.on_key_asking(key(KeyCode::Enter));
+    assert!(app
+        .provider
+        .as_ref()
+        .is_some_and(|flow| flow.protocol.as_deref() == Some("openai")));
+    // A URL that isn't one is asked again.
+    app.editor.insert("api.example.com");
+    app.on_key_asking(key(KeyCode::Enter));
+    assert!(app.provider.as_ref().is_some_and(|flow| flow.endpoint.is_none()));
+    assert!(app
+        .pending
+        .iter()
+        .any(|line| unstyled(line).contains("The endpoint is its URL")));
+    app.editor.clear();
+    app.editor.insert("https://api.example.com/v1");
+    app.on_key_asking(key(KeyCode::Enter));
+    assert_eq!(
+        app.provider.as_ref().and_then(|flow| flow.endpoint.as_deref()),
+        Some("https://api.example.com/v1")
+    );
+    // The name comes prefilled from the host; Enter takes it.
+    assert_eq!(app.editor.text(), "example");
+    app.on_key_asking(key(KeyCode::Enter));
+    assert_eq!(
+        app.provider.as_ref().and_then(|flow| flow.name.as_deref()),
+        Some("example")
+    );
+    app.editor.insert("sk");
+    app.on_key_asking(key(KeyCode::Enter));
+    assert!(matches!(app.next_input, Some(Input::CustomFetch(..))));
+
+    // The ticked models become the write; Enter with none ticked saves nothing yet.
+    app.custom = Some(CustomFlow {
+        name: "example".into(),
+        protocol: "openai".into(),
+        endpoint: "https://api.example.com/v1".into(),
+        key: "sk".into(),
+    });
+    let mut picker = Picker::new(
+        "Models to add".into(),
+        vec![
+            ("gpt-4o".into(), String::new(), PickerChoice::Stay),
+            ("gpt-4o-mini".into(), String::new(), PickerChoice::Stay),
+        ],
+        0,
+    );
+    picker.multi = true;
+    app.picker = Some(picker);
+    assert!(matches!(
+        app.on_key_picker(key(KeyCode::Enter)),
+        Idle::Continue
+    ));
+    app.on_key_picker(key(KeyCode::Char(' ')));
+    app.on_key_picker(key(KeyCode::Down));
+    app.on_key_picker(key(KeyCode::Char(' ')));
+    match app.on_key_picker(key(KeyCode::Enter)) {
+        Idle::Input(Input::CustomProvider(flow, models)) => {
+            assert_eq!(
+                (
+                    flow.name.as_str(),
+                    flow.protocol.as_str(),
+                    flow.endpoint.as_str(),
+                    flow.key.as_str()
+                ),
+                ("example", "openai", "https://api.example.com/v1", "sk")
+            );
+            assert_eq!(models, ["gpt-4o", "gpt-4o-mini"]);
+        }
+        _ => panic!("the ticked models save"),
+    }
+
+    // Esc on the list cancels without writing.
+    app.custom = Some(CustomFlow {
+        name: "example".into(),
+        protocol: "openai".into(),
+        endpoint: "https://api.example.com/v1".into(),
+        key: "sk".into(),
+    });
+    let mut picker = Picker::new(
+        "Models to add".into(),
+        vec![("gpt-4o".into(), String::new(), PickerChoice::Stay)],
+        0,
+    );
+    picker.multi = true;
+    app.picker = Some(picker);
+    app.on_key_picker(key(KeyCode::Esc));
+    assert!(app.custom.is_none() && app.picker.is_none());
+    assert!(app
+        .pending
+        .iter()
+        .any(|line| unstyled(line).contains("/provider custom cancelled")));
 }

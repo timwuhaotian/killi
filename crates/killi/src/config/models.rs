@@ -29,7 +29,7 @@ pub struct NewModel {
 /// What a sign-in adds to the config: its provider and models.
 pub struct Additions {
     /// The provider's name, when the config doesn't have it yet.
-    pub name: &'static str,
+    pub name: String,
     /// Finds the provider in a config that has it already, under any name.
     pub ours: fn(&Provider) -> bool,
     pub provider: toml::Table,
@@ -194,7 +194,7 @@ pub(super) fn with_models(
         .map(|(name, _)| name.to_string());
     let name = existing.clone().unwrap_or_else(|| {
         let taken = |name: &String| config.providers.contains_key(name);
-        std::iter::once(additions.name.to_string())
+        std::iter::once(additions.name.clone())
             .chain((2..).map(|n| format!("{}-{n}", additions.name)))
             .find(|name| !taken(name))
             .unwrap_or_default()

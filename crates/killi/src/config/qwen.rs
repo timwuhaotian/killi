@@ -31,7 +31,7 @@ fn additions(api_key: &str) -> Additions {
     provider.insert("base_url".into(), BASE_URL.into());
     provider.insert("api_key".into(), api_key.into());
     Additions {
-        name: "qwen",
+        name: "qwen".into(),
         ours,
         provider,
         models: vec![

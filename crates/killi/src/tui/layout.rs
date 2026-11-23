@@ -378,10 +378,27 @@ impl App {
             let count = picker.shown.len();
             let visible = count.min(room.saturating_sub(1).max(1));
             rows.push(fit(&title_rule(&picker.title, width), width));
-            let options: Vec<(&str, &str)> = picker
+            let names: Vec<String> = picker
                 .shown
                 .iter()
-                .map(|&i| (picker.options[i].0.as_str(), picker.options[i].1.as_str()))
+                .map(|&i| {
+                    let name = &picker.options[i].0;
+                    match (picker.multi, picker.ticked.contains(&i)) {
+                        (true, true) => format!("[x] {name}"),
+                        (true, false) => format!("[ ] {name}"),
+                        _ => name.clone(),
+                    }
+                })
+                .collect();
+            let options: Vec<(String, &str)> = picker
+                .shown
+                .iter()
+                .zip(names)
+                .map(|(&i, name)| (name, picker.options[i].1.as_str()))
+                .collect();
+            let options: Vec<(&str, &str)> = options
+                .iter()
+                .map(|(name, note)| (name.as_str(), *note))
                 .collect();
             rows.extend(choice_rows(
                 &options,
@@ -400,13 +417,23 @@ impl App {
                 (false, 0) => format!("{RESET}{}{DIM} matches nothing", picker.query),
                 (false, _) => format!("filter {RESET}{}{DIM}", picker.query),
             };
-            let hints = [
-                (2, filter),
-                (1, position),
-                (4, "↑↓ choose".into()),
-                (5, "Tab or Enter selects".into()),
-                (3, "Esc closes".into()),
-            ];
+            let hints = if picker.multi {
+                vec![
+                    (2, filter),
+                    (1, position),
+                    (4, "↑↓ choose".into()),
+                    (5, "Space ticks · Enter saves".into()),
+                    (3, "Esc cancels".into()),
+                ]
+            } else {
+                vec![
+                    (2, filter),
+                    (1, position),
+                    (4, "↑↓ choose".into()),
+                    (5, "Tab or Enter selects".into()),
+                    (3, "Esc closes".into()),
+                ]
+            };
             rows.push(hint_row(&hints, width));
         }
         if let Some(asking) = &self.asking {

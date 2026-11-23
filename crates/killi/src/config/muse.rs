@@ -38,7 +38,7 @@ fn additions(api_key: &str) -> Additions {
     provider.insert("tool_names".into(), tool_names.into());
     provider.insert("api_key".into(), api_key.into());
     Additions {
-        name: "meta",
+        name: "meta".into(),
         ours,
         provider,
         models: vec![

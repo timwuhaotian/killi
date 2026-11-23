@@ -467,6 +467,98 @@ pub(super) async fn provider_add(
     let Some(outcome) = outcome.take() else {
         return Ok(());
     };
+    provider_written(app, session, agent, outcome);
+    Ok(())
+}
+
+/// `/provider custom` between the key and the ticks: reads the endpoint's model list
+/// inside a turn (the key stays live while it runs), then offers the models to tick. A
+/// failed list call ends the flow with the reason; nothing is written.
+pub(super) async fn provider_custom(
+    app: &mut App,
+    keys: &mut EventStream,
+    rx: &mut mpsc::UnboundedReceiver<Event>,
+    flow: CustomFlow,
+) -> Result<()> {
+    let outcome = Rc::new(RefCell::new(None));
+    let slot = outcome.clone();
+    // The closure takes copies: the answers also build the flow the ticked models write.
+    let (ask, kept) = ((flow.protocol.clone(), flow.endpoint.clone(), flow.key.clone()), flow);
+    app.begin_busy();
+    run_turn(app, keys, rx, async move {
+        let (protocol, endpoint, key) = ask;
+        *slot.borrow_mut() = Some(crate::config::custom_served(&protocol, &endpoint, &key).await);
+        Ok((String::new(), Stop::Completed))
+    })
+    .await?;
+    app.end_busy();
+    let Some(ids) = outcome.take() else {
+        return Ok(());
+    };
+    match ids {
+        Err(e) => app.error_from("/provider", &e),
+        Ok(ids) => {
+            app.notice(&format!(
+                "The endpoint lists {}.",
+                crate::tools::count(ids.len(), "model")
+            ));
+            app.custom = Some(kept);
+            let options: Vec<_> = ids
+                .into_iter()
+                .map(|id| (id, String::new(), PickerChoice::Stay))
+                .collect();
+            let mut picker = Picker::new("Models to add".into(), options, 0);
+            picker.multi = true;
+            app.picker = Some(picker);
+        }
+    }
+    Ok(())
+}
+
+/// `/provider custom`'s write: the provider and the ticked models, inside a turn so the
+/// key stays live; then the same reload and notices as a preset.
+pub(super) async fn provider_custom_add(
+    app: &mut App,
+    session: &mut Setup,
+    agent: &mut Agent,
+    keys: &mut EventStream,
+    rx: &mut mpsc::UnboundedReceiver<Event>,
+    flow: CustomFlow,
+    models: Vec<String>,
+) -> Result<()> {
+    let outcome = Rc::new(RefCell::new(None));
+    let slot = outcome.clone();
+    let CustomFlow {
+        name,
+        protocol,
+        endpoint,
+        key,
+    } = flow;
+    app.begin_busy();
+    run_turn(app, keys, rx, async move {
+        *slot.borrow_mut() = Some(
+            crate::config::add_custom(&name, &protocol, &endpoint, &key, &models)
+                .map(|added| (added, Vec::new())),
+        );
+        Ok((String::new(), Stop::Completed))
+    })
+    .await?;
+    app.end_busy();
+    let Some(outcome) = outcome.take() else {
+        return Ok(());
+    };
+    provider_written(app, session, agent, outcome);
+    Ok(())
+}
+
+/// What a /provider write leaves: the notices, the reload, and the model switch when the
+/// session sat on the provider or on a model it no longer serves.
+fn provider_written(
+    app: &mut App,
+    session: &mut Setup,
+    agent: &mut Agent,
+    outcome: anyhow::Result<(crate::config::Added, Vec<String>)>,
+) {
     match outcome {
         Err(e) => app.error_from("/provider", &e),
         Ok((added, notes)) => {
@@ -500,7 +592,7 @@ pub(super) async fn provider_add(
             }
             if let Err(e) = session.reload() {
                 app.error_from("/reload", &e);
-                return Ok(());
+                return;
             }
             let alias = agent.model_alias().to_string();
             let on_it = session
@@ -547,7 +639,6 @@ pub(super) async fn provider_add(
             }
         }
     }
-    Ok(())
 }
 
 /// The model switch after `/provider`: first configuration has no removed model to name.

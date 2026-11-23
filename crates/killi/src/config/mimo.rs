@@ -31,7 +31,7 @@ fn additions(api_key: &str) -> Additions {
     provider.insert("base_url".into(), BASE_URL.into());
     provider.insert("api_key".into(), api_key.into());
     Additions {
-        name: "mimo",
+        name: "mimo".into(),
         ours,
         provider,
         models: vec![mimo("mimo-v2.6-pro", "MiMo-V2.6-Pro")],
