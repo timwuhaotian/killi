@@ -101,14 +101,26 @@ pub fn name(wanted: &str) -> String {
 
 /// `/provider custom`'s write: a provider of the given name on the protocol with the
 /// endpoint and key, and a model per ticked id.
-pub fn add(name: &str, protocol: &str, base_url: &str, api_key: &str, ids: &[String]) -> Result<Added> {
+pub fn add(
+    name: &str,
+    protocol: &str,
+    base_url: &str,
+    api_key: &str,
+    ids: &[String],
+) -> Result<Added> {
     add_models(&additions(name, protocol, base_url, api_key, ids))
 }
 
 /// The provider and models the flow writes. A repeat under the same name writes another
 /// provider (`example-2`, …) instead of repairing: only the endpoint's own list says which
 /// models it serves, so the ticked ones decide what changes.
-fn additions(wanted: &str, protocol: &str, base_url: &str, api_key: &str, ids: &[String]) -> Additions {
+fn additions(
+    wanted: &str,
+    protocol: &str,
+    base_url: &str,
+    api_key: &str,
+    ids: &[String],
+) -> Additions {
     let mut provider = toml::Table::new();
     provider.insert("type".into(), protocol.into());
     provider.insert("base_url".into(), base_url.into());
@@ -159,12 +171,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn the_openai_protocol_lists_models_with_a_bearer_key() {
-        let (url, asked) =
-            serve(r#"{"data":[{"id":"b"},{"id":"a"},{"id":"a"}]}"#, "200 OK").await;
+        let (url, asked) = serve(r#"{"data":[{"id":"b"},{"id":"a"},{"id":"a"}]}"#, "200 OK").await;
         assert_eq!(served("openai", &url, "sk").await.unwrap(), ["a", "b"]);
         let request = asked.await.unwrap();
         assert!(request.starts_with("GET /models "), "{request}");
-        assert!(request.to_lowercase().contains("authorization: bearer sk"), "{request}");
+        assert!(
+            request.to_lowercase().contains("authorization: bearer sk"),
+            "{request}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -172,18 +186,21 @@ mod tests {
         let (url, asked) = serve(r#"{"data":[{"id":"claude-x"}]}"#, "200 OK").await;
         assert_eq!(served("anthropic", &url, "sk").await.unwrap(), ["claude-x"]);
         let request = asked.await.unwrap();
-        assert!(request.starts_with("GET /v1/models?limit=1000 "), "{request}");
+        assert!(
+            request.starts_with("GET /v1/models?limit=1000 "),
+            "{request}"
+        );
         assert!(request.contains("x-api-key: sk"), "{request}");
-        assert!(request.contains("anthropic-version: 2023-06-01"), "{request}");
+        assert!(
+            request.contains("anthropic-version: 2023-06-01"),
+            "{request}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn an_endpoint_that_refuses_the_key_lists_nothing() {
         let (url, _) = serve("{}", "401 Unauthorized").await;
-        let error = served("openai", &url, "sk")
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = served("openai", &url, "sk").await.unwrap_err().to_string();
         assert!(error.contains("HTTP 401"), "{error}");
     }
 
@@ -192,7 +209,13 @@ mod tests {
         let ids = vec!["glm-5.3".to_string(), "gpt-4o".to_string()];
         let (out, name, _, added) = models::with_models(
             "",
-            &additions("example", "openai", "https://api.example.com/v1", "sk", &ids),
+            &additions(
+                "example",
+                "openai",
+                "https://api.example.com/v1",
+                "sk",
+                &ids,
+            ),
         )
         .unwrap();
         assert_eq!((name.as_str(), added.len()), ("example", 2));
@@ -228,7 +251,13 @@ mod tests {
         let ids = vec!["gpt-4o".to_string()];
         let (out, _, _, _) = models::with_models(
             "",
-            &additions("example", "openai", "https://api.example.com/v1", "sk", &ids),
+            &additions(
+                "example",
+                "openai",
+                "https://api.example.com/v1",
+                "sk",
+                &ids,
+            ),
         )
         .unwrap();
         let config: Config = toml::from_str(&out).unwrap();

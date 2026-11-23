@@ -17,10 +17,13 @@ fn signature_retry_omits_only_the_named_block() {
         "messages.0.content.0: Invalid `signature` in `thinking` block",
     ));
     let retry: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(retry["messages"][0]["content"], json!([
-        request["messages"][0]["content"][1],
-        request["messages"][0]["content"][2]
-    ]));
+    assert_eq!(
+        retry["messages"][0]["content"],
+        json!([
+            request["messages"][0]["content"][1],
+            request["messages"][0]["content"][2]
+        ])
+    );
 }
 
 #[test]
@@ -145,7 +148,14 @@ fn whitespace_only_assistant_text_is_skipped() {
         "whitespace text is not a block Anthropics accepts: {blocks:?}"
     );
     assert_eq!(blocks[0]["type"], "tool_use");
-    assert!(assistant_blocks(&json!({"role": "assistant", "content": " \n "}), true, &Default::default()).is_empty());
+    assert!(
+        assistant_blocks(
+            &json!({"role": "assistant", "content": " \n "}),
+            true,
+            &Default::default()
+        )
+        .is_empty()
+    );
 }
 
 #[test]

@@ -88,9 +88,10 @@ pub fn report(
     } else {
         format!("completed: {done}, failed: {failed}")
     };
-    let has_logs = outputs.iter().enumerate().any(|(n, output)| {
-        output.is_error && logs.get(n).is_some_and(|log| !log.is_empty())
-    });
+    let has_logs = outputs
+        .iter()
+        .enumerate()
+        .any(|(n, output)| output.is_error && logs.get(n).is_some_and(|log| !log.is_empty()));
     let render = |share: Option<usize>, note: &str| {
         let mut text = format!("<agent_swarm_result>\n<summary>{summary}</summary>\n");
         for (n, (item, output)) in items.iter().zip(outputs).enumerate() {
@@ -274,7 +275,11 @@ mod tests {
             Output::error("y".repeat(30_000)),
         ];
         let out = report(&ctx, &items, &outputs, &logs, 20_000);
-        assert!(out.text.contains("Partial log: agent-2.jsonl."), "{}", out.text);
+        assert!(
+            out.text.contains("Partial log: agent-2.jsonl."),
+            "{}",
+            out.text
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

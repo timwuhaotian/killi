@@ -77,9 +77,7 @@ fn layout_prompt(app: &mut App) -> Vec<String> {
     app.input_rows = app.input_rows.placed(above, cut);
     app.todo_rows = app
         .todo_rows
-        .and_then(|(first, last)| {
-            Some((first.saturating_sub(cut), last.checked_sub(cut)?))
-        })
+        .and_then(|(first, last)| Some((first.saturating_sub(cut), last.checked_sub(cut)?)))
         .map(|(first, last)| (above + first, above + last));
     // The screen's rows, so a row number indexes straight into them.
     let mut screen = vec![String::new(); above];

@@ -73,5 +73,12 @@ fn a_positional_prompt_starts_an_interactive_session_with_that_first_turn() {
 
 #[test]
 fn a_one_shot_and_an_interactive_prompt_are_not_both_accepted() {
-    assert!(parse(vec!["-p".to_string(), "once".to_string(), "interactive".to_string()]).is_err());
+    assert!(
+        parse(vec![
+            "-p".to_string(),
+            "once".to_string(),
+            "interactive".to_string()
+        ])
+        .is_err()
+    );
 }

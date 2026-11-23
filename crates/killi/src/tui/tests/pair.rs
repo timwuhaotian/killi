@@ -18,7 +18,8 @@ fn pair_turns_stand_apart_and_keep_their_details_at_narrow_widths() {
             "{rows:?}"
         );
         assert!(
-            rows.iter().any(|row| row.contains("commandcode/meta/muse-spark-1.3-contributor (high)")),
+            rows.iter()
+                .any(|row| row.contains("commandcode/meta/muse-spark-1.3-contributor (high)")),
             "{rows:?}"
         );
         assert!(app.pending.iter().all(|row| text::width(row) <= width));
@@ -47,7 +48,10 @@ fn typed_text_interjects_to_the_driving_pair() {
     let ctl = app.pair_ctl.as_ref().unwrap();
     assert_eq!(ctl.interject.borrow().len(), 1);
     assert_eq!(ctl.interject.borrow()[0].0, "go right");
-    assert!(app.take_pair_interrupt(), "the turn in flight is interrupted");
+    assert!(
+        app.take_pair_interrupt(),
+        "the turn in flight is interrupted"
+    );
     assert_eq!(
         app.controls.steer.borrow().len(),
         1,

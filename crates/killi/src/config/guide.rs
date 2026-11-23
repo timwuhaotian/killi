@@ -180,9 +180,7 @@ pub fn start_if_missing() -> Result<()> {
     write_template(&path)?;
     let config = Config::load()?;
     let mut configured = config.resolve(None).is_ok();
-    if !configured
-        && let Some(alias) = config.first_keyed()
-    {
+    if !configured && let Some(alias) = config.first_keyed() {
         set_default_model(&path, alias)?;
         configured = true;
     }

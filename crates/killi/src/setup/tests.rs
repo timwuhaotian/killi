@@ -93,14 +93,15 @@ async fn an_interactive_start_defers_only_a_missing_key() {
     let Err(error) = Setup::new(config, &root, Some("t/model"), false).await else {
         panic!("a missing key must end a headless start");
     };
-    assert!(error.to_string().contains("KILLI_TEST_ABSENT_KEY"), "{error}");
+    assert!(
+        error.to_string().contains("KILLI_TEST_ABSENT_KEY"),
+        "{error}"
+    );
     let config: Config = toml::from_str(source).unwrap();
     let setup = Setup::new(config, &root, Some("t/model"), true)
         .await
         .unwrap();
-    let agent = setup
-        .start(Controls::default(), Rc::new(|_| {}))
-        .unwrap();
+    let agent = setup.start(Controls::default(), Rc::new(|_| {})).unwrap();
     assert_eq!(agent.model_alias(), "t/model");
     std::fs::remove_dir_all(root).unwrap();
 }

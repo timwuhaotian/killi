@@ -133,7 +133,12 @@ impl Mcp {
     /// The `arguments` a tool call sends. A model that omits them, sends an empty string or
     /// malformed JSON is told what the tool takes instead of being handed a server error
     /// it can't read; a tool that takes nothing still runs with no arguments.
-    async fn tool_arguments(&self, server: &str, tool: &str, args: &Value) -> Result<Value, Output> {
+    async fn tool_arguments(
+        &self,
+        server: &str,
+        tool: &str,
+        args: &Value,
+    ) -> Result<Value, Output> {
         let sent = match Self::sent_arguments(args) {
             Ok(sent) => sent,
             Err(problem) => {
@@ -165,9 +170,9 @@ impl Mcp {
             Some(Value::String(text)) if text.trim().is_empty() => Ok(None),
             Some(Value::String(text)) => match serde_json::from_str::<Value>(text) {
                 Ok(parsed @ Value::Object(_)) => Ok(Some(parsed)),
-                Ok(_) => Err(
-                    "mcp `arguments` is a string but not a JSON object; send an object.".into(),
-                ),
+                Ok(_) => {
+                    Err("mcp `arguments` is a string but not a JSON object; send an object.".into())
+                }
                 Err(e) => Err(format!("mcp `arguments` is a string but not JSON: {e}")),
             },
             _ => Ok(None),
@@ -293,7 +298,10 @@ impl Shape {
             return Self {
                 text: format!(
                     "its schema names no arguments ({}); send `arguments` as an object.",
-                    crate::llm::truncate(&schema.map_or_else(|| "{}".into(), Value::to_string), 300)
+                    crate::llm::truncate(
+                        &schema.map_or_else(|| "{}".into(), Value::to_string),
+                        300
+                    )
                 ),
                 required: Vec::new(),
             };
@@ -316,7 +324,11 @@ impl Shape {
                 format!(
                     "{property} ({}{})",
                     kind(&properties[property]),
-                    if required.contains(property) { ", required" } else { "" }
+                    if required.contains(property) {
+                        ", required"
+                    } else {
+                        ""
+                    }
                 )
             })
             .collect();

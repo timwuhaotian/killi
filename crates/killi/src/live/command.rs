@@ -158,8 +158,9 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
             let mut tasks: Vec<Value> = Vec::new();
             for entry in &asked {
                 match send(entry, Request::List).await {
-                    Ok(reply) => tasks
-                        .extend(reply["tasks"].as_array().cloned().unwrap_or_default()),
+                    Ok(reply) => {
+                        tasks.extend(reply["tasks"].as_array().cloned().unwrap_or_default())
+                    }
                     // A session of another release takes no tasks, or one that ended between
                     // the list and the ask: it simply has nothing to say.
                     Err(e) => {
@@ -200,7 +201,10 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
                 match state.as_str() {
                     "completed" => {}
                     "submitted" | "working" | "" => {
-                        bail!("session {} stopped answering before task {id} ended", entry.pid)
+                        bail!(
+                            "session {} stopped answering before task {id} ended",
+                            entry.pid
+                        )
                     }
                     _ => return Ok(ExitCode::FAILURE),
                 }
@@ -253,7 +257,9 @@ pub(super) fn send_args(args: &[String]) -> Result<(String, bool, Option<u64>, O
             }
             "--after" => {
                 let id = words.next().ok_or_else(|| {
-                    anyhow!("--after takes the id of the task to continue; `killi tasks` lists them")
+                    anyhow!(
+                        "--after takes the id of the task to continue; `killi tasks` lists them"
+                    )
                 })?;
                 after = Some(id.clone());
             }
@@ -274,7 +280,9 @@ pub(super) fn send_args(args: &[String]) -> Result<(String, bool, Option<u64>, O
 /// with the task. It waits as long as the task takes between two steps — the session ends the
 /// task when its time is up, and the connection closes if the session goes. A session that
 /// can't follow tasks answers with an error instead of an event.
-pub(super) async fn next_event(lines: &mut mpsc::UnboundedReceiver<String>) -> Result<Option<Value>> {
+pub(super) async fn next_event(
+    lines: &mut mpsc::UnboundedReceiver<String>,
+) -> Result<Option<Value>> {
     let Some(line) = lines.recv().await else {
         return Ok(None);
     };

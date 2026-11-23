@@ -117,7 +117,9 @@ async fn a_request_reaches_the_session_and_its_reply_comes_back() {
             };
             let _ = match reply {
                 Reply::Once(reply) => reply.send(answer).map_err(|value| value.to_string()),
-                Reply::Stream(events) => events.send(answer.to_string()).map_err(|line| line.to_string()),
+                Reply::Stream(events) => events
+                    .send(answer.to_string())
+                    .map_err(|line| line.to_string()),
             };
         }
     });
@@ -280,7 +282,8 @@ fn a_task_request_keeps_its_shape_on_the_wire() {
     );
     // A release that doesn't know tasks reads the request as one it can't answer, with the
     // fields it does know left alone.
-    let old: Envelope = serde_json::from_str(r#"{"type":"ask","text":"x","later_field":1}"#).unwrap();
+    let old: Envelope =
+        serde_json::from_str(r#"{"type":"ask","text":"x","later_field":1}"#).unwrap();
     assert_eq!(
         old.request,
         Request::Ask {
@@ -333,8 +336,16 @@ fn send_refuses_a_timeout_it_can_not_keep() {
             .map(|word| word.to_string())
             .collect()
     };
-    let (text, quick, timeout, after) =
-        send_args(&args(&["fix", "it", "--timeout", "90", "--async", "--after", "7-1"])).unwrap();
+    let (text, quick, timeout, after) = send_args(&args(&[
+        "fix",
+        "it",
+        "--timeout",
+        "90",
+        "--async",
+        "--after",
+        "7-1",
+    ]))
+    .unwrap();
     assert_eq!(
         (text.as_str(), quick, timeout, after.as_deref()),
         ("fix it", true, Some(90), Some("7-1"))
@@ -351,7 +362,9 @@ fn send_refuses_a_timeout_it_can_not_keep() {
         let why = send_args(&args(bad)).unwrap_err().to_string();
         assert!(why.contains("--timeout takes a number of seconds"), "{why}");
     }
-    let why = send_args(&args(&["fix it", "--after"])).unwrap_err().to_string();
+    let why = send_args(&args(&["fix it", "--after"]))
+        .unwrap_err()
+        .to_string();
     assert!(why.contains("--after takes the id"), "{why}");
 }
 
@@ -426,11 +439,20 @@ fn a_session_still_at_its_first_prompt_is_no_peer() {
     )
     .unwrap();
     let here = me.here();
-    assert!(here.others().is_empty(), "opened and left at an empty prompt");
+    assert!(
+        here.others().is_empty(),
+        "opened and left at an empty prompt"
+    );
     assert_eq!(list_in(&dir).len(), 2, "`killi sessions` still lists it");
-    assert!(!list_in(&dir)[1].worked_since(0), "nothing of it for undo to warn about");
+    assert!(
+        !list_in(&dir)[1].worked_since(0),
+        "nothing of it for undo to warn about"
+    );
     fresh.update(|e| e.working = true);
-    assert_eq!(here.others().iter().map(|e| e.pid).collect::<Vec<_>>(), [22]);
+    assert_eq!(
+        here.others().iter().map(|e| e.pid).collect::<Vec<_>>(),
+        [22]
+    );
     fresh.update(|e| {
         e.working = false;
         e.prompt = "fix it".into();

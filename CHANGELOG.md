@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.1 — 2026-11-23
+
+- `grep` names a file once per block of matches instead of on every line, and `glob` stops at the same output limit as the other tools instead of only at 1,000 files, so long paths no longer fill the whole result.
+- `edit`'s "could not find" error now names the line that contains the text when it was taken from a longer line.
+- `read`'s description says its images are shown only for models that can see them, which is what a model without vision gets told at read time.
 - A command with a pipe reports the failure a later stage hides: `npm test 2>&1 | tail -40` failed, and the result now says so instead of the exit code of `tail`. A background task that fails this way reports the failure too.
 - `agent_message` reaches every subagent of a running swarm, not only a single subagent, so a redirect sent to a swarm lands.
 - A `task_output` with `wait` is refused right after the user sent a message that has no reply yet; answer the user first.

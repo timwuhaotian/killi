@@ -172,7 +172,10 @@ fn stored_arguments_that_arent_json_are_repaired_on_the_copy_being_sent() {
     let original = messages.clone();
     let body: Value =
         serde_json::from_slice(&prepare(&model, &messages, &[], "k").unwrap().body).unwrap();
-    assert_eq!(body["messages"][0]["tool_calls"][0]["function"]["arguments"], "{}");
+    assert_eq!(
+        body["messages"][0]["tool_calls"][0]["function"]["arguments"],
+        "{}"
+    );
     assert_eq!(
         body["messages"][0]["tool_calls"][1]["function"]["arguments"],
         r#"{"path":"a"}"#

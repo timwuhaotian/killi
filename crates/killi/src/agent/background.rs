@@ -242,7 +242,12 @@ impl Route {
     }
 
     /// `steer` is the subagent's message queue, when it has one to answer `agent_message`.
-    pub(super) fn detach(&self, background: &Rc<RefCell<Background>>, id: u32, steer: Option<Steer>) {
+    pub(super) fn detach(
+        &self,
+        background: &Rc<RefCell<Background>>,
+        id: u32,
+        steer: Option<Steer>,
+    ) {
         *self.0.borrow_mut() = Some((background.clone(), id, steer));
     }
 
@@ -310,9 +315,7 @@ impl Agent {
         if let Some((id, _)) = registry
             .tasks
             .iter()
-            .find(|(id, task)| {
-                !task.ended() && task.state != BgState::Queued && Some(**id) != me
-            })
+            .find(|(id, task)| !task.ended() && task.state != BgState::Queued && Some(**id) != me)
         {
             return Some(format!("background task {id}"));
         }
@@ -645,16 +648,22 @@ impl Agent {
             .rposition(|message| message["role"] == "tool")?;
         let text = self.messages[at]["content"].as_str().unwrap_or_default();
         let in_reply = |id: &str| {
-            reply["tool_calls"].as_array().is_some_and(|calls| {
-                calls.iter().any(|made| made["id"] == id)
-            })
+            reply["tool_calls"]
+                .as_array()
+                .is_some_and(|calls| calls.iter().any(|made| made["id"] == id))
         };
         let stopped = text.contains(STOPPED_FOR_MESSAGE)
-            && !in_reply(self.messages[at]["tool_call_id"].as_str().unwrap_or_default())
+            && !in_reply(
+                self.messages[at]["tool_call_id"]
+                    .as_str()
+                    .unwrap_or_default(),
+            )
             && self.messages[at + 1..reply_at]
                 .iter()
                 .any(|message| message["role"] == "user")
-            && !reply["content"].as_str().is_some_and(|text| !text.trim().is_empty());
+            && !reply["content"]
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty());
         // A refusal earlier in this same reply: nothing was answered since either.
         let refused_again = text.contains(UNANSWERED_MESSAGE) && in_reply(&call.id);
         (stopped || refused_again).then(|| {

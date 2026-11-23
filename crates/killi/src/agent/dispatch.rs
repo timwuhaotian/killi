@@ -459,15 +459,14 @@ impl Agent {
         // A blocked repeat keeps the tail of the earlier result, so a further repeat still
         // points at the hint that should have changed the call.
         let tail = if same_as.is_some() {
-            self.repeats.get(&key).map(|r| r.tail.clone()).unwrap_or_default()
+            self.repeats
+                .get(&key)
+                .map(|r| r.tail.clone())
+                .unwrap_or_default()
         } else {
             tail_of(&output.text)
         };
-        let (count, same) = self
-            .repeats
-            .entry(key)
-            .or_default()
-            .note(result, &tail);
+        let (count, same) = self.repeats.entry(key).or_default().note(result, &tail);
         let meta = json!({"name": call.name, "is_error": output.is_error, "brief": output.brief, "ms": millis(took)});
         self.push_meta(
             json!({"role": "tool", "tool_call_id": id, "content": output.text}),
@@ -481,7 +480,9 @@ impl Agent {
                 } else {
                     format!(" ({})", output.brief)
                 };
-                format!("and got the same result each time{brief}. Repeating it won't change the result; change the call or reply in text.")
+                format!(
+                    "and got the same result each time{brief}. Repeating it won't change the result; change the call or reply in text."
+                )
             } else {
                 "and its result changed, so this is a repetition warning, not a stale-result loop."
                     .to_string()

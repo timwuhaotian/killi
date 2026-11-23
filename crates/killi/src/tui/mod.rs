@@ -265,8 +265,17 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             app.draw()?;
         } else {
             let sent = mention::expand(&cwd, prompt);
-            prompt_turn(&mut app, &mut agent, &mut snapshots, &mut keys, &mut rx, prompt, &sent, &[])
-                .await?;
+            prompt_turn(
+                &mut app,
+                &mut agent,
+                &mut snapshots,
+                &mut keys,
+                &mut rx,
+                prompt,
+                &sent,
+                &[],
+            )
+            .await?;
         }
     }
     loop {
@@ -613,8 +622,16 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 provider_custom(&mut app, &mut keys, &mut rx, flow).await?;
             }
             Input::CustomProvider(flow, models) => {
-                provider_custom_add(&mut app, &mut session, &mut agent, &mut keys, &mut rx, flow, models)
-                    .await?;
+                provider_custom_add(
+                    &mut app,
+                    &mut session,
+                    &mut agent,
+                    &mut keys,
+                    &mut rx,
+                    flow,
+                    models,
+                )
+                .await?;
             }
             Input::Mcp(name, from_list) => match session.mcp().toggle(&name) {
                 Ok(on) => {

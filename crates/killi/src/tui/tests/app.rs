@@ -110,7 +110,9 @@ fn ctrl_s_during_a_swarm_queues_first_and_interrupts_on_the_second_press() {
     assert_eq!(app.queued, ["hello".to_string()]);
     assert_eq!(app.controls.steer.borrow().len(), 1);
     assert!(
-        app.pending.iter().any(|row| unstyled(row).contains("Swarm running")),
+        app.pending
+            .iter()
+            .any(|row| unstyled(row).contains("Swarm running")),
         "{:?}",
         app.pending
     );
@@ -120,7 +122,10 @@ fn ctrl_s_during_a_swarm_queues_first_and_interrupts_on_the_second_press() {
     let mut idle = test_app();
     idle.busy = Some(Instant::now());
     idle.editor.insert("hello");
-    assert!(idle.on_key_busy(send()), "no swarm: still interrupts at once");
+    assert!(
+        idle.on_key_busy(send()),
+        "no swarm: still interrupts at once"
+    );
     assert!(idle.send_now);
 }
 
@@ -385,11 +390,7 @@ fn the_swarm_argument_menu_offers_modes_and_parallel_counts() {
     let mut app = test_app();
     app.editor.insert("/swarm ");
     let menu = app.suggestions().expect("swarm arguments");
-    let values: Vec<&str> = menu
-        .items
-        .iter()
-        .map(|item| item.value.as_str())
-        .collect();
+    let values: Vec<&str> = menu.items.iter().map(|item| item.value.as_str()).collect();
     assert!(values.contains(&"on") && values.contains(&"off"));
     assert!(values.contains(&"parallel 8"), "{values:?}");
 }
@@ -491,7 +492,9 @@ fn every_provider_preset_asks_its_key() {
     for preset in &presets {
         app.provider_pick(preset);
         assert!(
-            app.provider.as_ref().is_some_and(|flow| &flow.preset == preset),
+            app.provider
+                .as_ref()
+                .is_some_and(|flow| &flow.preset == preset),
             "{preset} asks no key"
         );
         app.provider = None;
@@ -522,8 +525,14 @@ fn moving_in_the_theme_picker_previews_it_and_esc_restores_it() {
     app.open_theme_picker();
     app.on_key_picker(key(KeyCode::Down));
     let picked = text::skin_name();
-    assert!(matches!(app.on_key_picker(key(KeyCode::Enter)), Idle::Input(Input::Theme(name)) if name == picked));
-    assert_eq!(text::skin_name(), picked, "the pick keeps the previewed theme");
+    assert!(
+        matches!(app.on_key_picker(key(KeyCode::Enter)), Idle::Input(Input::Theme(name)) if name == picked)
+    );
+    assert_eq!(
+        text::skin_name(),
+        picked,
+        "the pick keeps the previewed theme"
+    );
     assert_eq!(
         app.theme_before_preview.as_deref(),
         Some(before),
@@ -563,7 +572,10 @@ fn the_theme_picker_shows_a_specimen_of_the_previewed_theme() {
             "keep this theme?",
             "main",
         ] {
-            assert!(shown.contains(sample), "{width}x{height} lacks {sample:?}: {shown}");
+            assert!(
+                shown.contains(sample),
+                "{width}x{height} lacks {sample:?}: {shown}"
+            );
         }
     }
     let mut app = test_app();
@@ -581,7 +593,10 @@ fn the_theme_picker_shows_a_specimen_of_the_previewed_theme() {
     assert!(open.contains("Theme preview ·"), "{open}");
     assert!(open.contains("Color theme"), "{open}");
     app.on_key_picker(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(!shown(&mut app).contains("Theme preview ·"), "closing the list closes the specimen");
+    assert!(
+        !shown(&mut app).contains("Theme preview ·"),
+        "closing the list closes the specimen"
+    );
 }
 
 #[test]
@@ -593,7 +608,8 @@ fn a_theme_preview_repaints_the_banner_still_on_screen() {
     let seen = Rc::new(Cell::new("before"));
     let cell = seen.clone();
     app.history.banner_starts();
-    app.history.push(Line::block(move |_| vec![cell.get().to_string()]));
+    app.history
+        .push(Line::block(move |_| vec![cell.get().to_string()]));
     app.history.banner_ends();
     seen.set("previewed");
     assert_eq!(app.history.rows(), ["before"], "laid out blocks are cached");
@@ -799,9 +815,9 @@ fn the_live_area_merges_the_thought_into_the_action_row() {
     let (rows, _, _) = app.live();
     let shown: Vec<String> = rows.iter().map(|row| unstyled(row)).collect();
     assert!(
-        shown.iter().any(|row| {
-            row.contains("thinking") && row.contains("The internal § references")
-        }),
+        shown
+            .iter()
+            .any(|row| { row.contains("thinking") && row.contains("The internal § references") }),
         "{shown:?}"
     );
     assert!(
@@ -1334,9 +1350,17 @@ fn a_draft_shows_its_continuation_after_the_cursor_and_tab_takes_it() {
         .iter()
         .position(|r| unstyled(r).contains("fix the bug in the parser"))
         .expect("the continuation is drawn after the draft");
-    assert!(rows[at].contains(&format!("{FAINT}g in the parser")), "{:?}", rows[at]);
+    assert!(
+        rows[at].contains(&format!("{FAINT}g in the parser")),
+        "{:?}",
+        rows[at]
+    );
     assert_eq!(row, at, "the cursor stays on the draft's row");
-    assert_eq!(column, 2 + "fix the bu".len(), "the cursor stays where the draft ends");
+    assert_eq!(
+        column,
+        2 + "fix the bu".len(),
+        "the cursor stays where the draft ends"
+    );
     app.edit_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(app.editor.text(), "fix the bug in the parser");
     assert!(app.ghost().is_none());
@@ -1361,7 +1385,10 @@ fn typing_along_the_continuation_keeps_it_and_other_typing_asks_after_a_pause() 
     assert!(app.ghost().is_none());
     assert!(!shown(&mut app).contains("in the parser"));
     let due = app.complete_at.expect("a pause asks how the draft goes on");
-    assert!(due > Instant::now() + crate::tui::suggest::COMPLETE_PAUSE / 2, "not before the pause");
+    assert!(
+        due > Instant::now() + crate::tui::suggest::COMPLETE_PAUSE / 2,
+        "not before the pause"
+    );
 }
 
 #[test]
@@ -1372,7 +1399,10 @@ fn taking_the_whole_suggestion_asks_at_once_for_more() {
     app.edited();
     assert!(app.complete_at.expect("more is asked for") <= Instant::now());
     app.ask_suggestion();
-    assert!(app.suggesting.is_some(), "the draft is sent for a continuation");
+    assert!(
+        app.suggesting.is_some(),
+        "the draft is sent for a continuation"
+    );
 }
 
 #[test]
@@ -1442,7 +1472,10 @@ fn a_report_waits_for_the_users_next_message_after_they_interrupted() {
         .background
         .borrow_mut()
         .insert_ended(1, "review", "found two bugs");
-    assert!(matches!(app.take_wake(), Some(Input::Wake)), "an idle report starts a turn");
+    assert!(
+        matches!(app.take_wake(), Some(Input::Wake)),
+        "an idle report starts a turn"
+    );
 
     app.wake_held = true;
     assert!(app.take_wake().is_none(), "not right after Esc");
@@ -1471,13 +1504,24 @@ fn the_empty_prompt_carries_an_island_while_the_next_prompt_is_asked() {
         .iter()
         .position(|r| unstyled(r).starts_with("❯  suggesting… "))
         .expect("the island stands in the placeholder's place");
-    assert!(rows[at].contains(&SELECT.to_string()), "on the island's ground: {:?}", rows[at]);
-    assert!(!unstyled(&rows[at]).contains("ask, / for commands"), "{:?}", rows[at]);
+    assert!(
+        rows[at].contains(&SELECT.to_string()),
+        "on the island's ground: {:?}",
+        rows[at]
+    );
+    assert!(
+        !unstyled(&rows[at]).contains("ask, / for commands"),
+        "{:?}",
+        rows[at]
+    );
     // The answer lands: the suggestion replaces the island.
     app.suggesting = None;
     app.suggestion = Some("run the tests".into());
     let shown = shown(&mut app);
-    assert!(shown.contains("run the tests · Tab or → fills it"), "{shown}");
+    assert!(
+        shown.contains("run the tests · Tab or → fills it"),
+        "{shown}"
+    );
     assert!(!shown.contains("suggesting"), "{shown}");
 }
 
@@ -1499,7 +1543,11 @@ fn a_paused_draft_carries_the_island_a_cell_after_the_cursor() {
     app.suggesting = Some(on_its_way());
     let (rows, row, column) = app.live();
     assert_eq!(unstyled(&rows[row]), "❯ fix the bu  suggesting… ");
-    assert_eq!(column, 2 + "fix the bu".len(), "the cursor stays where the draft ends");
+    assert_eq!(
+        column,
+        2 + "fix the bu".len(),
+        "the cursor stays where the draft ends"
+    );
     let before = rows.len();
     app.suggesting = None;
     let (rows, _, _) = app.live();
@@ -1522,7 +1570,11 @@ fn a_draft_with_no_room_left_on_its_row_goes_without_the_island() {
     app.editor.insert(&"x".repeat(44));
     app.suggesting = Some(on_its_way());
     let (rows, row, _) = app.live();
-    assert!(unstyled(&rows[row]).ends_with(" suggesting… "), "{:?}", rows[row]);
+    assert!(
+        unstyled(&rows[row]).ends_with(" suggesting… "),
+        "{:?}",
+        rows[row]
+    );
     assert_eq!(text::width(&rows[row]), 60);
 }
 
@@ -1531,7 +1583,10 @@ fn the_island_waits_for_the_ask_and_hides_where_no_suggestion_would_show() {
     let mut app = test_app();
     app.editor.insert("fix the bu");
     app.edited();
-    assert!(app.complete_at.is_some() && !app.completing(), "not during the pause");
+    assert!(
+        app.complete_at.is_some() && !app.completing(),
+        "not during the pause"
+    );
     app.suggesting = Some(on_its_way());
     assert!(app.completing());
     app.edit_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
@@ -1553,23 +1608,31 @@ fn the_custom_flow_collects_its_answers_and_the_tick_picker_saves_them() {
     app.provider_pick("custom");
     // The protocol comes from the options; openai is first.
     app.on_key_asking(key(KeyCode::Enter));
-    assert!(app
-        .provider
-        .as_ref()
-        .is_some_and(|flow| flow.protocol.as_deref() == Some("openai")));
+    assert!(
+        app.provider
+            .as_ref()
+            .is_some_and(|flow| flow.protocol.as_deref() == Some("openai"))
+    );
     // A URL that isn't one is asked again.
     app.editor.insert("api.example.com");
     app.on_key_asking(key(KeyCode::Enter));
-    assert!(app.provider.as_ref().is_some_and(|flow| flow.endpoint.is_none()));
-    assert!(app
-        .pending
-        .iter()
-        .any(|line| unstyled(line).contains("The endpoint is its URL")));
+    assert!(
+        app.provider
+            .as_ref()
+            .is_some_and(|flow| flow.endpoint.is_none())
+    );
+    assert!(
+        app.pending
+            .iter()
+            .any(|line| unstyled(line).contains("The endpoint is its URL"))
+    );
     app.editor.clear();
     app.editor.insert("https://api.example.com/v1");
     app.on_key_asking(key(KeyCode::Enter));
     assert_eq!(
-        app.provider.as_ref().and_then(|flow| flow.endpoint.as_deref()),
+        app.provider
+            .as_ref()
+            .and_then(|flow| flow.endpoint.as_deref()),
         Some("https://api.example.com/v1")
     );
     // The name comes prefilled from the host; Enter takes it.
@@ -1639,8 +1702,9 @@ fn the_custom_flow_collects_its_answers_and_the_tick_picker_saves_them() {
     app.picker = Some(picker);
     app.on_key_picker(key(KeyCode::Esc));
     assert!(app.custom.is_none() && app.picker.is_none());
-    assert!(app
-        .pending
-        .iter()
-        .any(|line| unstyled(line).contains("/provider custom cancelled")));
+    assert!(
+        app.pending
+            .iter()
+            .any(|line| unstyled(line).contains("/provider custom cancelled"))
+    );
 }

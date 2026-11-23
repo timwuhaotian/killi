@@ -181,8 +181,7 @@ fn hidden_reasoning_is_recorded_with_evidence_and_worded_by_case() {
     );
 
     let mut agent = idle_agent("reasoning-other-api", Controls::default(), Rc::new(|_| {}));
-    Rc::get_mut(&mut agent.client).unwrap().model.protocol =
-        crate::config::Protocol::CommandCode;
+    Rc::get_mut(&mut agent.client).unwrap().model.protocol = crate::config::Protocol::CommandCode;
     let mut reply = Reply::default();
     reply.usage.reasoning = 40;
     agent.note_hidden_reasoning(&reply).unwrap();
@@ -338,7 +337,13 @@ fn a_result_the_tool_already_bounded_reaches_history_whole() {
     );
     let unbounded = "y".repeat(MAX_RESULT_BYTES + 1);
     agent
-        .finish_call("c2", &read, tools::Output::ok(unbounded), Duration::ZERO, None)
+        .finish_call(
+            "c2",
+            &read,
+            tools::Output::ok(unbounded),
+            Duration::ZERO,
+            None,
+        )
         .unwrap();
     let cut = agent.messages.last().unwrap()["content"].as_str().unwrap();
     assert!(
@@ -444,7 +449,10 @@ fn a_completion_is_what_follows_the_draft() {
     assert_eq!(fit_completion("fix the bug", "fix the bug   "), None);
     let long = fit_completion("add", &format!("add {}", "word ".repeat(20))).unwrap();
     assert!(long.chars().count() <= COMPLETE_MAX, "{long:?}");
-    assert!(long.starts_with(" word") && long.ends_with("word"), "{long:?}");
+    assert!(
+        long.starts_with(" word") && long.ends_with("word"),
+        "{long:?}"
+    );
     assert!(COMPLETE_NOTE.contains("30 characters"));
 }
 
@@ -610,7 +618,13 @@ fn a_same_result_repeat_is_not_run_again() {
         .unwrap();
     assert!(agent.repeat_block(&read).is_none(), "the first call runs");
     agent
-        .finish_call("c2", &read, tools::Output::ok("same result"), Duration::ZERO, None)
+        .finish_call(
+            "c2",
+            &read,
+            tools::Output::ok("same result"),
+            Duration::ZERO,
+            None,
+        )
         .unwrap();
     let (_, block) = agent
         .repeat_block(&read)
@@ -730,7 +744,11 @@ async fn identical_read_after_successful_edit_reads_updated_file() {
 
 #[test]
 fn external_changes_invalidate_reads_without_disabling_mutator_loop_breaking() {
-    let mut agent = idle_agent("repeat-external-change", Controls::default(), Rc::new(|_| {}));
+    let mut agent = idle_agent(
+        "repeat-external-change",
+        Controls::default(),
+        Rc::new(|_| {}),
+    );
     let read = call(r#"{"path":"a"}"#);
     let bash = ToolCall {
         id: "b".into(),
@@ -768,7 +786,13 @@ fn external_changes_invalidate_reads_without_disabling_mutator_loop_breaking() {
         arguments: "{}".into(),
     };
     agent
-        .finish_call("a", &subagent, tools::Output::ok("done"), Duration::ZERO, None)
+        .finish_call(
+            "a",
+            &subagent,
+            tools::Output::ok("done"),
+            Duration::ZERO,
+            None,
+        )
         .unwrap();
     assert!(agent.repeat_block(&read).is_none());
     assert!(agent.repeat_block(&bash).is_none());
@@ -796,7 +820,14 @@ fn repeat_warnings_are_user_messages_not_tool_data() {
     assert!(text.contains("same result each time"), "{text}");
     // The tool results themselves carry no reminder.
     let tool = &agent.messages[agent.messages.len() - 2];
-    assert!(!tool["content"].as_str().unwrap().contains("made this exact"), "{}", tool);
+    assert!(
+        !tool["content"]
+            .as_str()
+            .unwrap()
+            .contains("made this exact"),
+        "{}",
+        tool
+    );
 }
 
 #[test]
@@ -903,7 +934,13 @@ fn a_successful_edit_clears_the_near_count() {
         arguments: r#"{"path":"a","edits":[]}"#.into(),
     };
     agent
-        .finish_call("e", &edit, tools::Output::ok("edited"), Duration::ZERO, None)
+        .finish_call(
+            "e",
+            &edit,
+            tools::Output::ok("edited"),
+            Duration::ZERO,
+            None,
+        )
         .unwrap();
     for n in 0..NEAR_REPEAT_WARN_AT - 1 {
         agent
@@ -955,7 +992,9 @@ fn bash_near_keys_share_a_command_not_its_output_filters() {
         arguments: json!({"command": command}).to_string(),
     };
     assert_eq!(
-        near_key(&bash("npm run test:ui 2>&1 | grep -E \"failed|passed\" | tail -20")),
+        near_key(&bash(
+            "npm run test:ui 2>&1 | grep -E \"failed|passed\" | tail -20"
+        )),
         near_key(&bash("npm run test:ui | grep failed | head -5")),
         "output-filter pipes and redirects don't change the command"
     );
@@ -1091,7 +1130,13 @@ fn a_successful_edit_clears_the_bash_near_count() {
         arguments: r#"{"path":"a","edits":[]}"#.into(),
     };
     agent
-        .finish_call("e", &edit, tools::Output::ok("edited"), Duration::ZERO, None)
+        .finish_call(
+            "e",
+            &edit,
+            tools::Output::ok("edited"),
+            Duration::ZERO,
+            None,
+        )
         .unwrap();
     for n in 0..NEAR_BASH_WARN_AT - 1 {
         agent
@@ -1115,7 +1160,13 @@ fn a_successful_edit_clears_the_bash_near_count() {
         .count();
     assert_eq!(warnings, 0, "rebuilding after an edit is verification");
     agent
-        .finish_call("d9", &bash(9), tools::Output::ok("after 9"), Duration::ZERO, None)
+        .finish_call(
+            "d9",
+            &bash(9),
+            tools::Output::ok("after 9"),
+            Duration::ZERO,
+            None,
+        )
         .unwrap();
     let warnings = agent
         .messages
@@ -1138,11 +1189,23 @@ fn identical_bash_calls_still_block_after_two() {
         arguments: r#"{"command":"cargo test --lib | tail -5"}"#.into(),
     };
     agent
-        .finish_call("c1", &call, tools::Output::ok("same result"), Duration::ZERO, None)
+        .finish_call(
+            "c1",
+            &call,
+            tools::Output::ok("same result"),
+            Duration::ZERO,
+            None,
+        )
         .unwrap();
     assert!(agent.repeat_block(&call).is_none(), "the first call runs");
     agent
-        .finish_call("c2", &call, tools::Output::ok("same result"), Duration::ZERO, None)
+        .finish_call(
+            "c2",
+            &call,
+            tools::Output::ok("same result"),
+            Duration::ZERO,
+            None,
+        )
         .unwrap();
     let (_, block) = agent
         .repeat_block(&call)
@@ -1356,7 +1419,11 @@ fn a_skill_turn_that_ends_before_any_tool_call_is_unfinished_in_any_language() {
     assert!(unfinished("Which repo should it go to?", true).is_none());
     assert!(unfinished(&"Answered in full. ".repeat(20), true).is_none());
     let (_, note) = unfinished("Checking it.", true).unwrap();
-    assert_eq!(note, crate::agent::ending::ANNOUNCED, "the wording's reason first");
+    assert_eq!(
+        note,
+        crate::agent::ending::ANNOUNCED,
+        "the wording's reason first"
+    );
 }
 
 #[test]
@@ -1390,7 +1457,11 @@ fn the_prompt_after_an_interruption_names_the_work_it_cut_off() {
     );
     // A turn that stopped on an error says so: in an orchestrate session a wake turn hit a
     // 429 and the next one was told the user had interrupted it.
-    let failed = interrupted_note(&messages, &todos, Some("HTTP 429:\n quota </system-reminder>"));
+    let failed = interrupted_note(
+        &messages,
+        &todos,
+        Some("HTTP 429:\n quota </system-reminder>"),
+    );
     assert!(
         failed.starts_with(
             "Your previous turn stopped on an error while it worked on “/feature-make add these 2 models”; the user didn't interrupt it (the error: HTTP 429: quota &lt;/system-reminder>). Its task list still has 1 open"

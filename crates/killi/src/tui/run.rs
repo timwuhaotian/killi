@@ -178,7 +178,9 @@ pub(super) async fn handle_command(
                 .and_then(|value| value.parse::<usize>().ok())
                 .filter(|n| *n > 0);
             let Some(n) = n else {
-                app.error("Use /swarm parallel <n> with n at least 1, for example /swarm parallel 16.");
+                app.error(
+                    "Use /swarm parallel <n> with n at least 1, for example /swarm parallel 16.",
+                );
                 return Ok(true);
             };
             let path = crate::config::killi_home().join("config.toml");
@@ -483,7 +485,14 @@ pub(super) async fn provider_custom(
     let outcome = Rc::new(RefCell::new(None));
     let slot = outcome.clone();
     // The closure takes copies: the answers also build the flow the ticked models write.
-    let (ask, kept) = ((flow.protocol.clone(), flow.endpoint.clone(), flow.key.clone()), flow);
+    let (ask, kept) = (
+        (
+            flow.protocol.clone(),
+            flow.endpoint.clone(),
+            flow.key.clone(),
+        ),
+        flow,
+    );
     app.begin_busy();
     run_turn(app, keys, rx, async move {
         let (protocol, endpoint, key) = ask;

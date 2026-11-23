@@ -153,7 +153,12 @@ async fn a_failed_stage_of_the_last_pipeline_fails_the_command() {
         "sh -c 'exit 3' | grep x; exit 4",
     ] {
         let out = bash(&ctx(), &json!({"command": command}), &never).await;
-        assert_eq!(out.is_error, command.contains("exit 4"), "{command}: {}", out.text);
+        assert_eq!(
+            out.is_error,
+            command.contains("exit 4"),
+            "{command}: {}",
+            out.text
+        );
     }
     let out = bash(&ctx(), &json!({"command": "yes | head -2"}), &never).await;
     assert_eq!(out.text, "y\ny");
@@ -200,7 +205,12 @@ async fn a_command_without_a_pipe_or_with_its_own_exit_trap_is_judged_by_its_exi
     .await;
     assert!(!out.is_error);
     assert_eq!(out.text, "own");
-    let out = bash(&ctx(), &json!({"command": "false | true; exec true"}), &never).await;
+    let out = bash(
+        &ctx(),
+        &json!({"command": "false | true; exec true"}),
+        &never,
+    )
+    .await;
     assert!(!out.is_error, "{}", out.text);
     let out = bash(
         &ctx(),

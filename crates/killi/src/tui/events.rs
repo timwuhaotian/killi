@@ -143,8 +143,7 @@ impl App {
                     .iter_mut()
                     .for_each(|todo| todo.content = text::sanitize_row(&todo.content).into_owned());
                 self.todos = todos;
-                if self.todos.len() <= 8
-                    || self.todos.iter().all(|todo| todo.status == "completed")
+                if self.todos.len() <= 8 || self.todos.iter().all(|todo| todo.status == "completed")
                 {
                     self.todos_expanded = false;
                 }
@@ -202,8 +201,10 @@ impl App {
                 let effort = text::sanitize_row(&effort).into_owned();
                 let what = text::sanitize_row(&what).into_owned();
                 self.emit(Line::block(move |width| {
-                    let title =
-                        format!("{BOLD}{LAGOON}→ {}{RESET} {BOLD}· {what}{RESET}", role.label());
+                    let title = format!(
+                        "{BOLD}{LAGOON}→ {}{RESET} {BOLD}· {what}{RESET}",
+                        role.label()
+                    );
                     let detail = format!("  {DIM}{model} ({effort}){RESET}");
                     let mut rows = wrap_words(&title, width, 2);
                     rows.extend(wrap_words(&detail, width, 2));

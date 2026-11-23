@@ -286,9 +286,10 @@ impl App {
             return;
         };
         let fits = since.rows + self.shown.len() <= self.height;
-        let block = since.block.clone().filter(|(_, at, count)| {
-            fits && at + count <= since.lines.len()
-        });
+        let block = since
+            .block
+            .clone()
+            .filter(|(_, at, count)| fits && at + count <= since.lines.len());
         let Some((render, at, count)) = block else {
             self.since_banner = Some(since);
             return;
@@ -320,7 +321,10 @@ impl App {
     pub(super) fn show_model(&mut self, agent: &Agent, config: &Config) {
         self.sees_images = agent.sees_images();
         self.status.model = agent.model_display().to_string();
-        self.status.backup = agent.backup_display().or_else(|| agent.backup_alias()).map(str::to_string);
+        self.status.backup = agent
+            .backup_display()
+            .or_else(|| agent.backup_alias())
+            .map(str::to_string);
         self.status.thinking = agent.thinking().label().to_string();
         self.status.window = agent.context_window();
         self.needs_provider =

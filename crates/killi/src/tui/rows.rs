@@ -626,12 +626,7 @@ fn interrupt_hint(elapsed: Duration) -> String {
 /// The working line while the snapshot runs: the island of the ice-cube spinner and the
 /// whole snapshot word beside it in the logo's gradient, then the turn's output count, the
 /// elapsed time and the interrupt hint.
-pub(super) fn snapshot_rows(
-    seq: usize,
-    frame: usize,
-    elapsed: Duration,
-    out: &str,
-) -> Vec<String> {
+pub(super) fn snapshot_rows(seq: usize, frame: usize, elapsed: Duration, out: &str) -> Vec<String> {
     vec![format!(
         "{} {FAINT}·{RESET} {TOKENS}{out}{RESET} {FAINT}·{RESET} {}",
         banner::steady_island(frame, &snapshot_word(seq, frame)),

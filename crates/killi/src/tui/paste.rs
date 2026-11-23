@@ -153,8 +153,8 @@ fn image_url_from_bytes(bytes: &[u8]) -> Result<String, String> {
     let Some((_, ext)) = media_type_from_magic(bytes) else {
         return Err("There's no image on the clipboard.".to_string());
     };
-    let file: PathBuf = std::env::temp_dir()
-        .join(format!("killi-paste-{}.{}", std::process::id(), ext));
+    let file: PathBuf =
+        std::env::temp_dir().join(format!("killi-paste-{}.{}", std::process::id(), ext));
     let path: &Path = &file;
     if let Err(e) = fs::write(path, bytes) {
         return Err(format!("Could not read the clipboard: {e}"));
@@ -162,7 +162,7 @@ fn image_url_from_bytes(bytes: &[u8]) -> Result<String, String> {
     let name = "the clipboard's image";
     let image = match image_type(path) {
         Some(found) => image_url(name, path, found),
-        None => Err(format!("{name} isn't an image (png, jpg, gif or webp)."))
+        None => Err(format!("{name} isn't an image (png, jpg, gif or webp).")),
     };
     let _ = fs::remove_file(path);
     image.map(|(url, _)| url)
@@ -229,10 +229,7 @@ mod tests {
             media_type_from_magic(&[0xFF, 0xD8, 0xFF, 0xE0]),
             Some(("image/jpeg", "jpg"))
         );
-        assert_eq!(
-            media_type_from_magic(b"GIF89a"),
-            Some(("image/gif", "gif"))
-        );
+        assert_eq!(media_type_from_magic(b"GIF89a"), Some(("image/gif", "gif")));
         assert_eq!(
             media_type_from_magic(b"RIFF\x00\x00\x00\x00WEBP"),
             Some(("image/webp", "webp"))

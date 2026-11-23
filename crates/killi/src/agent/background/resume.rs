@@ -66,9 +66,9 @@ impl Agent {
         let routes: Vec<(Route, Steer)> = jobs
             .iter()
             .filter_map(|job| {
-                job.as_ref().ok().map(|child| {
-                    (child.route.clone(), child.agent.controls.steer.clone())
-                })
+                job.as_ref()
+                    .ok()
+                    .map(|child| (child.route.clone(), child.agent.controls.steer.clone()))
             })
             .collect();
         let steers = routes.iter().map(|(_, steer)| steer.clone()).collect();

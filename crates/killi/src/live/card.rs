@@ -166,9 +166,7 @@ mod tests {
 
         let text = card_text(&live, Some(&old), 1_000);
         assert!(
-            text.starts_with(
-                "41 · idle for 1s · /w · “fix slugify” · killi 0.6.71 · killi-live/1"
-            ),
+            text.starts_with("41 · idle for 1s · /w · “fix slugify” · killi 0.6.71 · killi-live/1"),
             "{text}"
         );
         assert!(text.contains("Others can: ask it about its work"), "{text}");

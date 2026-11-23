@@ -108,10 +108,7 @@ fn truncate_shell_output(output: &str) -> String {
 /// killi. The terminal goes back first and is taken again after, as for Ctrl+Z.
 pub(super) fn run_interactive_shell(app: &mut App) -> Result<()> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-    let (fullscreen, enhanced) = (
-        app.fullscreen,
-        ENHANCED.load(Ordering::Relaxed),
-    );
+    let (fullscreen, enhanced) = (app.fullscreen, ENHANCED.load(Ordering::Relaxed));
     restore_terminal();
     println!(
         "Opened {shell} in {}. Type `exit` to return to killi.",

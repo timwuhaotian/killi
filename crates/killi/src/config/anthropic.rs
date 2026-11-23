@@ -48,7 +48,10 @@ fn sonnet(id: &'static str, display: &'static str) -> NewModel {
         tools: true,
         display: Some(display),
         default_effort: Some("high".into()),
-        efforts: ["low", "medium", "high", "xhigh", "max"].into_iter().map(Into::into).collect(),
+        efforts: ["low", "medium", "high", "xhigh", "max"]
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         ..NewModel::default()
     }
 }

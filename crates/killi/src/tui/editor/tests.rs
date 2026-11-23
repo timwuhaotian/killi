@@ -374,7 +374,11 @@ fn a_ghost_wraps_after_the_text_and_leaves_the_cursor_where_the_text_ends() {
         .map(|r| r.replace(&FAINT.to_string(), "").replace(RESET, ""))
         .collect();
     assert_eq!(plain, ["> fix the bug ", "  in parser"]);
-    assert!(rows[0].ends_with(&format!("{FAINT} bug {RESET}")), "{:?}", rows[0]);
+    assert!(
+        rows[0].ends_with(&format!("{FAINT} bug {RESET}")),
+        "{:?}",
+        rows[0]
+    );
     assert_eq!((row, column), (0, 9));
     assert_eq!(e.text(), "fix the", "the ghost is drawn, not typed");
 }

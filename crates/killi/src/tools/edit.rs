@@ -344,8 +344,14 @@ fn closest_hint(text: &str, old: &str) -> Option<String> {
 
 /// The 1-based line of `text` closest to `old`'s first non-empty line, trimmed on both sides.
 /// `None` when nothing is within half the needle's length.
+/// The line of `text` that `needle` could be starting on: the closest one, and the line that
+/// contains the needle, since a needle typed from a long line is a substring of it.
+/// An unrelated file gets nothing.
 fn nearest_line(text: &str, old: &str) -> Option<usize> {
     let needle = old.lines().map(str::trim).find(|line| !line.is_empty())?;
+    if let Some((line, _)) = text.lines().enumerate().find(|(_, line)| line.contains(needle)) {
+        return Some(line + 1);
+    }
     let limit = (needle.chars().count() / 2).max(1);
     text.lines()
         .enumerate()
@@ -484,6 +490,22 @@ mod tests {
         )
         .unwrap_err();
         assert!(!far.contains("closest line"), "{far}");
+    }
+
+    #[test]
+    fn a_missing_match_names_the_line_that_contains_it() {
+        // The first line of the old string was taken from the middle of one long line: no
+        // line is close in edit distance, but one contains it.
+        let text = "fn main() {\n    render(<div className=\"h-full bg-primary transition-all\">\n}\n";
+        let err = run(
+            text,
+            json!({
+                "old_string": "h-full bg-primary transition-all\">\n    render()",
+                "new_string": "h-full bg-muted transition-all\">\n",
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("starts at line 2"), "{err}");
     }
 
     #[test]

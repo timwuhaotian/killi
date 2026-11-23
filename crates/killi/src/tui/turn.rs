@@ -526,8 +526,7 @@ impl App {
     pub(super) fn wants_notify(&self, elapsed: Duration) -> bool {
         !self.send_now
             && (matches!(self.last_end, Some(LastEnd::Failed))
-                || matches!(self.last_end, Some(LastEnd::Done))
-                    && elapsed >= self.notify_after)
+                || matches!(self.last_end, Some(LastEnd::Done)) && elapsed >= self.notify_after)
     }
 
     /// Prints the streamed line still being held and lays out the table it held back, ending

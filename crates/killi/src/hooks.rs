@@ -356,15 +356,19 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn no_hooks_env_runs_nothing() {
-        let hooks = config(
-            "[[hooks.PreToolUse]]\ncommand = \"echo blocked >&2; exit 2\"\n",
-        );
+        let hooks = config("[[hooks.PreToolUse]]\ncommand = \"echo blocked >&2; exit 2\"\n");
         NO_HOOKS.with(|v| v.set(true));
         assert!(disabled());
         assert!(hooks.is_empty());
         assert!(!hooks.has_tool_hooks());
         let outcome = hooks
-            .run("PreToolUse", Some("bash"), &std::env::temp_dir(), "s", json!({}))
+            .run(
+                "PreToolUse",
+                Some("bash"),
+                &std::env::temp_dir(),
+                "s",
+                json!({}),
+            )
             .await;
         NO_HOOKS.with(|v| v.set(false));
         assert!(outcome.block.is_none());

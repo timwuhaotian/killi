@@ -58,7 +58,9 @@ use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
 use ending::{ends_with_question, interrupted_note, unfinished};
 use near::{NEAR_BASH_WARN_AT, NEAR_REPEAT_WARN_AT, near_key};
 use request::{is_media, is_overflow, provider_limit, reasoning_evidence};
-use types::{PartialSwarm, PendingPrompt, Repeat, last_model_state, last_plan_state, model_note, unanswered};
+use types::{
+    PartialSwarm, PendingPrompt, Repeat, last_model_state, last_plan_state, model_note, unanswered,
+};
 
 #[cfg(test)]
 use ask::question_args;

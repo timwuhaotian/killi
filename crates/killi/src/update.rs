@@ -30,7 +30,10 @@ const BINARY: &str = "killi-linux-x64";
 const BINARY: &str = "killi-linux-arm64";
 #[cfg(not(any(
     target_os = "macos",
-    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 )))]
 const BINARY: &str = "killi-linux-x64";
 #[cfg(target_os = "macos")]
@@ -41,7 +44,10 @@ const SHA_KEY: &str = "sha256-linux-x64";
 const SHA_KEY: &str = "sha256-linux-arm64";
 #[cfg(not(any(
     target_os = "macos",
-    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 )))]
 const SHA_KEY: &str = "sha256-linux-x64";
 
@@ -174,15 +180,9 @@ pub async fn install(release: Release) -> Result<()> {
     let base = releases_url();
     let http = http_client()?;
     let mut status = Status::silent();
-    install_with(
-        &mut status,
-        &http,
-        &base,
-        &release.version,
-        &release.sha256,
-    )
-    .await
-    .map(|_| ())
+    install_with(&mut status, &http, &base, &release.version, &release.sha256)
+        .await
+        .map(|_| ())
 }
 
 /// `CHANGELOG.md`, which sits beside the `releases/` folder: one level above `base`.
@@ -250,10 +250,9 @@ async fn latest(http: &reqwest::Client, base: &str) -> Result<(String, String)> 
             .and_then(toml::Value::as_str)
             .map(str::to_string)
     };
-    let (Some(version), Some(sha256)) = (
-        field("version"),
-        field(SHA_KEY).or_else(|| field("sha256")),
-    ) else {
+    let (Some(version), Some(sha256)) =
+        (field("version"), field(SHA_KEY).or_else(|| field("sha256")))
+    else {
         bail!("latest.toml needs `version` and `{SHA_KEY}`");
     };
     Ok((version, sha256))
@@ -285,11 +284,7 @@ async fn download(
             Ok(bytes) => return Ok(bytes),
             Err(error) if attempt < ATTEMPTS && retryable(&error) => {
                 status
-                    .during(
-                        "downloading",
-                        version,
-                        tokio::time::sleep(backoff(attempt)),
-                    )
+                    .during("downloading", version, tokio::time::sleep(backoff(attempt)))
                     .await;
             }
             Err(error) => return Err(error.context(format!("could not download {url}"))),
@@ -339,10 +334,14 @@ fn verify_and_install(
     version: &str,
     exe: &std::path::Path,
 ) -> Result<()> {
-    let bytes = fs::read(staging)
-        .with_context(|| format!("could not read {}", staging.display()))?;
+    let bytes =
+        fs::read(staging).with_context(|| format!("could not read {}", staging.display()))?;
     let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
-    let actual: String = digest.as_ref().iter().map(|byte| format!("{byte:02x}")).collect();
+    let actual: String = digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     if !actual.eq_ignore_ascii_case(sha256) {
         bail!("checksum mismatch: expected {sha256}, downloaded {actual}");
     }

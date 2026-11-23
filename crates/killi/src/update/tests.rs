@@ -106,9 +106,14 @@ async fn a_504_download_is_retried_from_the_start() {
     .await;
     let http = super::http_client().unwrap();
     let mut status = super::Status::new();
-    let bytes = super::download(&mut status, &http, &format!("{base}/{}", super::BINARY), "9.9.9")
-        .await
-        .unwrap();
+    let bytes = super::download(
+        &mut status,
+        &http,
+        &format!("{base}/{}", super::BINARY),
+        "9.9.9",
+    )
+    .await
+    .unwrap();
     assert_eq!(bytes, b"bin");
 }
 
@@ -129,7 +134,8 @@ async fn a_newer_release_comes_with_the_changelog_above_the_releases_folder() {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/main/releases", listener.local_addr().unwrap());
-    let changelog = "# Changelog\n\n## 0.2.0 — 2026-11-09\n\n- New.\n\n## 0.1.0 — 2026-11-08\n\n- Old.\n";
+    let changelog =
+        "# Changelog\n\n## 0.2.0 — 2026-11-09\n\n- New.\n\n## 0.1.0 — 2026-11-08\n\n- Old.\n";
     tokio::spawn(async move {
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
@@ -147,7 +153,10 @@ async fn a_newer_release_comes_with_the_changelog_above_the_releases_folder() {
         }
     });
     let http = super::http_client().unwrap();
-    let release = super::check_at(&http, &base, "0.1.0").await.unwrap().unwrap();
+    let release = super::check_at(&http, &base, "0.1.0")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(release.version, "0.2.0");
     assert_eq!(
         release.notes,
@@ -156,7 +165,12 @@ async fn a_newer_release_comes_with_the_changelog_above_the_releases_folder() {
             body: "- New.".into(),
         }]
     );
-    assert!(super::check_at(&http, &base, "0.2.0").await.unwrap().is_none());
+    assert!(
+        super::check_at(&http, &base, "0.2.0")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -175,7 +189,10 @@ fn a_wrong_checksum_names_the_downloaded_hash() {
         "{err}"
     );
     assert!(!target.exists());
-    assert!(staging.exists(), "a refused install leaves the staged file to the caller");
+    assert!(
+        staging.exists(),
+        "a refused install leaves the staged file to the caller"
+    );
 }
 
 #[test]
@@ -219,7 +236,11 @@ async fn latest_prefers_the_per_binary_checksum() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn latest_falls_back_to_the_legacy_checksum() {
-    let base = serve(vec![respond("200 OK", "version = \"9.9.9\"\nsha256 = \"legacy\"\n")]).await;
+    let base = serve(vec![respond(
+        "200 OK",
+        "version = \"9.9.9\"\nsha256 = \"legacy\"\n",
+    )])
+    .await;
     let http = super::http_client().unwrap();
     assert_eq!(
         super::latest(&http, &base).await.unwrap(),
@@ -299,8 +320,5 @@ fn before_the_download_starts_there_is_only_the_island_and_its_detail() {
         line.ends_with("for updates") && !line.contains("MB"),
         "{line:?}"
     );
-    assert!(
-        line.contains('🧊'),
-        "the ice-cube spinner: {line:?}"
-    );
+    assert!(line.contains('🧊'), "the ice-cube spinner: {line:?}");
 }

@@ -75,10 +75,7 @@ async fn a_reminder_raised_mid_batch_follows_the_last_result() {
     }
     let at = agent.messages.len();
     let calls = vec![
-        (
-            "g".to_string(),
-            grep(NEAR_REPEAT_WARN_AT, "g"),
-        ),
+        ("g".to_string(), grep(NEAR_REPEAT_WARN_AT, "g")),
         (
             "b".to_string(),
             ToolCall {
@@ -134,10 +131,20 @@ async fn any_user_message_pushed_mid_batch_waits_for_the_last_result() {
         .push(json!({"role": "assistant", "tool_calls": ids}))
         .unwrap();
     let note = "<system-reminder>From any producer, not just a tool result.</system-reminder>";
-    agent.push(json!({"role": "user", "content": note})).unwrap();
-    assert_eq!(agent.messages.len(), 1, "the message waits, not recorded yet");
+    agent
+        .push(json!({"role": "user", "content": note}))
+        .unwrap();
+    assert_eq!(
+        agent.messages.len(),
+        1,
+        "the message waits, not recorded yet"
+    );
     agent.execute_calls(calls, false).await.unwrap();
-    let roles: Vec<_> = agent.messages.iter().map(|m| m["role"].as_str().unwrap()).collect();
+    let roles: Vec<_> = agent
+        .messages
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect();
     assert_eq!(roles, ["assistant", "tool", "tool", "user"]);
     assert_eq!(agent.messages[3]["content"], note);
     assert!(unanswered(&agent.messages).is_empty());
@@ -444,7 +451,10 @@ async fn a_subagent_ending_with_open_tasks_is_asked_to_update_them() {
     ]}));
     assert!(!set.is_error, "{}", set.text);
     let (text, stop) = agent.run("do it", &[]).await.unwrap();
-    assert_eq!((text.as_str(), stop), ("Updated the list.", Stop::Completed));
+    assert_eq!(
+        (text.as_str(), stop),
+        ("Updated the list.", Stop::Completed)
+    );
     assert!(
         agent.messages.iter().any(|m| m["content"]
             .as_str()
@@ -465,7 +475,11 @@ fn a_task_list_with_two_items_in_progress_is_refused_and_kept() {
         {"content": "first", "status": "in_progress"},
         {"content": "second", "status": "in_progress"},
     ]}));
-    assert!(bad.is_error && bad.text.contains("Only one item can be in_progress"), "{}", bad.text);
+    assert!(
+        bad.is_error && bad.text.contains("Only one item can be in_progress"),
+        "{}",
+        bad.text
+    );
     assert_eq!(agent.todos.len(), 2);
     assert_eq!(agent.todos[0].status, "in_progress");
     assert_eq!(agent.todos[1].status, "pending");
@@ -516,7 +530,9 @@ async fn a_subagent_is_told_its_model_and_effort() {
     parent
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
-    let mut child = parent.subagent("child", None, false, &Default::default()).unwrap();
+    let mut child = parent
+        .subagent("child", None, false, &Default::default())
+        .unwrap();
     child.run("review it", &[]).await.unwrap();
     let said: Vec<&str> = child
         .messages
@@ -525,8 +541,9 @@ async fn a_subagent_is_told_its_model_and_effort() {
         .filter_map(|message| message["content"].as_str())
         .collect();
     assert!(
-        said.iter().any(|text| text.contains("Your model id is `test`")
-            && text.contains("thinking effort is `high`")),
+        said.iter()
+            .any(|text| text.contains("Your model id is `test`")
+                && text.contains("thinking effort is `high`")),
         "{said:?}"
     );
 }
@@ -538,7 +555,9 @@ async fn a_subagent_cannot_delegate_and_is_told_how_to_continue() {
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
     for fork in [false, true] {
-        let mut child = parent.subagent("child", None, fork, &Default::default()).unwrap();
+        let mut child = parent
+            .subagent("child", None, fork, &Default::default())
+            .unwrap();
         for name in ["agent", "agent_swarm"] {
             let call = ToolCall {
                 id: name.into(),
@@ -582,16 +601,15 @@ async fn a_subagent_leaves_finished_tasks_for_its_parent_to_report() {
         }
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let mut child = agent.subagent("child", None, false, &Default::default()).unwrap();
+    let mut child = agent
+        .subagent("child", None, false, &Default::default())
+        .unwrap();
     child.before_request().await.unwrap();
     assert!(
         child.messages.len() == 2
-            && !child
-                .messages
-                .iter()
-                .any(|message| message["content"]
-                    .as_str()
-                    .is_some_and(|text| text.contains("Background task"))),
+            && !child.messages.iter().any(|message| message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("Background task"))),
         "a subagent hears nothing about background tasks: {:?}",
         child.messages
     );
@@ -665,7 +683,9 @@ async fn the_model_hears_once_when_the_sessions_in_its_tree_change_and_gets_thei
     assert!(last(&agent).contains("No other killi session works in this repository now"));
     assert!(controls.peer_notes.borrow().is_empty());
 
-    let mut child = agent.subagent("child", None, false, &Default::default()).unwrap();
+    let mut child = agent
+        .subagent("child", None, false, &Default::default())
+        .unwrap();
     let _again = live::Registration::open_in(&dir, entry(4, "/w")).unwrap();
     child.before_request().await.unwrap();
     assert!(
@@ -792,9 +812,7 @@ async fn plan_mode_lets_memory_be_read_but_not_changed() {
         name: "memory".into(),
         arguments: json!({"add": "Uses pnpm"}).to_string(),
     };
-    let blocked = agent
-        .dispatch(&write, &json!({"add": "Uses pnpm"}))
-        .await;
+    let blocked = agent.dispatch(&write, &json!({"add": "Uses pnpm"})).await;
     assert!(
         blocked.is_error && blocked.text.contains("Plan mode"),
         "{}",
@@ -811,9 +829,7 @@ async fn only_the_main_session_changes_the_user_memory() {
         name: "memory".into(),
         arguments: json!({"add": "Uses pnpm"}).to_string(),
     };
-    let refused = agent
-        .dispatch(&write, &json!({"add": "Uses pnpm"}))
-        .await;
+    let refused = agent.dispatch(&write, &json!({"add": "Uses pnpm"})).await;
     assert!(
         refused.is_error && refused.text.contains("Only the main session"),
         "{}",
@@ -854,10 +870,14 @@ fn a_subagent_in_plan_mode_hears_it_first() {
     agent
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
-    let calm = agent.subagent("kid", None, false, &Default::default()).unwrap();
+    let calm = agent
+        .subagent("kid", None, false, &Default::default())
+        .unwrap();
     assert_eq!(calm.messages.len(), 1);
     agent.controls.plan.set(true);
-    let child = agent.subagent("kid", None, false, &Default::default()).unwrap();
+    let child = agent
+        .subagent("kid", None, false, &Default::default())
+        .unwrap();
     assert_eq!(child.messages.len(), 2);
     assert_eq!(child.messages[1]["content"].as_str(), Some(plan::ON));
     assert!(child.plan_announced);
@@ -1058,7 +1078,9 @@ async fn tree_moving_git_is_refused_while_a_peer_works_here() {
     agent
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
-    let mut child = agent.subagent("kid", None, false, &Default::default()).unwrap();
+    let mut child = agent
+        .subagent("kid", None, false, &Default::default())
+        .unwrap();
     assert!(child.controls.here.is_some());
     let call = bash_call("git restore f");
     let output = child

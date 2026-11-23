@@ -49,9 +49,9 @@ fn xattr_names(fd: libc::c_int) -> io::Result<Vec<u8>> {
 /// `com.apple.macl` is macOS's record of which apps may open the file (TCC tags Downloads with
 /// it): access control, not user data, so it is never a reason to refuse.
 fn foreign_xattr(names: &[u8]) -> Option<&[u8]> {
-    names.split(|&b| b == 0).find(|name| {
-        !name.is_empty() && *name != LABEL.to_bytes() && *name != b"com.apple.macl"
-    })
+    names
+        .split(|&b| b == 0)
+        .find(|name| !name.is_empty() && *name != LABEL.to_bytes() && *name != b"com.apple.macl")
 }
 
 // Resolve the final symlink ourselves so a dangling link is preserved too.

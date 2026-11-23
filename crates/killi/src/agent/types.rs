@@ -307,7 +307,11 @@ pub(super) fn fit_completion(typed: &str, reply: &str) -> Option<String> {
         rest
     };
     // Whitespace collapsed, a lead space kept: it says the next word is a new one.
-    let lead = if rest.starts_with(char::is_whitespace) { " " } else { "" };
+    let lead = if rest.starts_with(char::is_whitespace) {
+        " "
+    } else {
+        ""
+    };
     let words = rest.split_whitespace().collect::<Vec<_>>().join(" ");
     let more = cut_at_word(&format!("{lead}{words}"), COMPLETE_MAX);
     (!more.trim().is_empty()).then_some(more)

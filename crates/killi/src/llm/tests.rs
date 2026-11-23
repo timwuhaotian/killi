@@ -20,21 +20,37 @@ fn a_spent_quota_is_tried_once_more() {
 #[test]
 fn a_spent_chatgpt_plan_is_tried_once_more() {
     let body = r#"{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"Try again later"}}"#;
-    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, body)));
+    assert!(rechecked_once(&classify(
+        StatusCode::TOO_MANY_REQUESTS,
+        None,
+        body
+    )));
 }
 
 #[test]
 fn a_spent_budget_is_tried_once_more() {
     let body = r#"{"error":{"type":"budget_exceeded","message":"Budget has been exceeded"}}"#;
-    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, body)));
+    assert!(rechecked_once(&classify(
+        StatusCode::TOO_MANY_REQUESTS,
+        None,
+        body
+    )));
 }
 
 #[test]
 fn a_spent_chinese_token_plan_is_tried_once_more() {
     let body = r#"{"type":"error","error":{"type":"rate_limit_error","message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)"}}"#;
-    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, body)));
+    assert!(rechecked_once(&classify(
+        StatusCode::TOO_MANY_REQUESTS,
+        None,
+        body
+    )));
     let variant = r#"{"error":{"message":"已达到使用上限，请稍后再试"}}"#;
-    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, variant)));
+    assert!(rechecked_once(&classify(
+        StatusCode::TOO_MANY_REQUESTS,
+        None,
+        variant
+    )));
 }
 
 /// The body qwen's gateway sent for a per-minute token limit: the same model answered within
@@ -42,11 +58,26 @@ fn a_spent_chinese_token_plan_is_tried_once_more() {
 #[test]
 fn a_quota_worded_rate_limit_is_tried_again() {
     let body = r#"{"error":{"message":"Allocated quota exceeded, please increase your quota limit. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit","type":"insufficient_quota","code":"insufficient_quota"}}"#;
-    assert!(rechecked_once(&classify(StatusCode::TOO_MANY_REQUESTS, None, body)));
+    assert!(rechecked_once(&classify(
+        StatusCode::TOO_MANY_REQUESTS,
+        None,
+        body
+    )));
     // A server that names its own wait is taken at its word, unless it is too long to sit out.
-    let named = classify(StatusCode::TOO_MANY_REQUESTS, Some(Duration::from_secs(5)), body);
+    let named = classify(
+        StatusCode::TOO_MANY_REQUESTS,
+        Some(Duration::from_secs(5)),
+        body,
+    );
     assert_eq!(named.retry_after, Some(Duration::from_secs(5)));
-    assert!(!classify(StatusCode::TOO_MANY_REQUESTS, Some(Duration::from_secs(3600)), body).retryable);
+    assert!(
+        !classify(
+            StatusCode::TOO_MANY_REQUESTS,
+            Some(Duration::from_secs(3600)),
+            body
+        )
+        .retryable
+    );
 }
 
 #[test]
@@ -491,7 +522,10 @@ async fn an_endpoint_that_answered_before_outlasts_the_transport_cap() {
         .await
         .unwrap();
     assert_eq!(retries, TRANSPORT_ATTEMPTS);
-    assert_eq!(arrivals.lock().unwrap().len() as u32, TRANSPORT_ATTEMPTS + 2);
+    assert_eq!(
+        arrivals.lock().unwrap().len() as u32,
+        TRANSPORT_ATTEMPTS + 2
+    );
 }
 
 #[tokio::test]
@@ -565,7 +599,9 @@ async fn a_timeout_is_retryable_without_the_transport_attempt_cap() {
 async fn an_invalid_header_fails_without_a_retry_or_connection() {
     let (url, arrivals) = serve(Vec::new()).await;
     let mut model = test_model(&url);
-    model.headers.insert("invalid header".into(), "value".into());
+    model
+        .headers
+        .insert("invalid header".into(), "value".into());
     let client = Client::new(model).unwrap();
     let mut retries = 0;
     let error = client
@@ -692,7 +728,10 @@ async fn a_quota_429_that_clears_gets_its_answer_and_one_that_stays_fails_after_
     let (url, arrivals) = serve(vec![quota_429(0), sse_ok()]).await;
     let client = Client::new(test_model(&url)).unwrap();
     let message = [serde_json::json!({"role": "user", "content": "hi"})];
-    client.complete(&message, &[], "k", &mut |_| {}).await.unwrap();
+    client
+        .complete(&message, &[], "k", &mut |_| {})
+        .await
+        .unwrap();
     assert_eq!(arrivals.lock().unwrap().len(), 2);
     // A plan that is really spent fails on its second attempt, not its tenth.
     let (url, arrivals) = serve(vec![quota_429(0), quota_429(0), sse_ok()]).await;

@@ -43,12 +43,45 @@ fn grep_shows_context_and_other_output_modes() {
     );
     assert_eq!(
         out.text,
-        "long.txt-2- b\nlong.txt:3: needle\nlong.txt-4- c\n--\nlong.txt-8- g\nlong.txt:9: needle\nlong.txt-10- h"
+        "long.txt-2- b\n:3: needle\n-4- c\n--\nlong.txt-8- g\n:9: needle\n-10- h"
     );
     let out = grep_blocking(&dir, &dir, &json!({"pattern": "alpha", "output": "files"}));
     assert_eq!(out.text, "notes.txt\nsrc/a.rs");
     let out = grep_blocking(&dir, &dir, &json!({"pattern": "needle", "output": "count"}));
     assert_eq!(out.text, "long.txt:2");
+}
+
+#[test]
+fn a_file_names_itself_once_per_block_of_matches() {
+    let dir = tree();
+    std::fs::write(
+        dir.join("blocks.txt"),
+        "needle\na\nb\nc\nd\nneedle\ne\nf\n",
+    )
+    .unwrap();
+    // Two matches that are close enough for their context to overlap: one name for the run.
+    let out = grep_blocking(
+        &dir,
+        &dir,
+        &json!({"pattern": "needle", "context": 4, "glob": "blocks.txt"}),
+    );
+    assert_eq!(
+        out.text,
+        "blocks.txt:1: needle\n-2- a\n-3- b\n-4- c\n-5- d\n:6: needle\n-7- e\n-8- f"
+    );
+    // Matches far apart: each block names its file.
+    let out = grep_blocking(
+        &dir,
+        &dir,
+        &json!({"pattern": "needle", "glob": "blocks.txt"}),
+    );
+    assert_eq!(out.text, "blocks.txt:1: needle\nblocks.txt:6: needle");
+    let out = grep_blocking(
+        &dir,
+        &dir,
+        &json!({"pattern": "needle", "multiline": true, "glob": "blocks.txt"}),
+    );
+    assert_eq!(out.text, "blocks.txt:1: needle\nblocks.txt:6: needle");
 }
 
 #[test]
@@ -69,7 +102,7 @@ fn streaming_grep_keeps_every_match_and_overlapping_context() {
     stream_content(&mut reader, &regex, 2, 10, "x.txt", &mut out, &mut matches).unwrap();
     assert_eq!(
         out,
-        "x.txt-1- before\nx.txt:2: needle one\nx.txt:3: needle two\nx.txt-4- after\nx.txt-5- after two\n"
+        "x.txt-1- before\n:2: needle one\n:3: needle two\n-4- after\n-5- after two\n"
     );
     let _ = dir;
 }
@@ -82,10 +115,7 @@ fn grep_matches_across_lines() {
         &dir,
         &json!({"pattern": r"alpha\(\) \{\}\nfn beta", "multiline": true}),
     );
-    assert_eq!(
-        out.text,
-        "src/a.rs:1: fn alpha() {}\nsrc/a.rs:2: fn beta() {}"
-    );
+    assert_eq!(out.text, "src/a.rs:1: fn alpha() {}\n:2: fn beta() {}");
     let out = grep_blocking(
         &dir,
         &dir,
@@ -191,5 +221,23 @@ fn glob_matches_relative_paths() {
         glob_blocking(&dir, &dir, &json!({"pattern": "*.rs"}))
             .text
             .starts_with("No files match")
+    );
+}
+
+#[test]
+fn glob_stops_at_the_byte_limit() {
+    let dir = crate::test_temp::TempDir::new("killi-glob-bytes");
+    let segment = "f".repeat(200);
+    for n in 0..1000 {
+        let sub = dir.join(format!("d{n:04}/e{n:04}"));
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join(format!("{segment}.txt")), "x").unwrap();
+    }
+    let out = glob_blocking(&dir, &dir, &json!({"pattern": "**/*.txt"}));
+    assert!(out.text.len() <= crate::tools::MAX_BYTES + 80, "{}", out.text.len());
+    assert!(
+        out.text.contains("[1000 results limit reached; narrow the pattern or path.]"),
+        "{}",
+        out.text
     );
 }

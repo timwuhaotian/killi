@@ -279,9 +279,7 @@ impl Client {
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<Reply> {
         if self.model.alias.is_empty() {
-            bail!(
-                "no model is configured yet; type /provider to add one, then /model picks it"
-            );
+            bail!("no model is configured yet; type /provider to add one, then /model picks it");
         }
         if !self.model.chatgpt && self.model.api_key.is_empty() {
             bail!(
@@ -315,7 +313,9 @@ impl Client {
                 && attempt < HARD_ATTEMPTS
                 && self.model.protocol == Protocol::Anthropic
                 && failure.status == Some(400)
-                && failure.message.contains("Invalid `signature` in `thinking` block")
+                && failure
+                    .message
+                    .contains("Invalid `signature` in `thinking` block")
                 && anthropic::omit_rejected_thinking(&mut prepared.body, &failure.message)
             {
                 retried_signature = true;

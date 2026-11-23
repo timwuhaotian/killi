@@ -41,7 +41,11 @@ pub(super) fn prepare(
                 {
                     content.push(json!({"type": "reasoning", "text": text}));
                 }
-                for item in message["reasoning_details"].as_array().into_iter().flatten() {
+                for item in message["reasoning_details"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
                     let text = detail_text(item);
                     if !text.is_empty() {
                         content.push(json!({"type": "reasoning", "text": text}));
@@ -102,9 +106,9 @@ pub(super) fn prepare(
                                     true => part["image_url"]["url"]
                                         .as_str()
                                         .map(image_block)
-                                        .unwrap_or_else(|| {
-                                            json!({"type": "text", "text": IMAGE_OMITTED})
-                                        }),
+                                        .unwrap_or_else(
+                                            || json!({"type": "text", "text": IMAGE_OMITTED}),
+                                        ),
                                     false => json!({"type": "text", "text": IMAGE_OMITTED}),
                                 }),
                                 _ => {}
@@ -496,7 +500,9 @@ fn stream_error(event: &Value) -> Failure {
         return Failure::from_status(Some(status), format!("Command Code error: {message}"));
     }
     match code {
-        "invalid_request_error" | "authentication_error" | "permission_error"
+        "invalid_request_error"
+        | "authentication_error"
+        | "permission_error"
         | "not_found_error" => Failure::fatal(format!("Command Code error: {message}")),
         _ => Failure::transient(format!("Command Code error: {message}")),
     }
@@ -546,7 +552,10 @@ mod tests {
         assert_eq!(body["params"]["stream"], true);
         assert_eq!(body["params"]["max_tokens"], 64000);
         assert_eq!(body["params"]["reasoning_effort"], "xhigh");
-        assert_eq!(body["params"]["system"], json!([{"type": "text", "text": "sys"}]));
+        assert_eq!(
+            body["params"]["system"],
+            json!([{"type": "text", "text": "sys"}])
+        );
         assert_eq!(
             body["params"]["messages"],
             json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
@@ -577,7 +586,9 @@ mod tests {
                     "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{\"path\":\"a\"}"}}]}),
                 json!({"role": "tool", "tool_call_id": "c1", "content": "data"}),
             ],
-            &[json!({"type": "function", "function": {"name": "read", "description": "Read", "parameters": {"type": "object"}}})],
+            &[
+                json!({"type": "function", "function": {"name": "read", "description": "Read", "parameters": {"type": "object"}}}),
+            ],
         );
         let messages = body["params"]["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 3);
@@ -605,13 +616,11 @@ mod tests {
     #[test]
     fn images_ride_along_and_remote_ones_become_text() {
         let (_, body, _) = prepared(
-            &[
-                json!({"role": "user", "content": [
-                    {"type": "text", "text": "look"},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
-                    {"type": "image_url", "image_url": {"url": "https://example/x.png"}},
-                ]}),
-            ],
+            &[json!({"role": "user", "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                {"type": "image_url", "image_url": {"url": "https://example/x.png"}},
+            ]})],
             &[],
         );
         assert_eq!(
@@ -659,7 +668,12 @@ mod tests {
         assert_eq!(reply.tool_calls[0].arguments, "{\"path\":\"a\"}");
         assert_eq!(reply.finish_reason.as_deref(), Some("tool_calls"));
         assert_eq!(
-            (reply.usage.prompt, reply.usage.cached, reply.usage.completion, reply.usage.reasoning),
+            (
+                reply.usage.prompt,
+                reply.usage.cached,
+                reply.usage.completion,
+                reply.usage.reasoning
+            ),
             (50, 5, 7, 2)
         );
         parser.finish(&mut reply).unwrap();
@@ -675,13 +689,25 @@ mod tests {
                 .unwrap_err()
         };
         let fatal = error(json!({"type": "error", "message": "premium_credits_exhausted"}));
-        assert!(!fatal.retryable && fatal.kind == ErrorKind::Quota, "{fatal:?}");
-        let fatal = error(json!({"type": "error", "code": "invalid_request_error", "message": "bad"}));
+        assert!(
+            !fatal.retryable && fatal.kind == ErrorKind::Quota,
+            "{fatal:?}"
+        );
+        let fatal =
+            error(json!({"type": "error", "code": "invalid_request_error", "message": "bad"}));
         assert!(!fatal.retryable, "{fatal:?}");
         let paced = error(json!({"type": "error", "statusCode": 429, "message": "slow"}));
-        assert!(paced.retryable && paced.kind == ErrorKind::RateLimited, "{paced:?}");
+        assert!(
+            paced.retryable && paced.kind == ErrorKind::RateLimited,
+            "{paced:?}"
+        );
         assert!(error(json!({"type": "error", "message": "boom"})).retryable);
-        assert!(Parser::default().finish(&mut Reply::default()).unwrap_err().retryable);
+        assert!(
+            Parser::default()
+                .finish(&mut Reply::default())
+                .unwrap_err()
+                .retryable
+        );
     }
 
     #[test]

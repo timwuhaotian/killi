@@ -228,12 +228,14 @@ fn bang_runs_a_shell_command_and_bang_alone_opens_one() {
     assert_eq!(shell("! echo hi"), "echo hi");
     assert_eq!(shell("!"), "");
     assert_eq!(shell("  !  "), "");
-    assert!(
-        matches!(submission("wow! hi".into(), Vec::new()), Some(Input::Prompt(..)))
-    );
-    assert!(
-        matches!(submission("/help".into(), Vec::new()), Some(Input::Command(..)))
-    );
+    assert!(matches!(
+        submission("wow! hi".into(), Vec::new()),
+        Some(Input::Prompt(..))
+    ));
+    assert!(matches!(
+        submission("/help".into(), Vec::new()),
+        Some(Input::Command(..))
+    ));
 }
 
 #[test]
@@ -259,7 +261,11 @@ fn bang_help_row_fits_narrow_windows() {
         let rows = super::super::rows::help_rows(width, false);
         let all: Vec<String> = rows.iter().map(|r| stripped(r)).collect();
         // Continuation rows indent; collapse whitespace so a wrapped phrase reads whole.
-        let all = all.join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+        let all = all
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
             all.contains("opens a shell"),
             "help at {width} names the ! shell"

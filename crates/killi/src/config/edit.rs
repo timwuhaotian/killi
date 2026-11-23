@@ -421,9 +421,7 @@ pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<Vec
     toml::from_str::<Config>(&new).context("removing models would break the config")?;
     crate::fs_atomic::write(path, new.as_bytes(), None)
         .with_context(|| format!("could not write {}", path.display()))?;
-    if default_stale
-        && let Some(replacement) = &replacement
-    {
+    if default_stale && let Some(replacement) = &replacement {
         set_default_model(path, replacement)?;
     }
     if backup_stale {

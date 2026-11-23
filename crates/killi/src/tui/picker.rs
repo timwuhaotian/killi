@@ -585,7 +585,11 @@ impl App {
                 } else {
                     PickerChoice::Model(alias.clone())
                 };
-                (config.display_name(alias).to_string(), format!("{}{current}", model.provider), pick)
+                (
+                    config.display_name(alias).to_string(),
+                    format!("{}{current}", model.provider),
+                    pick,
+                )
             })
             .collect();
         if options.is_empty() {
@@ -847,8 +851,9 @@ impl App {
             );
         }
         if flow.name.is_none() {
-            let suggested =
-                crate::config::custom_suggested_name(flow.endpoint.as_deref().expect("the endpoint was answered"));
+            let suggested = crate::config::custom_suggested_name(
+                flow.endpoint.as_deref().expect("the endpoint was answered"),
+            );
             let name = if answer.is_empty() {
                 suggested
             } else {

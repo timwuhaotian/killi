@@ -171,7 +171,10 @@ async fn retries_are_recorded_in_the_session_log() {
     assert!(log.contains("\"attempt\":1"), "{log}");
     assert!(log.contains("\"wait_ms\":0"), "{log}");
     assert!(log.contains("slow down"), "{log}");
-    assert!(!log.contains("\"type\":\"abort\""), "a settled request is no abort: {log}");
+    assert!(
+        !log.contains("\"type\":\"abort\""),
+        "a settled request is no abort: {log}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -185,9 +188,15 @@ async fn a_request_dropped_before_it_settles_leaves_an_abort_in_the_log() {
         .unwrap_or_else(|| panic!("no abort entry: {log}"));
     assert!(abort["ms"].as_u64().unwrap() >= 100, "{abort}");
     assert!(abort["first_token_ms"].is_null(), "no token came: {abort}");
-    assert!(agent.retract().unwrap(), "the prompt can still be taken back");
+    assert!(
+        agent.retract().unwrap(),
+        "the prompt can still be taken back"
+    );
     let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
-    assert!(log.trim_end().ends_with('}'), "the log still appends whole lines");
+    assert!(
+        log.trim_end().ends_with('}'),
+        "the log still appends whole lines"
+    );
 }
 
 #[test]
@@ -199,11 +208,25 @@ fn subagents_forks_and_tasks_share_the_sessions_cache_key() {
         .unwrap();
     parent.share();
     assert_eq!(parent.cache_key, parent.session.id);
-    let fresh = parent.subagent("fresh", None, false, &Default::default()).unwrap();
-    assert!(fresh.session.id.starts_with("agent-"), "{}", fresh.session.id);
-    assert_eq!(fresh.cache_key, parent.cache_key, "its requests open with the session's prefix");
-    let fork = parent.subagent("fork", None, true, &Default::default()).unwrap();
-    assert_eq!(fork.cache_key, parent.cache_key, "a fork opens with the parent's history");
+    let fresh = parent
+        .subagent("fresh", None, false, &Default::default())
+        .unwrap();
+    assert!(
+        fresh.session.id.starts_with("agent-"),
+        "{}",
+        fresh.session.id
+    );
+    assert_eq!(
+        fresh.cache_key, parent.cache_key,
+        "its requests open with the session's prefix"
+    );
+    let fork = parent
+        .subagent("fork", None, true, &Default::default())
+        .unwrap();
+    assert_eq!(
+        fork.cache_key, parent.cache_key,
+        "a fork opens with the parent's history"
+    );
     let task = task_agent(&controls.aside.borrow(), None, Rc::new(|_| {}), 1).unwrap();
     assert_eq!(task.cache_key, parent.cache_key);
 }
@@ -227,7 +250,12 @@ async fn a_request_dropped_during_a_retry_backoff_logs_the_retry_then_the_abort(
     let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
     let kinds: Vec<String> = log
         .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap()["type"].as_str().unwrap().to_string())
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["type"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
         .filter(|kind| kind == "retry" || kind == "abort")
         .collect();
     assert_eq!(kinds, ["retry", "abort"], "{log}");
@@ -261,7 +289,9 @@ async fn compaction_restores_a_childs_delegation_reminder() {
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
     parent.client = Rc::new(test_client_at("primary", &url));
-    let mut child = parent.subagent("child", None, true, &Default::default()).unwrap();
+    let mut child = parent
+        .subagent("child", None, true, &Default::default())
+        .unwrap();
     child
         .push(json!({"role": "user", "content": "task"}))
         .unwrap();
@@ -343,9 +373,9 @@ async fn a_limited_swarm_stops_instead_of_running_every_item_into_the_same_limit
         );
         assert!(output.text.contains(body), "{name}: {}", output.text);
         assert!(
-            output
-                .text
-                .contains(&format!("Not run: the provider {why} (subagent #1 failed on it)")),
+            output.text.contains(&format!(
+                "Not run: the provider {why} (subagent #1 failed on it)"
+            )),
             "{name}: {}",
             output.text
         );
@@ -551,7 +581,9 @@ fn a_fork_accounts_its_inherited_history_once() {
         .unwrap();
     agent.stats.context = 5_000;
     agent.current_reply = agent.messages.len();
-    let child = agent.subagent("fork", None, true, &Default::default()).unwrap();
+    let child = agent
+        .subagent("fork", None, true, &Default::default())
+        .unwrap();
     assert_eq!(child.stats.context, 5_000);
     assert_eq!(child.accounted_messages, child.messages.len());
     assert!(
@@ -709,7 +741,11 @@ fn a_recorded_recap_loads_back_for_a_resume() {
     let log = std::fs::read_to_string(&agent.session.log_path).unwrap();
     assert!(log.contains("\"type\":\"recap\""), "{log}");
     assert!(log.contains("fixed it"), "{log}");
-    assert_eq!(log.lines().count(), 1, "an empty recap keeps nothing: {log}");
+    assert_eq!(
+        log.lines().count(),
+        1,
+        "an empty recap keeps nothing: {log}"
+    );
 }
 
 #[test]
@@ -876,8 +912,16 @@ async fn interrupted_parallel_agents_keep_finished_reports_on_recovery_and_resum
                 bytes.extend_from_slice(&buf[..n]);
                 if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
                     let headers = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
-                    let length = headers.lines().find_map(|line| line.strip_prefix("content-length:")).unwrap().trim().parse::<usize>().unwrap();
-                    if bytes.len() >= end + 4 + length { break; }
+                    let length = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .unwrap()
+                        .trim()
+                        .parse::<usize>()
+                        .unwrap();
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
                 }
             }
             String::from_utf8(bytes).unwrap()
@@ -886,8 +930,16 @@ async fn interrupted_parallel_agents_keep_finished_reports_on_recovery_and_resum
         let (mut second, _) = listener.accept().await.unwrap();
         let first_request = request(&mut first).await;
         let second_request = request(&mut second).await;
-        let fast = if first_request.contains("second") { &mut first } else { assert!(second_request.contains("second")); &mut second };
-        let reply = format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{}", sse("finished report", "stop"));
+        let fast = if first_request.contains("second") {
+            &mut first
+        } else {
+            assert!(second_request.contains("second"));
+            &mut second
+        };
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{}",
+            sse("finished report", "stop")
+        );
         fast.write_all(reply.as_bytes()).await.unwrap();
         fast.shutdown().await.unwrap();
         std::future::pending::<()>().await;
@@ -904,11 +956,35 @@ async fn interrupted_parallel_agents_keep_finished_reports_on_recovery_and_resum
             *seen.borrow_mut() = Some(label);
         }
     });
-    let mut agent = Agent::assemble(test_client_at("test", &url), &dir, Vec::new(), Settings::default(), Controls::default(), sink, Session::open(&log).unwrap());
-    agent.push(json!({"role": "system", "content": "sys"})).unwrap();
+    let mut agent = Agent::assemble(
+        test_client_at("test", &url),
+        &dir,
+        Vec::new(),
+        Settings::default(),
+        Controls::default(),
+        sink,
+        Session::open(&log).unwrap(),
+    );
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
     agent.push(json!({"role": "assistant", "tool_calls": [{"id": "prior"}, {"id": "a", "function": {"name": "agent"}}, {"id": "b", "function": {"name": "agent"}}]})).unwrap();
-    agent.push(json!({"role": "tool", "tool_call_id": "prior", "content": "prior result"})).unwrap();
-    let calls: Vec<_> = [("a", "first"), ("b", "second")].into_iter().map(|(id, label)| (id.to_string(), ToolCall { id: id.into(), name: "agent".into(), arguments: json!({"description": label, "prompt": label}).to_string() })).collect();
+    agent
+        .push(json!({"role": "tool", "tool_call_id": "prior", "content": "prior result"}))
+        .unwrap();
+    let calls: Vec<_> = [("a", "first"), ("b", "second")]
+        .into_iter()
+        .map(|(id, label)| {
+            (
+                id.to_string(),
+                ToolCall {
+                    id: id.into(),
+                    name: "agent".into(),
+                    arguments: json!({"description": label, "prompt": label}).to_string(),
+                },
+            )
+        })
+        .collect();
     {
         let future = agent.execute_calls(calls, false);
         tokio::pin!(future);
@@ -919,7 +995,9 @@ async fn interrupted_parallel_agents_keep_finished_reports_on_recovery_and_resum
                     _ = tokio::task::yield_now() => if finished.borrow().is_some() { break; },
                 }
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
     }
     assert_eq!(finished.borrow().as_deref(), Some("second"));
     let done = "b";
@@ -930,20 +1008,54 @@ async fn interrupted_parallel_agents_keep_finished_reports_on_recovery_and_resum
     agent.recover().unwrap();
     assert_eq!(&agent.messages[..prefix.len()], prefix);
     let check = |messages: &[Value]| {
-        let content = |id: &str| messages.iter().find(|m| m["tool_call_id"] == id).unwrap()["content"].as_str().unwrap();
+        let content = |id: &str| {
+            messages.iter().find(|m| m["tool_call_id"] == id).unwrap()["content"]
+                .as_str()
+                .unwrap()
+        };
         assert_eq!(content("prior"), "prior result");
-        assert!(content(done).contains("finished report"), "{}", content(done));
-        assert!(content(pending).contains("side effects"), "{}", content(pending));
+        assert!(
+            content(done).contains("finished report"),
+            "{}",
+            content(done)
+        );
+        assert!(
+            content(pending).contains("side effects"),
+            "{}",
+            content(pending)
+        );
     };
     check(&agent.messages);
     let (locked, report) = Session::resume(&snapshot).unwrap();
-    let resumed = Agent::resume_reported(test_client(), None, &dir, locked, report, Vec::new(), Settings::default(), Controls::default(), Rc::new(|_| {})).unwrap();
+    let resumed = Agent::resume_reported(
+        test_client(),
+        None,
+        &dir,
+        locked,
+        report,
+        Vec::new(),
+        Settings::default(),
+        Controls::default(),
+        Rc::new(|_| {}),
+    )
+    .unwrap();
     assert_eq!(&resumed.messages[..prefix.len()], prefix);
     check(&resumed.messages);
     drop(resumed);
     crate::test_temp::await_unlocked(&snapshot);
     let (locked, report) = Session::resume(&snapshot).unwrap();
-    let resumed_again = Agent::resume_reported(test_client(), None, &dir, locked, report, Vec::new(), Settings::default(), Controls::default(), Rc::new(|_| {})).unwrap();
+    let resumed_again = Agent::resume_reported(
+        test_client(),
+        None,
+        &dir,
+        locked,
+        report,
+        Vec::new(),
+        Settings::default(),
+        Controls::default(),
+        Rc::new(|_| {}),
+    )
+    .unwrap();
     check(&resumed_again.messages);
     server.abort();
 }

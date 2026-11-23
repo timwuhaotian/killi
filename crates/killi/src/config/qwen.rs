@@ -52,7 +52,10 @@ fn qwen(id: &'static str, display: &'static str, effort: &'static str) -> NewMod
         tools: true,
         display: Some(display),
         default_effort: Some(effort.into()),
-        efforts: ["low", "medium", "xhigh"].into_iter().map(Into::into).collect(),
+        efforts: ["low", "medium", "xhigh"]
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         ..NewModel::default()
     }
 }

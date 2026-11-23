@@ -191,7 +191,10 @@ impl Crew {
         running
             .chain(waiting)
             .filter_map(|index| {
-                self.meta.get(index).and_then(Option::as_ref).map(|meta| meta.steer.clone())
+                self.meta
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .map(|meta| meta.steer.clone())
             })
             .collect()
     }

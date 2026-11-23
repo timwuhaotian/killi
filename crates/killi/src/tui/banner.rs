@@ -65,11 +65,7 @@ const STOPS_OFF_WHITE: Stops = [
     (251.0, 247.0, 245.0),
     (249.0, 241.0, 241.0),
 ];
-const STOPS_RED_ORANGE: Stops = [
-    (255.0, 193.0, 0.0),
-    (255.0, 116.0, 0.0),
-    (255.0, 0.0, 0.0),
-];
+const STOPS_RED_ORANGE: Stops = [(255.0, 193.0, 0.0), (255.0, 116.0, 0.0), (255.0, 0.0, 0.0)];
 const STOPS_SNOW_ICE: Stops = [
     (255.0, 255.0, 255.0),
     (134.0, 214.0, 216.0),
@@ -375,7 +371,10 @@ mod tests {
         }
         let ground = SELECT.to_string();
         let island = working_island(30, "thinking");
-        assert!(island.starts_with(&ground) && island.ends_with(RESET), "{island:?}");
+        assert!(
+            island.starts_with(&ground) && island.ends_with(RESET),
+            "{island:?}"
+        );
         assert!(
             island.matches(&ground).count() > 1,
             "the ground is reapplied inside: {island:?}"

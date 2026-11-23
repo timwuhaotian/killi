@@ -18,11 +18,17 @@ impl App {
                 let waiting = self.controls.aside.borrow().waiting();
                 // `tasks` also tells a card that this session takes tasks at all: a release
                 // that doesn't never says it.
-                answer(reply, json!({"ok": true, "working": working, "plan": self.controls.plan.get(), "todos": todos, "waiting": waiting, "tasks": self.tasks_running()}));
+                answer(
+                    reply,
+                    json!({"ok": true, "working": working, "plan": self.controls.plan.get(), "todos": todos, "waiting": waiting, "tasks": self.tasks_running()}),
+                );
             }
             live::Request::Ask { from, text } => {
                 if self.peer_asking.len() >= MAX_PEER_ASKS {
-                    refuse(reply, "it is answering other sessions' questions; ask again in a minute");
+                    refuse(
+                        reply,
+                        "it is answering other sessions' questions; ask again in a minute",
+                    );
                     return;
                 }
                 let ask = self
@@ -51,7 +57,12 @@ impl App {
             }
             live::Request::Tell { from, text } => {
                 if self.peer_tells >= MAX_PEER_TELLS {
-                    refuse(reply, &format!("it has taken {MAX_PEER_TELLS} messages since its user's last prompt; send this one after the next"));
+                    refuse(
+                        reply,
+                        &format!(
+                            "it has taken {MAX_PEER_TELLS} messages since its user's last prompt; send this one after the next"
+                        ),
+                    );
                     return;
                 }
                 self.peer_tells += 1;

@@ -125,7 +125,8 @@ fn code_marks_a_part_that_wraps_without_an_indent() {
     let rows = md.rows(parts);
     assert!(rows.len() > 1, "{rows:?}");
     assert!(
-        rows.iter().all(|row| width(row) <= 30 && !row.starts_with(' ')),
+        rows.iter()
+            .all(|row| width(row) <= 30 && !row.starts_with(' ')),
         "a copy of a code row takes only the code: {rows:?}"
     );
     assert_eq!(
@@ -309,10 +310,7 @@ fn rust_and_typescript_get_types_calls_and_their_own_corners() {
     assert!(ts.contains(&format!("{TYPE}Box{RESET}")), "{ts}");
     assert!(ts.contains(&format!("{TYPE}number{RESET}")), "{ts}");
     assert!(ts.contains(&format!("{CALL}add{RESET}")), "{ts}");
-    assert!(
-        ts.contains(&format!("{STRING}`x${{y}}`{RESET}")),
-        "{ts}"
-    );
+    assert!(ts.contains(&format!("{STRING}`x${{y}}`{RESET}")), "{ts}");
     // Not rich: the same words stay plain, keywords aside.
     let py = highlight_code(Lang::Py, "x = Option(foo(1))");
     assert!(!py.contains(&TYPE.to_string()) && !py.contains(&CALL.to_string()));
@@ -342,7 +340,11 @@ fn tables_line_up_and_shrink_to_the_width() {
 fn an_unclosed_fence_does_not_leak_into_the_next_message() {
     let mut md = Markdown::default();
     assert!(md.line("```rust").iter().any(|row| row.contains("rust")));
-    assert!(md.line("let x = 1;").iter().all(|row| !row.starts_with(' ')));
+    assert!(
+        md.line("let x = 1;")
+            .iter()
+            .all(|row| !row.starts_with(' '))
+    );
     let held = md.end_message();
     assert!(held.is_empty(), "no table was held");
     assert_eq!(md.line("plain"), ["plain"]);
@@ -351,7 +353,11 @@ fn an_unclosed_fence_does_not_leak_into_the_next_message() {
         reopened.iter().any(|row| row.contains("rust")),
         "a fence still opens after the reset: {reopened:?}"
     );
-    assert!(md.line("let y = 2;").iter().all(|row| !row.starts_with(' ')));
+    assert!(
+        md.line("let y = 2;")
+            .iter()
+            .all(|row| !row.starts_with(' '))
+    );
 }
 
 #[test]
@@ -467,12 +473,7 @@ fn skins_paint_their_palettes_own_colors() {
         "\x1b[38;2;63;208;212m",
         "snow and ice's cyan #3fd0d4"
     );
-    for skin in [
-        Theme::Pastel,
-        Theme::Gray,
-        Theme::OffWhite,
-        Theme::SnowIce,
-    ] {
+    for skin in [Theme::Pastel, Theme::Gray, Theme::OffWhite, Theme::SnowIce] {
         assert_eq!(
             DANGER.shade(skin, true),
             DANGER.shade(Theme::Dark, true),

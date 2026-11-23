@@ -82,7 +82,11 @@ fn a_dressed_up_final_line_still_says_where_the_task_stands() {
             InputRequired,
             Some("which branch?"),
         ),
-        ("Stuck.\nStatus: blocked: need X", InputRequired, Some("need X")),
+        (
+            "Stuck.\nStatus: blocked: need X",
+            InputRequired,
+            Some("need X"),
+        ),
         (
             "It blew up.\nStatus: Failed. The build broke\n\n",
             Failed,

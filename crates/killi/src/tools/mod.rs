@@ -236,7 +236,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         tool(
             "read",
-            "Read a file. Text lines are prefixed `N\\t`; shows up to 2000 lines or 50KB, continue with offset. Images (png, jpg, gif, webp) are shown to you.",
+            "Read a file. Text lines are prefixed `N\\t`; up to 2000 lines or 50KB, continue with offset. Images (png, jpg, gif, webp) need vision to show.",
             json!({"type": "object", "properties": {
                 "path": {"type": "string"},
                 "offset": {"type": "integer", "description": "1-based first line"},
@@ -296,7 +296,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "grep",
-            "Search file contents with a regex (Rust syntax), honoring .gitignore. Returns `path:line: text`; context lines use `-`.",
+            "Search file contents with a Rust regex; uses .gitignore. Matches are `path:line: text`, one name per block; `-` marks context.",
             json!({"type": "object", "properties": {
                 "pattern": {"type": "string"},
                 "path": {"type": "string", "description": "File or directory, default working directory"},

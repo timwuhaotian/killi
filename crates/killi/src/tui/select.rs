@@ -141,8 +141,6 @@ fn pieces(line: &str) -> Vec<Piece<'_>> {
     out
 }
 
-
-
 /// Whether a character `width` columns wide at `col` lies within the columns `from` to `to`,
 /// both included. A wide character is taken whole when either of its columns is.
 fn covers(col: usize, width: usize, from: usize, to: usize) -> bool {

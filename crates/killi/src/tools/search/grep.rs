@@ -81,7 +81,10 @@ fn text_reader(path: &Path) -> io::Result<Option<BufReader<File>>> {
 
 /// Reads lossily like `String::from_utf8_lossy(...).lines()`, without holding the whole file.
 /// Returns a borrowed view when the line is valid UTF-8 (the common case), avoiding allocation.
-fn next_line<'b>(reader: &mut impl BufRead, buf: &'b mut Vec<u8>) -> io::Result<Option<Cow<'b, str>>> {
+fn next_line<'b>(
+    reader: &mut impl BufRead,
+    buf: &'b mut Vec<u8>,
+) -> io::Result<Option<Cow<'b, str>>> {
     buf.clear();
     if reader.read_until(b'\n', buf)? == 0 {
         return Ok(None);
@@ -119,23 +122,54 @@ impl PreviousLine {
 struct Pending {
     from: usize,
     to: usize,
-    text: String,
+    block: Block,
 }
 
-fn push_line(out: &mut String, path: &str, line: &PreviousLine) {
-    let sep = if line.matched { ':' } else { '-' };
-    let _ = writeln!(out, "{path}{sep}{}{sep} {}", line.number + 1, line.text);
+/// One block of matches, as it is appended: its first line names the file, the rest only
+/// their line, so a block's lines are not padded with the name again.
+struct Block {
+    text: String,
+    named: bool,
+}
+
+impl Block {
+    fn new() -> Self {
+        Block {
+            text: String::new(),
+            named: false,
+        }
+    }
+
+    fn separator(&mut self) {
+        self.text.push_str("--\n");
+    }
+
+    fn line(&mut self, path: &str, line: &PreviousLine) {
+        let sep = if line.matched { ':' } else { '-' };
+        let number = line.number + 1;
+        if self.named {
+            let _ = writeln!(self.text, "{sep}{number}{sep} {}", line.text);
+        } else {
+            self.named = true;
+            let _ = writeln!(self.text, "{path}{sep}{number}{sep} {}", line.text);
+        }
+    }
+
+    fn flush(&mut self, out: &mut String) -> Result<(), Stop> {
+        if out.len() + self.text.len() > MAX_BYTES {
+            return Err(Stop::Bytes);
+        }
+        out.push_str(&self.text);
+        self.text.clear();
+        Ok(())
+    }
 }
 
 fn flush_pending(pending: &mut Option<Pending>, out: &mut String) -> Result<(), Stop> {
-    let Some(pending) = pending.take() else {
+    let Some(mut chunk) = pending.take() else {
         return Ok(());
     };
-    if out.len() + pending.text.len() > MAX_BYTES {
-        return Err(Stop::Bytes);
-    }
-    out.push_str(&pending.text);
-    Ok(())
+    chunk.block.flush(out)
 }
 
 pub(super) fn stream_content(
@@ -159,9 +193,12 @@ pub(super) fn stream_content(
             break;
         };
         let matched = regex.is_match(&text);
-        let in_pending = pending
-            .as_ref()
-            .is_some_and(|chunk| (chunk.from..=chunk.to).contains(&number));
+        // A match at or before the block's `to` belongs to it; so does one within the
+        // context after it, since the lines between are context it would print anyway.
+        let in_pending = pending.as_ref().is_some_and(|chunk| {
+            (chunk.from..=chunk.to).contains(&number)
+                || ( matched && number.saturating_sub(context) <= chunk.to )
+        });
         let need_line = matched || in_pending || context > 0;
         if need_line {
             let line = PreviousLine::new(number, text.into_owned(), matched);
@@ -169,7 +206,7 @@ pub(super) fn stream_content(
                 if *matches == limit {
                     if let Some(chunk) = pending.as_mut() {
                         if in_pending {
-                            push_line(&mut chunk.text, path, &line);
+                            chunk.block.line(path, &line);
                         }
                         stop_after_pending = true;
                     } else {
@@ -178,39 +215,53 @@ pub(super) fn stream_content(
                     }
                 } else {
                     *matches += 1;
-                    if let Some(chunk) = pending.as_mut() {
+                    // The new match joins the open block when its context reaches it:
+                    // its `from` is at or before the block's `to`, so the lines in
+                    // between are gap lines the previous deque still holds.
+                    let joins = pending
+                        .as_ref()
+                        .is_some_and(|chunk| number.saturating_sub(context) <= chunk.to);
+                    if joins {
+                        let Some(chunk) = pending.as_mut() else {
+                            unreachable!()
+                        };
+                        for prev in previous.iter().filter(|prev| prev.number > chunk.to) {
+                            chunk.block.line(path, prev);
+                        }
+                        chunk.block.line(path, &line);
                         chunk.to = chunk.to.max(number + context);
                         printed = Some(printed.map_or(chunk.to, |p| p.max(chunk.to)));
-                        if in_pending {
-                            push_line(&mut chunk.text, path, &line);
-                        }
                     } else {
+                        if let Err(failed) = flush_pending(&mut pending, out) {
+                            stop = Some(failed);
+                            break;
+                        }
                         let from = number
                             .saturating_sub(context)
                             .max(printed.map_or(0, |p| p + 1));
                         let to = number + context;
-                        let mut chunk = String::new();
+                        let mut chunk = Block::new();
                         if context > 0 && printed.is_some_and(|p| from > p + 1) && from <= to {
-                            chunk.push_str("--\n");
+                            chunk.separator();
                         }
                         for prev in previous.iter().filter(|prev| prev.number >= from) {
-                            push_line(&mut chunk, path, prev);
+                            chunk.line(path, prev);
                         }
                         if from <= number {
-                            push_line(&mut chunk, path, &line);
+                            chunk.line(path, &line);
                         }
                         printed = Some(printed.map_or(to, |p| p.max(to)));
                         if from <= to {
                             pending = Some(Pending {
                                 from,
                                 to,
-                                text: chunk,
+                                block: chunk,
                             });
                         }
                     }
                 }
             } else if in_pending && let Some(chunk) = pending.as_mut() {
-                push_line(&mut chunk.text, path, &line);
+                chunk.block.line(path, &line);
             }
             if context > 0 {
                 previous.push_back(line);
@@ -219,12 +270,16 @@ pub(super) fn stream_content(
                 }
             }
         }
-        if pending.as_ref().is_some_and(|chunk| chunk.to == number)
-            && let Err(stop) = flush_pending(&mut pending, out)
+        // The block stays open while a later match could still join it; it closes on the
+        // first line past its `to` that isn't part of it.
+        if pending
+            .as_ref()
+            .is_some_and(|chunk| !matched && number > chunk.to)
+            && let Err(failed) = flush_pending(&mut pending, out)
         {
             return Ok(FileResult {
                 matches: 0,
-                stop: Some(stop),
+                stop: Some(failed),
             });
         }
         number += 1;
@@ -390,19 +445,19 @@ pub(super) fn grep_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
                     .saturating_sub(context)
                     .max(printed.map_or(0, |p| p + 1));
                 let to = (last + context).min(lines.len().saturating_sub(1));
-                let mut chunk = String::new();
+                let mut chunk = Block::new();
                 if context > 0 && printed.is_some_and(|p| from > p + 1) && from <= to {
-                    chunk.push_str("--\n");
+                    chunk.separator();
                 }
                 for n in from..=to {
                     let line = PreviousLine::new(n, lines[n].to_string(), is_match[n]);
-                    push_line(&mut chunk, &shown_path, &line);
+                    chunk.line(&shown_path, &line);
                 }
-                if out.len() + chunk.len() > MAX_BYTES {
+                if out.len() + chunk.text.len() > MAX_BYTES {
                     notes.push(stop_note(Stop::Bytes, limit));
                     break 'files;
                 }
-                out.push_str(&chunk);
+                out.push_str(&chunk.text);
                 printed = Some(printed.map_or(to, |p| p.max(to)));
             }
             continue;

@@ -209,9 +209,7 @@ fn tool_rows_bold_the_name_mute_the_folders_and_hang_output_off_a_gutter() {
         unstyled(&diff_row("+12\tlet x = 1;", 40, false, text::Lang::Plain)),
         "  │   12 + let x = 1;"
     );
-    assert!(
-        diff_row("-3\told", 40, false, text::Lang::Plain).contains(&format!("{DANGER}- old"))
-    );
+    assert!(diff_row("-3\told", 40, false, text::Lang::Plain).contains(&format!("{DANGER}- old")));
     assert_eq!(
         unstyled(&diff_row("@@ hunk", 40, true, text::Lang::Plain)),
         "  │ @@ hunk"

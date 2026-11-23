@@ -95,7 +95,9 @@ impl App {
             format!(
                 "  {LAGOON}→{RESET} {BOLD}/provider{RESET}   {DIM}add a provider and its key{RESET}"
             ),
-            format!("  {LAGOON}→{RESET} {BOLD}/model{RESET}      {DIM}pick a model it added{RESET}"),
+            format!(
+                "  {LAGOON}→{RESET} {BOLD}/model{RESET}      {DIM}pick a model it added{RESET}"
+            ),
             format!(
                 "  {LAGOON}→{RESET} {BOLD}killi login{RESET} {DIM}sign in to a subscription{RESET}"
             ),
@@ -150,7 +152,11 @@ impl App {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let state = if self.busy.is_some() { "working" } else { "idle" };
+        let state = if self.busy.is_some() {
+            "working"
+        } else {
+            "idle"
+        };
         let model = self.status.model.trim();
         let title = match (folder.as_str(), model) {
             ("", "") => format!("killi · {state}"),
@@ -254,9 +260,9 @@ impl App {
         self.forget_stale();
         let (live, cursor_row, cursor_col) = self.live();
         let cut = live.len().saturating_sub(self.height);
-        let todo_rows = self.todo_rows.and_then(|(first, last)| {
-            Some((first.saturating_sub(cut), last.checked_sub(cut)?))
-        });
+        let todo_rows = self
+            .todo_rows
+            .and_then(|(first, last)| Some((first.saturating_sub(cut), last.checked_sub(cut)?)));
         let (live, cursor_row) = (&live[cut..], cursor_row.saturating_sub(cut));
         let area = self.height - live.len();
         self.todo_rows = todo_rows.map(|(first, last)| (area + first, area + last));

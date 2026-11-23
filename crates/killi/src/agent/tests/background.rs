@@ -111,7 +111,9 @@ async fn a_message_moves_a_running_subagent_to_the_background_and_its_report_com
     let steer = controls.steer.clone();
     let (ran, ()) = tokio::join!(agent.execute_calls(calls, false), async {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        steer.borrow_mut().push_back(("what is 2+2?".into(), Vec::new()));
+        steer
+            .borrow_mut()
+            .push_back(("what is 2+2?".into(), Vec::new()));
     });
     ran.unwrap();
     let moved = last_tool(&agent);
@@ -153,7 +155,10 @@ async fn without_a_terminal_a_subagent_stays_in_the_foreground() {
         .push(json!({"role": "system", "content": "sys"}))
         .unwrap();
     controls.mode.set(crate::mode::Mode::Orchestrate);
-    let calls = vec![agent_call("a", json!({"prompt": "go", "description": "kid"}))];
+    let calls = vec![agent_call(
+        "a",
+        json!({"prompt": "go", "description": "kid"}),
+    )];
     agent.execute_calls(calls, false).await.unwrap();
     assert!(last_tool(&agent).contains("done"), "{}", last_tool(&agent));
     assert!(controls.background.borrow().tasks.is_empty());
@@ -183,9 +188,11 @@ async fn orchestrate_starts_a_forked_subagent_in_the_background_at_once() {
     );
     assert!(rx.try_recv().is_ok(), "the work went to the terminal");
     // Without `fork`, it starts from this conversation.
-    let child_log =
-        std::fs::read_to_string(agent.session.dir.join("agent-1.jsonl")).unwrap();
-    assert!(child_log.contains("the parent's own request"), "{child_log}");
+    let child_log = std::fs::read_to_string(agent.session.dir.join("agent-1.jsonl")).unwrap();
+    assert!(
+        child_log.contains("the parent's own request"),
+        "{child_log}"
+    );
     // The model hears of the mode once, at its next step.
     agent.before_request().await.unwrap();
     agent.before_request().await.unwrap();
@@ -243,7 +250,11 @@ async fn agent_message_reaches_a_background_subagent_and_the_tree_is_guarded() {
         json!({"id": 1, "message": "use the v2 API"}),
     )];
     agent.execute_calls(message, false).await.unwrap();
-    assert!(last_tool(&agent).contains("Told task 1"), "{}", last_tool(&agent));
+    assert!(
+        last_tool(&agent).contains("Told task 1"),
+        "{}",
+        last_tool(&agent)
+    );
     let queued = controls.background.borrow().tasks[&1]
         .steers
         .first()
@@ -253,12 +264,22 @@ async fn agent_message_reaches_a_background_subagent_and_the_tree_is_guarded() {
         .map(|(text, _)| text.clone())
         .unwrap();
     assert!(queued.contains("use the v2 API") && queued.contains("not from the user"));
-    let unknown = vec![tool_call("u", "agent_message", json!({"id": 9, "message": "hi"}))];
+    let unknown = vec![tool_call(
+        "u",
+        "agent_message",
+        json!({"id": 9, "message": "hi"}),
+    )];
     agent.execute_calls(unknown, false).await.unwrap();
     assert!(last_tool(&agent).contains("No subagent works in the background as task 9"));
     // While it works, the main agent leaves the tree where it is; nothing polls it here, so
     // it is marked as having its slot, as the terminal's polling would.
-    controls.background.borrow_mut().tasks.get_mut(&1).unwrap().state = BgState::Running;
+    controls
+        .background
+        .borrow_mut()
+        .tasks
+        .get_mut(&1)
+        .unwrap()
+        .state = BgState::Running;
     let git = vec![tool_call(
         "g",
         "bash",
@@ -297,7 +318,11 @@ async fn a_wake_turn_reads_the_report_before_its_prompt_and_is_no_user_prompt() 
     let report = agent
         .messages
         .iter()
-        .position(|m| m["content"].as_str().is_some_and(|t| t.contains("report text")))
+        .position(|m| {
+            m["content"]
+                .as_str()
+                .is_some_and(|t| t.contains("report text"))
+        })
         .unwrap();
     let wake = agent
         .messages
@@ -305,12 +330,20 @@ async fn a_wake_turn_reads_the_report_before_its_prompt_and_is_no_user_prompt() 
         .position(|m| m["content"].as_str() == Some(crate::agent::background::WAKE_PROMPT))
         .unwrap();
     assert!(report < wake, "the report comes before the prompt");
-    assert!(agent.user_prompts().is_empty(), "{:?}", agent.user_prompts());
+    assert!(
+        agent.user_prompts().is_empty(),
+        "{:?}",
+        agent.user_prompts()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_resumed_session_continues_its_paused_subagents_from_their_logs() {
-    let url = stub_replies(vec![sse("finished after the resume\\nStatus: ready", "stop")]).await;
+    let url = stub_replies(vec![sse(
+        "finished after the resume\\nStatus: ready",
+        "stop",
+    )])
+    .await;
     let dir = crate::test_temp::TempDir::new("killi-bg-resume");
     let log = dir.join("1-1.jsonl");
     let folder = dir.join("1-1");
@@ -419,7 +452,10 @@ async fn a_message_moves_a_running_swarm_to_the_background_as_one_task() {
     ran.unwrap();
     assert!(last_tool(&agent).contains("Moved to the background as task 1"));
     assert_eq!(controls.background.borrow().tasks[&1].members, 2);
-    assert!(agent.partial_swarm.is_none(), "the call is answered by its task");
+    assert!(
+        agent.partial_swarm.is_none(),
+        "the call is answered by its task"
+    );
     // The message reaches every member still working, the one running and the one waiting
     // for its turn alike.
     let message = agent.background_message(1, &json!({"id": 1, "message": "focus on security"}));
@@ -430,7 +466,11 @@ async fn a_message_moves_a_running_swarm_to_the_background_as_one_task() {
         message.text
     );
     for steer in &controls.background.borrow().tasks[&1].steers {
-        let queued = steer.borrow().front().map(|(text, _)| text.clone()).unwrap();
+        let queued = steer
+            .borrow()
+            .front()
+            .map(|(text, _)| text.clone())
+            .unwrap();
         assert!(queued.contains("focus on security") && queued.contains("not from the user"));
     }
     assert_eq!(rx.recv().await.unwrap().await, 1);
@@ -440,12 +480,19 @@ async fn a_message_moves_a_running_swarm_to_the_background_as_one_task() {
     );
     let second = std::fs::read_to_string(agent.session.dir.join("agent-2.jsonl")).unwrap();
     assert!(second.contains("focus on security"), "{second}");
-    let (report, failed) = controls.background.borrow().tasks[&1].report.clone().unwrap();
+    let (report, failed) = controls.background.borrow().tasks[&1]
+        .report
+        .clone()
+        .unwrap();
     assert!(!failed, "{report}");
     let (one, two) = (report.find("one").unwrap(), report.find("two").unwrap());
     assert!(one < two, "items in order: {report}");
     let late = agent.background_message(1, &json!({"id": 1, "message": "hi"}));
-    assert!(late.is_error && late.text.contains("already ended"), "{}", late.text);
+    assert!(
+        late.is_error && late.text.contains("already ended"),
+        "{}",
+        late.text
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -500,20 +547,37 @@ async fn a_subagent_paused_mid_call_answers_the_call_and_goes_on() {
     .unwrap();
     assert_eq!(agent.resume_background(), 1);
     assert_eq!(rx.recv().await.unwrap().await, 2);
-    let (report, failed) = controls.background.borrow().tasks[&2].report.clone().unwrap();
+    let (report, failed) = controls.background.borrow().tasks[&2]
+        .report
+        .clone()
+        .unwrap();
     assert!(!failed && report.contains("went on"), "{report}");
     let continued = std::fs::read_to_string(folder.join("agent-1.jsonl")).unwrap();
-    let b1 = continued.find("\"tool_call_id\":\"b1\"").expect("the open call is answered");
-    let note = continued.find("stopped while you were working").expect("the note is sent");
-    assert!(b1 < note, "the call's result comes before the note: {continued}");
+    let b1 = continued
+        .find("\"tool_call_id\":\"b1\"")
+        .expect("the open call is answered");
+    let note = continued
+        .find("stopped while you were working")
+        .expect("the note is sent");
+    assert!(
+        b1 < note,
+        "the call's result comes before the note: {continued}"
+    );
     assert!(!continued.contains("The user interrupted"), "{continued}");
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_reply_announcing_background_work_ends_the_turn() {
     let url = stub_replies(vec![
-        tool_reply("a", "agent", json!({"prompt": "go", "description": "kid", "fork": false})),
-        sse("Started the review in the background; next I'll report what it finds.", "stop"),
+        tool_reply(
+            "a",
+            "agent",
+            json!({"prompt": "go", "description": "kid", "fork": false}),
+        ),
+        sse(
+            "Started the review in the background; next I'll report what it finds.",
+            "stop",
+        ),
     ])
     .await;
     let (controls, _rx) = attached();
@@ -588,7 +652,11 @@ async fn a_wait_ends_when_another_task_does_and_a_timed_out_one_says_not_to_poll
         timed_out.text
     );
     let look = agent.background_output(slow, &json!({"id": slow})).await;
-    assert!(!look.text.contains("Rather than waiting again"), "{}", look.text);
+    assert!(
+        !look.text.contains("Rather than waiting again"),
+        "{}",
+        look.text
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -611,7 +679,11 @@ async fn a_wait_right_after_one_stopped_for_a_message_is_refused_until_the_model
     let stopped = agent
         .background_output(slow, &json!({"id": slow, "wait": 30}))
         .await;
-    assert!(stopped.text.contains(STOPPED_FOR_MESSAGE), "{}", stopped.text);
+    assert!(
+        stopped.text.contains(STOPPED_FOR_MESSAGE),
+        "{}",
+        stopped.text
+    );
     agent
         .push(json!({"role": "tool", "tool_call_id": "w0", "content": stopped.text}))
         .unwrap();
@@ -654,7 +726,10 @@ async fn a_wait_right_after_one_stopped_for_a_message_is_refused_until_the_model
     agent.push(reply(&["l"], json!({"id": slow}), "")).unwrap();
     let from = agent.messages.len();
     agent
-        .execute_calls(vec![tool_call("l", "task_output", json!({"id": slow}))], false)
+        .execute_calls(
+            vec![tool_call("l", "task_output", json!({"id": slow}))],
+            false,
+        )
         .await
         .unwrap();
     assert!(
@@ -672,13 +747,20 @@ async fn a_wait_right_after_one_stopped_for_a_message_is_refused_until_the_model
     let from = agent.messages.len();
     agent
         .execute_calls(
-            vec![tool_call("w3", "task_output", json!({"id": slow, "wait": 1}))],
+            vec![tool_call(
+                "w3",
+                "task_output",
+                json!({"id": slow, "wait": 1}),
+            )],
             false,
         )
         .await
         .unwrap();
     let waited = &results(&agent, from)[0];
-    assert!(waited.contains("is still running") && !waited.contains(UNANSWERED_MESSAGE), "{waited}");
+    assert!(
+        waited.contains("is still running") && !waited.contains(UNANSWERED_MESSAGE),
+        "{waited}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

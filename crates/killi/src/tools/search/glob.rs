@@ -73,8 +73,21 @@ pub(super) fn glob_blocking(cwd: &Path, root: &Path, args: &Value) -> Output {
             Output::ok(text)
         };
     }
+    let mut out = String::new();
+    for name in &found {
+        if out.len() + name.len() + 1 > MAX_BYTES {
+            more = true;
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(name);
+    }
+    if out.is_empty() {
+        more = false;
+    }
     let count = found.len();
-    let mut out = found.join("\n");
     if more {
         out.push_str(&format!(
             "\n[{MAX_FILES} results limit reached; narrow the pattern or path.]"

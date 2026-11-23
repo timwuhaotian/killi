@@ -82,9 +82,7 @@ fn chrome() -> Option<PathBuf> {
 /// in its own session so the helpers it starts can be killed with it.
 fn browser(url: &str, extra: &[String]) -> Result<(Command, PathBuf), String> {
     let Some(chrome) = chrome() else {
-        return Err(
-            "No Chrome, Chromium, Edge or Brave found on PATH (or KILLI_CHROME).".into(),
-        );
+        return Err("No Chrome, Chromium, Edge or Brave found on PATH (or KILLI_CHROME).".into());
     };
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -222,7 +220,10 @@ async fn moli_render(url: &str) -> Result<String, String> {
     let (out, said) = moli_fetch(&["--dump", "html"], url).await?;
     let dom = String::from_utf8_lossy(&out).into_owned();
     if dom.trim().is_empty() {
-        return Err(format!("Moli returned nothing for {url}.{}", moli_said(&said)));
+        return Err(format!(
+            "Moli returned nothing for {url}.{}",
+            moli_said(&said)
+        ));
     }
     Ok(dom)
 }

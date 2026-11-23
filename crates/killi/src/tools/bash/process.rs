@@ -132,10 +132,8 @@ fn status_file() -> Option<PathBuf> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let path = std::env::temp_dir().join(format!(
-        "killi-pipestatus-{}-{nanos}",
-        std::process::id()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("killi-pipestatus-{}-{nanos}", std::process::id()));
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

@@ -74,7 +74,10 @@ pub const THEMES: &[(&str, &str)] = &[
     ("batman", "signal yellow and olive on slate and black"),
     ("iced-coffee", "sky blue, coral and amber on dark"),
     ("creamery-station", "cream, butter and tan on dark"),
-    ("pastel-tweencore", "pastel pink, lavender and baby blue on dark"),
+    (
+        "pastel-tweencore",
+        "pastel pink, lavender and baby blue on dark",
+    ),
     ("cappuccino", "cream, tan and rust over coffee browns"),
     ("shades-of-gray", "grays only, light to dark"),
     ("off-white", "warm whites and ivory on dark"),
@@ -682,7 +685,9 @@ pub fn link_open(url: &str) -> String {
 /// terminal never acts on anything but a plain link killi itself printed.
 fn safe_link(url: &str) -> bool {
     (url.starts_with("http://") || url.starts_with("https://"))
-        && !url.bytes().any(|b| b <= 0x20 || b == 0x7f || b == 0x1b || b == 0x07)
+        && !url
+            .bytes()
+            .any(|b| b <= 0x20 || b == 0x7f || b == 0x1b || b == 0x07)
 }
 
 /// `styled` as a clickable link to `url`; unchanged when `url` isn't a safe web address.

@@ -106,7 +106,9 @@ pub(super) fn outcome_of(text: &str) -> (live::TaskState, Option<String>) {
         .unwrap_or(rest.len());
     let word = rest[..end].to_ascii_lowercase();
     let why = rest[end..]
-        .trim_start_matches(|c: char| decoration(c) || matches!(c, ':' | '.' | ',' | '-' | '—' | '–'))
+        .trim_start_matches(|c: char| {
+            decoration(c) || matches!(c, ':' | '.' | ',' | '-' | '—' | '–')
+        })
         .trim_end();
     let why = || {
         if why.is_empty() {

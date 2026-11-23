@@ -225,9 +225,16 @@ impl App {
                             ("working".to_string(), String::new())
                         };
                     rows.extend(
-                        working_rows(self.spinner, started.elapsed(), &action, &detail, &out, width)
-                            .into_iter()
-                            .map(|row| fit(&row, width)),
+                        working_rows(
+                            self.spinner,
+                            started.elapsed(),
+                            &action,
+                            &detail,
+                            &out,
+                            width,
+                        )
+                        .into_iter()
+                        .map(|row| fit(&row, width)),
                     );
                 }
             }
@@ -329,8 +336,7 @@ impl App {
             .ghost()
             .filter(|_| !self.editor.is_empty())
             .unwrap_or("");
-        let (mut input, cursor_row, cursor_col) =
-            self.editor.render(&prompt, width, &known, ghost);
+        let (mut input, cursor_row, cursor_col) = self.editor.render(&prompt, width, &known, ghost);
         if let Some(hint) = self.placeholder() {
             input[0] = fit(&format!("{FIN}❯{RESET} {hint}"), width);
         } else if self.completing() {

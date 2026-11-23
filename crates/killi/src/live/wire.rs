@@ -61,19 +61,13 @@ pub enum Request {
         quick: bool,
     },
     /// What a task stands on now, and its report once it ends.
-    Get {
-        id: String,
-    },
+    Get { id: String },
     /// Every task this session has taken, oldest first.
     List,
     /// Stop a task that is still running.
-    Cancel {
-        id: String,
-    },
+    Cancel { id: String },
     /// A task's events as they happen, one JSON object per line, until it ends.
-    Follow {
-        id: String,
-    },
+    Follow { id: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -177,9 +171,7 @@ async fn serve(stream: UnixStream, session: mpsc::UnboundedSender<Incoming>) -> 
             .unwrap_or_else(|_| json!({"error": "the session ended before it answered"})),
         Err(_) => json!({"error": "the session is ending"}),
     };
-    writer
-        .write_all(format!("{answered}\n").as_bytes())
-        .await?;
+    writer.write_all(format!("{answered}\n").as_bytes()).await?;
     Ok(())
 }
 
@@ -195,7 +187,11 @@ pub async fn send(to: &Entry, request: Request) -> Result<Value> {
         Request::Ask { .. } => ASK_TIMEOUT,
         // A task answers once it ends, so its own limit plus the slack the session needs to
         // say it ran out of time.
-        Request::Send { quick: false, timeout, .. } => Duration::from_secs(
+        Request::Send {
+            quick: false,
+            timeout,
+            ..
+        } => Duration::from_secs(
             timeout
                 .unwrap_or(TASK_TIMEOUT)
                 .min(MAX_TASK_TIMEOUT)
@@ -241,9 +237,7 @@ pub async fn follow(to: &Entry, request: Request) -> Result<mpsc::UnboundedRecei
         .await
         .with_context(|| format!("could not reach session {}", to.pid))?;
     stream
-        .write_all(
-            format!("{}\n", serde_json::to_string(&Envelope { v: 2, request })?).as_bytes(),
-        )
+        .write_all(format!("{}\n", serde_json::to_string(&Envelope { v: 2, request })?).as_bytes())
         .await?;
     let (lines, read) = mpsc::unbounded_channel::<String>();
     tokio::spawn(async move {

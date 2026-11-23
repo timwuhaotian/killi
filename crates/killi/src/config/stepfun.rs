@@ -50,7 +50,10 @@ fn step(id: &'static str, display: &'static str) -> NewModel {
         more_capabilities: vec!["video_in"],
         display: Some(display),
         default_effort: Some("high".into()),
-        efforts: ["low", "medium", "high"].into_iter().map(Into::into).collect(),
+        efforts: ["low", "medium", "high"]
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         ..NewModel::default()
     }
 }

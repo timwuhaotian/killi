@@ -28,7 +28,10 @@ const OUTPUT_FILTERS: [&str; 12] = [
 pub(super) fn near_key(call: &ToolCall) -> Option<u64> {
     let args = parse_args(call).ok()?;
     let target: Cow<str> = match call.name.as_str() {
-        "read" => args["path"].as_str().filter(|path| !path.is_empty())?.into(),
+        "read" => args["path"]
+            .as_str()
+            .filter(|path| !path.is_empty())?
+            .into(),
         "grep" | "glob" => args["path"]
             .as_str()
             .filter(|path| !path.is_empty())

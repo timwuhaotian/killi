@@ -179,7 +179,9 @@ fn names_a_coming_phase(sentence: &str) -> bool {
         "next:" | "next," => true,
         _ => false,
     });
-    next || words.iter().any(|word| word.trim_end_matches([':', ',']) == "starting")
+    next || words
+        .iter()
+        .any(|word| word.trim_end_matches([':', ',']) == "starting")
         || sentence.contains("接下来")
         || sentence.contains("下一步")
 }
@@ -234,7 +236,11 @@ fn last_line_ends_with(text: &str, marks: &[char]) -> bool {
 /// replacing the work it cut off, rewrites the task list and never comes back to it. Read from
 /// the history, so it also holds for a turn interrupted before a resume. `failed_on` is the
 /// error a turn stopped on when no one interrupted it.
-pub(super) fn interrupted_note(messages: &[Value], todos: &[Todo], failed_on: Option<&str>) -> String {
+pub(super) fn interrupted_note(
+    messages: &[Value],
+    todos: &[Todo],
+    failed_on: Option<&str>,
+) -> String {
     let (cut, after) = match failed_on {
         None => ("The user interrupted your previous turn", String::new()),
         Some(error) => {

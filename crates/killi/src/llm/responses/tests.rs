@@ -396,7 +396,11 @@ fn a_spent_plan_error_mid_stream_is_not_retried() {
         .unwrap_err();
     assert_eq!(failure.kind, ErrorKind::Quota);
     assert!(!failure.retryable);
-    assert!(failure.message.contains("usage limit"), "{}", failure.message);
+    assert!(
+        failure.message.contains("usage limit"),
+        "{}",
+        failure.message
+    );
 }
 
 #[test]

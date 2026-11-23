@@ -186,8 +186,7 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
                 }
             }
             Some("swarm_result") => {
-                if let (Some(id), Some(index)) =
-                    (entry["id"].as_str(), entry["index"].as_u64())
+                if let (Some(id), Some(index)) = (entry["id"].as_str(), entry["index"].as_u64())
                     && let Some(swarm) = loaded.swarms.get_mut(id)
                     && let Some(slot) = swarm.results.get_mut(index as usize)
                 {
@@ -203,12 +202,16 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
                     entry["text"].as_str(),
                     entry["is_error"].as_bool(),
                 ) {
-                    loaded.agents.insert(id.to_string(), (text.to_string(), is_error));
+                    loaded
+                        .agents
+                        .insert(id.to_string(), (text.to_string(), is_error));
                 }
             }
             Some("compaction") => {
                 loaded.messages = entry["messages"].as_array().cloned().unwrap_or_default();
-                let calls: HashSet<&str> = loaded.messages.iter()
+                let calls: HashSet<&str> = loaded
+                    .messages
+                    .iter()
                     .filter(|m| m["role"] == "assistant")
                     .flat_map(|m| m["tool_calls"].as_array().into_iter().flatten())
                     .filter_map(|call| call["id"].as_str())
@@ -233,13 +236,11 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
         .filter_map(|call| call["id"].as_str())
         .collect();
     loaded.swarms.retain(|id, swarm| {
-        !swarm.items.is_empty()
-            && called.contains(id.as_str())
-            && !answered.contains(id.as_str())
+        !swarm.items.is_empty() && called.contains(id.as_str()) && !answered.contains(id.as_str())
     });
-    loaded.agents.retain(|id, _| {
-        called.contains(id.as_str()) && !answered.contains(id.as_str())
-    });
+    loaded
+        .agents
+        .retain(|id, _| called.contains(id.as_str()) && !answered.contains(id.as_str()));
     let repaired = repair_dangling_calls(&mut loaded.messages);
     if loaded
         .messages

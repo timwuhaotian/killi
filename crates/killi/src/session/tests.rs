@@ -798,11 +798,17 @@ fn load_keeps_only_unanswered_agent_results_across_compaction() {
         json!({"type": "agent_result", "id": "pending", "text": "failed report", "is_error": true}),
         json!({"type": "agent_result", "id": "unknown", "text": "ignored", "is_error": false}),
     ];
-    let bytes = lines.iter().map(|line| format!("{line}\n")).collect::<String>();
+    let bytes = lines
+        .iter()
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
     let report = load::load_bytes(Path::new("test.jsonl"), bytes.as_bytes()).unwrap();
     assert_eq!(report.repaired, 0);
     assert_eq!(report.loaded.agents.len(), 1);
-    assert_eq!(report.loaded.agents["pending"], ("failed report".to_string(), true));
+    assert_eq!(
+        report.loaded.agents["pending"],
+        ("failed report".to_string(), true)
+    );
 }
 
 #[test]
@@ -869,7 +875,10 @@ fn background_work_stays_open_across_compactions_until_its_end() {
         json!({"type": "compaction", "messages": [{"role": "system", "content": "sys"}]}),
         json!({"type": "bg_end", "id": 3}),
     ];
-    let bytes = lines.iter().map(|line| format!("{line}\n")).collect::<String>();
+    let bytes = lines
+        .iter()
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
     let report = load::load_bytes(Path::new("test.jsonl"), bytes.as_bytes()).unwrap();
     let open: Vec<u32> = report.loaded.background.keys().copied().collect();
     assert_eq!(open, [5]);

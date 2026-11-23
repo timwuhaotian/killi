@@ -85,16 +85,9 @@ impl App {
         if self.height >= FULL_ROWS {
             // A settled frame, not the live spinner's: the word shows whole, as it settles.
             rows.extend(
-                working_rows(
-                    40,
-                    Duration::from_secs(3),
-                    "working",
-                    "",
-                    "1.2k out",
-                    width,
-                )
-                .into_iter()
-                .map(|row| fit(&row, width)),
+                working_rows(40, Duration::from_secs(3), "working", "", "1.2k out", width)
+                    .into_iter()
+                    .map(|row| fit(&row, width)),
             );
         }
         rows.extend(diff_rows(

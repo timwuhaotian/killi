@@ -198,7 +198,10 @@ fn add_in(file: &Path, fact: &str) -> Result<Saved> {
     check_chars(&fact)?;
     with_lock(file, |file| {
         let mut items = list_in(file);
-        if let Some(at) = items.iter().position(|item| item.eq_ignore_ascii_case(&fact)) {
+        if let Some(at) = items
+            .iter()
+            .position(|item| item.eq_ignore_ascii_case(&fact))
+        {
             return Ok(Saved::Already(at + 1));
         }
         let bytes = items.iter().map(|item| entry_bytes(item)).sum::<usize>() + entry_bytes(&fact);
@@ -225,14 +228,19 @@ fn edit_in(file: &Path, old: &str, new: &str) -> Result<Edited> {
     let old = normalize(old);
     let new = normalize(new);
     if old.is_empty() {
-        bail!("`old` needs the text of the memory to change; `memory` with no arguments lists them");
+        bail!(
+            "`old` needs the text of the memory to change; `memory` with no arguments lists them"
+        );
     }
     if !new.is_empty() {
         check_chars(&new)?;
     }
     with_lock(file, |file| {
         let mut items = list_in(file);
-        let Some(at) = items.iter().position(|item| item.eq_ignore_ascii_case(&old)) else {
+        let Some(at) = items
+            .iter()
+            .position(|item| item.eq_ignore_ascii_case(&old))
+        else {
             bail!(
                 "no memory matches “{old}”. Memory holds{}:\n{}",
                 if items.is_empty() { " nothing" } else { "" },
@@ -243,9 +251,13 @@ fn edit_in(file: &Path, old: &str, new: &str) -> Result<Edited> {
         if new.is_empty() {
             items.remove(at);
             save(file, &items)?;
-            return Ok(Edited::Removed { at: at + 1, old: stored });
+            return Ok(Edited::Removed {
+                at: at + 1,
+                old: stored,
+            });
         }
-        let bytes = items.iter().map(|item| entry_bytes(item)).sum::<usize>() - entry_bytes(&stored)
+        let bytes = items.iter().map(|item| entry_bytes(item)).sum::<usize>()
+            - entry_bytes(&stored)
             + entry_bytes(&new);
         if bytes > MAX_BYTES {
             bail!(
@@ -254,7 +266,11 @@ fn edit_in(file: &Path, old: &str, new: &str) -> Result<Edited> {
         }
         items[at] = new.clone();
         save(file, &items)?;
-        Ok(Edited::Replaced { at: at + 1, old: stored, new })
+        Ok(Edited::Replaced {
+            at: at + 1,
+            old: stored,
+            new,
+        })
     })
 }
 
@@ -338,7 +354,10 @@ mod tests {
             add_in(&file, "Prefers terse replies").unwrap(),
             Saved::Added(2)
         );
-        assert_eq!(add_in(&file, "uses pnpm, not npm").unwrap(), Saved::Already(1));
+        assert_eq!(
+            add_in(&file, "uses pnpm, not npm").unwrap(),
+            Saved::Already(1)
+        );
         assert_eq!(
             list_in(&file),
             ["Uses pnpm, not npm", "Prefers terse replies"]
@@ -453,14 +472,23 @@ mod tests {
     fn the_tool_lists_adds_edits_and_removes_entries() {
         let dir = TempDir::new("killi-memory-tool");
         let file = dir.join("memory.md");
-        let saved = run_in(&file, &serde_json::json!({"add": "Runs cargo fmt before commits"}));
-        let again = run_in(&file, &serde_json::json!({"add": "runs cargo fmt before commits"}));
+        let saved = run_in(
+            &file,
+            &serde_json::json!({"add": "Runs cargo fmt before commits"}),
+        );
+        let again = run_in(
+            &file,
+            &serde_json::json!({"add": "runs cargo fmt before commits"}),
+        );
         let listed = run_in(&file, &serde_json::json!({}));
         let replaced = run_in(
             &file,
             &serde_json::json!({"old": "Runs cargo fmt before commits", "new": "Runs cargo fmt --all"}),
         );
-        let removed = run_in(&file, &serde_json::json!({"old": "Runs cargo fmt --all", "new": ""}));
+        let removed = run_in(
+            &file,
+            &serde_json::json!({"old": "Runs cargo fmt --all", "new": ""}),
+        );
         let missing = run_in(&file, &serde_json::json!({"old": "Runs npm"}));
         let both = run_in(
             &file,
@@ -476,12 +504,36 @@ mod tests {
             again.text
         );
         assert!(listed.text.contains("Memory holds 1"), "{}", listed.text);
-        assert!(replaced.text.contains("Replaced memory 1"), "{}", replaced.text);
-        assert!(replaced.text.contains("Runs cargo fmt --all"), "{}", replaced.text);
-        assert!(removed.text.contains("Removed memory 1"), "{}", removed.text);
-        assert!(removed.text.contains("0 saved") || removed.text.contains("holds 0"), "{}", removed.text);
-        assert!(missing.is_error && missing.text.contains("no memory matches"), "{}", missing.text);
-        assert!(both.is_error && both.text.contains("not both"), "{}", both.text);
+        assert!(
+            replaced.text.contains("Replaced memory 1"),
+            "{}",
+            replaced.text
+        );
+        assert!(
+            replaced.text.contains("Runs cargo fmt --all"),
+            "{}",
+            replaced.text
+        );
+        assert!(
+            removed.text.contains("Removed memory 1"),
+            "{}",
+            removed.text
+        );
+        assert!(
+            removed.text.contains("0 saved") || removed.text.contains("holds 0"),
+            "{}",
+            removed.text
+        );
+        assert!(
+            missing.is_error && missing.text.contains("no memory matches"),
+            "{}",
+            missing.text
+        );
+        assert!(
+            both.is_error && both.text.contains("not both"),
+            "{}",
+            both.text
+        );
         assert!(empty.text.contains("empty"), "{}", empty.text);
     }
 }

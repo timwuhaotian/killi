@@ -86,7 +86,9 @@ impl App {
         };
         let (version, notes) = (release.version.clone(), release.notes.clone());
         self.begin(Kind::Note);
-        self.emit(Line::block(move |width| release_rows(&version, &notes, width)));
+        self.emit(Line::block(move |width| {
+            release_rows(&version, &notes, width)
+        }));
         self.commit(String::new());
         let current = env!("CARGO_PKG_VERSION");
         self.picker = Some(Picker::new(
@@ -230,7 +232,10 @@ mod tests {
                 assert!(text::width(row) <= width, "{width}: {row:?}");
             }
             let plain: Vec<String> = rows.iter().map(|r| unstyled(r)).collect();
-            assert!(plain[0].starts_with("killi 9.9.9 is out · this is "), "{plain:?}");
+            assert!(
+                plain[0].starts_with("killi 9.9.9 is out · this is "),
+                "{plain:?}"
+            );
             assert!(plain.iter().any(|r| r.contains("9.9.7 — 2026-11-09")));
             assert!(!plain.iter().any(|r| r.contains("9.9.6 —")), "{plain:?}");
             assert_eq!(
@@ -259,7 +264,10 @@ mod tests {
         app.picker = None;
         app.update_dismissed();
         found(&mut app, "9.9.9");
-        assert!(app.picker.is_none(), "a declined version isn't asked about again");
+        assert!(
+            app.picker.is_none(),
+            "a declined version isn't asked about again"
+        );
         found(&mut app, "9.9.10");
         assert!(app.picker.is_some(), "a newer one is");
 

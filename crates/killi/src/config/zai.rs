@@ -147,7 +147,8 @@ mod tests {
 
     /// The preset, rendered into an empty config the way `add_models` writes it.
     fn written() -> String {
-        let (out, _, _, added) = models::with_models("", &additions(("api_key", "sk-zai"), sample())).unwrap();
+        let (out, _, _, added) =
+            models::with_models("", &additions(("api_key", "sk-zai"), sample())).unwrap();
         assert_eq!(added, ["zai/glm-5.3"]);
         out
     }
@@ -155,12 +156,10 @@ mod tests {
     #[test]
     fn every_model_the_list_endpoint_names_is_written() {
         let ids = vec!["glm-5.3".to_string(), "glm-5.3-flash".to_string()];
-        let (out, _, _, added) = models::with_models("", &additions(("api_key", "sk-zai"), ids)).unwrap();
+        let (out, _, _, added) =
+            models::with_models("", &additions(("api_key", "sk-zai"), ids)).unwrap();
         assert_eq!(added, ["zai/glm-5.3", "zai/glm-5.3-flash"]);
-        assert!(
-            out.contains("[models.\"zai/glm-5.3-flash\"]"),
-            "{out}"
-        );
+        assert!(out.contains("[models.\"zai/glm-5.3-flash\"]"), "{out}");
         let config: Config = toml::from_str(&out).unwrap();
         assert_eq!(
             config.models["zai/glm-5.3-flash"].max_context_size,
@@ -181,7 +180,8 @@ mod tests {
     #[test]
     fn a_config_without_zai_gets_the_provider() {
         let mine = "default_model = \"openai/gpt\"\n\n[providers.openai]\ntype = \"openai\"\napi_key = \"sk\"\n\n[models.\"openai/gpt\"]\nprovider = \"openai\"\nmodel = \"gpt\"\n";
-        let (out, name, added, repaired) = with_additions(mine, &additions(("api_key", "sk-zai"), sample())).unwrap();
+        let (out, name, added, repaired) =
+            with_additions(mine, &additions(("api_key", "sk-zai"), sample())).unwrap();
         assert_eq!((name.as_str(), added.len()), ("zai", 1));
         assert!(repaired.is_empty(), "nothing was there to repair");
         assert!(out.starts_with(mine), "{out}");
@@ -198,7 +198,8 @@ mod tests {
         let broken = "default_model = \"zai/glm-5.3\"\n\n\
             # mine\n[providers.zai]\ntype = \"anthropic\"\nbase_url = \"https://api.z.ai/api/coding/paas/v4\"\napi_key_env = \"ZAI_KEY\"\ncustom_headers = { x-team = \"a\" }\n\n\
             # my model\n[models.\"zai/glm-5.3\"]\nprovider = \"zai\"\nmodel = \"glm-5.3\"\ndefault_effort = \"high\"\n";
-        let (out, name, added, repaired) = with_additions(broken, &additions(("api_key", "sk-new"), sample())).unwrap();
+        let (out, name, added, repaired) =
+            with_additions(broken, &additions(("api_key", "sk-new"), sample())).unwrap();
         assert_eq!(name, "zai");
         assert!(added.is_empty(), "the model was already there: {out}");
         assert_eq!(repaired, ["type"], "{out}");
@@ -216,7 +217,8 @@ mod tests {
         assert_eq!(model.protocol, Protocol::OpenAi);
         assert_eq!(model.base_url, BASE_URL);
 
-        let (again, _, none, nothing) = with_additions(&out, &additions(("api_key", "sk-new"), sample())).unwrap();
+        let (again, _, none, nothing) =
+            with_additions(&out, &additions(("api_key", "sk-new"), sample())).unwrap();
         assert!(
             again == out && none.is_empty() && nothing.is_empty(),
             "a repaired config needs nothing more: {again}"
@@ -225,10 +227,7 @@ mod tests {
 
     #[test]
     fn only_the_coding_api_is_ours() {
-        for url in [
-            BASE_URL,
-            "https://api.z.ai/api/coding/paas/v4/",
-        ] {
+        for url in [BASE_URL, "https://api.z.ai/api/coding/paas/v4/"] {
             let provider: Provider = toml::from_str(&format!(
                 "type = \"openai\"\nbase_url = \"{url}\"\napi_key = \"k\"\n"
             ))
@@ -250,7 +249,8 @@ mod tests {
     #[test]
     fn a_zai_provider_on_another_api_is_left_alone() {
         let other = "[providers.zai]\ntype = \"openai\"\nbase_url = \"https://api.example.com/v1\"\napi_key = \"other\"\n";
-        let (out, name, _, repaired) = with_additions(other, &additions(("api_key", "sk-zai"), sample())).unwrap();
+        let (out, name, _, repaired) =
+            with_additions(other, &additions(("api_key", "sk-zai"), sample())).unwrap();
         assert_eq!((name.as_str(), repaired.len()), ("zai-2", 0));
         assert!(out.contains(other), "{out}");
         let config: Config = toml::from_str(&out).unwrap();

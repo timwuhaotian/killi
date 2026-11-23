@@ -102,12 +102,9 @@ impl Config {
             .iter()
             .find(|(alias, model)| {
                 self.model_allowed(alias)
-                    && self
-                        .providers
-                        .get(&model.provider)
-                        .is_some_and(|provider| {
-                            provider.kind != "chatgpt" && provider.key().is_some()
-                        })
+                    && self.providers.get(&model.provider).is_some_and(|provider| {
+                        provider.kind != "chatgpt" && provider.key().is_some()
+                    })
             })
             .map(|(alias, _)| alias.as_str())
     }
@@ -115,7 +112,9 @@ impl Config {
     /// Whether `[models_filter.<provider>]` keeps `alias`; a provider without an entry
     /// keeps every model.
     pub fn model_allowed(&self, alias: &str) -> bool {
-        let provider = alias.split_once('/').map_or(alias, |(provider, _)| provider);
+        let provider = alias
+            .split_once('/')
+            .map_or(alias, |(provider, _)| provider);
         self.models_filter
             .get(provider)
             .is_none_or(|filter| filter.allows(alias))

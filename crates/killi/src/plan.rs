@@ -103,7 +103,11 @@ fn segments(command: &str) -> Vec<&str> {
                 b'\'' => quote = Quote::Single,
                 b'"' => quote = Quote::Double,
                 b'$' if matches!(bytes.get(at + 1), Some(b'\'' | b'"')) => {
-                    quote = if bytes[at + 1] == b'\'' { Quote::Ansi } else { Quote::Double };
+                    quote = if bytes[at + 1] == b'\'' {
+                        Quote::Ansi
+                    } else {
+                        Quote::Double
+                    };
                     at += 1;
                 }
                 b'|' | b';' | b'&' | b'\n' => {
@@ -210,7 +214,9 @@ fn segment_allowed(segment: &str, extra: &[String]) -> bool {
     let starts =
         |prefix: &str| normalized == prefix || normalized.starts_with(&format!("{prefix} "));
     if words.first() == Some(&"find")
-        && words.iter().any(|w| matches!(*w, "-delete" | "-exec" | "-execdir" | "-ok" | "-fprint"))
+        && words
+            .iter()
+            .any(|w| matches!(*w, "-delete" | "-exec" | "-execdir" | "-ok" | "-fprint"))
     {
         return false;
     }
