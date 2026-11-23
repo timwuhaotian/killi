@@ -5,6 +5,8 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.8.14 — 2026-11-23
+
 - `web_search` can ask Keenable: `provider = "keenable"` under `[search]`, or pick it in `/web-search-config`. Without a key it uses Keenable's public endpoint (rate limited per IP); with `api_key` or `api_key_env` it uses the keyed endpoint. Brave stays the default, and the fallback chain after the provider is unchanged. A 529 overload answer, like a 429 or 5xx, is retried once before the next source.
 
 ## 0.8.13 — 2026-11-21
