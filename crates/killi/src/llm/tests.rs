@@ -319,7 +319,7 @@ fn output_cap_reserves_estimated_input_and_never_reaches_zero() {
         images: false,
         thinking: crate::config::Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![serde_json::json!({"role": "user", "content": "x".repeat(4_000)})];
     let input = estimated_input_tokens(&messages, &[]);
@@ -393,7 +393,7 @@ fn test_model(base_url: &str) -> ResolvedModel {
         images: false,
         thinking: crate::config::Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     }
 }
 

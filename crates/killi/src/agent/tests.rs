@@ -7,6 +7,7 @@ mod units;
 
 fn call(arguments: &str) -> ToolCall {
     ToolCall {
+        extra_content: None,
         id: "c".into(),
         name: "read".into(),
         arguments: arguments.into(),
@@ -35,7 +36,7 @@ pub(super) fn test_client_at(alias: &str, base_url: &str) -> Client {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     Client::new(model).unwrap()
 }

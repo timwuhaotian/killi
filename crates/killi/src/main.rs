@@ -51,7 +51,7 @@ Usage:
   killi -p <prompt> [-m <model>] [-c] [--json] Run one task, print the answer and exit
   killi init                                   Write a starting ~/.killi/config.toml, or add [prompt] to yours
   killi import [tool] [--force]                Copy providers, models and MCP servers from another agent
-  killi login [<service>]                      Sign in to chatgpt, opencode-go, muse-code or command-code, adding its models
+  killi login [<service>]                      Sign in to chatgpt, opencode-go, muse-code, command-code or grok, adding its models
   killi logout [<service>]                     Sign out of one
   killi update                                 Install the latest published version
   killi models sync [<provider>]               Refresh OpenCode Go and Z.ai model lists

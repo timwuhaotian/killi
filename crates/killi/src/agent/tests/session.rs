@@ -314,6 +314,7 @@ async fn a_rate_limited_swarm_member_finishes_its_work_on_the_backup() {
     agent.set_backup(test_client_at("backup", &backup));
 
     let call = ToolCall {
+        extra_content: None,
         id: "s1".into(),
         name: "agent_swarm".into(),
         arguments: json!({"prompt_template": "Do {{item}}.", "items": ["a", "b"]}).to_string(),
@@ -357,6 +358,7 @@ async fn a_limited_swarm_stops_instead_of_running_every_item_into_the_same_limit
         agent.client = Rc::new(test_client_at("primary", &primary));
 
         let call = ToolCall {
+            extra_content: None,
             id: "s1".into(),
             name: "agent_swarm".into(),
             arguments: json!({"prompt_template": "Do {{item}}.", "items": ["a", "b", "c"]})
@@ -823,6 +825,7 @@ async fn max_tokens_with_a_nonempty_report_is_not_a_successful_agent() {
         .unwrap();
     agent.client = Rc::new(test_client_at("test", &url));
     let call = ToolCall {
+        extra_content: None,
         id: "a1".into(),
         name: "agent".into(),
         arguments: json!({"prompt": "Do the work."}).to_string(),
@@ -850,6 +853,7 @@ async fn max_tokens_with_nonempty_reports_is_not_a_completed_swarm() {
         .unwrap();
     agent.client = Rc::new(test_client_at("test", &url));
     let call = ToolCall {
+        extra_content: None,
         id: "s1".into(),
         name: "agent_swarm".into(),
         arguments: json!({"prompt_template": "Do {{item}}.", "items": ["a", "b"]}).to_string(),
@@ -981,6 +985,7 @@ async fn interrupted_parallel_agents_keep_finished_reports_on_recovery_and_resum
                     id: id.into(),
                     name: "agent".into(),
                     arguments: json!({"description": label, "prompt": label}).to_string(),
+                    extra_content: None,
                 },
             )
         })

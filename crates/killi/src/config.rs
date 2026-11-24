@@ -2,6 +2,8 @@ mod anthropic;
 mod command;
 mod custom;
 mod edit;
+mod gemini;
+mod grok;
 mod guide;
 mod import;
 mod kimi;
@@ -32,6 +34,11 @@ pub use custom::{
 pub use edit::{
     remove_models, remove_provider_key, set_backup_model, set_mode, set_model_effort, set_search,
     set_swarm, set_swarm_parallel, set_ui_theme, set_verbosity,
+};
+pub use gemini::{ABOUT as GEMINI_ABOUT, add as add_gemini, ours as gemini_ours};
+pub use grok::{
+    ABOUT as GROK_ABOUT, BASE_URL as GROK_BASE_URL, add as add_grok, models as grok_models,
+    ours as grok_ours,
 };
 pub use guide::{init, start_if_missing};
 pub use import::import_command;
@@ -289,8 +296,9 @@ pub struct SkillsConfig {
 #[derive(Debug, Deserialize)]
 pub struct Provider {
     /// "openai" (Chat Completions), "anthropic" (Messages), "openai_responses" (Responses),
-    /// "commandcode" (Command Code's subscription API), or "chatgpt": Responses on the
-    /// user's ChatGPT plan, signed in with `killi login`.
+    /// "commandcode" (Command Code's subscription API), or a plan signed in with `killi
+    /// login`: "chatgpt" (Responses on the user's ChatGPT plan) or "grok" (Responses on
+    /// xAI's API with the user's Grok subscription).
     #[serde(rename = "type")]
     pub kind: String,
     pub base_url: Option<String>,
@@ -372,9 +380,9 @@ pub struct ResolvedModel {
     pub thinking: Thinking,
     /// Chat Completions requests carry `cache_control` breakpoints.
     pub cache_control: bool,
-    /// On the user's ChatGPT plan: requests carry the token `killi login` saved, refreshed as
-    /// it expires, in place of `api_key`.
-    pub chatgpt: bool,
+    /// On a subscription `killi login` signed in to: requests carry its saved token, refreshed
+    /// as it expires, in place of `api_key`.
+    pub plan: Option<Plan>,
 }
 
 impl ResolvedModel {
@@ -396,7 +404,7 @@ impl ResolvedModel {
             images: false,
             thinking: Thinking::Off,
             cache_control: false,
-            chatgpt: false,
+            plan: None,
         }
     }
 }
@@ -424,8 +432,28 @@ impl std::fmt::Debug for ResolvedModel {
             .field("images", &self.images)
             .field("thinking", &self.thinking)
             .field("cache_control", &self.cache_control)
-            .field("chatgpt", &self.chatgpt)
+            .field("plan", &self.plan)
             .finish()
+    }
+}
+
+/// A subscription killi signs in to with `killi login`, whose provider `type` names it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Plan {
+    /// `type = "chatgpt"`: Responses on the user's ChatGPT plan.
+    ChatGpt,
+    /// `type = "grok"`: Responses on xAI's API with the user's SuperGrok or X Premium plan.
+    Grok,
+}
+
+impl Plan {
+    /// The plan a provider `type` names, if any.
+    pub fn of(kind: &str) -> Option<Plan> {
+        match kind {
+            "chatgpt" => Some(Plan::ChatGpt),
+            "grok" => Some(Plan::Grok),
+            _ => None,
+        }
     }
 }
 

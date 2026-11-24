@@ -21,7 +21,9 @@ struct Request<'a> {
     tools: &'a [Value],
     stream: bool,
     stream_options: StreamOptions,
-    prompt_cache_key: &'a str,
+    /// Left out for Gemini, which refuses a field it doesn't know.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,6 +55,8 @@ pub(super) fn prepare(
         mark_cache_breakpoints(&mut messages);
     }
     map_history_calls(&mut messages, &model.tool_names);
+    let gemini = gemini::is_gemini(&model.base_url);
+    gemini::prepare_calls(&mut messages, gemini);
     let completion_style = model.model.starts_with("gpt-5")
         || (model.model.starts_with('o')
             && model.model[1..].starts_with(|c: char| c.is_ascii_digit()));
@@ -76,7 +80,7 @@ pub(super) fn prepare(
         stream_options: StreamOptions {
             include_usage: true,
         },
-        prompt_cache_key: cache_key,
+        prompt_cache_key: (!gemini).then_some(cache_key),
         max_tokens: max_output.filter(|_| !completion_style),
         max_completion_tokens: max_output.filter(|_| completion_style),
         reasoning_effort,
@@ -322,17 +326,27 @@ impl StreamParser for Parser {
             .flatten()
         {
             let index = call.get("index").and_then(Value::as_u64);
-            let slot = match index.and_then(|index| {
+            let id = call.get("id").and_then(Value::as_str).unwrap_or_default();
+            let named = call.pointer("/function/name").is_some_and(|name| name.is_string());
+            let seen = index.and_then(|index| {
                 self.call_slots
                     .iter()
                     .find(|(seen, _)| *seen == index)
                     .map(|(_, slot)| *slot)
-            }) {
+            });
+            // A named delta with another id at a known index is a new call: some providers
+            // number parallel calls all 0, and merging them would garble both.
+            let another = seen.is_some_and(|slot| {
+                let open = &reply.tool_calls[slot].id;
+                named && !id.is_empty() && !open.is_empty() && open != id
+            });
+            let slot = match seen.filter(|_| !another) {
                 Some(slot) => slot,
                 None if reply.tool_calls.len() < MAX_STREAMED_CALLS => {
                     let slot = reply.tool_calls.len();
                     reply.tool_calls.push(ToolCall::default());
                     if let Some(index) = index {
+                        self.call_slots.retain(|(seen, _)| *seen != index);
                         self.call_slots.push((index, slot));
                     }
                     slot
@@ -340,8 +354,12 @@ impl StreamParser for Parser {
                 None => continue,
             };
             let slot = &mut reply.tool_calls[slot];
-            if let Some(id) = call.get("id").and_then(Value::as_str) {
+            // A continuation that repeats the call's own id adds nothing to it.
+            if slot.id != id {
                 slot.id.push_str(id);
+            }
+            if let Some(extra) = call.get("extra_content").filter(|extra| !extra.is_null()) {
+                slot.extra_content.get_or_insert_with(|| extra.clone());
             }
             if let Some(function) = call.get("function") {
                 if let Some(name) = function.get("name").and_then(Value::as_str) {
@@ -461,6 +479,8 @@ fn parse_usage(usage: &Value) -> Usage {
         reasoning: num(usage.pointer("/completion_tokens_details/reasoning_tokens")),
     }
 }
+
+mod gemini;
 
 #[cfg(test)]
 mod tests;

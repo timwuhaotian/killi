@@ -183,6 +183,8 @@ fn provider_question(preset: &str) -> &'static str {
         "opencode-go" => "OpenCode Go API key:",
         "command-code" => "Command Code API key:",
         "anthropic" => "Anthropic API key:",
+        "gemini" => "Gemini API key:",
+        "grok" => "xAI API key:",
         "kimi" => "Kimi API key:",
         "mimo" => "MiMo API key:",
         "minimax" => "MiniMax API key:",
@@ -205,6 +207,8 @@ fn provider_setup(preset: &str) -> (&'static str, &'static str) {
             "Writes a `commandcode` provider with the key, and the models the subscription serves. `killi login command-code` signs in with the browser instead."
         }
         "anthropic" => crate::config::ANTHROPIC_ABOUT,
+        "gemini" => crate::config::GEMINI_ABOUT,
+        "grok" => crate::config::GROK_ABOUT,
         "kimi" => crate::config::KIMI_ABOUT,
         "mimo" => crate::config::MIMO_ABOUT,
         "minimax" => crate::config::MINIMAX_ABOUT,
@@ -728,6 +732,8 @@ impl App {
             ("opencode-go", "OpenCode Go, with the API key from its console", crate::login::opencode_go_signed_in()),
             ("command-code", "Command Code, with the API key from its account", crate::login::commandcode_signed_in()),
             ("anthropic", "Anthropic's API, with your API key", has(crate::config::anthropic_ours)),
+            ("gemini", "Google's Gemini API, with your AI Studio key", has(crate::config::gemini_ours)),
+            ("grok", "xAI's Grok API, with your API key", has(crate::config::grok_ours)),
             ("kimi", "Kimi's coding plan, with your API key", has(crate::config::kimi_ours)),
             ("mimo", "Xiaomi's MiMo, with your API key", has(crate::config::mimo_ours)),
             ("minimax", "MiniMax, with your API key", has(crate::config::minimax_ours)),
@@ -759,7 +765,7 @@ impl App {
     pub(super) fn provider_pick(&mut self, preset: &str) {
         if provider_question(preset).is_empty() {
             return self.error(
-                "Pick one of: /provider anthropic, kimi, mimo, minimax, qwen, stepfun, unisound, zai, muse-code, opencode-go, command-code or custom.",
+                "Pick one of: /provider anthropic, gemini, grok, kimi, mimo, minimax, qwen, stepfun, unisound, zai, muse-code, opencode-go, command-code or custom.",
             );
         }
         let (note, question) = provider_setup(preset);

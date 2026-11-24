@@ -155,7 +155,7 @@ fn reasoning_without_encrypted_content_is_not_replayed() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![
         json!({"role": "user", "content": "hi"}),
@@ -205,7 +205,7 @@ fn prepare_caps_output_from_remaining_context() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![json!({"role": "user", "content": "hello"})];
     let prepared = prepare(&model, &messages, &[], "cache").unwrap();
@@ -231,7 +231,7 @@ fn a_chatgpt_plan_request_has_no_output_cap_and_no_key() {
         images: false,
         thinking: Thinking::Effort("high".into()),
         cache_control: false,
-        chatgpt: true,
+        plan: Some(crate::config::Plan::ChatGpt),
     };
     let prepared = prepare(
         &model,
@@ -290,7 +290,7 @@ fn mapped_tool_names_go_out_and_come_back() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![
         json!({"role": "user", "content": "list"}),

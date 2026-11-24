@@ -334,6 +334,7 @@ impl Parser {
             id: id.to_string(),
             name,
             arguments: String::new(),
+            extra_content: None,
         });
         self.calls.insert(id.to_string(), slot);
         Some(slot)
@@ -528,7 +529,7 @@ mod tests {
             images: true,
             thinking: Thinking::Effort("xhigh".into()),
             cache_control: false,
-            chatgpt: false,
+            plan: None,
         }
     }
 

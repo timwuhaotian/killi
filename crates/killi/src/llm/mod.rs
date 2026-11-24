@@ -19,7 +19,7 @@ use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde_json::Value;
 
-use crate::config::{Protocol, ResolvedModel};
+use crate::config::{Plan, Protocol, ResolvedModel};
 
 use error::{
     backoff, body_excerpt, classify, excerpt, kind_for_status, retryable_status, spent_quota,
@@ -137,6 +137,9 @@ pub struct ToolCall {
     pub name: String,
     /// Exactly as the model streamed it; never re-serialized.
     pub arguments: String,
+    /// The provider's own data on the call, stored on it and sent back verbatim: Gemini's
+    /// `{"google": {"thought_signature": …}}`, which it requires on the next request.
+    pub extra_content: Option<Value>,
 }
 
 pub enum Delta<'a> {
@@ -240,13 +243,13 @@ impl Failure {
     }
 }
 
-impl From<crate::login::chatgpt::TokenError> for Failure {
-    fn from(error: crate::login::chatgpt::TokenError) -> Self {
+impl From<crate::login::TokenError> for Failure {
+    fn from(error: crate::login::TokenError) -> Self {
         match error {
-            crate::login::chatgpt::TokenError::SignIn(message) => {
+            crate::login::TokenError::SignIn(message) => {
                 Failure::of(ErrorKind::Auth, None, false, message)
             }
-            crate::login::chatgpt::TokenError::Transient(message) => Failure::transient(message),
+            crate::login::TokenError::Transient(message) => Failure::transient(message),
         }
     }
 }
@@ -281,7 +284,7 @@ impl Client {
         if self.model.alias.is_empty() {
             bail!("no model is configured yet; type /provider to add one, then /model picks it");
         }
-        if !self.model.chatgpt && self.model.api_key.is_empty() {
+        if self.model.plan.is_none() && self.model.api_key.is_empty() {
             bail!(
                 "model `{}` has no API key yet; type /provider to add one, or run `killi login` for a subscription",
                 self.model.alias
@@ -351,8 +354,10 @@ impl Client {
                         Instant::now() + failure.retry_after.unwrap_or_else(|| backoff(attempt));
                     self.cooldown.set(Some(deadline));
                 }
-                let advice = if self.model.chatgpt {
+                let advice = if self.model.plan == Some(Plan::ChatGpt) {
                     crate::login::chatgpt::advice(&failure.message)
+                } else if self.model.plan == Some(Plan::Grok) {
+                    crate::login::grok::advice(&failure.message)
                 } else if self.model.protocol == Protocol::CommandCode
                     && failure.kind == ErrorKind::Auth
                 {
@@ -402,7 +407,7 @@ impl Client {
         (wait, mine.is_none_or(|mine| deadline > mine))
     }
 
-    /// One request. On a ChatGPT plan it carries the current token, and the first 401 of a
+    /// One request. On a plan it carries the plan's current token, and the first 401 of a
     /// `complete` call refreshes that token and is retried at once (`renewed` records it).
     async fn attempt(
         &self,
@@ -411,9 +416,9 @@ impl Client {
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<Reply, Failure> {
         let mut request = self.http.post(&prepared.url).body(prepared.body.clone());
-        let token = match self.model.chatgpt {
-            true => Some(crate::login::chatgpt::access_token(&self.http, None).await?),
-            false => None,
+        let token = match self.model.plan {
+            Some(plan) => Some(plan_token(&self.http, plan, None).await?),
+            None => None,
         };
         if let Some(token) = &token {
             request = request.header("authorization", format!("Bearer {token}"));
@@ -439,11 +444,11 @@ impl Client {
                 .as_deref()
                 .filter(|_| status == StatusCode::UNAUTHORIZED && !*renewed)
             {
-                crate::login::chatgpt::access_token(&self.http, Some(token)).await?;
+                let plan = self.model.plan.expect("a token means a plan");
+                plan_token(&self.http, plan, Some(token)).await?;
                 *renewed = true;
-                let message = format!(
-                    "HTTP {status}: the ChatGPT token was turned away, so it was refreshed"
-                );
+                let message =
+                    format!("HTTP {status}: the plan's token was turned away, so it was refreshed");
                 return Err(Failure {
                     kind: ErrorKind::Auth,
                     status: Some(status.as_u16()),
@@ -563,6 +568,19 @@ impl Client {
         ensure_stream_consumed(lines.rest())?;
         parser.finish(&mut reply)?;
         validate_reply(reply)
+    }
+}
+
+/// The token a request on `plan` carries: the saved one while it has time left, else a
+/// refreshed one. `rejected` is a token the API just turned away.
+async fn plan_token(
+    http: &reqwest::Client,
+    plan: Plan,
+    rejected: Option<&str>,
+) -> Result<String, crate::login::TokenError> {
+    match plan {
+        Plan::ChatGpt => crate::login::chatgpt::access_token(http, rejected).await,
+        Plan::Grok => crate::login::grok::access_token(http, rejected).await,
     }
 }
 

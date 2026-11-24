@@ -231,7 +231,7 @@ fn max_tokens_is_capped_by_remaining_context() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![json!({"role": "user", "content": "hello"})];
     let expected = super::cap_output(&model, &messages, &[], 4_000);
@@ -300,7 +300,7 @@ fn mapped_tool_names_go_out_and_come_back() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![
         json!({"role": "assistant", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "web_search", "arguments": "{\"q\":\"x\"}"}}]}),

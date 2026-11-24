@@ -9,7 +9,7 @@ use super::{
     Delta, ErrorKind, Failure, IMAGE_OMITTED, Prepared, Reply, StreamParser, ToolCall, cap_output,
     content_text, json_arguments, spent_quota, system_text, truncate,
 };
-use crate::config::{ResolvedModel, Thinking};
+use crate::config::{Plan, ResolvedModel, Thinking};
 
 pub(super) fn prepare(
     model: &ResolvedModel,
@@ -48,7 +48,10 @@ pub(super) fn prepare(
         .collect();
     body.insert("prompt_cache_key".into(), cache_key.into());
     // A ChatGPT plan turns `max_output_tokens` away.
-    if let Some(max) = model.max_output.filter(|_| !model.chatgpt) {
+    if let Some(max) = model
+        .max_output
+        .filter(|_| model.plan != Some(Plan::ChatGpt))
+    {
         body.insert(
             "max_output_tokens".into(),
             cap_output(model, messages, &tools, max)
@@ -74,7 +77,7 @@ pub(super) fn prepare(
     }
     let mut headers = vec![("content-type".into(), "application/json".into())];
     // A plan's token is added as each attempt is sent, since it is refreshed as it expires.
-    if !model.chatgpt {
+    if model.plan.is_none() {
         headers.push(("authorization".into(), format!("Bearer {}", model.api_key)));
     }
     Ok(Prepared {
@@ -245,6 +248,7 @@ impl StreamParser for Parser {
                     id: item["call_id"].as_str().unwrap_or_default().to_string(),
                     name: ours,
                     arguments: String::new(),
+                    extra_content: None,
                 });
                 self.calls.insert(index, reply.tool_calls.len() - 1);
             }

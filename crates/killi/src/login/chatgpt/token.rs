@@ -32,7 +32,7 @@ pub(super) async fn access_token_at(
         return Ok(credentials.access_token);
     }
     // Refresh tokens rotate: one killi refreshes at a time, and the others take its result.
-    let _lock = Lock::acquire(path)
+    let _lock = Lock::acquire(path, "ChatGPT")
         .await
         .map_err(|error| TokenError::Transient(error.to_string()))?;
     let mut credentials = signed_in_at(path)?;

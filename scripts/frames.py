@@ -79,6 +79,7 @@ SCENES = {
     "shell": dict(keys=["!git status"]),
     "files": dict(keys=["fix @sl"]),
     "picker": dict(keys=["/model\r"]),
+    "provider": dict(keys=["/provider\r"] + ["\x1b[B"] * 5),
     "theme": dict(keys=["/theme\r"] + ["\x1b[B"] * 9),
     "conv": dict(keys=[FIX], until="fills it"),
     "readme": dict(keys=["The slugify test fails. Fix it and run the tests.\r"], until="fills it"),

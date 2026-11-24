@@ -44,31 +44,34 @@ impl Config {
                 model.provider
             );
         };
-        let chatgpt = provider.kind == "chatgpt";
+        let plan = Plan::of(&provider.kind);
         let protocol = match model.protocol.as_deref().unwrap_or(&provider.kind) {
             "openai" => Protocol::OpenAi,
             "anthropic" => Protocol::Anthropic,
-            "openai_responses" | "chatgpt" => Protocol::Responses,
+            "openai_responses" | "chatgpt" | "grok" => Protocol::Responses,
             "commandcode" => Protocol::CommandCode,
             other => bail!(
-                "model `{alias}` uses the `{other}` API, which killi doesn't support; use openai, anthropic, openai_responses, commandcode or chatgpt"
+                "model `{alias}` uses the `{other}` API, which killi doesn't support; use openai, anthropic, openai_responses, commandcode, chatgpt or grok"
             ),
         };
-        if chatgpt && protocol != Protocol::Responses {
+        if plan.is_some() && protocol != Protocol::Responses {
             bail!(
-                "model `{alias}` runs on a ChatGPT plan, which takes only the Responses API; remove its `protocol`"
+                "model `{alias}` runs on a `{}` plan, which takes only the Responses API; remove its `protocol`",
+                provider.kind
             );
         }
         let base_url = match (
             model.base_url.as_ref().or(provider.base_url.as_ref()),
             protocol,
         ) {
+            // A plan's token is good only on its own API, so it goes nowhere else.
+            (_, _) if plan == Some(Plan::Grok) => super::GROK_BASE_URL.to_string(),
             (Some(url), _) => url.clone(),
             (None, Protocol::Anthropic) => "https://api.anthropic.com".to_string(),
             (None, Protocol::CommandCode) => "https://api.commandcode.ai".to_string(),
             (None, _) => "https://api.openai.com/v1".to_string(),
         };
-        let api_key = match chatgpt {
+        let api_key = match plan.is_some() {
             true => String::new(),
             false if key_required => provider
                 .key()
@@ -90,7 +93,7 @@ impl Config {
             images: model.capabilities.iter().any(|c| c == "image_in"),
             thinking: self.thinking_for(model),
             cache_control: model.cache_control,
-            chatgpt,
+            plan,
         })
     }
 
@@ -103,7 +106,7 @@ impl Config {
             .find(|(alias, model)| {
                 self.model_allowed(alias)
                     && self.providers.get(&model.provider).is_some_and(|provider| {
-                        provider.kind != "chatgpt" && provider.key().is_some()
+                        Plan::of(&provider.kind).is_none() && provider.key().is_some()
                     })
             })
             .map(|(alias, _)| alias.as_str())
@@ -132,7 +135,7 @@ impl Config {
         let Some(provider) = self.providers.get(&model.provider) else {
             return false;
         };
-        provider.kind != "chatgpt" && provider.key().is_none()
+        Plan::of(&provider.kind).is_none() && provider.key().is_none()
     }
 
     /// The configured provider `ours` picks out: its name, and whether it has a key.

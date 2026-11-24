@@ -36,7 +36,8 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   and every new one (`/backup-model none` drops it); a hand edit takes the next killi start.
 - `[providers.<name>]`: `type` ("openai" for Chat Completions and compatible APIs,
   "anthropic" for Messages, "openai_responses" for Responses, "chatgpt" for the user's
-  ChatGPT plan: no key, `killi login chatgpt` signs in and adds the plan's models), `base_url`
+  ChatGPT plan: no key, `killi login chatgpt` signs in and adds the plan's models; "grok" the
+  same for a Grok subscription with `killi login grok`, always on `https://api.x.ai/v1`), `base_url`
   (default `https://api.openai.com/v1`, or `https://api.anthropic.com` for anthropic), one of
   `api_key` or `api_key_env` (the name of an environment variable, which wins when both are
   set), `custom_headers = { "X-Name" = "value" }`, `tool_names = { bash = "run_command" }`

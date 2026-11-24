@@ -244,7 +244,11 @@ impl Agent {
             message["tool_calls"] = calls
                 .iter()
                 .map(|(id, call)| {
-                    json!({"id": id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}})
+                    let mut stored = json!({"id": id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}});
+                    if let Some(extra) = &call.extra_content {
+                        stored["extra_content"] = extra.clone();
+                    }
+                    stored
                 })
                 .collect();
         }

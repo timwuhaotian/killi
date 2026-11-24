@@ -160,7 +160,7 @@ fn stored_arguments_that_arent_json_are_repaired_on_the_copy_being_sent() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![json!({
         "role": "assistant", "content": null,
@@ -327,7 +327,7 @@ fn prepare_marks_breakpoints_only_when_the_model_asks() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![
         json!({"role": "system", "content": "rules"}),
@@ -363,7 +363,7 @@ fn images_become_text_when_the_model_cannot_see_them() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![json!({"role": "user", "content": [
         {"type": "text", "text": "look"},
@@ -411,7 +411,7 @@ fn prepare_caps_output_from_context_and_preserves_string_reasoning() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![
         json!({"role": "user", "content": "hello"}),
@@ -469,7 +469,7 @@ fn mapped_tool_names_go_out_and_come_back() {
         images: false,
         thinking: Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![
         json!({"role": "assistant", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "bash", "arguments": "{}"}}]}),
@@ -504,4 +504,77 @@ fn mapped_tool_names_go_out_and_come_back() {
         reply.tool_calls[0].name, "bash",
         "the call comes back under killi's name"
     );
+}
+
+#[test]
+fn geminis_thought_signature_is_kept_per_call_and_sent_back_only_to_gemini() {
+    let mut reply = Reply::default();
+    let mut sink = |_: Delta| {};
+    let events = [
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"f1","type":"function","function":{"name":"read","arguments":"{}"},"extra_content":{"google":{"thought_signature":"sig-a"}}}]}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"f2","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":""},"extra_content":null}]},"finish_reason":"tool_calls"}]}"#,
+    ];
+    let mut parser = Parser::default();
+    for event in events {
+        parser
+            .event(&serde_json::from_str(event).unwrap(), &mut reply, &mut sink)
+            .ok()
+            .unwrap();
+    }
+    parser.finish(&mut reply).unwrap();
+    assert_eq!(
+        reply.tool_calls[0].extra_content,
+        Some(json!({"google": {"thought_signature": "sig-a"}})),
+        "a later chunk without it doesn't clear it"
+    );
+    assert_eq!(reply.tool_calls[1].extra_content, None);
+
+    let stored = vec![json!({"role": "assistant", "tool_calls": [
+        {"id": "f1", "type": "function", "function": {"name": "read", "arguments": "{}"},
+         "extra_content": {"google": {"thought_signature": "sig-a"}}}
+    ]})];
+    let sent = |base_url: &str| -> Value {
+        let model = ResolvedModel {
+            base_url: base_url.into(),
+            model: "gemini-4-neon".into(),
+            ..ResolvedModel::unconfigured()
+        };
+        serde_json::from_slice(&prepare(&model, &stored, &[], "cache-key").unwrap().body).unwrap()
+    };
+    let gemini = sent("https://generativelanguage.googleapis.com/v1beta/openai");
+    assert!(gemini.get("prompt_cache_key").is_none(), "Gemini refuses the field: {gemini}");
+    assert_eq!(
+        gemini["messages"][0]["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+        "sig-a"
+    );
+    let other = sent("https://api.example.com/v1");
+    assert_eq!(other["prompt_cache_key"], "cache-key");
+    assert!(other["messages"][0]["tool_calls"][0].get("extra_content").is_none());
+}
+
+#[test]
+fn parallel_calls_that_share_an_index_stay_apart() {
+    let mut reply = Reply::default();
+    let mut sink = |_: Delta| {};
+    let events = [
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":"{\"path\":"}}]}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"a\"}"}}]}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c2","function":{"name":"read","arguments":"{\"path\":\"b\"}"}}]}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c2","function":{"arguments":""}}]},"finish_reason":"tool_calls"}]}"#,
+    ];
+    let mut parser = Parser::default();
+    for event in events {
+        parser
+            .event(&serde_json::from_str(event).unwrap(), &mut reply, &mut sink)
+            .ok()
+            .unwrap();
+    }
+    parser.finish(&mut reply).unwrap();
+    let calls: Vec<_> = reply
+        .tool_calls
+        .iter()
+        .map(|call| (call.id.as_str(), call.arguments.as_str()))
+        .collect();
+    assert_eq!(calls, [("c1", r#"{"path":"a"}"#), ("c2", r#"{"path":"b"}"#)]);
 }

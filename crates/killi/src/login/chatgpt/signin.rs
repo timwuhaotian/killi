@@ -92,7 +92,7 @@ pub async fn login() -> Result<()> {
             path.display()
         );
     }
-    let _lock = Lock::acquire(&path).await?;
+    let _lock = Lock::acquire(&path, "ChatGPT").await?;
     saved.subject = subject;
     saved.email = email;
     saved.scopes = callback
@@ -154,7 +154,7 @@ pub async fn logout() -> Result<()> {
     } else {
         revoke(&super::super::http_client()?, &credentials).await
     };
-    let _lock = Lock::acquire(&path).await?;
+    let _lock = Lock::acquire(&path, "ChatGPT").await?;
     credentials.sign_out();
     credentials.save(&path)?;
     match revoked {

@@ -488,7 +488,7 @@ fn every_provider_preset_asks_its_key() {
         .iter()
         .map(|(name, _, _)| name.clone())
         .collect();
-    assert_eq!(presets.len(), 12, "{presets:?}");
+    assert_eq!(presets.len(), 14, "{presets:?}");
     for preset in &presets {
         app.provider_pick(preset);
         assert!(
