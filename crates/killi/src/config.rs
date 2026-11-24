@@ -59,7 +59,7 @@ use models::toml_int;
 use yaml::read_yaml;
 
 #[cfg(test)]
-use command::{agree, create_command_link, valid_command_name};
+use command::{agree, create_command_link, rows, valid_command_name};
 #[cfg(test)]
 use guide::{TEMPLATE, starting_config};
 #[cfg(test)]

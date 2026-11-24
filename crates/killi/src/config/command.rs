@@ -4,7 +4,9 @@ use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use crossterm::cursor::{RestorePosition, SavePosition};
+use unicode_width::UnicodeWidthStr;
+
+use crossterm::cursor::MoveUp;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::queue;
 use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor};
@@ -177,7 +179,8 @@ fn read_line_opt(prompt: &str) -> Result<Option<String>> {
 }
 
 /// An inline list picked with ↑/↓ and Enter, starting at `selected`. Esc and Ctrl+C cancel.
-/// Saving the cursor instead of counting rows keeps redraws correct when an option wraps.
+/// Each frame's height is counted, wrapping included, so the next frame moves back up over
+/// it; a saved cursor loses its place as soon as the frame scrolls the screen.
 pub(crate) fn select(question: &str, options: &[String], selected: usize) -> Result<usize> {
     if options.is_empty() {
         bail!("nothing to pick from");
@@ -185,10 +188,10 @@ pub(crate) fn select(question: &str, options: &[String], selected: usize) -> Res
     terminal::enable_raw_mode()?;
     let _raw = RawMode;
     let mut out = std::io::stderr();
-    queue!(out, SavePosition)?;
     let mut selected = selected.min(options.len() - 1);
+    let mut lines = 0;
     let chosen = loop {
-        draw_options(&mut out, options, question, selected)?;
+        lines = draw_options(&mut out, options, question, selected, lines)?;
         let Event::Key(key) = event::read()? else {
             continue;
         };
@@ -206,7 +209,7 @@ pub(crate) fn select(question: &str, options: &[String], selected: usize) -> Res
             _ => {}
         }
     };
-    queue!(out, RestorePosition, Clear(ClearType::FromCursorDown))?;
+    queue!(out, MoveUp(lines as u16), Clear(ClearType::FromCursorDown))?;
     out.flush()?;
     Ok(chosen)
 }
@@ -220,13 +223,22 @@ impl Drop for RawMode {
     }
 }
 
+/// Draws the list over the previous frame's rows, returning the rows this frame takes so
+/// the caller can move back over them on the next draw.
 fn draw_options(
     out: &mut impl Write,
     options: &[String],
     question: &str,
     selected: usize,
-) -> Result<()> {
-    queue!(out, RestorePosition, Clear(ClearType::FromCursorDown))?;
+    previous_lines: usize,
+) -> Result<usize> {
+    let columns = terminal::size().map_or(80, |(columns, _)| usize::from(columns));
+    let columns = if columns == 0 { 80 } else { columns };
+    if previous_lines > 0 {
+        queue!(out, MoveUp(previous_lines as u16))?;
+    }
+    queue!(out, Clear(ClearType::FromCursorDown))?;
+    let mut lines = 1; // the blank line the frame opens on
     queue!(
         out,
         Print("\r\n  "),
@@ -240,6 +252,8 @@ fn draw_options(
         Print("  Choose an option\r\n\r\n"),
         ResetColor,
     )?;
+    lines += rows(&format!("  ◆ killi  {question}"), columns);
+    lines += rows("  Choose an option", columns) + 1;
     for (index, option) in options.iter().enumerate() {
         if index == selected {
             queue!(
@@ -252,10 +266,10 @@ fn draw_options(
                 ResetColor,
             )?;
         } else {
-            queue!(out, Print(format!("    {option}\r\n")))?;
-            continue;
+            queue!(out, Print(format!("    {option}")))?;
         }
         queue!(out, Print("\r\n"))?;
+        lines += rows(&format!("    {option}"), columns);
     }
     queue!(
         out,
@@ -263,8 +277,15 @@ fn draw_options(
         Print("\r\n  ↑ ↓ choose  ·  Enter confirm  ·  Esc cancel\r\n\r\n"),
         ResetColor,
     )?;
+    lines += 1 + rows("  ↑ ↓ choose  ·  Enter confirm  ·  Esc cancel", columns) + 1;
     out.flush()?;
-    Ok(())
+    Ok(lines)
+}
+
+/// The rows `text`, starting at column 0, takes at `columns` wide: text exactly filling
+/// the row ends it, since the `\r\n` after it starts the next.
+pub(super) fn rows(text: &str, columns: usize) -> usize {
+    text.width().div_ceil(columns).max(1)
 }
 
 /// Reads one line with the terminal's echo off, so a pasted key stays out of the scrollback.

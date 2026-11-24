@@ -969,6 +969,17 @@ fn confirm_on_empty_stdin_is_no() {
 }
 
 #[test]
+fn picker_row_count_wraps_text_past_the_width() {
+    // Exactly filling the row ends it: the newline after it starts the next one.
+    assert_eq!(super::rows("12345", 5), 1);
+    assert_eq!(super::rows("123456", 5), 2);
+    assert_eq!(super::rows("123456789012", 5), 3);
+    assert_eq!(super::rows("", 5), 1);
+    // The option line's indent counts from column 0.
+    assert_eq!(super::rows("    123456", 5), 2);
+}
+
+#[test]
 fn command_names_are_single_safe_words() {
     for name in ["dw", "ddd", "d", "my-cmd_2", "K9"] {
         assert!(super::valid_command_name(name), "{name}");

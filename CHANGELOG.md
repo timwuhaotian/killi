@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.5 — 2026-11-24
+
+- `killi login` no longer reprints the whole service list on every ↑/↓: the picker redraws over its previous frame instead of relying on a saved cursor.
+
 ## 0.9.4 — 2026-11-24
 
 - A subagent that runs too long is stopped and reported as timed out, with how long it ran, its requests and tool calls, and its log, instead of holding a whole swarm for an hour. `[agent] subagent_timeout` sets the minutes (default 30, 0 for no limit). A timeout isn't a provider limit, so the rest of a swarm keeps running.
