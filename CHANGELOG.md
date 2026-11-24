@@ -5,6 +5,11 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.4 — 2026-11-24
+
+- A subagent that runs too long is stopped and reported as timed out, with how long it ran, its requests and tool calls, and its log, instead of holding a whole swarm for an hour. `[agent] subagent_timeout` sets the minutes (default 30, 0 for no limit). A timeout isn't a provider limit, so the rest of a swarm keeps running.
+- A subagent's log records its thinking effort in its `session` line, as the main session's does.
+
 ## 0.9.3 — 2026-11-24
 
 A stability release for the agent loop and its harness, from a full audit of both.

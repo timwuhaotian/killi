@@ -3,6 +3,7 @@ use super::*;
 use tokio::sync::mpsc;
 
 use crate::agent::background::{BgStart, STOPPED_FOR_MESSAGE, UNANSWERED_MESSAGE};
+use crate::agent::subagent::{Child, tag};
 
 /// Controls for an interactive session whose background work arrives on the returned receiver,
 /// as the terminal's would.
@@ -809,4 +810,74 @@ async fn a_resume_numbers_past_every_task_the_log_named() {
     .unwrap();
     // Task 1 ended and bash task 4 died with the old process; neither id is handed out again.
     assert_eq!(agent.ctx.tasks.borrow_mut().reserve_id(), 5);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_subagent_past_its_time_limit_is_stopped_and_reported_as_timed_out() {
+    let url = slow_stub(
+        vec![sse("never", "stop"), sse("late", "stop")],
+        Duration::from_secs(30),
+    )
+    .await;
+    let mut parent = idle_agent("child-timeout", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut parent.client).unwrap().model.base_url = url;
+    Rc::get_mut(&mut parent.settings).unwrap().subagent_timeout = Duration::from_millis(300);
+    parent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let agent = parent
+        .subagent("child", None, false, &Default::default())
+        .unwrap();
+    let job = Ok(Child {
+        agent,
+        sent: "review it".into(),
+        route: Default::default(),
+    });
+    let started = Instant::now();
+    let done = tag(0, job, parent.ctx.clone()).await;
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(done.output.is_error);
+    assert!(
+        done.output.text.contains("timed out after 300ms"),
+        "{}",
+        done.output.text
+    );
+    assert!(done.limited.is_none(), "a timeout is not a provider limit");
+    assert_eq!(done.stats.unwrap().requests, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_zero_time_limit_lets_a_subagent_run_to_its_report() {
+    let url = slow_stub(vec![sse("done", "stop")], Duration::from_millis(200)).await;
+    let mut parent = idle_agent("child-no-limit", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut parent.client).unwrap().model.base_url = url;
+    parent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let agent = parent
+        .subagent("child", None, false, &Default::default())
+        .unwrap();
+    let job = Ok(Child {
+        agent,
+        sent: "review it".into(),
+        route: Default::default(),
+    });
+    let done = tag(0, job, parent.ctx.clone()).await;
+    assert!(!done.output.is_error, "{}", done.output.text);
+    assert_eq!(done.output.text, "done");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_subagents_log_says_its_effort() {
+    let mut parent = idle_agent("child-effort-log", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut parent.client).unwrap().model.thinking = Thinking::Effort("low".into());
+    parent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    let child = parent
+        .subagent("child", None, false, &Default::default())
+        .unwrap();
+    let log = std::fs::read_to_string(&child.session.log_path).unwrap();
+    let first: Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+    assert_eq!(first["effort"], "low");
 }

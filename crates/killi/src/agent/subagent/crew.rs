@@ -235,27 +235,45 @@ async fn run_child(index: usize, job: Job, parent: Rc<tools::Context>) -> ChildD
         }
     };
     (agent.sink)(Event::Started);
-    let (mut output, limited) = match agent.run(&sent, &[]).await {
-        Ok((text, Stop::MaxTokens)) if !text.trim().is_empty() => (
+    let limit = agent.settings.subagent_timeout;
+    let ran = if limit.is_zero() {
+        Some(agent.run(&sent, &[]).await)
+    } else {
+        tokio::time::timeout(limit, agent.run(&sent, &[]))
+            .await
+            .ok()
+    };
+    let (mut output, limited) = match ran {
+        None => (
+            tools::Output::error(format!(
+                "The subagent timed out after {:?} ({} requests, {} tool calls) with no report. It may have performed work or caused side effects; inspect its log {} before retrying, and run it again on a narrower task or at a lower /effort.",
+                limit,
+                agent.stats.requests,
+                agent.stats.tool_calls,
+                log_name(&agent),
+            )),
+            None,
+        ),
+        Some(Ok((text, Stop::MaxTokens))) if !text.trim().is_empty() => (
             tools::Output::error(format!(
                 "The subagent's report was truncated (MaxTokens). Partial report:\n{text}"
             )),
             None,
         ),
-        Ok((text, Stop::StepLimit)) if !text.trim().is_empty() => (
+        Some(Ok((text, Stop::StepLimit))) if !text.trim().is_empty() => (
             tools::Output::ok(format!("{text}\n\n(stopped at the step limit)")),
             None,
         ),
-        Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => {
+        Some(Ok((text, stop))) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => {
             (tools::Output::ok(text), None)
         }
-        Ok((_, stop)) => (
+        Some(Ok((_, stop))) => (
             tools::Output::error(format!(
                 "The subagent stopped without a final report ({stop:?})."
             )),
             None,
         ),
-        Err(e) => (
+        Some(Err(e)) => (
             tools::Output::error(format!("The subagent failed: {e:#}")),
             provider_limit(&e),
         ),

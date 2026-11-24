@@ -442,6 +442,8 @@ pub struct Settings {
     pub plan_allow: Vec<String>,
     /// Subagents an `agent_swarm` call runs at once.
     pub swarm_parallel: usize,
+    /// How long one subagent may run before it is stopped; zero means no limit.
+    pub subagent_timeout: Duration,
     pub search: crate::tools::SearchSettings,
     pub skills: Skills,
     pub hooks: Rc<HooksConfig>,

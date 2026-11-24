@@ -76,6 +76,7 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
   of the model's `max_context_size`, or 256000 when the window is unknown), `plan_allow = ["make -n"]` (extra command prefixes bash may run in plan mode),
   `notify_after` (seconds a turn takes before a desktop notification, default 10),
   `swarm_parallel` (subagents one `agent_swarm` call runs at once, default 8; `/swarm parallel <n>` writes it),
+  `subagent_timeout` (minutes a subagent may run before it is stopped and reported as timed out, default 30, 0 for no limit),
   `swarm = false` (start sessions with swarm mode off; it is on by default, and `/swarm on|off` writes it),
   `verbosity = "ultra-concise"` (replies in the fewest words that keep the meaning; `"normal"` by default, and `/verbosity` writes it; an older `mode = "ultra-concise"` line still reads as the verbosity),
   `mode = "orchestrate"` (every `agent` and `agent_swarm` call runs in the background while the user keeps talking to the main agent; `"focus"` by default, where they run in the foreground and move to the background when the user sends a message; `/mode` writes it, and picking `focus` removes the line),

@@ -47,6 +47,7 @@ pub(super) const TEMPLATE: &str = r#"# killi's config. Models are named "<provid
 [agent]
 swarm = true                    # start in swarm mode: split work across subagents; false turns it off
 swarm_parallel = 8              # subagents a swarm runs at once
+subagent_timeout = 30           # minutes a subagent may run before it is stopped; 0 for no limit
 verbosity = "normal"            # how long replies run; "ultra-concise" keeps them to the fewest words
 # mode = "orchestrate"          # every subagent runs in the background while you keep talking; default "focus"
 peers = true                    # other killi sessions here can see this one, ask it and message it

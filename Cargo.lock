@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "killi"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

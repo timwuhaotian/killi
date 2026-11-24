@@ -20,6 +20,16 @@ use crate::skills::Skills;
 use crate::tools;
 
 const DEFAULT_SWARM_PARALLEL: usize = 8;
+const DEFAULT_SUBAGENT_TIMEOUT_MINUTES: u64 = 30;
+
+/// `[agent] subagent_timeout` as a duration; zero is no limit.
+fn subagent_timeout(config: &Config) -> std::time::Duration {
+    let minutes = config
+        .agent
+        .subagent_timeout
+        .unwrap_or(DEFAULT_SUBAGENT_TIMEOUT_MINUTES);
+    std::time::Duration::from_secs(minutes.saturating_mul(60))
+}
 
 /// What a session starts with besides its model and folder, for the banner.
 #[derive(Debug, Default)]
@@ -146,6 +156,7 @@ impl Setup {
                 .swarm_parallel
                 .unwrap_or(DEFAULT_SWARM_PARALLEL)
                 .max(1),
+            subagent_timeout: subagent_timeout(&config),
             search: config.search.settings(),
             skills: skills.clone(),
             hooks: Rc::new(config.hooks.clone()),
@@ -306,6 +317,7 @@ impl Setup {
             .max(1);
         self.settings.max_steps = config.agent.max_steps();
         self.settings.max_steps_interactive = config.agent.max_steps_interactive();
+        self.settings.subagent_timeout = subagent_timeout(&config);
         self.config = config;
     }
 

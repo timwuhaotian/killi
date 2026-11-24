@@ -220,6 +220,9 @@ pub struct AgentConfig {
     pub notify_after: Option<u64>,
     /// Subagents an `agent_swarm` call runs at once (default 8).
     pub swarm_parallel: Option<usize>,
+    /// Minutes a subagent may run before it is stopped and reported as timed out (default 30,
+    /// 0 for no limit).
+    pub subagent_timeout: Option<u64>,
     /// Start every session in swarm mode (default true); `/swarm on|off` still changes it.
     pub swarm: Option<bool>,
     /// How long replies run: `normal` (default) or `ultra-concise`; `/verbosity` sets it.

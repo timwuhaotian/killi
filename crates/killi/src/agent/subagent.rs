@@ -539,7 +539,7 @@ impl Agent {
         } else {
             (0, 0)
         };
-        session.record(&json!({"type": "session", "id": session.id, "version": env!("CARGO_PKG_VERSION"), "model": self.client.model.alias, "context_window": self.client.model.context_window, "tools": *self.tools}))?;
+        session.record(&json!({"type": "session", "id": session.id, "version": env!("CARGO_PKG_VERSION"), "model": self.client.model.alias, "context_window": self.client.model.context_window, "effort": self.client.model.thinking.label(), "tools": *self.tools}))?;
         session.record(&json!({"type": "compaction", "messages": *messages}))?;
         let announce_plan = !fork && self.controls.plan.get();
         let mut agent = self.child_agent(
