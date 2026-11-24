@@ -99,7 +99,7 @@ fn a_chatgpt_model_needs_no_key_and_speaks_responses() {
     let config: super::Config = toml::from_str(source).unwrap();
     let model = config.resolve(Some("plan/gpt-a")).unwrap();
     assert_eq!(model.protocol, super::Protocol::Responses);
-    assert!(model.chatgpt && model.api_key.is_empty());
+    assert!(model.plan == Some(super::Plan::ChatGpt) && model.api_key.is_empty());
     assert_eq!(model.base_url, "https://api.openai.com/v1");
     assert!(
         !config.missing_key(Some("plan/gpt-a")),
@@ -116,6 +116,22 @@ fn a_chatgpt_model_needs_no_key_and_speaks_responses() {
     );
     let template: super::Config = toml::from_str(super::TEMPLATE).unwrap();
     assert_eq!(template.chatgpt_model(None), None);
+}
+
+#[test]
+fn a_grok_plan_needs_no_key_and_its_token_goes_only_to_xai() {
+    let source = "[providers.grok]\ntype = \"grok\"\nbase_url = \"https://gateway.example/v1\"\n\n[models.\"grok/grok-4.7\"]\nprovider = \"grok\"\nmodel = \"grok-4.7\"\n";
+    let config: super::Config = toml::from_str(source).unwrap();
+    let model = config.resolve(Some("grok/grok-4.7")).unwrap();
+    assert_eq!(model.protocol, super::Protocol::Responses);
+    assert_eq!(model.plan, Some(super::Plan::Grok));
+    assert!(model.api_key.is_empty());
+    assert_eq!(model.base_url, super::GROK_BASE_URL);
+    assert!(!config.missing_key(Some("grok/grok-4.7")));
+    assert_eq!(config.first_keyed(), None, "a plan is not a keyed provider");
+    let chat: super::Config =
+        toml::from_str(&format!("{source}protocol = \"openai\"\n")).unwrap();
+    assert!(chat.resolve(Some("grok/grok-4.7")).is_err());
 }
 
 fn plan_model(id: &str) -> super::NewModel {
@@ -157,7 +173,7 @@ fn signing_in_adds_the_provider_and_its_models_once() {
     );
     assert_eq!(model.support_efforts, ["low", "high"]);
     assert_eq!(model.capabilities, ["image_in", "thinking", "tool_use"]);
-    assert!(config.resolve(None).unwrap().chatgpt);
+    assert_eq!(config.resolve(None).unwrap().plan, Some(super::Plan::ChatGpt));
 
     let (again, _, existed, none) =
         super::with_models(&text, &chatgpt(vec![plan_model("gpt-a")])).unwrap();

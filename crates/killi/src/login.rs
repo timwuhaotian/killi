@@ -1,9 +1,11 @@
 //! `killi login` and `killi logout`: the services killi signs in to, named on the command line
-//! or picked from a list. ChatGPT and Command Code sign in through the browser; OpenCode Go
-//! takes the API key from its console, and Muse Code the muse CLI's.
+//! or picked from a list. ChatGPT, Command Code and Grok sign in through the browser; OpenCode
+//! Go takes the API key from its console, and Muse Code the muse CLI's. Gemini has no sign-in
+//! here: Google allows third-party agents only an API key (`/provider gemini`).
 
 pub mod chatgpt;
 mod commandcode;
+pub mod grok;
 mod muse_code;
 mod opencode_go;
 
@@ -14,7 +16,11 @@ pub(crate) use opencode_go::{
     add as opencode_go_add, add_env as opencode_go_add_env, signed_in as opencode_go_signed_in,
 };
 
+use std::fs;
 use std::io::IsTerminal;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -27,14 +33,16 @@ enum Service {
     OpencodeGo,
     MuseCode,
     CommandCode,
+    Grok,
 }
 
 impl Service {
-    const ALL: [Service; 4] = [
+    const ALL: [Service; 5] = [
         Service::ChatGpt,
         Service::OpencodeGo,
         Service::MuseCode,
         Service::CommandCode,
+        Service::Grok,
     ];
 
     fn name(self) -> &'static str {
@@ -43,6 +51,7 @@ impl Service {
             Service::OpencodeGo => "opencode-go",
             Service::MuseCode => "muse-code",
             Service::CommandCode => "command-code",
+            Service::Grok => "grok",
         }
     }
 
@@ -59,6 +68,7 @@ impl Service {
             Service::CommandCode => {
                 "Command Code: your subscription, signed in with commandcode.ai in the browser"
             }
+            Service::Grok => "Grok: your SuperGrok or X Premium plan, signed in in the browser",
         }
     }
 
@@ -68,6 +78,7 @@ impl Service {
             Service::OpencodeGo => opencode_go::signed_in(),
             Service::MuseCode => muse_code::signed_in(),
             Service::CommandCode => commandcode::signed_in(),
+            Service::Grok => grok::signed_in(),
         }
     }
 }
@@ -79,6 +90,7 @@ pub async fn login(name: Option<&str>) -> Result<()> {
         Service::OpencodeGo => opencode_go::login().await,
         Service::MuseCode => muse_code::login(),
         Service::CommandCode => commandcode::login().await,
+        Service::Grok => grok::login().await,
     }
 }
 
@@ -98,6 +110,7 @@ pub async fn logout(name: Option<&str>) -> Result<()> {
         Service::OpencodeGo => opencode_go::logout(),
         Service::MuseCode => muse_code::logout(),
         Service::CommandCode => commandcode::logout(),
+        Service::Grok => grok::logout().await,
     }
 }
 
@@ -151,6 +164,46 @@ pub(crate) fn open_browser(url: &str) {
         .status();
 }
 
+/// Why a request on a plan has no token: signing in again fixes `SignIn`, waiting may fix
+/// `Transient`.
+#[derive(Debug)]
+pub enum TokenError {
+    SignIn(String),
+    Transient(String),
+}
+
+/// An exclusive `flock` on a file beside a plan's credentials, held while one killi changes
+/// them: refresh tokens rotate, so one killi refreshes at a time and the others take its result.
+pub(crate) struct Lock {
+    _file: fs::File,
+}
+
+impl Lock {
+    /// Waits up to 30 s for the lock beside `credentials`; `plan` names it in the error.
+    pub(crate) async fn acquire(credentials: &Path, plan: &str) -> std::io::Result<Self> {
+        // A first sign-in locks before anything has made `~/.killi`.
+        if let Some(dir) = credentials.parent() {
+            fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .open(credentials.with_extension("lock"))?;
+        for _ in 0..600 {
+            // SAFETY: the descriptor belongs to `file`, which stays open for the call.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(Self { _file: file });
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Err(std::io::Error::other(format!(
+            "another killi kept the {plan} sign-in locked for 30 s"
+        )))
+    }
+}
+
 fn http_client() -> Result<reqwest::Client> {
     let builder = reqwest::Client::builder().user_agent(crate::llm::USER_AGENT);
     Ok(builder
@@ -192,7 +245,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("chatgpt, opencode-go, muse-code, command-code"),
+            error.contains("chatgpt, opencode-go, muse-code, command-code, grok"),
             "{error}"
         );
     }

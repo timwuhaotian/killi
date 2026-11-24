@@ -279,11 +279,14 @@ model = "MiniMax-M3.1-Flash"
 ```
 
 To use a subscription instead of a pay-as-you-go key, run `killi login` and pick one, or name
-it: `killi login chatgpt`, `killi login opencode-go`, `killi login muse-code` or `killi login
-command-code`. Either way killi adds the provider and its models to the config; `killi logout`
-signs out. Inside a session, `/provider` lists every preset and adds one from a pasted key:
-opencode-go, muse-code and command-code, plus anthropic, kimi, mimo, minimax, qwen, stepfun,
-unisound and zai. (ChatGPT and the browser sign-ins stay in `killi login`.) Run on a provider
+it: `killi login chatgpt`, `killi login opencode-go`, `killi login muse-code`, `killi login
+command-code` or `killi login grok` (a SuperGrok or X Premium plan, confirmed with a code in any
+browser, so it works over SSH too; killi isn't among the agents xAI names, so it may refuse a plan). Either way killi adds the provider and its models to the
+config; `killi logout` signs out. Inside a session, `/provider` lists every preset and adds one
+from a pasted key: opencode-go, muse-code and command-code, plus anthropic, gemini, grok, kimi,
+mimo, minimax, qwen, stepfun, unisound and zai. (ChatGPT and the browser sign-ins stay in
+`killi login`.) Gemini takes only an AI Studio key: Google forbids third-party tools from
+signing in with Gemini CLI's Google login, so killi has no `killi login gemini`. Run on a provider
 the config already has, it also brings that provider's key, API and URL up to date (and the
 tool names for muse-code) and keeps the rest.
 

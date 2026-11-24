@@ -28,7 +28,7 @@ fn signed_in_at_time(saved_at: u64) -> Credentials {
 
 /// A token endpoint on a free local port that answers each POST with the next reply and
 /// records the form bodies it got.
-async fn token_server(replies: Vec<(u16, &'static str)>) -> (String, Arc<Mutex<Vec<String>>>) {
+pub(in crate::login) async fn token_server(replies: Vec<(u16, &'static str)>) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let url = format!(
         "http://127.0.0.1:{}/token",

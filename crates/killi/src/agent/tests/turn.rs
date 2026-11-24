@@ -21,6 +21,7 @@ async fn read_batches_start_together_and_write_results_in_call_order() {
             (
                 id.to_string(),
                 ToolCall {
+                    extra_content: None,
                     id: id.into(),
                     name: "read".into(),
                     arguments: json!({"path": path}).to_string(),
@@ -58,6 +59,7 @@ async fn a_reminder_raised_mid_batch_follows_the_last_result() {
     let mut agent = idle_agent("batch-reminder", Controls::default(), Rc::new(|_| {}));
     std::fs::write(agent.ctx.cwd.join("a.txt"), "alpha").unwrap();
     let grep = |n: u32, id: &str| ToolCall {
+        extra_content: None,
         id: id.into(),
         name: "grep".into(),
         arguments: json!({"pattern": format!("p{n}"), "path": "."}).to_string(),
@@ -79,6 +81,7 @@ async fn a_reminder_raised_mid_batch_follows_the_last_result() {
         (
             "b".to_string(),
             ToolCall {
+                extra_content: None,
                 id: "b".into(),
                 name: "bash".into(),
                 arguments: r#"{"command":"ls"}"#.into(),
@@ -119,6 +122,7 @@ async fn any_user_message_pushed_mid_batch_waits_for_the_last_result() {
             (
                 id.to_string(),
                 ToolCall {
+                    extra_content: None,
                     id: id.into(),
                     name: "todo_write".into(),
                     arguments: r#"{"todos":[]}"#.into(),
@@ -171,6 +175,7 @@ async fn the_first_tool_call_waits_for_an_in_flight_snapshot() {
     let calls = vec![(
         "a".to_string(),
         ToolCall {
+            extra_content: None,
             id: "a".into(),
             name: "read".into(),
             arguments: r#"{"path":"a.txt"}"#.into(),
@@ -205,6 +210,7 @@ async fn configured_hooks_keep_read_calls_serial() {
             (
                 id.to_string(),
                 ToolCall {
+                    extra_content: None,
                     id: id.into(),
                     name: "read".into(),
                     arguments: r#"{"path":"a.txt"}"#.into(),
@@ -234,6 +240,7 @@ async fn a_message_typed_during_a_call_goes_ahead_of_the_calls_after_it() {
             (
                 id.to_string(),
                 ToolCall {
+                    extra_content: None,
                     id: id.to_string(),
                     name: "todo_write".into(),
                     arguments: r#"{"todos":[]}"#.into(),
@@ -332,6 +339,7 @@ async fn a_task_list_unchanged_for_many_calls_is_pointed_out_once() {
         (
             id.to_string(),
             ToolCall {
+                extra_content: None,
                 id: id.into(),
                 name: "read".into(),
                 arguments: r#"{"path":"a.txt"}"#.into(),
@@ -342,6 +350,7 @@ async fn a_task_list_unchanged_for_many_calls_is_pointed_out_once() {
         (
             id.to_string(),
             ToolCall {
+                extra_content: None,
                 id: id.into(),
                 name: "todo_write".into(),
                 arguments: format!(r#"{{"todos":{todos}}}"#),
@@ -410,6 +419,7 @@ async fn a_subagents_unchanged_task_list_is_also_pointed_out() {
     let list = (
         "t".to_string(),
         ToolCall {
+            extra_content: None,
             id: "t".into(),
             name: "todo_write".into(),
             arguments: r#"{"todos":[{"content":"first","status":"in_progress"},{"content":"second","status":"pending"}]}"#.into(),
@@ -421,6 +431,7 @@ async fn a_subagents_unchanged_task_list_is_also_pointed_out() {
             (
                 format!("r{i}"),
                 ToolCall {
+                    extra_content: None,
                     id: format!("r{i}"),
                     name: "read".into(),
                     arguments: r#"{"path":"a.txt"}"#.into(),
@@ -560,6 +571,7 @@ async fn a_subagent_cannot_delegate_and_is_told_how_to_continue() {
             .unwrap();
         for name in ["agent", "agent_swarm"] {
             let call = ToolCall {
+                extra_content: None,
                 id: name.into(),
                 name: name.into(),
                 arguments: "{}".into(),
@@ -712,6 +724,7 @@ async fn bash_with_a_message(command: &str, depth: u8) -> (String, Duration) {
     let mut agent = idle_agent(&format!("wake-{depth}"), controls, sink);
     agent.depth = depth;
     let call = ToolCall {
+        extra_content: None,
         id: "a".into(),
         name: "bash".into(),
         arguments: json!({"command": command, "timeout": 60}).to_string(),
@@ -742,6 +755,7 @@ async fn plan_mode_blocks_mcp_tool_calls_but_lists_tools() {
     let mut agent = idle_agent("plan-mcp", Controls::default(), Rc::new(|_| {}));
     agent.controls.plan.set(true);
     let tool = ToolCall {
+        extra_content: None,
         id: "a".into(),
         name: "mcp".into(),
         arguments: json!({"server": "s", "tool": "t"}).to_string(),
@@ -755,6 +769,7 @@ async fn plan_mode_blocks_mcp_tool_calls_but_lists_tools() {
         blocked.text
     );
     let list = ToolCall {
+        extra_content: None,
         id: "b".into(),
         name: "mcp".into(),
         arguments: json!({"server": "s"}).to_string(),
@@ -768,6 +783,7 @@ async fn plan_mode_lets_a_cd_before_read_only_commands_and_names_what_it_refuses
     let mut agent = idle_agent("plan-bash", Controls::default(), Rc::new(|_| {}));
     agent.controls.plan.set(true);
     let bash = |id: &str, command: &str| ToolCall {
+        extra_content: None,
         id: id.into(),
         name: "bash".into(),
         arguments: json!({"command": command}).to_string(),
@@ -801,6 +817,7 @@ async fn plan_mode_lets_memory_be_read_but_not_changed() {
     let mut agent = idle_agent("plan-memory", Controls::default(), Rc::new(|_| {}));
     agent.controls.plan.set(true);
     let read = ToolCall {
+        extra_content: None,
         id: "a".into(),
         name: "memory".into(),
         arguments: "{}".into(),
@@ -808,6 +825,7 @@ async fn plan_mode_lets_memory_be_read_but_not_changed() {
     let listed = agent.dispatch(&read, &json!({})).await;
     assert!(!listed.is_error, "{}", listed.text);
     let write = ToolCall {
+        extra_content: None,
         id: "b".into(),
         name: "memory".into(),
         arguments: json!({"add": "Uses pnpm"}).to_string(),
@@ -825,6 +843,7 @@ async fn only_the_main_session_changes_the_user_memory() {
     let mut agent = idle_agent("memory-depth", Controls::default(), Rc::new(|_| {}));
     agent.depth = 1;
     let write = ToolCall {
+        extra_content: None,
         id: "a".into(),
         name: "memory".into(),
         arguments: json!({"add": "Uses pnpm"}).to_string(),
@@ -836,6 +855,7 @@ async fn only_the_main_session_changes_the_user_memory() {
         refused.text
     );
     let read = ToolCall {
+        extra_content: None,
         id: "b".into(),
         name: "memory".into(),
         arguments: "{}".into(),
@@ -897,6 +917,7 @@ async fn a_blocking_hook_stops_an_agent_call() {
     let calls = vec![(
         "a".to_string(),
         ToolCall {
+            extra_content: None,
             id: "a".into(),
             name: "agent".into(),
             arguments: json!({"prompt": "do it", "description": "kid"}).to_string(),
@@ -926,6 +947,7 @@ async fn a_post_tool_hook_note_stays_a_reminder_while_the_result_is_neutralized(
     let calls = vec![(
         "b".to_string(),
         ToolCall {
+            extra_content: None,
             id: "b".into(),
             name: "bash".into(),
             arguments: json!({"command": command}).to_string(),
@@ -1026,12 +1048,14 @@ async fn nested_agents_files_cover_bash_cwd_and_directories() {
     std::fs::create_dir_all(&sub).unwrap();
     std::fs::write(sub.join("AGENTS.md"), "be careful").unwrap();
     let read = ToolCall {
+        extra_content: None,
         id: "r".into(),
         name: "read".into(),
         arguments: json!({"path": "sub"}).to_string(),
     };
     agent.execute("r", &read, false).await;
     let bash = ToolCall {
+        extra_content: None,
         id: "b".into(),
         name: "bash".into(),
         arguments: json!({"command": "pwd", "cwd": "sub"}).to_string(),
@@ -1098,6 +1122,7 @@ fn peered_agent(name: &str) -> (Agent, live::Registration, crate::test_temp::Tem
 
 fn bash_call(command: &str) -> ToolCall {
     ToolCall {
+        extra_content: None,
         id: "a".into(),
         name: "bash".into(),
         arguments: json!({"command": command}).to_string(),
@@ -1736,6 +1761,7 @@ async fn a_subagent_at_its_step_limit_reports_what_it_has_and_skips_prompt_hooks
     )
     .await;
     let call = ToolCall {
+        extra_content: None,
         id: "a1".into(),
         name: "agent".into(),
         arguments: json!({"prompt": "Do the work."}).to_string(),
@@ -1777,6 +1803,7 @@ async fn a_peer_task_runs_as_a_subagent_does_for_hooks_memory_and_its_step_limit
     let (text, stop) = task.run("Do the task.", &[]).await.unwrap();
     assert_eq!((text.as_str(), stop), ("Task report.", Stop::StepLimit));
     let write = ToolCall {
+        extra_content: None,
         id: "m".into(),
         name: "memory".into(),
         arguments: json!({"add": "Uses pnpm"}).to_string(),
@@ -1841,6 +1868,7 @@ async fn a_blocked_repeat_starts_before_it_ends() {
     let mut agent = idle_agent("blocked-repeat-events", Controls::default(), sink);
     for id in ["a", "b", "c"] {
         let call = ToolCall {
+            extra_content: None,
             id: id.into(),
             name: "bash".into(),
             arguments: json!({"command": "echo same"}).to_string(),

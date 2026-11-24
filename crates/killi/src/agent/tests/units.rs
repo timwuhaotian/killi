@@ -270,6 +270,7 @@ fn options_under_an_option_key_a_lone_description_or_an_extra_layer_are_asked() 
 #[test]
 fn a_poll_repeats_only_when_its_result_does() {
     let wait = ToolCall {
+        extra_content: None,
         id: "a".into(),
         name: "task_output".into(),
         arguments: r#"{"id":3,"wait":300}"#.into(),
@@ -639,6 +640,7 @@ fn a_same_result_repeat_is_not_run_again() {
         "different arguments are not a repeat"
     );
     let poll = ToolCall {
+        extra_content: None,
         id: "p".into(),
         name: "task_output".into(),
         arguments: r#"{"id":1}"#.into(),
@@ -715,6 +717,7 @@ async fn identical_read_after_successful_edit_reads_updated_file() {
         );
     }
     let edit = ToolCall {
+        extra_content: None,
         id: "e".into(),
         name: "edit".into(),
         arguments: r#"{"path":"a.txt","edits":[{"old_string":"before","new_string":"after"}]}"#
@@ -751,6 +754,7 @@ fn external_changes_invalidate_reads_without_disabling_mutator_loop_breaking() {
     );
     let read = call(r#"{"path":"a"}"#);
     let bash = ToolCall {
+        extra_content: None,
         id: "b".into(),
         name: "bash".into(),
         arguments: r#"{"command":"update"}"#.into(),
@@ -781,6 +785,7 @@ fn external_changes_invalidate_reads_without_disabling_mutator_loop_breaking() {
     }
     assert!(agent.repeat_block(&read).is_some());
     let subagent = ToolCall {
+        extra_content: None,
         id: "a".into(),
         name: "agent".into(),
         arguments: "{}".into(),
@@ -833,6 +838,7 @@ fn repeat_warnings_are_user_messages_not_tool_data() {
 #[test]
 fn identical_calls_share_a_key_and_others_do_not() {
     let call = |name: &str, arguments: &str| ToolCall {
+        extra_content: None,
         id: "c".into(),
         name: name.into(),
         arguments: arguments.into(),
@@ -855,6 +861,7 @@ fn identical_calls_share_a_key_and_others_do_not() {
 #[test]
 fn near_keys_share_a_target_not_tuning() {
     let named = |name: &str, arguments: &str| ToolCall {
+        extra_content: None,
         id: "c".into(),
         name: name.into(),
         arguments: arguments.into(),
@@ -929,6 +936,7 @@ fn a_successful_edit_clears_the_near_count() {
             .unwrap();
     }
     let edit = ToolCall {
+        extra_content: None,
         id: "e".into(),
         name: "edit".into(),
         arguments: r#"{"path":"a","edits":[]}"#.into(),
@@ -987,6 +995,7 @@ fn a_successful_edit_clears_the_near_count() {
 #[test]
 fn bash_near_keys_share_a_command_not_its_output_filters() {
     let bash = |command: &str| ToolCall {
+        extra_content: None,
         id: "c".into(),
         name: "bash".into(),
         arguments: json!({"command": command}).to_string(),
@@ -1045,6 +1054,7 @@ fn bash_near_keys_share_a_command_not_its_output_filters() {
     );
     assert_eq!(
         near_key(&ToolCall {
+            extra_content: None,
             id: "c".into(),
             name: "bash".into(),
             arguments: "{}".into(),
@@ -1057,6 +1067,7 @@ fn bash_near_keys_share_a_command_not_its_output_filters() {
 fn near_duplicate_bash_warns_at_three_once_and_never_blocks() {
     let mut agent = idle_agent("near-bash", Controls::default(), Rc::new(|_| {}));
     let bash = |n: usize, command: &str| ToolCall {
+        extra_content: None,
         id: format!("c{n}"),
         name: "bash".into(),
         arguments: json!({"command": command}).to_string(),
@@ -1109,6 +1120,7 @@ fn near_duplicate_bash_warns_at_three_once_and_never_blocks() {
 fn a_successful_edit_clears_the_bash_near_count() {
     let mut agent = idle_agent("near-bash-clear", Controls::default(), Rc::new(|_| {}));
     let bash = |n: u32| ToolCall {
+        extra_content: None,
         id: format!("c{n}"),
         name: "bash".into(),
         arguments: json!({"command": format!("cargo check 2>&1 | tail -{n}")}).to_string(),
@@ -1125,6 +1137,7 @@ fn a_successful_edit_clears_the_bash_near_count() {
             .unwrap();
     }
     let edit = ToolCall {
+        extra_content: None,
         id: "e".into(),
         name: "edit".into(),
         arguments: r#"{"path":"a","edits":[]}"#.into(),
@@ -1184,6 +1197,7 @@ fn a_successful_edit_clears_the_bash_near_count() {
 fn identical_bash_calls_still_block_after_two() {
     let mut agent = idle_agent("bash-exact", Controls::default(), Rc::new(|_| {}));
     let call = ToolCall {
+        extra_content: None,
         id: "c".into(),
         name: "bash".into(),
         arguments: r#"{"command":"cargo test --lib | tail -5"}"#.into(),
@@ -1212,6 +1226,7 @@ fn identical_bash_calls_still_block_after_two() {
         .expect("the third identical call is blocked");
     assert!(block.text.contains("Not run again"), "{}", block.text);
     let variant = ToolCall {
+        extra_content: None,
         id: "d".into(),
         name: "bash".into(),
         arguments: r#"{"command":"cargo test --lib | head -5"}"#.into(),
@@ -1292,6 +1307,7 @@ fn a_side_question_mid_turn_answers_running_calls_first() {
 fn only_read_only_file_and_search_calls_form_parallel_groups() {
     for name in ["read", "grep", "glob"] {
         assert!(parallel_read(&ToolCall {
+            extra_content: None,
             id: "c".into(),
             name: name.into(),
             arguments: "{}".into()
@@ -1299,6 +1315,7 @@ fn only_read_only_file_and_search_calls_form_parallel_groups() {
     }
     for name in ["write", "edit", "bash", "ask_user_question", "task_output"] {
         assert!(!parallel_read(&ToolCall {
+            extra_content: None,
             id: "c".into(),
             name: name.into(),
             arguments: "{}".into()
@@ -1999,4 +2016,23 @@ async fn a_failed_manual_compaction_leaves_proactive_compaction_due() {
         agent.compaction_due(),
         "nor does an overflow's compaction that failed"
     );
+}
+
+#[test]
+fn a_calls_provider_data_is_stored_with_it() {
+    let mut agent = idle_agent("call-extra", Controls::default(), Rc::new(|_| {}));
+    let signed = json!({"google": {"thought_signature": "sig-a"}});
+    let mut reply = Reply::default();
+    for (id, extra) in [("a", Some(signed.clone())), ("b", None)] {
+        reply.tool_calls.push(ToolCall {
+            id: id.into(),
+            name: "read".into(),
+            arguments: "{}".into(),
+            extra_content: extra,
+        });
+    }
+    agent.record_reply(&reply).unwrap();
+    let calls = &agent.messages.last().unwrap()["tool_calls"];
+    assert_eq!(calls[0]["extra_content"], signed);
+    assert!(calls[1].get("extra_content").is_none());
 }

@@ -28,6 +28,8 @@ pub(in crate::tui) async fn provider_add(
                 .await
                 .map(|code| (code.added, code.notes)),
             "anthropic" => crate::config::add_anthropic(&key).map(|added| (added, Vec::new())),
+            "gemini" => crate::config::add_gemini(&key).map(|added| (added, Vec::new())),
+            "grok" => crate::config::add_grok(&key).map(|added| (added, Vec::new())),
             "kimi" => crate::config::add_kimi(&key).map(|added| (added, Vec::new())),
             "mimo" => crate::config::add_mimo(&key).map(|added| (added, Vec::new())),
             "minimax" => crate::config::add_minimax(&key).map(|added| (added, Vec::new())),

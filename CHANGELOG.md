@@ -32,6 +32,11 @@ A stability release for the agent loop and its harness, from a full audit of bot
 - Spilled tool output is readable only by you, and session folders are made private even if they already existed. A log write that fails partway no longer loses the next record. `/prune` holds a session's lock while deleting it.
 - Session review scripts count "Interrupted before…" results as failures; a call cut off by a crash says it may have partly run.
 
+## 0.9.2 — 2026-11-24
+
+- `/provider gemini` adds Google's Gemini 4 models on Gemini's OpenAI-compatible API with an AI Studio key. Requests to Gemini leave out `prompt_cache_key`, which it refuses, and send each turn's thought signatures back on the tool calls they came with; calls without one (made by another model) carry Google's documented placeholder. There is no `killi login gemini`: Google allows third-party tools only an API key, not Gemini CLI's Google sign-in.
+- `/provider grok` adds xAI's Grok 4.7, 4.6 and 4.3 on its Responses API with a key from console.x.ai. `killi login grok` uses a SuperGrok or X Premium subscription instead, through the same device sign-in the agents xAI supports use: you confirm a code in any browser (so it works over SSH), and killi keeps the token in `~/.killi/grok.json`, refreshes it as it expires, and sends it only to api.x.ai. killi isn't one of the agents xAI names, so xAI may turn a plan away (HTTP 403); a key then still works.
+
 ## 0.9.1 — 2026-11-23
 
 - `grep` names a file once per block of matches instead of on every line, and `glob` stops at the same output limit as the other tools instead of only at 1,000 files, so long paths no longer fill the whole result.

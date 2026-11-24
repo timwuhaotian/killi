@@ -43,6 +43,7 @@ fn agent_call(id: &str, args: Value) -> (String, ToolCall) {
     (
         id.to_string(),
         ToolCall {
+            extra_content: None,
             id: id.into(),
             name: "agent".into(),
             arguments: args.to_string(),
@@ -54,6 +55,7 @@ fn tool_call(id: &str, name: &str, args: Value) -> (String, ToolCall) {
     (
         id.to_string(),
         ToolCall {
+            extra_content: None,
             id: id.into(),
             name: name.into(),
             arguments: args.to_string(),

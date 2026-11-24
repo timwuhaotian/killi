@@ -461,6 +461,7 @@ impl StreamParser for Parser {
                                 .cloned()
                                 .unwrap_or_else(|| name.to_string()),
                             arguments: String::new(),
+                            extra_content: None,
                         });
                         Block::Tool(reply.tool_calls.len() - 1)
                     }

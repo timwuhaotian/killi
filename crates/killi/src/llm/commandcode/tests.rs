@@ -16,7 +16,7 @@ fn model() -> ResolvedModel {
         images: true,
         thinking: Thinking::Effort("xhigh".into()),
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     }
 }
 

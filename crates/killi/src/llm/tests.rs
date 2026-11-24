@@ -468,6 +468,7 @@ fn finish_reasons_say_what_a_reply_is_worth() {
 #[test]
 fn only_missing_arguments_become_empty_json() {
     let call = |arguments: &str| ToolCall {
+        extra_content: None,
         id: "c".into(),
         name: "write".into(),
         arguments: arguments.into(),
@@ -746,7 +747,7 @@ fn output_cap_reserves_estimated_input_and_never_reaches_zero() {
         images: false,
         thinking: crate::config::Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     };
     let messages = vec![serde_json::json!({"role": "user", "content": "x".repeat(4_000)})];
     let input = estimated_input_tokens(&messages, &[]);
@@ -820,7 +821,7 @@ fn test_model(base_url: &str) -> ResolvedModel {
         images: false,
         thinking: crate::config::Thinking::Off,
         cache_control: false,
-        chatgpt: false,
+        plan: None,
     }
 }
 

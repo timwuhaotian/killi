@@ -21,7 +21,9 @@ struct Request<'a> {
     tools: &'a [Value],
     stream: bool,
     stream_options: StreamOptions,
-    prompt_cache_key: &'a str,
+    /// Left out for Gemini, which refuses a field it doesn't know.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,6 +55,8 @@ pub(super) fn prepare(
         mark_cache_breakpoints(&mut messages);
     }
     map_history_calls(&mut messages, &model.tool_names);
+    let gemini = gemini::is_gemini(&model.base_url);
+    gemini::prepare_calls(&mut messages, gemini);
     let completion_style = model.model.starts_with("gpt-5")
         || (model.model.starts_with('o')
             && model.model[1..].starts_with(|c: char| c.is_ascii_digit()));
@@ -76,7 +80,7 @@ pub(super) fn prepare(
         stream_options: StreamOptions {
             include_usage: true,
         },
-        prompt_cache_key: cache_key,
+        prompt_cache_key: (!gemini).then_some(cache_key),
         max_tokens: max_output.filter(|_| !completion_style),
         max_completion_tokens: max_output.filter(|_| completion_style),
         reasoning_effort,
@@ -364,6 +368,7 @@ impl StreamParser for Parser {
                     let slot = reply.tool_calls.len();
                     reply.tool_calls.push(ToolCall::default());
                     if let Some(index) = index {
+                        self.call_slots.retain(|(seen, _)| *seen != index);
                         self.call_slots.push((index, slot));
                     }
                     slot
@@ -375,6 +380,9 @@ impl StreamParser for Parser {
                 && slot.id.is_empty()
             {
                 slot.id = id.to_string();
+            }
+            if let Some(extra) = call.get("extra_content").filter(|extra| !extra.is_null()) {
+                slot.extra_content.get_or_insert_with(|| extra.clone());
             }
             if let Some(function) = call.get("function") {
                 // A name arrives whole or in pieces; one sent again on a later fragment
@@ -498,6 +506,8 @@ fn parse_usage(usage: &Value) -> Usage {
         reasoning: num(usage.pointer("/completion_tokens_details/reasoning_tokens")),
     }
 }
+
+mod gemini;
 
 #[cfg(test)]
 mod tests;

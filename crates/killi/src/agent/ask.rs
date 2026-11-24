@@ -289,6 +289,7 @@ mod tests {
         (
             id.to_string(),
             ToolCall {
+                extra_content: None,
                 id: id.into(),
                 name: "exit_plan_mode".into(),
                 arguments: json!({"plan": format!("plan {id}")}).to_string(),

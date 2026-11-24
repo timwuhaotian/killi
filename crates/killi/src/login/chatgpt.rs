@@ -10,7 +10,6 @@ mod token;
 
 use std::fs;
 use std::io::Write;
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -30,7 +29,10 @@ use models::plan_models;
 use oauth::{authorize_url, identity, issued_client, prior_subject, wait_for_callback};
 
 pub use signin::{login, logout, offer};
+pub use super::TokenError;
 pub use token::{access_token, advice, signed_in};
+
+use super::Lock;
 
 #[cfg(test)]
 use models::models_from;
@@ -164,14 +166,6 @@ impl Credentials {
     }
 }
 
-/// Why a request on the plan has no token: signing in again fixes `SignIn`, waiting may fix
-/// `Transient`.
-#[derive(Debug)]
-pub enum TokenError {
-    SignIn(String),
-    Transient(String),
-}
-
 fn credentials_path() -> PathBuf {
     killi_home().join("chatgpt.json")
 }
@@ -183,32 +177,6 @@ fn oauth_error(body: &Value) -> &str {
         .as_str()
         .or_else(|| body["error"]["code"].as_str())
         .unwrap_or_default()
-}
-
-/// An exclusive `flock` on a file beside the credentials, held while one killi changes them.
-struct Lock {
-    _file: fs::File,
-}
-
-impl Lock {
-    async fn acquire(credentials: &Path) -> std::io::Result<Self> {
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .open(credentials.with_extension("lock"))?;
-        for _ in 0..600 {
-            // SAFETY: the descriptor belongs to `file`, which stays open for the call.
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-                return Ok(Self { _file: file });
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        Err(std::io::Error::other(
-            "another killi kept the ChatGPT sign-in locked for 30 s",
-        ))
-    }
 }
 
 /// The fresh secrets of one sign-in attempt.
@@ -280,4 +248,4 @@ fn now() -> u64 {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
