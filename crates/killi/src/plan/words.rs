@@ -2,7 +2,7 @@
 //! braces expanded, so plan mode's checks see `'-delete'`, `-de""lete` and `-{delete,x}` as the
 //! `-delete` that `find` receives.
 
-use super::braces;
+use super::braces::{self, Budget};
 
 /// Variables bash takes from the environment unchanged, so this process's value is the
 /// shell's. Others may be bash's own (`$BASH_COMMAND` is the command's text) or set by the
@@ -18,6 +18,10 @@ pub(crate) struct Word {
     /// take its place; or it holds a variable whose value plan mode doesn't know (`$PATH`),
     /// which `text` keeps as written.
     pub unseen: bool,
+    /// Bash may hand the command other words here, or more or fewer of them: the word holds an
+    /// unquoted glob anywhere (`Cargo.[lt]o*`) or a variable plan mode doesn't know. For a
+    /// command whose operands' positions matter (`uniq in out`, sed's script), not only flags.
+    pub opaque: bool,
 }
 
 /// A character of a word, and whether quoting or an escape made it literal.
@@ -31,18 +35,38 @@ pub(super) struct Raw {
     pub unknown: bool,
 }
 
-/// The words of one segment, as [`words`] gives them.
+/// The words of one segment with quotes removed and braces left as written, or `None` as
+/// for [`words`]. Cheap enough for a check that runs on every `bash` call.
 pub(crate) fn unquote_words(segment: &str) -> Option<Vec<String>> {
-    Some(words(segment)?.into_iter().map(|w| w.text).collect())
+    Some(read(segment)?.into_iter().map(text).collect())
 }
 
-/// The words of one segment (no `|`, `;`, `&` or newline outside quotes), or `None` when
-/// bash would read it differently from a plain word list: an unbalanced quote, an output
-/// redirect (`>` outside quotes), a heredoc (`<<`), a backquote, `$(…)`, `${…}` beyond a bare
-/// name, or `$_`, `$@` and the like. An input redirect's word (`<f`, `<<<'text'`) is stdin,
-/// not an argument, and is left out; an unquoted `#` starting a word comments out the rest
-/// of its line.
-pub(crate) fn words(segment: &str) -> Option<Vec<Word>> {
+/// The words of one segment, braces expanded within what is left of `budget`.
+pub(super) fn words(segment: &str, budget: &mut Budget) -> Option<Vec<Word>> {
+    Some(
+        braces::expand(read(segment)?, budget)?
+            .into_iter()
+            .map(|word| Word {
+                unseen: word.unknown || glob_flag(&word.chars),
+                opaque: word.unknown || word.chars.iter().any(|&(c, quoted)| !quoted && is_glob(c)),
+                text: text(word),
+            })
+            .collect(),
+    )
+}
+
+fn text(word: Raw) -> String {
+    word.chars.into_iter().map(|(c, _)| c).collect()
+}
+
+/// The words of one segment, or `None` when bash would read it differently from a plain
+/// word list: a control operator outside quotes (`;`, `|`, `&`, a newline, `(`, `)`), which
+/// means [`super::segments`] split it differently from bash; an unbalanced quote; an output
+/// redirect other than to `/dev/null` or `&1`/`&2`; a heredoc (`<<`); a backquote, `$(…)`,
+/// `${…}` beyond a bare name, or `$_`, `$@` and the like. An input redirect's word (`<f`,
+/// `<<<'text'`) is stdin, not an argument, and is left out, as is a let-through output
+/// redirect; an unquoted `#` starting a word comments out the rest of its line.
+fn read(segment: &str) -> Option<Vec<Raw>> {
     let chars: Vec<char> = segment.chars().collect();
     let mut words: Vec<Raw> = Vec::new();
     let mut word = Raw::default();
@@ -62,11 +86,19 @@ pub(crate) fn words(segment: &str) -> Option<Vec<Word>> {
     while at < chars.len() {
         let c = chars[at];
         match c {
-            ' ' | '\t' | '\n' => {
+            ' ' | '\t' => {
                 finish(&mut words, &mut word, &mut in_word, &mut redirected);
                 at += 1;
                 continue;
             }
+            // A redirect still waiting for its word (`< >x`) is a syntax error in bash.
+            '>' | '&' if redirected && !in_word => return None,
+            '&' if chars.get(at + 1) == Some(&'>') => {
+                finish(&mut words, &mut word, &mut in_word, &mut redirected);
+                at = harmless_output(&chars, at + 2, true)?;
+                continue;
+            }
+            ';' | '|' | '&' | '\n' | '(' | ')' => return None,
             '#' if !in_word => {
                 at = (at..chars.len())
                     .find(|&i| chars[i] == '\n')
@@ -98,19 +130,28 @@ pub(crate) fn words(segment: &str) -> Option<Vec<Word>> {
                 at = double_quoted(&chars, at + 2, &mut word)?
             }
             '$' => at = dollar(&chars, at, &mut word, false)?,
-            '`' | '>' => return None,
+            '`' => return None,
+            '>' => {
+                // `2>` names the stream; a redirect's own word (`<2>…`) doesn't.
+                let fd = in_word && !redirected && is_fd(&word.chars);
+                if fd {
+                    if !matches!(word.chars[..], [('1' | '2', _)]) {
+                        return None;
+                    }
+                    word = Raw::default();
+                    in_word = false;
+                }
+                finish(&mut words, &mut word, &mut in_word, &mut redirected);
+                at = harmless_output(&chars, at + 1, false)?;
+                continue;
+            }
             '<' => {
                 match chars.get(at + 1) {
                     Some('(' | '>') => return None,
                     Some('<') if chars.get(at + 2) != Some(&'<') => return None,
                     _ => {}
                 }
-                let fd = !word.chars.is_empty()
-                    && word
-                        .chars
-                        .iter()
-                        .all(|&(c, quoted)| !quoted && c.is_ascii_digit());
-                if fd {
+                if is_fd(&word.chars) {
                     word = Raw::default();
                     in_word = false;
                 }
@@ -130,15 +171,33 @@ pub(crate) fn words(segment: &str) -> Option<Vec<Word>> {
         in_word = true;
     }
     finish(&mut words, &mut word, &mut in_word, &mut redirected);
-    Some(
-        braces::expand(words)?
-            .into_iter()
-            .map(|word| Word {
-                unseen: word.unknown || glob_flag(&word.chars),
-                text: word.chars.into_iter().map(|(c, _)| c).collect(),
-            })
-            .collect(),
-    )
+    Some(words)
+}
+
+/// A word that is a file descriptor's number before a redirect: unquoted digits.
+fn is_fd(word: &[Char]) -> bool {
+    !word.is_empty()
+        && word
+            .iter()
+            .all(|&(c, quoted)| !quoted && c.is_ascii_digit())
+}
+
+/// Past an output redirect that writes nowhere, from `at` just past its `>` (`&>` when
+/// `both`): `/dev/null`, after `>>` too, or `&1` or `&2`, each followed by a blank or the
+/// end. `None` for any other target.
+fn harmless_output(chars: &[char], mut at: usize, both: bool) -> Option<usize> {
+    let ends = |at: usize| matches!(chars.get(at), None | Some(' ' | '\t'));
+    if !both && chars.get(at) == Some(&'&') {
+        return (matches!(chars.get(at + 1), Some('1' | '2')) && ends(at + 2)).then_some(at + 2);
+    }
+    if chars.get(at) == Some(&'>') {
+        at += 1;
+    }
+    while matches!(chars.get(at), Some(' ' | '\t')) {
+        at += 1;
+    }
+    let end = at + "/dev/null".len();
+    (chars.get(at..end)?.iter().copied().eq("/dev/null".chars()) && ends(end)).then_some(end)
 }
 
 /// `"…"` from `at`, just past the opening quote: a backslash escapes only `$`, `` ` ``, `"`,
@@ -271,11 +330,13 @@ fn dollar(chars: &[char], at: usize, word: &mut Raw, quoted: bool) -> Option<usi
 /// A word bash may replace with file names, one of which could read as a flag: it holds an
 /// unquoted `*`, `?` or `[`, and the text before it is empty or starts with `-`.
 fn glob_flag(word: &[Char]) -> bool {
-    let Some(glob) = word
-        .iter()
-        .position(|&(c, quoted)| !quoted && matches!(c, '*' | '?' | '['))
-    else {
+    let Some(glob) = word.iter().position(|&(c, quoted)| !quoted && is_glob(c)) else {
         return false;
     };
     glob == 0 || word[0].0 == '-'
+}
+
+/// A character that makes an unquoted word a glob pattern.
+fn is_glob(c: char) -> bool {
+    matches!(c, '*' | '?' | '[')
 }

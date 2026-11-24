@@ -1,17 +1,28 @@
 //! Brace expansion, as bash does it before anything else: `a{b,c}d` is `abd acd`, and
 //! `{a..c}` and `{1..9..2}` are sequences. A brace pair with neither stays as it is.
 //!
-//! This runs on every `bash` call, plan mode or not, so its cost is bounded whatever the
-//! input: a worklist instead of recursion, a cap on the words, and a budget on the
-//! characters built along the way. Past either, the segment is refused.
+//! Plan mode runs this on every `bash` call, so its cost is bounded whatever the input: a
+//! worklist instead of recursion, a cap on the words of a segment, and one budget on the
+//! characters built for the whole command. Past either, the segment is refused.
 
 use super::words::{Char, Raw};
 
 /// Most words one segment may expand to (`{1..9999}`); past it the segment is refused.
 const MAX_WORDS: usize = 1024;
 
-/// Characters the expansion may build beyond twice the segment's own length.
+/// Characters the expansion may build beyond twice the command's own length.
 const MAX_WORK: usize = 1 << 20;
+
+/// The characters brace expansion may still build for one command. Shared by all its
+/// segments, so many small expansions cost no more than one large one.
+pub(super) struct Budget(usize);
+
+impl Budget {
+    /// The budget for a command `length` bytes long.
+    pub(super) fn new(length: usize) -> Budget {
+        Budget(MAX_WORK.saturating_add(length.saturating_mul(2)))
+    }
+}
 
 /// What one brace pair expands to.
 enum Group {
@@ -20,16 +31,15 @@ enum Group {
     Sequence(Vec<String>),
 }
 
-/// `words` with their braces expanded, or `None` when that makes too many words or too much
-/// work, or a sequence bash would read differently from this.
-pub(super) fn expand(words: Vec<Raw>) -> Option<Vec<Raw>> {
-    let length: usize = words.iter().map(|w| w.chars.len() + 1).sum();
-    let mut budget = MAX_WORK.saturating_add(length.saturating_mul(2));
+/// `words` with their braces expanded, or `None` when that makes too many words, spends
+/// what is left of `budget`, or gives a sequence bash would read differently from this.
+pub(super) fn expand(words: Vec<Raw>, budget: &mut Budget) -> Option<Vec<Raw>> {
+    let budget = &mut budget.0;
     let mut out = Vec::new();
     for word in words {
         let mut pending = vec![word];
         while let Some(raw) = pending.pop() {
-            budget = budget.checked_sub(raw.chars.len() + 1)?;
+            *budget = budget.checked_sub(raw.chars.len() + 1)?;
             let Some((open, close, group)) = first_group(&raw.chars)? else {
                 if out.len() == MAX_WORDS {
                     return None;
@@ -41,7 +51,7 @@ pub(super) fn expand(words: Vec<Raw>) -> Option<Vec<Raw>> {
             let first = pending.len();
             let mut add = |middle: &[Char]| {
                 let length = open + middle.len() + word.len() - close;
-                budget = budget.checked_sub(length)?;
+                *budget = budget.checked_sub(length)?;
                 let mut joined = Vec::with_capacity(length);
                 joined.extend_from_slice(&word[..open]);
                 joined.extend_from_slice(middle);

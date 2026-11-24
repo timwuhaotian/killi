@@ -35,11 +35,17 @@ pub fn command_dir(command: &str) -> Option<String> {
     found
 }
 
-/// The words of a segment with quotes removed, or split at whitespace when bash would do more
-/// with it (`$(…)`, a redirect), so a verb is still seen.
+/// The words of a segment with quotes removed, or split at whitespace and parentheses when
+/// bash would do more with it (`$(…)`, a redirect, a subshell), so a verb is still seen.
+/// Braces are not expanded: this runs on every `bash` call, and its cost stays linear.
 fn words(segment: &str) -> Vec<String> {
-    crate::plan::words::unquote_words(segment)
-        .unwrap_or_else(|| segment.split_whitespace().map(str::to_string).collect())
+    crate::plan::words::unquote_words(segment).unwrap_or_else(|| {
+        segment
+            .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+            .filter(|word| !word.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
 }
 
 fn segment_verb(words: &[String]) -> Option<&'static str> {
@@ -237,6 +243,39 @@ mod tests {
         assert_eq!(
             moving_verb("git commit -F - <<EOF\nkeep git stash out\nEOF"),
             None
+        );
+    }
+
+    #[test]
+    fn redirects_and_subshells_hide_no_verb() {
+        assert_eq!(moving_verb("git stash 2>&1 | tail -3"), Some("stash"));
+        assert_eq!(moving_verb("git stash >/tmp/out"), Some("stash"));
+        assert_eq!(moving_verb("(git stash)"), Some("stash"));
+        assert_eq!(
+            moving_verb("(cd sub && git checkout -- .)"),
+            Some("checkout")
+        );
+        assert_eq!(moving_verb("git stash list 2>/dev/null"), None);
+    }
+
+    #[test]
+    fn long_commands_stay_cheap() {
+        let inputs = [
+            "cat {1..1023}{1..1};".repeat(10_000),
+            "git status {a,b}{c,d}{e,f};".repeat(8_000),
+            "cd x && ".repeat(25_000),
+        ];
+        let started = std::time::Instant::now();
+        for input in &inputs {
+            assert_eq!(moving_verb(input), None);
+            command_dir(input);
+        }
+        // A few ms each in a release build; brace expansion here took seconds.
+        let limit = if cfg!(debug_assertions) { 3000 } else { 300 };
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(limit),
+            "{:?}",
+            started.elapsed()
         );
     }
 

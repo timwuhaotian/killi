@@ -5,8 +5,9 @@ use super::sed::sed_writes;
 
 /// Flags and subcommands that write behind a read-only command name: `sort -o`, `git tag v1`,
 /// `sed -n ... w out`, or run a program the command line names: `rg --pre`, `git grep -O`,
-/// `go vet -vettool`. The whole segment is refused when one shows up.
-pub(super) fn writes_behind_a_read_only_name(words: &[&str]) -> bool {
+/// `go vet -vettool`. The whole segment is refused when one shows up. `opaque` says, word by
+/// word, that bash may hand the command something else there (see `Word::opaque`).
+pub(super) fn writes_behind_a_read_only_name(words: &[&str], opaque: &[bool]) -> bool {
     let args = || words.iter().skip(1);
     let has = |flags: &[&str]| args().any(|w| flags.iter().any(|f| long_flag(w, f)));
     let cluster =
@@ -34,19 +35,53 @@ pub(super) fn writes_behind_a_read_only_name(words: &[&str]) -> bool {
         Some(&"rg") => has(&["--pre", "--hostname-bin"]),
         Some(&"sort") => has(&["--output", "--compress-program"]) || cluster("o", "kStT"),
         Some(&"tree") => has(&["--output"]) || cluster("oR", ""),
-        Some(&"uniq") => uniq_has_output(words),
-        Some(&"sed") => sed_writes(words),
+        Some(&"uniq") => uniq_has_output(words) || opaque.iter().skip(1).any(|&o| o),
+        Some(&"sed") => sed_writes(words, opaque),
+        Some(&"xxd") => xxd_writes(words) || opaque.iter().skip(1).any(|&o| o),
+        // `env` with a command runs it; alone it prints the environment.
+        Some(&"env") => words.len() > 1,
         Some(&"git") => git_writes(words),
         Some(&"cargo") => {
             (matches!(words.get(..2), Some(["cargo", "clippy" | "check"])) && has(&["--fix"]))
                 || has(&["--config"])
+                || args().any(|w| *w == "--target-dir" || w.starts_with("--target-dir="))
                 || cluster("Z", "")
+                || cargo_passes_on(words)
         }
+        // Go's flags take one dash or two and no abbreviations. Flags for the compiler,
+        // assembler and linker can name an output file; `-mod` and `-modfile` let go rewrite
+        // go.mod; `-pkgdir` writes installed packages.
         Some(&"go") => args().any(|w| {
             let name = w.trim_start_matches('-');
             let name = name.split('=').next().unwrap_or(name);
-            w.starts_with('-') && matches!(name, "toolexec" | "vettool" | "exec")
+            w.starts_with('-')
+                && matches!(
+                    name,
+                    "toolexec"
+                        | "vettool"
+                        | "exec"
+                        | "gcflags"
+                        | "asmflags"
+                        | "ldflags"
+                        | "gccgoflags"
+                        | "pkgdir"
+                        | "modfile"
+                        | "mod"
+                )
         }),
+        // pnpm runs the JavaScript a pnpmfile names, and takes any setting as `--config.x`.
+        // It expands an unambiguous abbreviation, but `--global` is a flag of its own. Plain
+        // `pnpm ls` runs the project's own `.pnpmfile.cjs`, as `cargo check` runs its build
+        // scripts: that is the project's code, not a program the command line picks.
+        Some(&"pnpm") => args().any(|w| {
+            let name = w.split('=').next().unwrap_or(w);
+            (name.len() >= "--pn".len() && "--pnpmfile".starts_with(name))
+                || (name.len() > "--global".len() && "--global-pnpmfile".starts_with(name))
+                || w.starts_with("--config.")
+        }),
+        // npm writes its debug log, and `view` its cache, wherever these point.
+        Some(&"npm") => has(&["--logs-dir", "--cache"]),
+        Some(&"xcodebuild") => xcodebuild_writes(words),
         Some(&"less" | &"more") => {
             has(&[
                 "--log-file",
@@ -97,19 +132,21 @@ fn short_has(word: &str, flag: char) -> bool {
 }
 
 /// `uniq` with an input and an output file writes the second one. Flags that take a value
-/// (`-f`, `-s`, `-w`) don't count their value as a file.
+/// (`-f`, `-s`, `-w`) don't count their value as a file; past `--` every word is a file.
 fn uniq_has_output(words: &[&str]) -> bool {
     let mut operands = 0;
     let mut skip_next = false;
+    let mut options_done = false;
     for word in words.iter().skip(1) {
         if skip_next {
             skip_next = false;
             continue;
         }
-        if *word == "--" {
+        if *word == "--" && !options_done {
+            options_done = true;
             continue;
         }
-        if word.starts_with('-') && word.len() > 1 {
+        if !options_done && word.starts_with('-') && word.len() > 1 {
             skip_next = matches!(
                 *word,
                 "-f" | "-s" | "-w" | "--skip-fields" | "--skip-chars" | "--check-chars"
@@ -119,6 +156,97 @@ fn uniq_has_output(words: &[&str]) -> bool {
         operands += 1;
     }
     operands >= 2
+}
+
+/// `xxd` with a second file writes it, and `-r` (`-revert`) turns a dump back into bytes.
+/// xxd matches flags by their first letters. `-c`, `-g`, `-l`, `-o`, `-s`, `-n` and `-R` take
+/// a value, the next word when given alone or under their long names (`-cols 8`); counting a
+/// value as a file only refuses more.
+fn xxd_writes(words: &[&str]) -> bool {
+    let mut operands = 0;
+    let mut options_done = false;
+    let mut args = words.iter().skip(1);
+    while let Some(&word) = args.next() {
+        if options_done || word == "-" || !word.starts_with('-') {
+            operands += 1;
+            continue;
+        }
+        if word == "--" {
+            options_done = true;
+            continue;
+        }
+        if word.starts_with("-r") {
+            return true;
+        }
+        let takes_next = matches!(
+            word,
+            "-c" | "-cols"
+                | "-g"
+                | "-groupsize"
+                | "-l"
+                | "-len"
+                | "-o"
+                | "-offset"
+                | "-s"
+                | "-seek"
+                | "-n"
+                | "-name"
+                | "-R"
+        );
+        if takes_next {
+            args.next();
+        }
+    }
+    operands > 1
+}
+
+/// What cargo hands on past `--`: rustfmt reads it as options that can write files, and the
+/// compiler as flags that can name an output (`--emit=metadata=/path`). Only lint levels
+/// (`-D warnings`, `--allow=x`) pass, and nothing for `cargo fmt`.
+fn cargo_passes_on(words: &[&str]) -> bool {
+    let Some(dashes) = words.iter().position(|w| *w == "--") else {
+        return false;
+    };
+    if words.get(1) == Some(&"fmt") {
+        return true;
+    }
+    let lint = |value: &str| !value.is_empty() && !value.starts_with('-');
+    let mut rest = words[dashes + 1..].iter();
+    while let Some(&word) = rest.next() {
+        if matches!(
+            word,
+            "-D" | "-W" | "-A" | "-F" | "--deny" | "--warn" | "--allow" | "--forbid"
+        ) {
+            if !rest.next().is_some_and(|value| lint(value)) {
+                return true;
+            }
+            continue;
+        }
+        let attached = ["-D", "-W", "-A", "-F"]
+            .iter()
+            .chain(&["--deny=", "--warn=", "--allow=", "--forbid="])
+            .any(|flag| word.strip_prefix(flag).is_some_and(lint));
+        if !attached {
+            return true;
+        }
+    }
+    false
+}
+
+/// `xcodebuild -list` with anything but the flags that pick what to list: build actions and
+/// the `-…Path` flags write.
+fn xcodebuild_writes(words: &[&str]) -> bool {
+    let mut args = words.iter().skip(1);
+    while let Some(&word) = args.next() {
+        match word {
+            "-list" | "-json" => {}
+            "-project" | "-workspace" => {
+                args.next();
+            }
+            _ => return true,
+        }
+    }
+    false
 }
 
 /// `tsc --noEmit` that writes anyway: a trace or profile, an incremental build-info file,
@@ -190,6 +318,9 @@ fn git_writes(words: &[&str]) -> bool {
         return true;
     }
     match words[1] {
+        "reflog" => words[2..]
+            .iter()
+            .any(|w| matches!(*w, "expire" | "delete" | "drop" | "write")),
         "remote" => !matches!(words[2..], [] | ["-v" | "--verbose"] | ["get-url", ..]),
         "grep" => words
             .iter()

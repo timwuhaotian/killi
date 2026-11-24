@@ -4,6 +4,17 @@ fn bash_allowed(command: &str, extra: &[String]) -> bool {
     bash_refused(command, extra).is_none()
 }
 
+/// The words plan mode checks in one segment, braces expanded.
+fn expanded(segment: &str) -> Option<Vec<String>> {
+    let budget = &mut braces::Budget::new(segment.len());
+    Some(
+        words::words(segment, budget)?
+            .into_iter()
+            .map(|w| w.text)
+            .collect(),
+    )
+}
+
 #[test]
 fn read_only_commands_pass() {
     for command in [
@@ -239,7 +250,7 @@ fn quotes_come_off_before_the_checks() {
 
 #[test]
 fn words_are_what_bash_passes() {
-    let words = |segment: &str| words::unquote_words(segment);
+    let words = expanded;
     assert_eq!(
         words(r#"a 'b c' "d\"e" f\ g -de""lete $'h\ti'"#).unwrap(),
         ["a", "b c", "d\"e", "f g", "-delete", "h\ti"]
@@ -524,7 +535,7 @@ fn huge_brace_words_refuse_fast_without_deep_recursion() {
 
 #[test]
 fn brace_expansion_matches_bash() {
-    let words = |segment: &str| words::unquote_words(segment).unwrap();
+    let words = |segment: &str| expanded(segment).unwrap();
     assert_eq!(words("{a,b}{c,d}"), ["ac", "ad", "bc", "bd"]);
     assert_eq!(words("x{a,{b,c}}y"), ["xay", "xby", "xcy"]);
     assert_eq!(words("{{a,b}"), ["{a", "{b"]);
@@ -543,7 +554,7 @@ fn brace_expansion_matches_bash() {
         "{1..99999999999999999999}",
         "{1..2..99999999999999999999}",
     ] {
-        assert!(words::unquote_words(refused).is_none(), "{refused}");
+        assert!(expanded(refused).is_none(), "{refused}");
     }
 }
 
@@ -593,4 +604,201 @@ fn ordinary_exploration_still_runs() {
     ] {
         assert!(bash_allowed(command, &[]), "{command}");
     }
+}
+
+#[test]
+fn bash_and_the_split_read_the_same_text() {
+    for command in [
+        "ls $$'\\';rm -rf victim;echo ''",
+        "echo $$'\\' ; touch P1 ; echo ''",
+        "ls \\>/dev/null;rm -rf victim",
+        "ls \\>/dev/null|rm -rf victim",
+        "ls \\>/dev/null\nrm -rf victim",
+        "ls \\2>&1;rm -rf victim",
+        "ls \\\n#'\ntouch PWNED\n#'",
+        "ls \\\n#<<EOF\ntouch PWNED\nEOF",
+        "ls ?(#x); touch P",
+        "ls ?(a)#b; touch P",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command:?}");
+    }
+    assert_eq!(
+        bash_refused("ls \\\n#'\ntouch PWNED\n#'", &[]).as_deref(),
+        Some("touch PWNED")
+    );
+    for segment in ["a;b", "a|b", "a&b", "a\nb", "a(b", "a)b", "a # x\nb"] {
+        assert!(expanded(segment).is_none(), "{segment:?}");
+    }
+    for segment in ["'a;b'", "a\\;b", "\"a|b\"", "a\\\nb"] {
+        assert!(expanded(segment).is_some(), "{segment:?}");
+    }
+}
+
+#[test]
+fn only_redirects_to_nowhere_pass() {
+    for command in [
+        "ls 1>/dev/null",
+        "ls 2> /dev/null",
+        "ls >>/dev/null",
+        "ls >&2",
+        "ls 2>&1 | head",
+        "ls &>/dev/null",
+        "ls>/dev/null",
+        "cat <&0",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "ls >& out",
+        "ls &> out",
+        "ls 2>&1x",
+        "ls 3>/dev/null",
+        "ls >| /dev/null",
+        "ls > '/dev/null'x",
+        "find . <2>/dev/null -delete",
+        "find . < >/dev/null -delete",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    assert_eq!(
+        expanded("find . <2>/dev/null -name x").unwrap(),
+        ["find", ".", "-name", "x"]
+    );
+}
+
+#[test]
+fn operands_whose_place_matters_must_be_seen() {
+    for command in [
+        "uniq Cargo.[lt]o*",
+        "uniq a?",
+        "uniq -- *",
+        "uniq src/*",
+        "uniq $X",
+        "uniq -- -a -b",
+        "sed -n -- $TERM f",
+        "sed -n -- $p f",
+        "sed -n /x*/p f",
+        "sed -n -e $X f",
+        "sed -n --expression $X f",
+        "xxd f out",
+        "xxd -r dump out",
+        "xxd -revert dump",
+        "xxd -c 8 f out",
+        "xxd f*",
+        "xxd -- -r out",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "uniq -c f",
+        "uniq -f 1 -- f",
+        "sed -n p src/*.rs",
+        "sed -n -e p -- src/*.rs",
+        "xxd f",
+        "xxd -l 64 -c 16 f",
+        "head -c 200 f | xxd",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+}
+
+#[test]
+fn build_tools_refuse_what_names_an_output_or_a_program() {
+    for command in [
+        "cargo clippy -- --emit=metadata=/tmp/x",
+        "cargo clippy -- -D warnings --emit=metadata=/tmp/x",
+        "cargo clippy -- -D --emit=metadata=/tmp/x",
+        "cargo clippy -- -Zunpretty=x",
+        "cargo check --target-dir /tmp/x",
+        "cargo check --target-dir=/tmp/x",
+        "cargo fmt",
+        "cargo fmt --check -- --print-config default rustfmt.toml",
+        "go list -export -gcflags=-o=/tmp/x ./...",
+        "go list -asmflags=x ./...",
+        "go list --ldflags x ./...",
+        "go list -gccgoflags=x ./...",
+        "go list -pkgdir /tmp/x ./...",
+        "go list -modfile=x.mod ./...",
+        "go list -mod=mod ./...",
+        "go vet -mod mod ./...",
+        "pnpm ls --config.pnpmfile=x.cjs",
+        "pnpm ls --pnpmfile x.cjs",
+        "pnpm ls --pnpmf=x.cjs",
+        "pnpm ls --global-pnpmfile=x.cjs",
+        "npm ls --logs-dir=/tmp/x",
+        "npm ls --logs-dir /tmp/x",
+        "npm view x --cache /tmp/y",
+        "xcodebuild -list -derivedDataPath /tmp/x",
+        "xcodebuild -list build",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "cargo clippy -- -D warnings",
+        "cargo clippy --all-targets -- -Dwarnings -A clippy::x --allow=y",
+        "cargo check --target wasm32-unknown-unknown",
+        "cargo fmt --check",
+        "cargo fmt --check -p killi",
+        "go list -m all",
+        "go vet ./...",
+        "pnpm ls --global",
+        "pnpm ls --depth 0",
+        "npm ls --long",
+        "xcodebuild -list",
+        "xcodebuild -list -json -project App.xcodeproj",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+}
+
+#[test]
+fn harmless_lookups_pass() {
+    for command in [
+        "git stash list",
+        "git stash show -p stash@{0}",
+        "git reflog -10",
+        "git reflog show main",
+        "git show-ref --tags",
+        "true",
+        "rg foo || true",
+        "false",
+        "test -f Cargo.toml && echo yes",
+        "[ -d target ] && echo built",
+        "printenv PATH",
+        "env",
+        "env | grep RUST",
+        "od -c file | head",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "git reflog expire --all",
+        "git reflog delete HEAD@{1}",
+        "git stash drop",
+        "env rm -rf x",
+        "env FOO=1 ls",
+        "env -i sh",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+}
+
+#[test]
+fn one_brace_budget_covers_the_whole_command() {
+    let inputs = [
+        "cat {1..1023}{1..1};".repeat(10_000),
+        "ls {1..1023}{1..1} ".repeat(10_000),
+        "git status {a,b}{c,d}{e,f};".repeat(8_000),
+    ];
+    let started = std::time::Instant::now();
+    for input in &inputs {
+        assert!(!bash_allowed(input, &[]));
+    }
+    // About 15 ms each in a release build; the per-segment budget took seconds.
+    let limit = if cfg!(debug_assertions) { 3000 } else { 300 };
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(limit),
+        "{:?}",
+        started.elapsed()
+    );
 }

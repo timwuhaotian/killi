@@ -2,17 +2,23 @@
 //! plan mode can't read, or a script with a `w`, `W` or `e` command or an `s///w` or `s///e`
 //! flag anywhere in it, `p;w out` included.
 
-/// `words` is a `sed` command line, quotes already removed.
-pub(super) fn sed_writes(words: &[&str]) -> bool {
+/// `words` is a `sed` command line, quotes already removed. A script or an option's value
+/// that is `opaque` (a glob or an unknown variable, which bash may turn into other words) is
+/// refused, since what sed runs is then unknown.
+pub(super) fn sed_writes(words: &[&str], opaque: &[bool]) -> bool {
+    let opaque = |at: usize| opaque.get(at).copied().unwrap_or(false);
     let mut scripts = Vec::new();
-    let mut operands = Vec::new();
+    let mut first_operand = None;
     let mut options_done = false;
     let mut at = 1;
     while let Some(&word) = words.get(at) {
         at += 1;
         if options_done || word == "-" || !word.starts_with('-') {
-            operands.push(word);
+            first_operand.get_or_insert(at - 1);
             continue;
+        }
+        if opaque(at - 1) {
+            return true;
         }
         if word == "--" {
             options_done = true;
@@ -32,6 +38,9 @@ pub(super) fn sed_writes(words: &[&str]) -> bool {
                     at += 1;
                     words.get(at - 1).copied()
                 });
+                if opaque(at - 1) {
+                    return true;
+                }
                 if abbreviates("expression") {
                     scripts.extend(value);
                 }
@@ -48,6 +57,9 @@ pub(super) fn sed_writes(words: &[&str]) -> bool {
                     let rest = &word[i + 1..];
                     if rest.is_empty() {
                         at += 1;
+                        if opaque(at - 1) {
+                            return true;
+                        }
                         scripts.extend(words.get(at - 1).copied());
                     } else {
                         scripts.push(rest);
@@ -58,8 +70,13 @@ pub(super) fn sed_writes(words: &[&str]) -> bool {
             }
         }
     }
-    if scripts.is_empty() {
-        scripts.extend(operands.first());
+    if scripts.is_empty()
+        && let Some(first) = first_operand
+    {
+        if opaque(first) {
+            return true;
+        }
+        scripts.push(words[first]);
     }
     scripts.iter().any(|script| {
         let chars: Vec<char> = script.chars().collect();

@@ -28,6 +28,14 @@ const READ_ONLY: &[&str] = &[
     "du",
     "df",
     "pwd",
+    "true",
+    "false",
+    "test",
+    "[",
+    "env",
+    "printenv",
+    "od",
+    "xxd",
     "which",
     "type",
     "whoami",
@@ -65,10 +73,15 @@ const READ_ONLY: &[&str] = &[
     "git describe",
     "git shortlog",
     "git config --get",
+    "git stash list",
+    "git stash show",
+    "git reflog",
+    "git show-ref",
     "cargo check",
     "cargo clippy",
     "cargo tree",
     "cargo metadata",
+    "cargo fmt --check",
     "cargo --version",
     "rustc --version",
     "npm ls",
@@ -90,7 +103,11 @@ const READ_ONLY: &[&str] = &[
 /// would act on: one outside quotes and past a backslash is text to the command instead, as
 /// in `grep -E 'a|b'`. `$'…'` is like `'…'` with backslash escapes; `'…'` has none. An
 /// unquoted `#` that starts a word comments out the rest of its line, and a heredoc's body
-/// (the lines after a `<<WORD` up to the line `WORD`) is input, so neither is in a part.
+/// (the lines after a `<<WORD` up to the line `WORD`) is input, so neither is in a part. A
+/// backslash-newline is removed before any of this, so `\⏎#` starts a comment; `$$` is a
+/// variable, so `$$'…'` is `$$` and a plain `'…'`; and the `&` of `>&`, `<&` and `&>` is part
+/// of a redirect. Each part's words are read again by [`words`], which refuses a part holding
+/// a control operator bash would act on, so a split this misreads can't hide a command.
 pub(crate) fn segments(command: &str) -> Vec<&str> {
     #[derive(PartialEq)]
     enum Quote {
@@ -123,7 +140,13 @@ pub(crate) fn segments(command: &str) -> Vec<&str> {
                         word_start = true;
                         continue;
                     }
+                    b'\\' if bytes.get(at + 1) == Some(&b'\n') => {
+                        at += 2;
+                        word_start = starts_word;
+                        continue;
+                    }
                     b'\\' => at += 1,
+                    b'$' if bytes.get(at + 1) == Some(&b'$') => at += 1,
                     b'\'' => quote = Quote::Single,
                     b'"' => quote = Quote::Double,
                     b'$' if matches!(bytes.get(at + 1), Some(b'\'' | b'"')) => {
@@ -144,6 +167,10 @@ pub(crate) fn segments(command: &str) -> Vec<&str> {
                             continue;
                         }
                     }
+                    b'<' | b'>' if bytes.get(at + 1) == Some(&b'&') => at += 1,
+                    b'&' if bytes.get(at + 1) == Some(&b'>') => {}
+                    // Inside a word, `(` opens an extglob pattern (`?(#x)`), not a list.
+                    b'(' if !starts_word => word_start = false,
                     b'\n' => {
                         parts.push(&command[start..at]);
                         start = skip_heredocs(command, at + 1, &mut heredocs);
@@ -247,15 +274,15 @@ fn skip_heredocs(command: &str, mut at: usize, heredocs: &mut Vec<(String, bool)
 const ANY_ARGUMENTS: &[&str] = &[
     "cat", "head", "tail", "wc", "ls", "grep", "egrep", "fgrep", "stat", "du", "basename",
     "dirname", "realpath", "readlink", "echo", "nl", "cut", "tr", "cmp", "diff", "column", "jq",
+    "true", "false", "test", "[", "printenv", "od",
 ];
 
 /// The first segment of `command` plan mode refuses, if any, so the refusal can name it.
-/// `extra` holds additional allowed prefixes from config.
-/// The segment comes from the cleaned command, so a let-through redirect (`2>&1`,
-/// `>/dev/null`) is missing from its text.
+/// `extra` holds additional allowed prefixes from config. The segments share one budget for
+/// brace expansion, so a long command of small expansions is as cheap as one large one.
 pub fn bash_refused(command: &str, extra: &[String]) -> Option<String> {
-    let cleaned = without_harmless_redirects(command);
-    segments(&cleaned)
+    let mut budget = braces::Budget::new(command.len());
+    segments(command)
         .into_iter()
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
@@ -263,44 +290,10 @@ pub fn bash_refused(command: &str, extra: &[String]) -> Option<String> {
             segment.contains("$(")
                 || segment.contains('`')
                 || segment.contains("<(")
-                || !words::words(segment).is_some_and(|words| segment_allowed(&words, extra))
+                || !words::words(segment, &mut budget)
+                    .is_some_and(|words| words.is_empty() || segment_allowed(&words, extra))
         })
         .map(str::to_string)
-}
-
-/// `command` without the redirects plan mode lets through: `2>&1`, `2>/dev/null` and
-/// `>/dev/null`, each only where bash reads it as one, so the `>2` in `>2>&1/dev/null`,
-/// which writes a file named `2`, stays and is refused.
-fn without_harmless_redirects(command: &str) -> String {
-    const LET_THROUGH: &[&str] = &[
-        "2>&1",
-        "2>/dev/null",
-        "2> /dev/null",
-        ">/dev/null",
-        "> /dev/null",
-    ];
-    let bytes = command.as_bytes();
-    let boundary =
-        |byte: u8| byte.is_ascii_whitespace() || matches!(byte, b';' | b'|' | b'&' | b'(' | b')');
-    let mut cleaned = String::with_capacity(command.len());
-    let (mut kept, mut at) = (0, 0);
-    while at < bytes.len() {
-        let found = LET_THROUGH.iter().find(|redirect| {
-            bytes[at..].starts_with(redirect.as_bytes())
-                && (redirect.starts_with('>') || at == 0 || boundary(bytes[at - 1]))
-                && bytes.get(at + redirect.len()).is_none_or(|&b| boundary(b))
-        });
-        match found {
-            Some(redirect) => {
-                cleaned.push_str(&command[kept..at]);
-                at += redirect.len();
-                kept = at;
-            }
-            None => at += 1,
-        }
-    }
-    cleaned.push_str(&command[kept..]);
-    cleaned
 }
 
 /// The command a segment runs, for the checks: `git -C <dir> log` is `git log`, and `xargs
@@ -416,13 +409,23 @@ fn segment_allowed(words: &[words::Word], extra: &[String]) -> bool {
                 .enumerate()
                 .all(|(i, w)| words_run.get(i) == Some(&w))
     };
-    if writes::writes_behind_a_read_only_name(&words_run) {
+    // `words_run` is a tail of `words`, but for `git`, whose name stays first.
+    let opaque: Vec<bool> = words[words.len().saturating_sub(words_run.len())..]
+        .iter()
+        .map(|w| w.opaque)
+        .collect();
+    if writes::writes_behind_a_read_only_name(&words_run, &opaque) {
         return false;
     }
     let configured = extra.iter().any(|prefix| starts(prefix));
     // A word past `--` is an operand, not a flag, except to `find`, whose expression comes
-    // after its paths, and `cargo`, which hands what follows to another program.
-    let operands_after_dashes = !matches!(words_run.first(), Some(&("find" | "cargo")));
+    // after its paths, and `cargo`, which hands what follows to another program. For `uniq`,
+    // `sed` and `xxd` an operand's position matters too (an output file, the script), so a
+    // word plan mode can't see is refused there as well.
+    let operands_after_dashes = !matches!(
+        words_run.first(),
+        Some(&("find" | "cargo" | "uniq" | "sed" | "xxd"))
+    );
     let unseen = words
         .iter()
         .take_while(|w| !(operands_after_dashes && w.text == "--"))
