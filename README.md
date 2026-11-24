@@ -127,6 +127,9 @@ Rust 1.94 or later, on macOS (arm64) or Linux (x64/arm64).
   background from the start, so the main agent only talks with you and coordinates (forking
   this conversation into each subagent by default, `agent_message` to correct one mid-task).
   Quitting asks whether to pause them; resuming the session continues each from its own log.
+  A turn nobody watches (`-p`, a subagent, a swarm member, a peer's task) wraps up after
+  `[agent] max_steps` requests (default 200; `0` turns it off); `max_steps_interactive` sets a
+  limit for the turns you watch, which have none by default.
   **Background tasks** keep servers and slow builds running. **Undo** puts
   your files back as they were before a turn, including what commands changed.
 - **Sessions that know about each other.** Run several killi at once and each knows where the

@@ -139,7 +139,8 @@ pub(super) fn guess_end(output: &str) -> (bool, String) {
         .lines()
         .last()
         .is_some_and(|l| l.starts_with("[Command "))
-        || output.starts_with("Interrupted by the user");
+        || output.starts_with("Interrupted by the user")
+        || output.starts_with("Interrupted before");
     let lines = output.lines().count();
     match (failed, lines) {
         _ if output.starts_with("(no output") => (false, "no output".into()),
@@ -157,13 +158,32 @@ pub(super) fn guess_end(output: &str) -> (bool, String) {
     }
 }
 
+/// Reminders killi once wrote with an escaped tag: the goal notes and a subagent's delegation
+/// rule. Logs from those versions still hold them, and they are not what the user typed.
+const LEGACY_REMINDERS: [&str; 3] = [
+    "&lt;system-reminder>Session goal:",
+    "&lt;system-reminder>The session goal is over",
+    "&lt;system-reminder>You are a subagent",
+];
+const LEGACY_END: &str = "&lt;/system-reminder>";
+
 /// What the user typed for a message killi sent as `text`: without the reminders before it or
 /// the files it named with `@` after it, which a compaction may have cut before their end, and
 /// a skill run as the `/name request` that started it. `None` if it is only reminders.
 fn typed(text: &str) -> Option<String> {
     let prompt = strip_reminders(text)?;
     let mut prompt = crate::skills::typed(prompt).unwrap_or_else(|| prompt.to_string());
-    if let Some(at) = prompt.find("\n\n<system-reminder>") {
+    let cut = prompt.find("\n\n<system-reminder>").or_else(|| {
+        prompt
+            .match_indices("\n\n&lt;system-reminder>")
+            .map(|(at, _)| at)
+            .find(|at| {
+                LEGACY_REMINDERS
+                    .iter()
+                    .any(|start| prompt[at + 2..].starts_with(start))
+            })
+    });
+    if let Some(at) = cut {
         prompt.truncate(at);
     }
     Some(prompt)
@@ -172,9 +192,16 @@ fn typed(text: &str) -> Option<String> {
 /// A user message without the reminders in front of it, or `None` if it is only reminders.
 pub(super) fn strip_reminders(text: &str) -> Option<&str> {
     let mut rest = text;
-    while let Some(after) = rest.strip_prefix("<system-reminder>") {
-        let end = after.find("</system-reminder>")?;
-        rest = after[end + 18..].trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix("<system-reminder>") {
+            let end = after.find("</system-reminder>")?;
+            rest = after[end + "</system-reminder>".len()..].trim_start();
+        } else if LEGACY_REMINDERS.iter().any(|start| rest.starts_with(start)) {
+            let end = rest.find(LEGACY_END)?;
+            rest = rest[end + LEGACY_END.len()..].trim_start();
+        } else {
+            break;
+        }
     }
     (!rest.is_empty()).then_some(rest)
 }

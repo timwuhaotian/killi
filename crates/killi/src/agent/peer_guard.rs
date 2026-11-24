@@ -4,11 +4,22 @@
 //! inspected. `bash -c "…"`, `xargs git`, scripts and aliases get through. The peer
 //! reminder stays as the backstop.
 
-/// The tree-moving git verb `command` runs, if any. Each `|`, `;`, `&` and newline
-/// segment is checked on its own; leading `VAR=x` assignments and `cd <dir>` prefixes
-/// are skipped, and git's global options before the subcommand are accepted.
+/// The tree-moving git verb `command` runs, if any. Each segment between `|`, `;`, `&` and
+/// newlines outside quotes is checked on its own; leading `VAR=x` assignments and `cd <dir>`
+/// prefixes are skipped, and git's global options before the subcommand are accepted.
+/// Each line is then read again on its own, so a quote or heredoc the split misreads can't
+/// hide a later line; a line of a quoted message that starts with `git stash` is refused too.
 pub fn moving_verb(command: &str) -> Option<&'static str> {
-    command.split(['|', ';', '&', '\n']).find_map(segment_verb)
+    let verb = |segment: &str| segment_verb(&words(segment));
+    crate::plan::segments(command)
+        .into_iter()
+        .find_map(verb)
+        .or_else(|| {
+            command
+                .lines()
+                .flat_map(crate::plan::segments)
+                .find_map(verb)
+        })
 }
 
 /// A literal directory `command` points at (`cd <dir>`, `git -C <dir>`,
@@ -16,16 +27,23 @@ pub fn moving_verb(command: &str) -> Option<&'static str> {
 /// The last one wins.
 pub fn command_dir(command: &str) -> Option<String> {
     let mut found = None;
-    for segment in command.split(['|', ';', '&', '\n']) {
-        if let Some(dir) = segment_dir(segment) {
+    for segment in crate::plan::segments(command) {
+        if let Some(dir) = segment_dir(&words(segment)) {
             found = Some(dir);
         }
     }
     found
 }
 
-fn segment_verb(segment: &str) -> Option<&'static str> {
-    let words: Vec<&str> = segment.split_whitespace().collect();
+/// The words of a segment with quotes removed, or split at whitespace when bash would do more
+/// with it (`$(…)`, a redirect), so a verb is still seen.
+fn words(segment: &str) -> Vec<String> {
+    crate::plan::words::unquote_words(segment)
+        .unwrap_or_else(|| segment.split_whitespace().map(str::to_string).collect())
+}
+
+fn segment_verb(words: &[String]) -> Option<&'static str> {
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let mut words = words.as_slice();
     loop {
         while words.first().is_some_and(|w| is_env_assign(w)) {
@@ -75,8 +93,8 @@ fn segment_verb(segment: &str) -> Option<&'static str> {
     }
 }
 
-fn segment_dir(segment: &str) -> Option<String> {
-    let words: Vec<&str> = segment.split_whitespace().collect();
+fn segment_dir(words: &[String]) -> Option<String> {
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let mut words = words.as_slice();
     let mut found = None;
     loop {
@@ -180,6 +198,46 @@ mod tests {
         ] {
             assert_eq!(moving_verb(command), None, "{command}");
         }
+    }
+
+    #[test]
+    fn separators_and_verbs_inside_quotes_are_text() {
+        for command in [
+            "git commit -m \"wip; git stash\"",
+            "git commit -m 'a | git checkout -- .'",
+            "echo 'x && git reset --hard'",
+        ] {
+            assert_eq!(moving_verb(command), None, "{command}");
+        }
+        assert_eq!(moving_verb("git 'stash'"), Some("stash"));
+        assert_eq!(moving_verb("git \"checkout\" -- ."), Some("checkout"));
+        assert_eq!(
+            moving_verb("git checkout $(git rev-parse HEAD~1)"),
+            Some("checkout")
+        );
+        assert_eq!(
+            command_dir("git -C 'my repo' commit -m 'x; cd /tmp' && git reset --hard"),
+            Some("my repo".to_string())
+        );
+    }
+
+    #[test]
+    fn comments_heredocs_and_odd_lines_hide_no_verb() {
+        assert_eq!(
+            moving_verb("# Check what's changed\ngit stash"),
+            Some("stash")
+        );
+        assert_eq!(
+            moving_verb("git commit -F - <<EOF\nFix the parser's bug\nEOF\ngit checkout main"),
+            Some("checkout")
+        );
+        assert_eq!(moving_verb("echo $((1<<2))\ngit stash"), Some("stash"));
+        assert_eq!(moving_verb("echo 'it\ngit reset --hard"), Some("reset"));
+        assert_eq!(moving_verb("ls # git stash"), None);
+        assert_eq!(
+            moving_verb("git commit -F - <<EOF\nkeep git stash out\nEOF"),
+            None
+        );
     }
 
     #[test]

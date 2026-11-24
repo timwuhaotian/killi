@@ -151,6 +151,9 @@ impl Setup {
             hooks: Rc::new(config.hooks.clone()),
             mcp: Rc::new(mcp),
             instruction_files: prompt.instruction_files.clone(),
+            max_steps: config.agent.max_steps(),
+            max_steps_interactive: config.agent.max_steps_interactive(),
+            peer_task: false,
         };
         Ok(Self {
             config,
@@ -301,6 +304,8 @@ impl Setup {
             .swarm_parallel
             .unwrap_or(DEFAULT_SWARM_PARALLEL)
             .max(1);
+        self.settings.max_steps = config.agent.max_steps();
+        self.settings.max_steps_interactive = config.agent.max_steps_interactive();
         self.config = config;
     }
 

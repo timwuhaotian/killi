@@ -152,19 +152,22 @@ impl Drop for Running {
 /// The page's DOM after its scripts have run. Moli renders it when it is around, headless
 /// Chrome otherwise.
 pub(super) async fn render(url: &str) -> Result<String, String> {
-    if moli().is_some() {
-        return moli_render(url).await;
+    if let Some(moli) = moli() {
+        return moli_render(&moli, url).await;
     }
     chrome_render(url).await
 }
 
-/// One-shot `moli fetch` with `extra`, on `url`: moli exits on its own, so unlike the
-/// Chrome shell-out below there is nothing to stop early. Returns stdout with stderr beside
-/// it, which only names a failure. The whole run shares one deadline with moli's own
+/// One-shot `moli fetch` with `extra`, on `url`, from the binary `moli()` found: moli exits on
+/// its own, so unlike the Chrome shell-out below there is nothing to stop early. Returns stdout
+/// with stderr beside it, which only names a failure. The whole run shares one deadline with moli's own
 /// `--timeout`, which sits inside it.
-async fn moli_fetch(extra: &[&str], url: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
+async fn moli_fetch(
+    moli: &std::path::Path,
+    extra: &[&str],
+    url: &str,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
     use tokio::io::AsyncReadExt;
-    let moli = moli().expect("the caller checked moli is around");
     let mut command = Command::new(moli);
     command
         .arg("fetch")
@@ -216,8 +219,8 @@ fn moli_said(said: &[u8]) -> String {
 }
 
 /// `moli fetch` runs the page's JavaScript and prints the live DOM as HTML.
-async fn moli_render(url: &str) -> Result<String, String> {
-    let (out, said) = moli_fetch(&["--dump", "html"], url).await?;
+async fn moli_render(moli: &std::path::Path, url: &str) -> Result<String, String> {
+    let (out, said) = moli_fetch(moli, &["--dump", "html"], url).await?;
     let dom = String::from_utf8_lossy(&out).into_owned();
     if dom.trim().is_empty() {
         return Err(format!(
@@ -264,15 +267,19 @@ async fn chrome_render(url: &str) -> Result<String, String> {
 /// Takes a screenshot into `file`. Moli prints a viewport PNG when it is around, headless
 /// Chrome otherwise.
 async fn capture(url: &str, file: &std::path::Path) -> Result<(), String> {
-    if moli().is_some() {
-        return moli_capture(url, file).await;
+    if let Some(moli) = moli() {
+        return moli_capture(&moli, url, file).await;
     }
     chrome_capture(url, file).await
 }
 
 /// `moli fetch --layout --dump screenshot` prints a viewport PNG.
-async fn moli_capture(url: &str, file: &std::path::Path) -> Result<(), String> {
-    let (png, said) = moli_fetch(&["--layout", "--dump", "screenshot"], url).await?;
+async fn moli_capture(
+    moli: &std::path::Path,
+    url: &str,
+    file: &std::path::Path,
+) -> Result<(), String> {
+    let (png, said) = moli_fetch(moli, &["--layout", "--dump", "screenshot"], url).await?;
     if png.starts_with(b"\x89PNG\r\n\x1a\n") {
         return std::fs::write(file, &png)
             .map_err(|e| format!("Could not save the screenshot of {url}: {e}"));
@@ -341,7 +348,7 @@ pub(super) async fn screenshot(ctx: &Context, url: &str) -> Output {
         Temp(std::env::temp_dir().join(format!("killi-shot-{}-{nanos}.png", std::process::id())));
     match capture(url, &file.0).await {
         Ok(()) => {
-            let mut output = files::read_image(ctx, url, &file.0, "image/png");
+            let mut output = files::read_image(ctx, url, &file.0, "image/png").await;
             if !output.is_error {
                 output.text =
                     format!("Screenshot of {url} (top of the page); it is attached below.");

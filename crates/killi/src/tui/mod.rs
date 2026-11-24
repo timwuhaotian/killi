@@ -111,8 +111,8 @@ use rows::{
     tool_summary, tool_text, working_rows, wrap_items,
 };
 use run::{
-    flush_recap, handle_command, next_incoming, peer_label, prompt_turn, provider_add,
-    provider_custom, provider_custom_add, run_turn, wake_turn,
+    command_turn, flush_recap, handle_command, next_incoming, peer_label, prompt_turn,
+    provider_add, provider_custom, provider_custom_add, run_turn, show_events, wake_turn,
 };
 use schedule::Schedule;
 use select::{InputRows, Selection, Spot};
@@ -245,6 +245,8 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
             app.show_saved_recap(&saved);
         }
         app.resume_background(&mut agent);
+        // What the resume itself noted, such as a different folder or skipped log lines.
+        show_events(&mut app, &mut rx);
     }
     if start.pick_session {
         app.open_session_picker(&cwd);
@@ -460,6 +462,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                                 app.show_saved_recap(&saved);
                             }
                             app.editor = Editor::with_history(agent.user_prompts());
+                            show_events(&mut app, &mut rx);
                         }
                         Err(e) => app.error_report(&e),
                     }
@@ -683,6 +686,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                 }
             }
         }
+        follow_model(&mut app, &agent, session.config());
         app.refresh_branch_async().await;
         app.live_sync(&agent);
         app.draw()?;
@@ -691,18 +695,31 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
     let stopped = agent.stop_tasks();
     agent.session_end("exit").await;
     drop(terminal);
+    // A terminal closed under killi takes stdout with it: these lines are a courtesy, so a
+    // failed write is dropped rather than turned into a panic on the way out.
     if let Some(note) = stopped_note(&stopped) {
-        println!("{DIM}{note}{RESET}");
+        let _ = writeln!(stdout(), "{DIM}{note}{RESET}");
     }
     agent.discard_if_unused();
     if !agent.user_prompts().is_empty() {
         // The command on its own line, so a triple-click or a drag copies it alone.
-        println!(
+        let _ = writeln!(
+            stdout(),
             "{DIM}To continue this session:{RESET}\n{}",
             resume_command(&agent.session.log_path)
         );
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Puts the status line, the context meter, the effort choices and image pasting on the
+/// model the agent is on now, when the agent moved by itself, as a fallback to the backup
+/// model does mid-turn.
+fn follow_model(app: &mut App, agent: &Agent, config: &Config) {
+    let backup = agent.backup_display().or_else(|| agent.backup_alias());
+    if app.status.model != agent.model_display() || app.status.backup.as_deref() != backup {
+        app.show_model(agent, config);
+    }
 }
 
 /// Says which background commands were stopped as a session ended, if any.

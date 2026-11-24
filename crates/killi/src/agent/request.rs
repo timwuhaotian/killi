@@ -2,30 +2,93 @@ use super::*;
 
 impl Agent {
     pub(super) async fn request(&mut self) -> Result<Reply> {
-        let sink = self.sink.clone();
         // Every retry a provider answer demands is kept in the session log as it happens, so
         // a session that seemed to hang on a rate limit can be traced from its log: when a
         // retry eventually succeeds, the backoff would otherwise leave no trace at all.
-        // Entries are buffered here (the closure only forwards to the sink) and recorded
-        // when the request settles, before the usage or error entry that follows it, or
-        // before the `abort` entry if it is dropped first (`Unsettled`).
+        // Entries are buffered in `unsettled` and recorded when the request settles, before
+        // the usage or error entry that follows it, or before the `abort` entry if it is
+        // dropped first.
         let mut unsettled = Unsettled::new(&self.session, None);
+        let messages = self.messages.clone();
+        let reply = self
+            .complete_with_fallback(&messages, true, &mut unsettled)
+            .await;
+        drop(messages);
+        // The backup's attempt, when there was one: the timings are its own.
+        let started = unsettled.started;
+        self.settle(&mut unsettled)?;
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(error) => {
+                self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
+                return Err(error);
+            }
+        };
+        let took = started.elapsed();
+        self.stats.requests += 1;
+        self.account(
+            &reply.usage,
+            Some(&reply.finish_reason),
+            Some(took),
+            unsettled.first_token.get(),
+            reply.reasoning_kept(),
+            reasoning_evidence(&reply),
+        )?;
+        self.note_hidden_reasoning(&reply)?;
+        Ok(reply)
+    }
+
+    /// Asks the session's model for `request`. When the primary spends its retries on a
+    /// failure that is about it, not the request, the session switches to the backup it was
+    /// given and asks it once; the switch is the one `switch_model` makes, so the backup
+    /// becomes the model the session runs on and the log notes it. Text, reasoning and tool
+    /// progress reach the sink only with `stream_text`; retries always do, and are buffered
+    /// in `unsettled` for the caller to settle. A failed attempt that streamed part of a reply
+    /// is followed by `Event::Discard`, before the backup starts or the error returns, and the
+    /// backup's timings start over in `unsettled`.
+    pub(super) async fn complete_with_fallback(
+        &mut self,
+        request: &[Value],
+        stream_text: bool,
+        unsettled: &mut Unsettled,
+    ) -> Result<Reply> {
+        let sink = self.sink.clone();
         let logged = unsettled.retries.clone();
         let seen = unsettled.first_token.clone();
-        let started = unsettled.started;
+        let started = Cell::new(unsettled.started);
+        // Whether the attempt in flight showed anything; a retry discards that on its own.
+        let shown = Cell::new(false);
+        let discard = |reason: &str| {
+            if shown.replace(false) {
+                sink(Event::Discard {
+                    reason: reason.to_string(),
+                });
+            }
+        };
         let mut on_delta = |delta: Delta| {
             if !matches!(delta, Delta::Retry { .. }) && seen.get().is_none() {
-                seen.set(Some(started.elapsed()));
+                seen.set(Some(started.get().elapsed()));
             }
             match delta {
-                Delta::Text(text) => sink(Event::Text(text.to_string())),
-                Delta::Reasoning(text) => sink(Event::Reasoning(text.to_string())),
-                Delta::Tool(text) => sink(Event::ToolDelta(text.len())),
+                Delta::Text(text) if stream_text => {
+                    shown.set(true);
+                    sink(Event::Text(text.to_string()))
+                }
+                Delta::Reasoning(text) if stream_text => {
+                    shown.set(true);
+                    sink(Event::Reasoning(text.to_string()))
+                }
+                Delta::Tool(text) if stream_text => {
+                    shown.set(true);
+                    sink(Event::ToolDelta(text.len()))
+                }
+                Delta::Text(_) | Delta::Reasoning(_) | Delta::Tool(_) => {}
                 Delta::Retry {
                     attempt,
                     wait,
                     reason,
                 } => {
+                    shown.set(false);
                     logged.borrow_mut().push(json!({
                         "type": "retry",
                         "attempt": attempt,
@@ -40,75 +103,56 @@ impl Agent {
                 }
             }
         };
-        let reply = match self
+        let error = match self
             .client
-            .complete(&self.messages, &self.tools, &self.cache_key, &mut on_delta)
+            .complete(request, &self.tools, &self.cache_key, &mut on_delta)
             .await
         {
-            Ok(reply) => reply,
-            // The primary spent its retries on a failure that is about it, not the request:
-            // this session switches to the backup it was given and asks it once. The switch is
-            // the switch `switch_model` makes, so the backup becomes the model the session runs
-            // on and the log notes it.
-            Err(error) => match Self::fallback_reason(&error)
-                .and_then(|reason| Some((reason, self.backup.take()?)))
-            {
-                Some((reason, backup)) => {
-                    let from = self.client.model.alias.clone();
-                    self.switch_client((*backup).clone())?;
-                    // A subagent that falls back keeps the session on its own model, so it
-                    // says what it did itself.
-                    let note = if self.depth == 0 {
-                        format!(
-                            "{from} {reason}, so this session switched to its backup {}.",
-                            self.client.model.alias
-                        )
-                    } else {
-                        format!(
-                            "{from} {reason}, so this subagent switched to the backup {}.",
-                            self.client.model.alias
-                        )
-                    };
-                    (self.sink)(Event::Notice(note));
-                    match self
-                        .client
-                        .complete(&self.messages, &self.tools, &self.cache_key, &mut on_delta)
-                        .await
-                    {
-                        Ok(reply) => reply,
-                        Err(error) => {
-                            self.settle(&mut unsettled)?;
-                            self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
-                            return Err(error);
-                        }
-                    }
-                }
-                None => {
-                    self.settle(&mut unsettled)?;
-                    self.session.record(&json!({"type": "error", "message": format!("{error:#}"), "ms": millis(started.elapsed())}))?;
-                    return Err(error);
-                }
-            },
+            Ok(reply) => return Ok(reply),
+            Err(error) => error,
         };
-        self.settle(&mut unsettled)?;
-        let took = started.elapsed();
-        self.stats.requests += 1;
-        self.account(
-            &reply.usage,
-            Some(&reply.finish_reason),
-            Some(took),
-            seen.get(),
-            reply.reasoning_kept(),
-            reasoning_evidence(&reply),
-        )?;
-        self.note_hidden_reasoning(&reply)?;
-        Ok(reply)
+        let Some((reason, backup)) =
+            Self::fallback_reason(&error).zip(self.armed_backup().cloned())
+        else {
+            discard("the attempt failed");
+            return Err(error);
+        };
+        // The primary's attempt is over here, whatever it streamed: the backup answers the
+        // request from the start.
+        discard("the backup model answers instead");
+        started.set(Instant::now());
+        unsettled.started = started.get();
+        seen.set(None);
+        let from = self.client.model.alias.clone();
+        self.switch_client((*backup).clone())?;
+        // A subagent that falls back keeps the session on its own model, so it says what it
+        // did itself.
+        let note = if self.depth == 0 {
+            format!(
+                "{from} {reason}, so this session switched to its backup {}.",
+                self.client.model.alias
+            )
+        } else {
+            format!(
+                "{from} {reason}, so this subagent switched to the backup {}.",
+                self.client.model.alias
+            )
+        };
+        (self.sink)(Event::Notice(note));
+        let reply = self
+            .client
+            .complete(request, &self.tools, &self.cache_key, &mut on_delta)
+            .await;
+        if reply.is_err() {
+            discard("the attempt failed");
+        }
+        reply
     }
 
     /// Writes the retry backoffs this request's attempts answered, beside the message and
     /// usage records — never into the history. Old logs have no `retry` entries and read
     /// unchanged. The request settled, so `unsettled` writes nothing when it drops.
-    fn settle(&mut self, unsettled: &mut Unsettled) -> Result<()> {
+    pub(super) fn settle(&mut self, unsettled: &mut Unsettled) -> Result<()> {
         unsettled.disarm();
         for retry in unsettled.retries.borrow().iter() {
             self.session.record(retry)?;
@@ -120,15 +164,16 @@ impl Agent {
     /// placeholder and retry once, recording the rewrite as a compaction-kind entry so a
     /// resumed session replays the stripped conversation.
     pub(super) fn strip_images(&mut self, error: &anyhow::Error) -> Result<()> {
-        self.pending_prompt = None;
-        let messages: &mut Vec<Value> = Rc::make_mut(&mut self.messages);
-        let stripped = strip_images_from(messages);
-        self.share();
+        let mut messages = (*self.messages).clone();
+        let stripped = strip_images_from(&mut messages);
         self.session.record(&json!({
             "type": "compaction",
             "cause": {"media_rejected": format!("{error:#}"), "stripped": stripped},
-            "messages": *self.messages,
+            "messages": messages,
         }))?;
+        self.pending_prompt = None;
+        self.messages = Rc::new(messages);
+        self.share();
         (self.sink)(Event::Notice(format!(
             "The provider rejected the conversation's images, so {stripped} {} replaced with a placeholder and the request was retried.",
             if stripped == 1 {
@@ -196,8 +241,12 @@ impl Agent {
         reasoning_seen: Option<Value>,
     ) -> Result<()> {
         self.stats.first_prompt.get_or_insert(usage.prompt);
-        self.stats.context = usage.prompt;
-        self.accounted_messages = self.messages.len();
+        // A provider that reports no usage says nothing about the context: the estimate
+        // keeps its last billed size and goes on counting the messages since.
+        if usage.prompt > 0 {
+            self.stats.context = usage.prompt;
+            self.accounted_messages = self.messages.len();
+        }
         let total = &mut self.stats.usage;
         total.prompt += usage.prompt;
         total.cached += usage.cached;
@@ -250,6 +299,7 @@ impl Agent {
         }
         self.current_reply = self.messages.len();
         self.push(message)?;
+        (self.sink)(Event::Settled);
         Ok(calls)
     }
 }

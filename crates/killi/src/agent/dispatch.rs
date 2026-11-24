@@ -46,6 +46,14 @@ impl Agent {
             }
             if let Some((same_as, output)) = self.repeat_block(&calls[i].1) {
                 let (id, call) = &calls[i];
+                self.tool_start(
+                    id,
+                    &tools::summary(
+                        &call.name,
+                        &parse_args(call).unwrap_or_default(),
+                        &self.ctx.cwd,
+                    ),
+                );
                 let started = Instant::now();
                 stop |= self.finish_call(id, call, output, started.elapsed(), Some(same_as))?;
                 i += 1;
@@ -84,7 +92,7 @@ impl Agent {
                 let outputs = self.run_subagents(&calls[i..end]).await;
                 let took = started.elapsed();
                 for ((id, call), output) in calls[i..end].iter().zip(outputs) {
-                    stop |= self.finish_call(id, call, output, took, None)?;
+                    stop |= self.finish_stored_call(id, call, output, took)?;
                 }
                 i = end;
                 continue;
@@ -93,7 +101,7 @@ impl Agent {
             if call.name == "agent_swarm" && (self.depth == 0 || self.pair_exec) {
                 let started = Instant::now();
                 let output = self.run_swarm(id, call).await;
-                stop |= self.finish_call(id, call, output, started.elapsed(), None)?;
+                stop |= self.finish_stored_call(id, call, output, started.elapsed())?;
                 i += 1;
                 continue;
             }
@@ -110,7 +118,7 @@ impl Agent {
                     image.clone(),
                 ));
             }
-            stop |= self.finish_call(id, call, output, took, None)?;
+            stop |= self.finish_stored_call(id, call, output, took)?;
             i += 1;
         }
         if !images.is_empty() {
@@ -185,6 +193,8 @@ impl Agent {
         }
     }
 
+    /// Runs one call with its hooks and returns its result as history stores it (see
+    /// `post_hook`).
     pub(super) async fn execute(
         &mut self,
         id: &str,
@@ -197,7 +207,7 @@ impl Agent {
             Err(why) => {
                 let output = invalid_arguments(call, &why, truncated);
                 self.tool_start(id, &format!("{} (invalid arguments)", call.name));
-                return output;
+                return neutralized(output);
             }
         };
         self.tool_start(id, &tools::summary(&call.name, &args, &self.ctx.cwd));
@@ -209,7 +219,9 @@ impl Agent {
             )
             .await;
         if let Some(reason) = before.block {
-            return tools::Output::error(format!("A hook blocked this call: {reason}"));
+            return neutralized(tools::Output::error(format!(
+                "A hook blocked this call: {reason}"
+            )));
         }
         if let Some(path) = args["path"].as_str() {
             self.touched(tools::resolve(&self.ctx, path));
@@ -256,9 +268,13 @@ impl Agent {
             }
             "todo_write" => self.todo_write(&args),
             "later" => self.later(&args),
-            "memory" if self.depth > 0 && crate::memory::writes(&args) => tools::Output::error(
-                "Only the main session changes the user's memory. Read it with `memory` if you need it, and report anything worth keeping to your parent.",
-            ),
+            "memory"
+                if (self.depth > 0 || self.settings.peer_task) && crate::memory::writes(&args) =>
+            {
+                tools::Output::error(
+                    "Only the main session changes the user's memory. Read it with `memory` if you need it, and report anything worth keeping to your parent.",
+                )
+            }
             "memory" => {
                 let output = crate::memory::run(&args);
                 if crate::memory::writes(&args) {
@@ -286,6 +302,7 @@ impl Agent {
             _ => {
                 // Only the top-level agent hears the user; a subagent waits out its own commands.
                 let steer = (self.depth == 0).then(|| self.controls.steer.clone());
+                self.ctx.read_only.set(self.controls.plan.get());
                 dispatch_tool(&self.ctx, &call.name, args, steer).await
             }
         }
@@ -394,9 +411,10 @@ impl Agent {
     }
 
     /// Runs the `SessionEnd` hooks once, when the session's work is done. Sessions that never
-    /// started (no turn ran, so no `SessionStart`) run none: there is nothing to close out.
+    /// started (no turn ran, so no `SessionStart`) run none: there is nothing to close out, and
+    /// neither does a peer task, which runs inside a session that goes on.
     pub async fn session_end(&self, reason: &str) {
-        if self.session_started {
+        if self.session_started && !self.settings.peer_task {
             self.hook("SessionEnd", None, json!({"reason": reason}))
                 .await;
         }
@@ -409,16 +427,41 @@ impl Agent {
         });
     }
 
-    /// Reports and records a call's result. Returns true when the repeat breaker trips.
-    /// `same_as` is the previous result's hash for a call the repeat breaker refused to run
-    /// again, so it counts as the same result instead of breaking the streak.
+    /// Reports and records a call's result straight from a tool, neutralized first. Returns
+    /// true when the repeat breaker trips. `same_as` is the previous result's hash for a call
+    /// the repeat breaker refused to run again, so it counts as the same result instead of
+    /// breaking the streak.
     pub(super) fn finish_call(
+        &mut self,
+        id: &str,
+        call: &ToolCall,
+        output: tools::Output,
+        took: Duration,
+        same_as: Option<u64>,
+    ) -> Result<bool> {
+        self.record_call(id, call, output, took, same_as, true)
+    }
+
+    /// Reports and records a result already as history stores it, from `execute`,
+    /// `run_subagents` or `run_swarm`: neutralized, with what hooks say after it.
+    fn finish_stored_call(
+        &mut self,
+        id: &str,
+        call: &ToolCall,
+        output: tools::Output,
+        took: Duration,
+    ) -> Result<bool> {
+        self.record_call(id, call, output, took, None, false)
+    }
+
+    fn record_call(
         &mut self,
         id: &str,
         call: &ToolCall,
         mut output: tools::Output,
         took: Duration,
         same_as: Option<u64>,
+        raw: bool,
     ) -> Result<bool> {
         if self
             .partial_swarm
@@ -439,7 +482,9 @@ impl Agent {
             display: output.display.take(),
             output: output.text.clone(),
         });
-        output.text = neutralize_reminder_tags(&output.text).into_owned();
+        if raw {
+            output = neutralized(output);
+        }
         if output.text.len() > MAX_RESULT_BYTES {
             output.text = self.shorten(&output.text);
         }
@@ -555,23 +600,44 @@ impl Agent {
         Some((repeat.result, output))
     }
 
-    /// Runs a tool call's PostToolUse hooks over its result, appending what they say.
+    /// Runs a call's PostToolUse hooks over its raw result, then makes the result what history
+    /// stores: the tool's text neutralized, and what the hooks say after it as killi's own
+    /// reminder, which stays real.
     pub(super) async fn post_hook(&self, name: &str, args: &Value, output: &mut tools::Output) {
+        let note = self.hook_note(name, args, &output.text).await;
+        neutralize_in_place(&mut output.text);
+        if let Some(note) = note {
+            output.text.push_str(&note);
+        }
+    }
+
+    /// What a call's PostToolUse hooks say about its raw result, as the reminder to append once
+    /// the result is neutralized.
+    pub(super) async fn hook_note(&self, name: &str, args: &Value, text: &str) -> Option<String> {
         let after = self
             .hook(
                 "PostToolUse",
                 Some(name),
-                tool_payload(name, args, Some(&output.text)),
+                tool_payload(name, args, Some(text)),
             )
             .await;
-        if let Some(note) = after
+        after
             .block
             .or_else(|| (!after.context.is_empty()).then(|| after.context.join("\n")))
-        {
-            output.text.push_str(&format!(
-                "\n\n<system-reminder>A hook says: {note}</system-reminder>"
-            ));
-        }
+            .map(|note| format!("\n\n<system-reminder>A hook says: {note}</system-reminder>"))
+    }
+}
+
+/// `output` with its untrusted text neutralized.
+fn neutralized(mut output: tools::Output) -> tools::Output {
+    neutralize_in_place(&mut output.text);
+    output
+}
+
+/// Neutralizes untrusted text where it is (see `neutralize_reminder_tags`).
+pub(super) fn neutralize_in_place(text: &mut String) {
+    if let Cow::Owned(safe) = neutralize_reminder_tags(text) {
+        *text = safe;
     }
 }
 
@@ -611,17 +677,62 @@ pub(super) async fn dispatch_tool(
     tools::run(ctx, name, args, &wake).await
 }
 
-/// Untrusted tool output as it is stored in history: a literal reminder tag in it would read
-/// with killi's authority, so the tag's `<` reads as text instead. This runs before killi's
-/// own reminders are appended, so those stay real. Same tags as `tui::mention`'s file blocks.
-pub(super) fn neutralize_reminder_tags(text: &str) -> Cow<'_, str> {
-    if !(text.contains("<system-reminder") || text.contains("</system-reminder")) {
+/// Untrusted text as it is stored in history, from tools or `@` files: a reminder tag in it
+/// would read with killi's authority, so the tag's `<` reads as text instead. A model reads
+/// close variants as the tag too: any case, `_` for `-`, spaces or invisible characters
+/// inside, fullwidth forms. This runs before killi's own reminders are appended, so those stay
+/// real. Linear: each scan ends at the first character that can't continue the name.
+pub(crate) fn neutralize_reminder_tags(text: &str) -> Cow<'_, str> {
+    let mut out = String::new();
+    let mut copied = 0;
+    for (at, open) in text.match_indices(['<', '\u{FF1C}', '\u{FE64}']) {
+        let after = at + open.len();
+        if names_reminder(&text[after..]) {
+            out.push_str(&text[copied..at]);
+            out.push_str("&lt;");
+            copied = after;
+        }
+    }
+    if copied == 0 {
         return Cow::Borrowed(text);
     }
-    Cow::Owned(
-        text.replace("<system-reminder", "&lt;system-reminder")
-            .replace("</system-reminder", "&lt;/system-reminder"),
-    )
+    out.push_str(&text[copied..]);
+    Cow::Owned(out)
+}
+
+/// Whether `rest`, the text after a `<`, spells `system-reminder` the way a model would read
+/// it: in any case or fullwidth, with a `/`, separators or invisible characters anywhere.
+fn names_reminder(rest: &str) -> bool {
+    let mut name = "systemreminder".chars().peekable();
+    for c in rest.chars() {
+        let c = match c {
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        };
+        if c.is_whitespace()
+            || matches!(
+                c,
+                '/' | '-'
+                    | '_'
+                    | '\u{00AD}'
+                    | '\u{180E}'
+                    | '\u{200B}'..='\u{200F}'
+                    | '\u{2010}'..='\u{2015}'
+                    | '\u{2060}'..='\u{2064}'
+                    | '\u{2212}'
+                    | '\u{FEFF}'
+            )
+        {
+            continue;
+        }
+        if name.next() != Some(c.to_ascii_lowercase()) {
+            return false;
+        }
+        if name.peek().is_none() {
+            return true;
+        }
+    }
+    false
 }
 
 fn hash_text(text: &str) -> u64 {

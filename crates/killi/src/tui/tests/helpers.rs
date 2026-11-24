@@ -548,10 +548,20 @@ fn a_closed_pipe_reads_as_a_gone_terminal() {
     let mut fds = [0 as libc::c_int; 2];
     // SAFETY: fills the two descriptors.
     assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    // Other tests spawn processes in parallel; a child forked before this flag is set keeps
+    // the write end open for a moment, so the hangup is waited for rather than read once.
+    for fd in fds {
+        // SAFETY: sets a flag on a descriptor this test owns.
+        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
     assert!(!terminal_gone(fds[0]), "an open pipe is not gone");
     // SAFETY: writes one byte this test reads back, and closes descriptors it opened.
     assert_eq!(unsafe { libc::write(fds[1], b"x".as_ptr().cast(), 1) }, 1);
     unsafe { libc::close(fds[1]) };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !terminal_gone(fds[0]) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     assert!(
         terminal_gone(fds[0]),
         "a hangup is gone even with input buffered"

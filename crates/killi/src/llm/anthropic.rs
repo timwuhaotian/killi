@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 
 use super::{
     Delta, ErrorKind, Failure, IMAGE_OMITTED, Prepared, Reply, StreamParser, ToolCall,
-    arguments_object, cap_output, content_text, system_text, truncate,
+    arguments_object, cap_output, classify_stream_error, content_text, system_text, truncate,
 };
 use crate::config::{ResolvedModel, Thinking};
 
@@ -520,15 +520,7 @@ impl StreamParser for Parser {
                     "provider error mid-stream: {}",
                     truncate(&error.to_string(), 2000)
                 );
-                return Err(match error["type"].as_str() {
-                    Some("authentication_error") => {
-                        Failure::of(ErrorKind::Auth, None, false, message)
-                    }
-                    Some("invalid_request_error" | "permission_error" | "not_found_error") => {
-                        Failure::fatal(message)
-                    }
-                    _ => Failure::transient(message),
-                });
+                return Err(classify_stream_error(error.get("type"), &message));
             }
             _ => {}
         }

@@ -50,6 +50,8 @@ swarm_parallel = 8              # subagents a swarm runs at once
 verbosity = "normal"            # how long replies run; "ultra-concise" keeps them to the fewest words
 # mode = "orchestrate"          # every subagent runs in the background while you keep talking; default "focus"
 peers = true                    # other killi sessions here can see this one, ask it and message it
+# max_steps = 200               # requests a turn no one watches (-p, subagents, peer tasks) makes before it wraps up; 0 = no limit
+# max_steps_interactive = 0     # the same for a turn you watch in the terminal; default 0, no limit
 
 # Keep a provider to the models you want. A provider without an entry keeps every model.
 # [models_filter.zai]

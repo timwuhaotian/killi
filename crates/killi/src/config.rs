@@ -223,9 +223,28 @@ pub struct AgentConfig {
     /// Let the other killi sessions on this machine see this one, ask it about its work and
     /// leave it messages, and tell the model about those working in its tree (default true).
     pub peers: Option<bool>,
+    /// Requests one turn may make when no one watches it: `-p`, subagents, swarm members and
+    /// tasks other sessions send (default 200). At the limit the agent is asked to reply with
+    /// where the work stands, and the turn ends. 0 turns the limit off.
+    pub max_steps: Option<u32>,
+    /// The same for a turn the user watches in the terminal (default none; 0 is none too).
+    pub max_steps_interactive: Option<u32>,
 }
 
+/// Requests an unattended turn makes before it wraps up, unless `[agent] max_steps` says.
+pub const DEFAULT_MAX_STEPS: u32 = 200;
+
 impl AgentConfig {
+    /// The step limit for a turn no one watches; `None` when turned off.
+    pub fn max_steps(&self) -> Option<u32> {
+        Some(self.max_steps.unwrap_or(DEFAULT_MAX_STEPS)).filter(|n| *n > 0)
+    }
+
+    /// The step limit for a turn the user watches; `None` unless one is set.
+    pub fn max_steps_interactive(&self) -> Option<u32> {
+        self.max_steps_interactive.filter(|n| *n > 0)
+    }
+
     /// Whether a session starts in swarm mode.
     pub fn swarm_on(&self) -> bool {
         self.swarm.unwrap_or(true)

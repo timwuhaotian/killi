@@ -113,7 +113,7 @@ pub async fn bash(ctx: &Context, args: &Value, wake: Wake<'_>) -> Output {
         Ok(dir) => dir,
         Err(e) => return Output::error(e),
     };
-    let mut process = match Process::spawn(&dir, command) {
+    let mut process = match Process::spawn(&dir, command, ctx.read_only.get()) {
         Ok(process) => process,
         Err(e) => return Output::error(format!("Could not start bash: {e}")),
     };

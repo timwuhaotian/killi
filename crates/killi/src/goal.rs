@@ -5,14 +5,14 @@
 /// Told to the model on the step after `/goal <text>`: the goal stands until the user ends it.
 pub fn set_note(goal: &str) -> String {
     format!(
-        "&lt;system-reminder>Session goal: {goal}\nThis goal stands until the user ends it with /goal done or /goal clear. Break it into todo_write items and keep that list current; don't claim it is done until every part is finished and verified. If it turns out truly impossible, say what blocks it and what would unblock it, then wait for the user — only they can clear it.&lt;/system-reminder>"
+        "<system-reminder>Session goal: {goal}\nThis goal stands until the user ends it with /goal done or /goal clear. Break it into todo_write items and keep that list current; don't claim it is done until every part is finished and verified. If it turns out truly impossible, say what blocks it and what would unblock it, then wait for the user — only they can clear it.</system-reminder>"
     )
 }
 
 /// Told to the model on the step after the user ends the goal, so it stops pursuing it.
 pub fn end_note(goal: &str) -> String {
     format!(
-        "&lt;system-reminder>The session goal is over and no longer stands: {goal}\nCarry on with what the user asks next.&lt;/system-reminder>"
+        "<system-reminder>The session goal is over and no longer stands: {goal}\nCarry on with what the user asks next.</system-reminder>"
     )
 }
 
@@ -60,9 +60,7 @@ mod tests {
             note.contains("/goal done") && note.contains("/goal clear"),
             "{note}"
         );
-        assert!(
-            note.starts_with("&lt;system-reminder>") && note.ends_with("&lt;/system-reminder>")
-        );
+        assert!(note.starts_with("<system-reminder>") && note.ends_with("</system-reminder>"));
     }
 
     #[test]
@@ -70,6 +68,7 @@ mod tests {
         let note = end_note("ship v2");
         assert!(note.contains("ship v2"), "{note}");
         assert!(note.contains("no longer stands"), "{note}");
+        assert!(note.starts_with("<system-reminder>") && note.ends_with("</system-reminder>"));
     }
 
     #[test]

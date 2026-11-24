@@ -95,6 +95,38 @@ impl App {
         self.last_end = None;
         Ok(true)
     }
+
+    /// After a busy spell that ran no agent turn — /btw, /recap, /compact, /schedule,
+    /// /provider — nothing took the messages typed meanwhile, so they go back into the prompt
+    /// ahead of what was typed since, to send when the user chooses. Esc drops them, as it
+    /// does a turn's queue, and says the command was cancelled; Ctrl+S leaves them for
+    /// `read_input` to send at once.
+    pub(super) fn restore_queued(&mut self, ended: &Ended) {
+        if matches!(ended, Ended::Interrupted) {
+            if self.send_now {
+                self.notice("Cancelled to send your message now.");
+                return;
+            }
+            self.controls.steer.borrow_mut().clear();
+            self.queued.clear();
+            self.notice("Cancelled.");
+            return;
+        }
+        let typed = std::mem::take(&mut self.queued);
+        let steered: Vec<Steered> = self.controls.steer.borrow_mut().drain(..).collect();
+        if steered.is_empty() {
+            return;
+        }
+        let mut back: Vec<Steered> = steered
+            .into_iter()
+            .enumerate()
+            .map(|(i, (expanded, images))| (typed.get(i).cloned().unwrap_or(expanded), images))
+            .collect();
+        let draft = self.editor.take_draft();
+        back.extend(Some(draft).filter(|(text, _)| !text.is_empty()));
+        restore_steered(&mut self.editor, back);
+        self.notice("What you sent meanwhile is back in the prompt; Enter sends it.");
+    }
 }
 
 /// Puts messages typed during a finished turn back into the prompt, blank-line separated,

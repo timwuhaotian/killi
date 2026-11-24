@@ -44,6 +44,9 @@ pub struct Context {
     pub images: Cell<bool>,
     /// Which service `web_search` asks; /web-search-config swaps it while the session runs.
     pub search: RefCell<SearchSettings>,
+    /// Whether the next `bash` call runs under plan mode: its git can't run code from a
+    /// repository's own config. The agent sets it before each call.
+    pub read_only: Cell<bool>,
     /// Test-only scratch folder removed when the context drops, so `cargo test` leaves
     /// no `killi-*` folders behind in the temporary folder.
     #[cfg(test)]
@@ -59,6 +62,7 @@ impl Context {
             running: Rc::default(),
             images: Cell::new(true),
             search: RefCell::default(),
+            read_only: Cell::new(false),
             #[cfg(test)]
             temp: None,
         }
@@ -76,6 +80,7 @@ impl Context {
             running: self.running.clone(),
             images: Cell::new(self.images.get()),
             search: RefCell::new(self.search.borrow().clone()),
+            read_only: Cell::new(false),
             #[cfg(test)]
             temp: None,
         }
@@ -130,7 +135,7 @@ impl Output {
 /// Runs the tools that need nothing but the working directory; the agent handles the rest.
 pub async fn run(ctx: &Context, name: &str, args: Value, wake: bash::Wake<'_>) -> Output {
     match name {
-        "read" => files::read(ctx, &args),
+        "read" => files::read(ctx, &args).await,
         "write" => files::write(ctx, &args),
         "edit" => edit::edit(ctx, &args),
         "bash" => bash::bash(ctx, &args, wake).await,
@@ -409,15 +414,32 @@ pub fn is_binary(bytes: &[u8]) -> bool {
     bytes[..bytes.len().min(8000)].contains(&0)
 }
 
-/// Writes `text` to a new file in the spill directory and returns its path.
+/// Writes `text` to a new file in the spill directory and returns its path. Both are private
+/// to this user: a full output can hold secrets.
 pub fn spill(ctx: &Context, stem: &str, text: &str) -> Option<PathBuf> {
-    std::fs::create_dir_all(&ctx.spill_dir).ok()?;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    crate::session::create_private_dir(&ctx.spill_dir).ok()?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_nanos();
-    let path = ctx.spill_dir.join(format!("{stem}-{nanos}.txt"));
-    std::fs::write(&path, text).ok()?;
+    let (path, mut file) = (0..8).find_map(|n| {
+        let path = ctx.spill_dir.join(match n {
+            0 => format!("{stem}-{nanos}.txt"),
+            n => format!("{stem}-{nanos}-{n}.txt"),
+        });
+        let open = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path);
+        open.ok().map(|file| (path, file))
+    })?;
+    if file.write_all(text.as_bytes()).is_err() {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
     Some(path)
 }
 

@@ -24,7 +24,10 @@ message arriving through `killi ask` and `killi tell`) and select (a drag held a
 selection in reverse video), select-prompt (Shift+Alt+Left over the prompt's last words), held (a prompt waiting for its first token) and takeback (Esc before that
 token: the prompt back in the editor), suggest (the next-prompt suggestion the model gave, and
 Tab filling it into the prompt, the model then continuing it), draft (a typed draft, paused, its continuation faint after it),
-suggesting and completing (the island the prompt carries while those two are on their way), and shell (a local command being typed). Three scenes feed the
+suggesting and completing (the island the prompt carries while those two are on their way), shell (a local command being typed),
+snapshot-wait (a quick reply outrunning a slow undo snapshot: the row that waits for it) and
+snapshot-skipped (Esc giving it up), and cancelled (Esc on a slow `/btw` still out) and btw-queued
+(a message typed while that `/btw` ran, back in the prompt). Three scenes feed the
 README: readme (the slugify fix under its natural prompt, banner and all, at a tall inline size),
 skin (`/theme` just opened, previewing the session's own theme) and slash (the `/` menu narrowed
 by `/re`, a skill among the commands) — draw them with
@@ -110,8 +113,16 @@ SCENES = {
     "peers": dict(keys=[], peer=True),
     "sessions": dict(keys=["/sessions\r"], peer=True),
     "update": dict(keys=[], until="Update killi", update=True),
+    "snapshot-wait": dict(keys=["hi\r", "WAITFOR:Esc skips it"], settle=0.3, slow_snapshot=True),
+    "snapshot-skipped": dict(keys=["hi\r", "WAITFOR:Esc skips it", "\x1b"], settle=0.5, slow_snapshot=True),
+    "cancelled": dict(keys=["SLOW hi\r", "IDLE", "/btw why?\r", "WAIT:1", "\x1b"], settle=0.5),
+    "btw-queued": dict(keys=["SLOW hi\r", "IDLE", "/btw why?\r", "WAIT:0.5", "keep it short\r"], until="back in the prompt", settle=0.3),
     "peer": dict(keys=["ASK:Which files are you changing, and is anything committed?", "TELL:The base branch is pushed and green; rebase on it when you get there."], peer=True),
 }
+
+# A clean filter in the scratch HOME's git config that the snapshot scenes' file goes through:
+# the undo snapshot's `git add` then outlasts the turn's one-line reply.
+SLOW_FILTER = '[filter "slow"]\n\tclean = sleep 20\n'
 
 # The other session the peer scenes show: a file in ~/.killi/live that frames.py keeps locked,
 # which is all a live session is to the others.
@@ -233,6 +244,7 @@ class Scratch:
         (self.home / ".killi" / "config.toml").write_text(self.config)
         subprocess.run(["git", "checkout", "-q", "--", "."], cwd=self.project, check=True)
         subprocess.run(["git", "clean", "-qfdx"], cwd=self.project, check=True)
+        (self.home / ".gitconfig").unlink(missing_ok=True)
         for name in ("sessions", "snapshots", "live"):
             shutil.rmtree(self.home / ".killi" / name, ignore_errors=True)
         (self.home / ".killi" / "last-model.json").unlink(missing_ok=True)
@@ -320,6 +332,10 @@ def run_scene(args, scratch, scene, cols, rows, theme):
     background, foreground, _ = THEMES[theme]
     peer = hold_peer(scratch) if scene.get("peer") else None
     site, releases = release_site(scratch) if scene.get("update") else (None, None)
+    if scene.get("slow_snapshot"):
+        (scratch.home / ".gitconfig").write_text(SLOW_FILTER)
+        (scratch.project / ".gitattributes").write_text("*.dat filter=slow\n")
+        (scratch.project / "data.dat").write_text("data\n")
     screen = pyte.Screen(cols, rows)
     stream = pyte.ByteStream(screen)
     pid, fd = pty.fork()

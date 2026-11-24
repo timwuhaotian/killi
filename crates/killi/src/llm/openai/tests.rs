@@ -505,3 +505,159 @@ fn mapped_tool_names_go_out_and_come_back() {
         "the call comes back under killi's name"
     );
 }
+
+/// An error object in a data line, read by its code (string or number) and its text.
+fn mid_stream(error: Value) -> Failure {
+    Parser::default()
+        .event(
+            &json!({ "error": error }),
+            &mut Reply::default(),
+            &mut |_: Delta| {},
+        )
+        .unwrap_err()
+}
+
+#[test]
+fn errors_mid_stream_are_classified_by_code_and_text() {
+    let limited = mid_stream(json!({"code": "rate_limit_exceeded", "message": "slow down"}));
+    assert_eq!(
+        (limited.kind, limited.retryable),
+        (ErrorKind::RateLimited, true)
+    );
+    let spent = mid_stream(
+        json!({"code": "insufficient_quota", "message": "You exceeded your current quota"}),
+    );
+    assert_eq!((spent.kind, spent.retryable), (ErrorKind::Quota, false));
+    let long = mid_stream(json!({"code": "context_length_exceeded", "message": "too long"}));
+    assert_eq!((long.kind, long.retryable), (ErrorKind::Overflow, false));
+    let numbered = mid_stream(
+        json!({"code": 400, "message": "This model's maximum context length is 128000 tokens"}),
+    );
+    assert_eq!(
+        (numbered.kind, numbered.status),
+        (ErrorKind::Overflow, Some(400))
+    );
+    let typed =
+        mid_stream(json!({"code": null, "type": "invalid_request_error", "message": "bad"}));
+    assert_eq!((typed.kind, typed.retryable), (ErrorKind::Invalid, false));
+    let busy = mid_stream(json!({"code": 502, "message": "upstream error"}));
+    assert_eq!((busy.kind, busy.retryable), (ErrorKind::Other, true));
+    for code in [json!(1302), json!("1302")] {
+        let throttled =
+            mid_stream(json!({"code": code, "message": "Rate limit reached for requests"}));
+        assert_eq!(
+            (throttled.kind, throttled.retryable, throttled.status),
+            (ErrorKind::RateLimited, true, None),
+            "a gateway's own number says nothing, as a number or a string: {code}"
+        );
+    }
+}
+
+#[test]
+fn a_refusal_delta_is_a_refusal() {
+    let event = json!({"choices":[{"delta":{"refusal":"cannot help"}}]});
+    let refused = Parser::default()
+        .event(&event, &mut Reply::default(), &mut |_: Delta| {})
+        .unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::Refused);
+}
+
+/// The calls a stream of tool-call fragments assembles, as (id, name, arguments).
+fn assembled(fragments: &[Value]) -> Vec<(String, String, String)> {
+    let mut parser = Parser::default();
+    let mut reply = Reply::default();
+    let mut sink = |_: Delta| {};
+    for fragment in fragments {
+        let event = json!({"choices":[{"delta":{"tool_calls":[fragment]}}]});
+        parser.event(&event, &mut reply, &mut sink).unwrap();
+    }
+    let done = json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]});
+    parser.event(&done, &mut reply, &mut sink).unwrap();
+    parser.finish(&mut reply).unwrap();
+    reply
+        .tool_calls
+        .into_iter()
+        .map(|call| (call.id, call.name, call.arguments))
+        .collect()
+}
+
+fn call(id: &str, name: &str, arguments: &str) -> (String, String, String) {
+    (id.into(), name.into(), arguments.into())
+}
+
+#[test]
+fn fragments_without_an_index_continue_the_latest_call() {
+    let calls = assembled(&[
+        json!({"id": "a", "function": {"name": "read", "arguments": "{\"pa"}}),
+        json!({"function": {"arguments": "th\":\"x\"}"}}),
+        json!({"id": "b", "function": {"name": "grep", "arguments": "{}"}}),
+    ]);
+    assert_eq!(
+        calls,
+        [
+            call("a", "read", r#"{"path":"x"}"#),
+            call("b", "grep", "{}")
+        ]
+    );
+}
+
+#[test]
+fn a_name_or_id_sent_again_is_not_doubled() {
+    let calls = assembled(&[
+        json!({"index": 0, "id": "a", "function": {"name": "read", "arguments": "{\"pa"}}),
+        json!({"index": 0, "id": "a", "function": {"name": "read", "arguments": "th\":\"x\"}"}}),
+    ]);
+    assert_eq!(calls, [call("a", "read", r#"{"path":"x"}"#)]);
+    let pieces = assembled(&[
+        json!({"index": 0, "id": "a", "function": {"name": "re"}}),
+        json!({"index": 0, "function": {"name": "ad", "arguments": "{}"}}),
+    ]);
+    assert_eq!(pieces, [call("a", "read", "{}")]);
+}
+
+#[test]
+fn interleaved_calls_keep_their_own_fragments() {
+    let calls = assembled(&[
+        json!({"index": 0, "id": "a", "function": {"name": "read", "arguments": "{\"path\":"}}),
+        json!({"index": 1, "id": "b", "function": {"name": "grep", "arguments": "{\"pattern\":"}}),
+        json!({"index": 0, "function": {"arguments": "\"x\"}"}}),
+        json!({"index": 1, "function": {"arguments": "\"y\"}"}}),
+    ]);
+    assert_eq!(
+        calls,
+        [
+            call("a", "read", r#"{"path":"x"}"#),
+            call("b", "grep", r#"{"pattern":"y"}"#)
+        ]
+    );
+    let renumbered = assembled(&[
+        json!({"index": 0, "id": "a", "function": {"name": "read", "arguments": "{}"}}),
+        json!({"index": 0, "id": "b", "function": {"name": "grep", "arguments": "{}"}}),
+    ]);
+    assert_eq!(
+        renumbered,
+        [call("a", "read", "{}"), call("b", "grep", "{}")],
+        "a new id under the same index is a new call"
+    );
+}
+
+#[test]
+fn a_fresh_id_without_a_name_continues_the_call() {
+    let indexed = assembled(&[
+        json!({"index": 0, "id": "a", "function": {"name": "read", "arguments": "{\"pa"}}),
+        json!({"index": 0, "id": "a2", "function": {"arguments": "th\":\"x\"}"}}),
+    ]);
+    assert_eq!(indexed, [call("a", "read", r#"{"path":"x"}"#)]);
+    let unindexed = assembled(&[
+        json!({"id": "a", "function": {"name": "read", "arguments": "{\"pa"}}),
+        json!({"id": "a2", "function": {"arguments": "th\":\"x\"}"}}),
+        json!({"id": "b", "function": {"name": "grep", "arguments": "{}"}}),
+    ]);
+    assert_eq!(
+        unindexed,
+        [
+            call("a", "read", r#"{"path":"x"}"#),
+            call("b", "grep", "{}")
+        ]
+    );
+}

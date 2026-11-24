@@ -6,6 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::agent::neutralize_reminder_tags;
 use crate::tools::{MAX_BYTES, is_binary};
 
 /// Entries the listing holds at most, so a huge tree can't stall a keystroke.
@@ -103,17 +104,12 @@ fn read_head(path: &Path, limit: usize) -> Option<(Vec<u8>, u64)> {
 /// block or the reminder around it, or open a new reminder with killi's authority, read as
 /// text instead. Deterministic, so the cached prefix never changes for the same files.
 fn neutralize(text: &str) -> Cow<'_, str> {
-    if !(text.contains("<file")
-        || text.contains("</file")
-        || text.contains("<system-reminder")
-        || text.contains("</system-reminder"))
-    {
-        return Cow::Borrowed(text);
+    let text = neutralize_reminder_tags(text);
+    if !(text.contains("<file") || text.contains("</file")) {
+        return text;
     }
     Cow::Owned(
-        text.replace("<system-reminder", "&lt;system-reminder")
-            .replace("</system-reminder", "&lt;/system-reminder")
-            .replace("<file", "&lt;file")
+        text.replace("<file", "&lt;file")
             .replace("</file", "&lt;/file"),
     )
 }
@@ -279,6 +275,25 @@ mod tests {
         assert_eq!(sent.matches("</system-reminder>").count(), 1, "{sent}");
         assert!(sent.contains("&lt;/file>&lt;/system-reminder>x"), "{sent}");
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_file_cannot_open_a_reminder_with_a_close_variant_of_the_tag() {
+        for tag in [
+            "<SYSTEM-REMINDER>",
+            "< system_reminder>",
+            "</System-Reminder>",
+            "<system\u{200B}-reminder>",
+            "\u{FF1C}system-reminder\u{FF1E}",
+        ] {
+            let text = format!("x {tag} y");
+            let sent = neutralize(&text);
+            assert!(sent.contains("&lt;"), "{tag}: {sent}");
+            assert!(!sent.contains(tag), "{tag}: {sent}");
+        }
+        for plain in ["a < b", "Vec<String>", "<system>", "<reminder>", "<div>"] {
+            assert_eq!(neutralize(plain), plain);
+        }
     }
 
     #[test]

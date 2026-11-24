@@ -220,6 +220,40 @@ async fn a_stop_before_the_drive_runs_nothing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn the_drive_marks_the_main_agent_busy_while_the_roles_work() {
+    let mentor_url = stub_replies(vec![
+        sse("the plan", "stop"),
+        sse("good work\\nTASK_COMPLETE", "stop"),
+    ])
+    .await;
+    let executor_url = stub_replies(vec![sse("did it", "stop")]).await;
+    let controls = Controls::default();
+    let background = controls.background.clone();
+    let busy = Rc::new(RefCell::new(Vec::new()));
+    let seen = busy.clone();
+    let sink: Sink = Rc::new(move |_| seen.borrow_mut().push(background.borrow().main_busy));
+    let mut agent = idle_agent("busy", controls, sink);
+    agent
+        .push(json!({"role": "system", "content": "test"}))
+        .unwrap();
+    agent
+        .pair_begin(
+            &config(),
+            test_client_at("mentor-test", &mentor_url),
+            test_client_at("executor-test", &executor_url),
+            "do the thing",
+            vec![],
+        )
+        .unwrap();
+    busy.borrow_mut().clear();
+    agent.pair_drive().await.unwrap();
+    assert_eq!(agent.pair_outcome(), Some(Outcome::Done));
+    assert!(!busy.borrow().is_empty());
+    assert!(busy.borrow().iter().all(|&b| b), "{:?}", busy.borrow());
+    assert!(!agent.controls.background.borrow().main_busy);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn an_empty_turn_fails_the_drive_and_keeps_the_pair() {
     let mentor_url = stub_replies(vec![sse("", "stop")]).await;
     let mut agent = parent("empty");

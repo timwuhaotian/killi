@@ -268,14 +268,12 @@ pub(super) async fn command(
     let arg = arg.to_string();
     let parsed = Rc::new(RefCell::new(None));
     let slot = parsed.clone();
-    app.begin_busy();
-    let ended = run_turn(app, keys, rx, async move {
+    let ended = command_turn(app, keys, rx, async move {
         let result = parse(&client, &arg).await;
         *slot.borrow_mut() = Some(result);
         Ok((String::new(), Stop::Completed))
     })
     .await?;
-    app.end_busy();
     if matches!(ended, Ended::Done(Ok(_)))
         && let Some(result) = parsed.take()
     {

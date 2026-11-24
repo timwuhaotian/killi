@@ -47,12 +47,16 @@ pub(crate) fn task_agent(
         peer_notes: Rc::default(),
         background: Rc::default(),
     };
+    let settings = Settings {
+        peer_task: true,
+        ..(*settings).clone()
+    };
     let mut agent = Agent::begin(
         (*client).clone(),
         &ctx.cwd,
         &system,
         (*aside.tools).clone(),
-        (*settings).clone(),
+        settings,
         controls,
         sink,
         session,

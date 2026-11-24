@@ -345,19 +345,14 @@ impl App {
                     self.search = None;
                     self.provider = None;
                 }
-                // A correction with no answer to ride on goes on its own, or it is lost.
+                // A correction with no answer to ride on goes with the dismissal, or it is lost.
                 let note = std::mem::take(&mut self.ask_corrections);
-                let payload = if note.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}（本问未作答）", note.join("\n"))
-                };
                 for line in &note {
                     self.commit(format!("  {FIN}↳{RESET} {line}"));
                 }
                 self.ask_past.clear();
                 self.ask_view = None;
-                let _ = asking.question.reply.send(payload);
+                asking.question.dismiss(&note);
                 self.commit(format!("{DIM}  (dismissed){RESET}"));
             }
             KeyCode::Char('c')
@@ -434,7 +429,7 @@ impl App {
         if answer != past.answer {
             let old = std::mem::replace(&mut past.answer, answer.clone());
             self.ask_corrections.push(format!(
-                "更正之前的问题「{}」：答案改为「{answer}」（原为「{old}」）",
+                "Corrected an earlier answer to “{}”: now “{answer}” (was “{old}”)",
                 first_line(&past.text, 60)
             ));
         }
@@ -478,7 +473,7 @@ impl App {
         let payload = if note.is_empty() {
             answer
         } else {
-            format!("{}\n本问答案：{answer}", note.join("\n"))
+            format!("{}\nAnswer to this question: {answer}", note.join("\n"))
         };
         let _ = asking.question.reply.send(payload);
     }

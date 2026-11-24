@@ -99,17 +99,131 @@ async fn an_unreachable_primary_switches_to_the_backup() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn a_rejected_key_or_request_switches_to_the_backup() {
-    for (name, status) in [
-        ("backup-401", "401 Unauthorized"),
-        ("backup-400", "400 Bad Request"),
-        ("backup-404", "404 Not Found"),
+async fn a_rejected_key_spent_credit_or_an_unknown_model_switches_to_the_backup() {
+    for (name, status, message) in [
+        ("backup-401", "401 Unauthorized", "nope"),
+        ("backup-404", "404 Not Found", "nope"),
+        (
+            "backup-400-model",
+            "400 Bad Request",
+            "model gpt-9 not found",
+        ),
+        (
+            "backup-400-credit",
+            "400 Bad Request",
+            "Your credit balance is too low to access the API",
+        ),
+        ("backup-403-balance", "403 Forbidden", "余额不足"),
+        (
+            "backup-400-signature",
+            "400 Bad Request",
+            "messages.1.content.0: Invalid `signature` in `thinking` block",
+        ),
     ] {
-        let rejected = failing(status, "{\"error\":{\"message\":\"nope\"}}");
+        let rejected = failing(
+            status,
+            &format!("{{\"error\":{{\"message\":\"{message}\"}}}}"),
+        );
         let (agent, reply) = request_with_backup(name, Some(vec![rejected])).await;
         assert_eq!(reply.unwrap().text, "from backup", "{status}");
         assert_eq!(agent.model_alias(), "backup", "{status}");
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_malformed_request_or_a_refusal_keeps_the_primary_and_the_backup() {
+    let filtered = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{}",
+        sse("partial", "content_filter")
+    );
+    for (name, reply, kind) in [
+        (
+            "keep-400",
+            failing(
+                "400 Bad Request",
+                "{\"error\":{\"message\":\"roles must alternate\"}}",
+            ),
+            ErrorKind::Invalid,
+        ),
+        (
+            "keep-422",
+            failing(
+                "422 Unprocessable Entity",
+                "{\"error\":{\"message\":\"bad schema\"}}",
+            ),
+            ErrorKind::Invalid,
+        ),
+        ("keep-refusal", filtered, ErrorKind::Refused),
+    ] {
+        let (agent, result) = request_with_backup(name, Some(vec![reply])).await;
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<ProviderError>().map(|p| p.kind),
+            Some(kind),
+            "{name}"
+        );
+        assert_eq!(agent.model_alias(), "primary", "{name}");
+        assert_eq!(agent.backup_alias(), Some("backup"), "{name}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_call_cut_off_at_the_output_limit_says_so() {
+    let cut = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"src/ma\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n";
+    let url = stub_replies(vec![cut.to_string(), sse("done", "stop")]).await;
+    let mut agent = idle_agent("cut-call", Controls::default(), Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
+    let (text, _) = agent.run("read it", &[]).await.unwrap();
+    assert_eq!(text, "done");
+    let call = agent
+        .messages
+        .iter()
+        .find_map(|m| m["tool_calls"][0]["function"]["arguments"].as_str())
+        .unwrap();
+    assert_eq!(call, r#"{"path":"src/ma"#, "kept as streamed");
+    let result = agent
+        .messages
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .and_then(|m| m["content"].as_str())
+        .unwrap();
+    assert!(result.contains("output token limit"), "{result}");
+    assert!(result.contains("src/ma"), "{result}");
+}
+
+#[test]
+fn a_compacted_session_is_not_discarded() {
+    let summary = format!(
+        "{} to save space.</system-reminder>\n\nThe work so far.",
+        crate::session::COMPACTED_MARK
+    );
+    let mut agent = idle_agent("discard-compacted", Controls::default(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent
+        .push(json!({"role": "user", "content": summary}))
+        .unwrap();
+    agent.discard_if_unused();
+    assert!(
+        agent.session.log_path.exists(),
+        "a summary stands for what was said before it"
+    );
+
+    let mut agent = idle_agent("discard-reminded", Controls::default(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent
+        .push(
+            json!({"role": "user", "content": "<system-reminder>note</system-reminder>\n\nhello"}),
+        )
+        .unwrap();
+    agent.discard_if_unused();
+    assert!(
+        agent.session.log_path.exists(),
+        "a prompt behind a reminder is still a prompt"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -808,10 +922,22 @@ fn a_resumed_session_keeps_the_plan_mode_it_ended_in_and_drops_the_queue() {
 #[tokio::test(flavor = "current_thread")]
 async fn length_continuations_keep_every_part() {
     let url = stub_replies(vec![sse("part1", "length"), sse("part2", "stop")]).await;
-    let mut agent = idle_agent("length-text", Controls::default(), Rc::new(|_| {}));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let seen = events.clone();
+    let sink: Sink = Rc::new(move |event| match event {
+        Event::Text(text) => seen.borrow_mut().push(text),
+        Event::Settled => seen.borrow_mut().push("|settled|".into()),
+        _ => {}
+    });
+    let mut agent = idle_agent("length-text", Controls::default(), sink);
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
     let (text, stop) = agent.run("go", &[]).await.unwrap();
     assert_eq!((text.as_str(), stop), ("part1part2", Stop::Completed));
+    assert_eq!(
+        events.borrow().concat(),
+        "part1|settled|part2|settled|",
+        "each recorded part is settled before the next streams, so `-p` keeps it on a retry"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1501,5 +1627,220 @@ async fn a_resumed_session_ended_ultra_concise_hears_it_is_off_when_the_config_s
     assert_eq!(
         agent.messages[agent.messages.len() - 2]["content"].as_str(),
         Some(verbosity::OFF)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn returning_to_the_primary_arms_the_backup_again() {
+    let primary = rate_limited_stub(10, "slow down").await;
+    let backup = answering_stub_times("from backup", 2).await;
+    let mut agent = idle_agent("backup-rearm", Controls::default(), Rc::new(|_| {}));
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent
+        .push(json!({"role": "user", "content": "hi"}))
+        .unwrap();
+    agent.client = Rc::new(test_client_at("primary", &primary));
+    agent.set_backup(test_client_at("backup", &backup));
+    assert_eq!(agent.request().await.unwrap().text, "from backup");
+    assert_eq!(agent.model_alias(), "backup");
+    assert_eq!(agent.backup_alias(), None, "no backup while running on it");
+
+    let primary = rate_limited_stub(10, "slow down").await;
+    agent
+        .switch_model(test_client_at("primary", &primary))
+        .unwrap();
+    assert_eq!(
+        agent.backup_alias(),
+        Some("backup"),
+        "/model back to the primary arms the backup"
+    );
+    assert_eq!(agent.request().await.unwrap().text, "from backup");
+    assert_eq!(
+        agent.model_alias(),
+        "backup",
+        "the next failure switches again"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_failing_backup_does_not_switch_to_itself() {
+    let backup = rate_limited_stub(10, "slow down").await;
+    let notices = Rc::new(RefCell::new(Vec::new()));
+    let seen = notices.clone();
+    let sink: Sink = Rc::new(move |event| {
+        if let Event::Notice(text) = event {
+            seen.borrow_mut().push(text);
+        }
+    });
+    let mut agent = idle_agent("backup-on-it", Controls::default(), sink);
+    agent
+        .push(json!({"role": "system", "content": "sys"}))
+        .unwrap();
+    agent
+        .push(json!({"role": "user", "content": "hi"}))
+        .unwrap();
+    agent.client = Rc::new(test_client_at("backup", &backup));
+    agent.set_backup(test_client_at("backup", &backup));
+    let error = agent.request().await.unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<ProviderError>().map(|p| p.kind),
+        Some(ErrorKind::RateLimited)
+    );
+    assert_eq!(agent.model_alias(), "backup");
+    assert!(
+        !notices
+            .borrow()
+            .iter()
+            .any(|n| n.contains("switched to its backup")),
+        "a session already on its backup doesn't fall back to it again: {:?}",
+        notices.borrow()
+    );
+}
+
+#[test]
+fn backup_changes_reach_side_questions_and_peer_tasks() {
+    let mut agent = idle_agent("backup-share", Controls::default(), Rc::new(|_| {}));
+    agent.set_backup(test_client_at("backup", ""));
+    let alias = |agent: &Agent| {
+        agent
+            .controls
+            .aside
+            .borrow()
+            .backup
+            .as_ref()
+            .map(|client| client.model.alias.clone())
+    };
+    assert_eq!(alias(&agent).as_deref(), Some("backup"));
+    agent.clear_backup();
+    assert_eq!(alias(&agent), None);
+}
+
+/// Resumes the log written from `messages` with default settings.
+fn resume_messages(name: &str, messages: &[Value]) -> (crate::test_temp::TempDir, Agent) {
+    resume_messages_to(name, messages, Rc::new(|_| {}))
+}
+
+/// `resume_messages`, with the resumed session's events going to `sink`.
+fn resume_messages_to(
+    name: &str,
+    messages: &[Value],
+    sink: Sink,
+) -> (crate::test_temp::TempDir, Agent) {
+    let dir = crate::test_temp::TempDir::new(name);
+    let log = dir.join("session.jsonl");
+    let lines: Vec<String> = messages
+        .iter()
+        .map(|message| json!({"type": "message", "message": message}).to_string())
+        .collect();
+    std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+    let (locked, report) = Session::resume(&log).unwrap();
+    let agent = Agent::resume_reported(
+        test_client(),
+        None,
+        &dir,
+        locked,
+        report,
+        Vec::new(),
+        Settings::default(),
+        Controls::default(),
+        sink,
+    )
+    .unwrap();
+    (dir, agent)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_resumed_session_keeps_the_swarm_mode_it_ended_in() {
+    let (_dir, mut agent) = resume_messages(
+        "killi-resume-swarm",
+        &[
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": swarm::ON}),
+            json!({"role": "user", "content": "split it"}),
+        ],
+    );
+    assert!(agent.swarm_announced, "the log ended in swarm mode");
+    agent.controls.swarm.set(true);
+    agent.before_request().await.unwrap();
+    let ons = agent
+        .messages
+        .iter()
+        .filter(|m| m["content"] == swarm::ON)
+        .count();
+    assert_eq!(ons, 1, "swarm mode isn't announced again on resume");
+    let (_dir, agent) = resume_messages(
+        "killi-resume-swarm-off",
+        &[
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": swarm::ON}),
+            json!({"role": "user", "content": swarm::OFF}),
+        ],
+    );
+    assert!(!agent.swarm_announced, "the log ended out of swarm mode");
+}
+
+#[test]
+fn a_resumed_session_keeps_its_last_set_task_list() {
+    let call = |id: &str, todos: Value| {
+        json!({"role": "assistant", "tool_calls": [{"id": id, "type": "function", "function": {
+            "name": "todo_write",
+            "arguments": json!({"todos": todos}).to_string(),
+        }}]})
+    };
+    let set = json!([
+        {"content": "write the parser", "status": "completed"},
+        {"content": "test it", "status": "in_progress"},
+    ]);
+    let mut writer = idle_agent("todos-writer", Controls::default(), Rc::new(|_| {}));
+    let accepted = writer.todo_write(&json!({"todos": set}));
+    let refused = writer.todo_write(&json!({"todos": [
+        {"content": "a", "status": "in_progress"},
+        {"content": "b", "status": "in_progress"},
+    ]}));
+    assert!(refused.is_error);
+    let shown = Rc::new(RefCell::new(Vec::new()));
+    let seen = shown.clone();
+    let sink: Sink = Rc::new(move |event| {
+        if let Event::Todos(todos) = event {
+            seen.borrow_mut().push(todos);
+        }
+    });
+    let (_dir, agent) = resume_messages_to(
+        "killi-resume-todos",
+        &[
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "build it"}),
+            call("t1", set.clone()),
+            json!({"role": "tool", "tool_call_id": "t1", "content": accepted.text}),
+            call(
+                "t2",
+                json!([
+                    {"content": "a", "status": "in_progress"},
+                    {"content": "b", "status": "in_progress"},
+                ]),
+            ),
+            json!({"role": "tool", "tool_call_id": "t2", "content": refused.text}),
+        ],
+        sink,
+    );
+    let todos: Vec<(&str, &str)> = agent
+        .todos
+        .iter()
+        .map(|t| (t.content.as_str(), t.status.as_str()))
+        .collect();
+    assert_eq!(
+        todos,
+        [
+            ("write the parser", "completed"),
+            ("test it", "in_progress")
+        ],
+        "the refused list never replaced the one the tool set"
+    );
+    assert_eq!(
+        *shown.borrow(),
+        std::slice::from_ref(&agent.todos),
+        "the terminal's task panel shows the restored list"
     );
 }

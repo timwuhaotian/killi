@@ -1,4 +1,5 @@
 use super::*;
+pub(super) use crate::crash::crash_line;
 
 /// Whether to take the whole screen: `[ui] fullscreen` when set, else in Kil, which sends the
 /// wheel to the program and leaves selecting text to itself.
@@ -353,67 +354,31 @@ pub fn install_crash_hook() {
     std::panic::set_hook(Box::new(move |info| {
         crate::tools::kill_all();
         crate::live::leave();
-        append_crash(panic_message(info));
+        crate::crash::append_record(|ts| crash_line(&panic_message(info), ts));
         restore_terminal();
         report(info);
     }));
 }
 
-/// What the panic says, for the crash record.
+/// What the panic says, for the crash record, and where in the source it happened: the
+/// location survives a stripped binary.
 fn panic_message(info: &std::panic::PanicHookInfo) -> String {
-    if let Some(text) = info.payload().downcast_ref::<&str>() {
+    let message = if let Some(text) = info.payload().downcast_ref::<&str>() {
         text.to_string()
     } else if let Some(text) = info.payload().downcast_ref::<String>() {
         text.clone()
     } else {
-        info.to_string()
-    }
+        return info.to_string();
+    };
+    located(message, info.location())
 }
 
-/// The crash record in the session log's shape: one JSON object with a millisecond stamp.
-pub(super) fn crash_line(message: &str, ts: u128) -> String {
-    format!(
-        "{{\"type\":\"crash\",\"message\":{},\"ts\":{ts}}}\n",
-        serde_json::Value::String(message.to_string())
-    )
-}
-
-/// Notes the crash in the session log, best effort: nothing is left running to retry with.
-/// A crash may have torn the last line, so the record starts on a fresh line instead of
-/// gluing onto it.
-fn append_crash(message: String) {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let Some(path) = crate::agent::crash_log() else {
-        return;
-    };
-    let mut file = match std::fs::OpenOptions::new()
-        .append(true)
-        .read(true)
-        .open(&path)
-    {
-        Ok(file) => file,
-        Err(_) => return,
-    };
-    let torn = match file.seek(SeekFrom::End(0)) {
-        Ok(0) => false,
-        Ok(_) => file
-            .seek(SeekFrom::End(-1))
-            .and_then(|_| {
-                let mut last = [0u8; 1];
-                file.read_exact(&mut last).map(|()| last[0] != b'\n')
-            })
-            .unwrap_or(false),
-        Err(_) => false,
-    };
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis());
-    let mut line = crash_line(&message, ts);
-    if torn {
-        line.insert(0, '\n');
+/// `message` with the source location it came from, when there is one.
+pub(super) fn located(message: String, at: Option<&std::panic::Location>) -> String {
+    match at {
+        Some(at) => format!("{message} (at {}:{}:{})", at.file(), at.line(), at.column()),
+        None => message,
     }
-    let _ = file.write_all(line.as_bytes());
 }
 
 /// Gives the terminal back as it was before the UI took it; also on quitting from a signal,

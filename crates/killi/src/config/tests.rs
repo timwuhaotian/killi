@@ -262,6 +262,23 @@ fn swarm_mode_starts_on_unless_the_config_says_off() {
 }
 
 #[test]
+fn step_limits_bound_unattended_turns_by_default_and_zero_turns_them_off() {
+    let default = super::AgentConfig::default();
+    assert_eq!(default.max_steps(), Some(super::DEFAULT_MAX_STEPS));
+    assert_eq!(default.max_steps_interactive(), None);
+    let set: super::Config =
+        toml::from_str("[agent]\nmax_steps = 50\nmax_steps_interactive = 400\n").unwrap();
+    assert_eq!(set.agent.max_steps(), Some(50));
+    assert_eq!(set.agent.max_steps_interactive(), Some(400));
+    let off: super::Config =
+        toml::from_str("[agent]\nmax_steps = 0\nmax_steps_interactive = 0\n").unwrap();
+    assert_eq!(off.agent.max_steps(), None);
+    assert_eq!(off.agent.max_steps_interactive(), None);
+    let template: super::Config = toml::from_str(super::TEMPLATE).unwrap();
+    assert_eq!(template.agent.max_steps(), Some(super::DEFAULT_MAX_STEPS));
+}
+
+#[test]
 fn the_verbosity_is_read_and_saved_by_name() {
     use crate::verbosity::Verbosity;
     assert_eq!(super::AgentConfig::default().verbosity(), Verbosity::Normal);

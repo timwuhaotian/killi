@@ -322,8 +322,11 @@ impl Agent {
 
     /// Runs pair turns until the mentor ends it, the budget runs out, or the terminal stops
     /// or interrupts the loop. Each step queues the next, so an interruption resumes where
-    /// the queue stands.
+    /// the queue stands. The drive is the session's turn: the roles run below it, so it keeps
+    /// the machine awake and marks the main agent busy until it returns.
     pub async fn pair_drive(&mut self) -> Result<(String, Stop)> {
+        let _awake = self.awake.hold();
+        let _busy = background::Busy::new(&self.controls.background);
         loop {
             let ended = self
                 .pair

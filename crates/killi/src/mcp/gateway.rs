@@ -3,6 +3,9 @@ use super::*;
 use super::connection::RpcError;
 use crate::tools::Output;
 
+/// How long the session waits for each eager server to start and list its tools.
+const EAGER_TIMEOUT: Duration = Duration::from_secs(30);
+
 impl Mcp {
     fn refused(&self, server: &str) -> Option<Output> {
         self.off
@@ -32,13 +35,28 @@ impl Mcp {
     }
 
     /// Starts the named servers now and returns native definitions of their tools. The
-    /// servers start together, so one slow server doesn't hold the others behind it.
+    /// servers start together, so one slow server doesn't hold the others behind it, and
+    /// one that isn't ready within `EAGER_TIMEOUT` is reported instead of holding up the
+    /// session; it stays reachable through `mcp`.
     pub async fn start_eager(&mut self, names: &[String]) -> (Vec<Value>, Vec<String>) {
+        self.start_eager_within(names, EAGER_TIMEOUT).await
+    }
+
+    pub(super) async fn start_eager_within(
+        &mut self,
+        names: &[String],
+        limit: Duration,
+    ) -> (Vec<Value>, Vec<String>) {
         let mut definitions = Vec::new();
         let mut problems = Vec::new();
         let started = futures_util::future::join_all(names.iter().map(|name| {
-            let tools = self.tools(name);
-            async move { (name, tools.await) }
+            let tools = tokio::time::timeout(limit, self.tools(name));
+            async move {
+                let tools = tools
+                    .await
+                    .unwrap_or_else(|_| Err(anyhow!("didn't start within {}s", limit.as_secs())));
+                (name, tools)
+            }
         }))
         .await;
         for (name, tools) in started {

@@ -410,6 +410,15 @@ impl App {
                         notice_line = first_line(note, 120);
                         self.notice(note);
                     }
+                    Stop::StepLimit => {
+                        let (cap, key) = agent.step_limit();
+                        let cap = cap.map(|n| format!(" ({n} requests)")).unwrap_or_default();
+                        let note = format!(
+                            "Stopped at the turn's step limit{cap}; the reply says what is left. Send a message to go on, or raise [agent] {key}."
+                        );
+                        notice_line = first_line(&note, 120);
+                        self.notice(&note);
+                    }
                     Stop::Completed => {}
                 }
                 if !self.later_noted && leaves_something_for_later(&text) {

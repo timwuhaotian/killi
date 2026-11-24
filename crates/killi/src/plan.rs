@@ -1,6 +1,11 @@
 //! Plan mode: the tool list stays the same, and calls are checked when they run. Writes are
 //! refused, and bash runs only commands known to be read-only.
 
+mod braces;
+mod sed;
+pub(crate) mod words;
+mod writes;
+
 /// Commands whose every form only reads. Matched as the start of each pipeline segment.
 /// `cd` is here because a segment only moves the shell the other segments run in; each of
 /// them is still checked on its own.
@@ -55,7 +60,7 @@ const READ_ONLY: &[&str] = &[
     "git rev-parse",
     "git ls-files",
     "git grep",
-    "git remote -v",
+    "git remote",
     "git tag",
     "git describe",
     "git shortlog",
@@ -83,8 +88,10 @@ const READ_ONLY: &[&str] = &[
 
 /// The parts of `command` between its control operators (`|`, `;`, `&`, a newline) that bash
 /// would act on: one outside quotes and past a backslash is text to the command instead, as
-/// in `grep -E 'a|b'`. `$'…'` is like `'…'` with backslash escapes; `'…'` has none.
-fn segments(command: &str) -> Vec<&str> {
+/// in `grep -E 'a|b'`. `$'…'` is like `'…'` with backslash escapes; `'…'` has none. An
+/// unquoted `#` that starts a word comments out the rest of its line, and a heredoc's body
+/// (the lines after a `<<WORD` up to the line `WORD`) is input, so neither is in a part.
+pub(crate) fn segments(command: &str) -> Vec<&str> {
     #[derive(PartialEq)]
     enum Quote {
         None,
@@ -94,28 +101,63 @@ fn segments(command: &str) -> Vec<&str> {
     }
     let bytes = command.as_bytes();
     let mut parts = Vec::new();
+    let mut heredocs = Vec::new();
     let (mut start, mut at, mut quote) = (0, 0, Quote::None);
+    let mut word_start = true;
     while at < bytes.len() {
         let byte = bytes[at];
         match quote {
-            Quote::None => match byte {
-                b'\\' => at += 1,
-                b'\'' => quote = Quote::Single,
-                b'"' => quote = Quote::Double,
-                b'$' if matches!(bytes.get(at + 1), Some(b'\'' | b'"')) => {
-                    quote = if bytes[at + 1] == b'\'' {
-                        Quote::Ansi
-                    } else {
-                        Quote::Double
-                    };
-                    at += 1;
+            Quote::None => {
+                let starts_word = std::mem::replace(
+                    &mut word_start,
+                    matches!(
+                        byte,
+                        b' ' | b'\t' | b'\n' | b';' | b'|' | b'&' | b'(' | b')' | b'<' | b'>'
+                    ),
+                );
+                match byte {
+                    b'#' if starts_word => {
+                        parts.push(&command[start..at]);
+                        at = command[at..].find('\n').map_or(bytes.len(), |n| at + n);
+                        start = at;
+                        word_start = true;
+                        continue;
+                    }
+                    b'\\' => at += 1,
+                    b'\'' => quote = Quote::Single,
+                    b'"' => quote = Quote::Double,
+                    b'$' if matches!(bytes.get(at + 1), Some(b'\'' | b'"')) => {
+                        quote = if bytes[at + 1] == b'\'' {
+                            Quote::Ansi
+                        } else {
+                            Quote::Double
+                        };
+                        at += 1;
+                    }
+                    b'<' if bytes.get(at + 1) == Some(&b'<') => {
+                        if bytes.get(at + 2) == Some(&b'<') {
+                            at += 2;
+                        } else {
+                            let (delimiter, end) = heredoc_delimiter(command, at + 2);
+                            heredocs.extend(delimiter);
+                            at = end;
+                            continue;
+                        }
+                    }
+                    b'\n' => {
+                        parts.push(&command[start..at]);
+                        start = skip_heredocs(command, at + 1, &mut heredocs);
+                        at = start;
+                        word_start = true;
+                        continue;
+                    }
+                    b'|' | b';' | b'&' => {
+                        parts.push(&command[start..at]);
+                        start = at + 1;
+                    }
+                    _ => {}
                 }
-                b'|' | b';' | b'&' | b'\n' => {
-                    parts.push(&command[start..at]);
-                    start = at + 1;
-                }
-                _ => {}
-            },
+            }
             Quote::Single if byte == b'\'' => quote = Quote::None,
             Quote::Double => match byte {
                 b'\\' => at += 1,
@@ -131,38 +173,143 @@ fn segments(command: &str) -> Vec<&str> {
         }
         at += 1;
     }
-    parts.push(&command[start..]);
+    parts.push(&command[start.min(bytes.len())..]);
     parts
 }
+
+/// The heredoc word that starts at `at`, just past `<<`, with its quotes removed, and the
+/// index past it. The flag says `<<-`, whose body lines may start with tabs.
+fn heredoc_delimiter(command: &str, mut at: usize) -> (Option<(String, bool)>, usize) {
+    let bytes = command.as_bytes();
+    let strip_tabs = bytes.get(at) == Some(&b'-');
+    if strip_tabs {
+        at += 1;
+    }
+    while matches!(bytes.get(at), Some(b' ' | b'\t')) {
+        at += 1;
+    }
+    let mut word = Vec::new();
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            b' ' | b'\t' | b'\n' | b';' | b'|' | b'&' | b'<' | b'>' | b'(' | b')' => break,
+            b'\'' | b'"' => {
+                let close = bytes[at + 1..]
+                    .iter()
+                    .position(|&b| b == byte)
+                    .map_or(bytes.len(), |n| at + 1 + n);
+                word.extend_from_slice(&bytes[at + 1..close]);
+                at = close + 1;
+            }
+            b'\\' => {
+                word.extend(bytes.get(at + 1));
+                at += 2;
+            }
+            _ => {
+                word.push(byte);
+                at += 1;
+            }
+        }
+    }
+    let at = at.min(bytes.len());
+    if word.is_empty() {
+        return (None, at);
+    }
+    (
+        Some((String::from_utf8_lossy(&word).into_owned(), strip_tabs)),
+        at,
+    )
+}
+
+/// Where `command` goes on past the bodies of `heredocs`, which start at `at`: each ends at
+/// its word alone on a line, or at the end of the command.
+fn skip_heredocs(command: &str, mut at: usize, heredocs: &mut Vec<(String, bool)>) -> usize {
+    for (delimiter, strip_tabs) in heredocs.drain(..) {
+        while at < command.len() {
+            let end = command[at..].find('\n').map_or(command.len(), |n| at + n);
+            let line = &command[at..end];
+            let line = if strip_tabs {
+                line.trim_start_matches('\t')
+            } else {
+                line
+            };
+            at = end + 1;
+            if line == delimiter {
+                break;
+            }
+        }
+    }
+    at.min(command.len())
+}
+
+/// Commands no argument can make write or run anything, so they may take words plan mode
+/// can't see: arguments `xargs` reads from its input, a glob that could name a file
+/// called `-o` or `--pre=sh`, or a variable such as `$PATH`.
+const ANY_ARGUMENTS: &[&str] = &[
+    "cat", "head", "tail", "wc", "ls", "grep", "egrep", "fgrep", "stat", "du", "basename",
+    "dirname", "realpath", "readlink", "echo", "nl", "cut", "tr", "cmp", "diff", "column", "jq",
+];
 
 /// The first segment of `command` plan mode refuses, if any, so the refusal can name it.
 /// `extra` holds additional allowed prefixes from config.
 /// The segment comes from the cleaned command, so a let-through redirect (`2>&1`,
 /// `>/dev/null`) is missing from its text.
 pub fn bash_refused(command: &str, extra: &[String]) -> Option<String> {
-    let cleaned = command
-        .replace("2>&1", "")
-        .replace(">/dev/null", "")
-        .replace("> /dev/null", "");
+    let cleaned = without_harmless_redirects(command);
     segments(&cleaned)
         .into_iter()
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
         .find(|segment| {
-            segment.contains('>')
-                || segment.contains("$(")
+            segment.contains("$(")
                 || segment.contains('`')
                 || segment.contains("<(")
-                || !segment_allowed(segment, extra)
+                || !words::words(segment).is_some_and(|words| segment_allowed(&words, extra))
         })
         .map(str::to_string)
 }
 
+/// `command` without the redirects plan mode lets through: `2>&1`, `2>/dev/null` and
+/// `>/dev/null`, each only where bash reads it as one, so the `>2` in `>2>&1/dev/null`,
+/// which writes a file named `2`, stays and is refused.
+fn without_harmless_redirects(command: &str) -> String {
+    const LET_THROUGH: &[&str] = &[
+        "2>&1",
+        "2>/dev/null",
+        "2> /dev/null",
+        ">/dev/null",
+        "> /dev/null",
+    ];
+    let bytes = command.as_bytes();
+    let boundary =
+        |byte: u8| byte.is_ascii_whitespace() || matches!(byte, b';' | b'|' | b'&' | b'(' | b')');
+    let mut cleaned = String::with_capacity(command.len());
+    let (mut kept, mut at) = (0, 0);
+    while at < bytes.len() {
+        let found = LET_THROUGH.iter().find(|redirect| {
+            bytes[at..].starts_with(redirect.as_bytes())
+                && (redirect.starts_with('>') || at == 0 || boundary(bytes[at - 1]))
+                && bytes.get(at + redirect.len()).is_none_or(|&b| boundary(b))
+        });
+        match found {
+            Some(redirect) => {
+                cleaned.push_str(&command[kept..at]);
+                at += redirect.len();
+                kept = at;
+            }
+            None => at += 1,
+        }
+    }
+    cleaned.push_str(&command[kept..]);
+    cleaned
+}
+
 /// The command a segment runs, for the checks: `git -C <dir> log` is `git log`, and `xargs
 /// wc -l` runs `wc` on what it reads (`xargs` alone runs `echo`). `git -c` stays in view,
-/// since a config value can name a command to run.
-fn command_words(segment: &str) -> Vec<&str> {
-    let mut words = segment.split_whitespace().peekable();
+/// since a config value can name a command to run. The flag says the command came after
+/// `xargs`, so it gets arguments the checks never see. `None` when `xargs` would put what it
+/// reads into the command's name (`-I`, `-J`, `-i`, `--replace`).
+fn command_words(words: &[String]) -> Option<(Vec<&str>, bool)> {
+    let mut words = words.iter().map(String::as_str).peekable();
     if words.peek() == Some(&"git") {
         words.next();
         while let Some(word) = words.peek().copied() {
@@ -183,287 +330,110 @@ fn command_words(segment: &str) -> Vec<&str> {
                 _ => break,
             }
         }
-        return std::iter::once("git").chain(words).collect();
+        return Some((std::iter::once("git").chain(words).collect(), false));
     }
     if words.peek() == Some(&"xargs") {
         words.next();
+        let mut replace = None;
         while let Some(word) = words.peek().copied() {
             if word == "--" || !word.starts_with('-') {
                 break;
             }
-            // The flags that take their value as the next word; `-e` takes it only attached.
-            let takes_value = matches!(
-                word,
-                "-I" | "-J" | "-n" | "-N" | "-d" | "-a" | "-P" | "-s" | "-S" | "-L" | "-E" | "-R"
-            );
             words.next();
-            if takes_value {
-                words.next();
+            if word.starts_with("--") {
+                if writes::long_flag(word, "--replace") {
+                    replace = Some(word.split_once('=').map_or("{}", |(_, value)| value));
+                }
+                // GNU's long options that need a value take the next word without `=`.
+                let needs_value = [
+                    "--arg-file",
+                    "--delimiter",
+                    "--max-args",
+                    "--max-chars",
+                    "--max-procs",
+                    "--process-slot-var",
+                ];
+                if !word.contains('=') && needs_value.iter().any(|f| writes::long_flag(word, f)) {
+                    words.next();
+                }
+                continue;
+            }
+            // Letters that take a value take the rest of the word or, when it is empty, the
+            // next word; `-e`, `-i` and `-l` take only the rest.
+            for (i, letter) in word.char_indices().skip(1) {
+                let rest = &word[i + letter.len_utf8()..];
+                match letter {
+                    'I' | 'J' | 'a' | 'd' | 'E' | 'L' | 'n' | 'P' | 's' | 'S' | 'R' => {
+                        let value = if rest.is_empty() {
+                            words.next()
+                        } else {
+                            Some(rest)
+                        };
+                        if matches!(letter, 'I' | 'J') {
+                            replace = Some(value.unwrap_or_default());
+                        }
+                        break;
+                    }
+                    'i' => {
+                        replace = Some(if rest.is_empty() { "{}" } else { rest });
+                        break;
+                    }
+                    'e' | 'l' => break,
+                    _ => {}
+                }
             }
         }
-        if words.peek().is_none() {
-            return vec!["echo"];
+        let command = words.peek().copied().unwrap_or("echo");
+        if replace.is_some_and(|r| r.is_empty() || command.contains(r)) {
+            return None;
         }
+        if words.peek().is_none() {
+            return Some((vec!["echo"], true));
+        }
+        return Some((words.collect(), true));
     }
-    words.collect()
+    Some((words.collect(), false))
 }
 
-fn segment_allowed(segment: &str, extra: &[String]) -> bool {
-    let words = command_words(segment);
-    let normalized = words.join(" ");
-    let starts =
-        |prefix: &str| normalized == prefix || normalized.starts_with(&format!("{prefix} "));
-    if words.first() == Some(&"find")
-        && words
-            .iter()
-            .any(|w| matches!(*w, "-delete" | "-exec" | "-execdir" | "-ok" | "-fprint"))
+fn segment_allowed(words: &[words::Word], extra: &[String]) -> bool {
+    let texts: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
+    if writes::foreign_git_dir(&texts) {
+        return false;
+    }
+    let Some((words_run, via_xargs)) = command_words(&texts) else {
+        return false;
+    };
+    if words_run
+        .first()
+        .is_some_and(|w| w.contains(char::is_whitespace))
     {
         return false;
     }
-    if words.first() == Some(&"sed") && words.iter().any(|w| w.starts_with("-i")) {
-        return false;
-    }
-    if writes_behind_a_read_only_name(&words) {
-        return false;
-    }
-    READ_ONLY.iter().any(|prefix| starts(prefix)) || extra.iter().any(|prefix| starts(prefix))
-}
-
-/// Flags and subcommands that write behind a read-only command name: `sort -o`, `git tag v1,
-/// `sed -n ... w out`. The whole segment is refused when one shows up.
-fn writes_behind_a_read_only_name(words: &[&str]) -> bool {
-    let has = |flags: &[&str]| {
-        words.iter().skip(1).any(|w| {
-            flags
-                .iter()
-                .any(|f| *w == *f || w.starts_with(&format!("{f}=")))
-        })
+    let starts = |prefix: &str| {
+        let mut wanted = prefix.split_whitespace().peekable();
+        wanted.peek().is_some()
+            && wanted
+                .enumerate()
+                .all(|(i, w)| words_run.get(i) == Some(&w))
     };
-    match words.first() {
-        Some(&"fd") => has(&["-x", "-X", "--exec", "--exec-batch"]),
-        Some(&"rg") => has(&["--pre"]),
-        Some(&"sort") => words
-            .iter()
-            .skip(1)
-            .any(|w| *w == "-o" || w.starts_with("--output") || short_has(w, 'o')),
-        Some(&"tree") => has(&["-o", "--output"]),
-        Some(&"uniq") => uniq_has_output(words),
-        Some(&"sed") => sed_writes(words),
-        Some(&"git") => git_writes(words),
-        Some(&"cargo") => {
-            matches!(words.get(..2), Some(["cargo", "clippy" | "check"])) && has(&["--fix"])
-        }
-        _ => false,
-    }
-}
-
-/// A combined short flag like `-ro`: `-`, not `--`, with `flag` among the letters.
-fn short_has(word: &str, flag: char) -> bool {
-    word.starts_with('-') && !word.starts_with("--") && word[1..].contains(flag)
-}
-
-/// `uniq` with an input and an output file writes the second one. Flags that take a value
-/// (`-f`, `-s`, `-w`) don't count their value as a file.
-fn uniq_has_output(words: &[&str]) -> bool {
-    let mut operands = 0;
-    let mut skip_next = false;
-    for word in words.iter().skip(1) {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if *word == "--" {
-            continue;
-        }
-        if word.starts_with('-') && word.len() > 1 {
-            skip_next = matches!(
-                *word,
-                "-f" | "-s" | "-w" | "--skip-fields" | "--skip-chars" | "--check-chars"
-            );
-            continue;
-        }
-        operands += 1;
-    }
-    operands >= 2
-}
-
-/// A `w` command or `s///w` flag with a filename: `sed -n` still writes it.
-fn sed_writes(words: &[&str]) -> bool {
-    for word in words.iter().skip(1) {
-        let mut script = *word;
-        if script == "-e" {
-            continue;
-        }
-        if let Some(rest) = script
-            .strip_prefix("--expression=")
-            .or_else(|| script.strip_prefix("-e"))
-        {
-            script = rest;
-        }
-        if script.starts_with('-') {
-            continue;
-        }
-        let script = script.trim_matches(|c| c == '\'' || c == '"' || c == ';');
-        if script == "w"
-            || script.trim_start_matches(|c: char| c.is_ascii_digit() || ",.$".contains(c)) == "w"
-        {
-            return true;
-        }
-        if sed_substitute_writes(script) {
-            return true;
-        }
-        if let Some(pos) = script.rfind("/w") {
-            let after = &script[pos + 2..];
-            if after.is_empty() || !after.starts_with('/') {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// An `s<delim>…<delim>…<delim>w` substitution writes its file, whatever delimiter it uses:
-/// `s|a|b|w out` writes just as `s/a/b/w out` does.
-fn sed_substitute_writes(script: &str) -> bool {
-    let mut chars = script.char_indices();
-    if chars.next().map(|(_, c)| c) != Some('s') {
+    if writes::writes_behind_a_read_only_name(&words_run) {
         return false;
     }
-    let Some((_, delim)) = chars.next() else {
-        return false;
-    };
-    if delim.is_alphanumeric() || delim.is_whitespace() || delim == '\\' {
-        return false;
-    }
-    let rest = &script[1 + delim.len_utf8()..];
-    let mut seen = 0;
-    let mut escaped = false;
-    for (at, c) in rest.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        escaped = c == '\\';
-        if c == delim {
-            seen += 1;
-            if seen == 2 {
-                let flags = &rest[at + delim.len_utf8()..];
-                return flags
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or_default()
-                    .contains('w');
-            }
-        }
-    }
-    false
-}
-
-/// `git branch` creating, deleting or renaming a branch, `git tag` creating or deleting one,
-/// and `git diff --output=`: all write. Bare `git branch`, `git tag` and listings stay allowed.
-fn git_writes(words: &[&str]) -> bool {
-    if words.len() < 2 || words[0] != "git" {
+    let configured = extra.iter().any(|prefix| starts(prefix));
+    // A word past `--` is an operand, not a flag, except to `find`, whose expression comes
+    // after its paths, and `cargo`, which hands what follows to another program.
+    let operands_after_dashes = !matches!(words_run.first(), Some(&("find" | "cargo")));
+    let unseen = words
+        .iter()
+        .take_while(|w| !(operands_after_dashes && w.text == "--"))
+        .any(|w| w.unseen);
+    if (via_xargs || unseen)
+        && !configured
+        && !words_run.first().is_some_and(|c| ANY_ARGUMENTS.contains(c))
+    {
         return false;
     }
-    match words[1] {
-        "branch" if words.len() > 2 => {
-            let takes_value = [
-                "--contains",
-                "--no-contains",
-                "--merged",
-                "--no-merged",
-                "--points-at",
-                "--sort",
-                "--format",
-                "--set-upstream-to",
-            ];
-            let writes = [
-                "--force",
-                "--delete",
-                "--move",
-                "--copy",
-                "--set-upstream-to",
-                "--unset-upstream",
-                "--edit-description",
-            ];
-            let listed = words
-                .iter()
-                .skip(2)
-                .any(|w| *w == "-l" || *w == "--list" || short_has(w, 'l'));
-            let mut skip_next = false;
-            for word in words.iter().skip(2) {
-                if skip_next {
-                    skip_next = false;
-                    continue;
-                }
-                let flag = word.split('=').next().unwrap_or(word);
-                if writes.contains(&flag) {
-                    return true;
-                }
-                if takes_value.contains(&flag) {
-                    skip_next = !word.contains('=');
-                    continue;
-                }
-                if word.starts_with('-')
-                    && !word.starts_with("--")
-                    && "dDmMcCfu".chars().any(|f| short_has(word, f))
-                {
-                    return true;
-                }
-                if !word.starts_with('-') && !listed {
-                    return true;
-                }
-            }
-            false
-        }
-        "tag" if words.len() > 2 => {
-            // List filters imply `--list`, so `--contains HEAD` lists just as `-l` does.
-            let listed = words.iter().skip(2).any(|w| {
-                matches!(*w, "-l" | "--list")
-                    || short_has(w, 'l')
-                    || [
-                        "--contains",
-                        "--no-contains",
-                        "--merged",
-                        "--no-merged",
-                        "--points-at",
-                    ]
-                    .contains(&w.split('=').next().unwrap_or(w))
-            });
-            words.iter().skip(2).any(|w| {
-                let flag = w.split('=').next().unwrap_or(w);
-                if matches!(
-                    flag,
-                    "-l" | "--list"
-                        | "-n"
-                        | "--sort"
-                        | "--format"
-                        | "--contains"
-                        | "--no-contains"
-                        | "--merged"
-                        | "--no-merged"
-                        | "--points-at"
-                        | "--column"
-                        | "--no-column"
-                ) || (flag == "-n"
-                    || (flag.starts_with("-n") && flag[2..].chars().all(|c| c.is_ascii_digit())))
-                {
-                    return false;
-                }
-                if listed && !w.starts_with('-') {
-                    return false;
-                }
-                if listed && "dasufme".chars().any(|f| short_has(w, f)) {
-                    return true;
-                }
-                !listed
-            })
-        }
-        "diff" => words
-            .iter()
-            .any(|w| *w == "--output" || w.starts_with("--output=")),
-        _ => false,
-    }
+    READ_ONLY.iter().any(|prefix| starts(prefix)) || configured
 }
 
 pub const ON: &str = "<system-reminder>Plan mode is on. Research and plan only: write and edit are blocked, and bash runs only read-only commands. When your plan is ready, call exit_plan_mode with it and wait for the user's approval.</system-reminder>";

@@ -1,24 +1,5 @@
 use super::*;
 
-/// The folder the resumed session ran in, from its log's `session` entry: resuming from
-/// another folder keeps running here, so the mismatch is worth a notice. Old logs
-/// carry no `cwd` and stay silent.
-fn logged_cwd(log: &Path) -> Option<PathBuf> {
-    let bytes = std::fs::read(log).ok()?;
-    for chunk in bytes.split(|b| *b == b'\n') {
-        if chunk.is_empty() {
-            continue;
-        }
-        let entry: Value = serde_json::from_str(std::str::from_utf8(chunk).ok()?).ok()?;
-        if entry["type"] == "session"
-            && let Some(cwd) = entry["cwd"].as_str().filter(|cwd| !cwd.is_empty())
-        {
-            return Some(PathBuf::from(cwd));
-        }
-    }
-    None
-}
-
 /// Makes `session`'s log the one a crash is noted in. Only a session the user runs calls this:
 /// a subagent or a task another session sent would otherwise take the crash record of the
 /// session it runs in.
@@ -108,6 +89,7 @@ impl Agent {
         agent.backup = backup.map(Rc::new);
         agent.plan_announced = last_plan_state(&loaded.messages);
         agent.model_announced = last_model_state(&loaded.messages);
+        agent.swarm_announced = swarm::last_swarm_state(&loaded.messages);
         agent.concise_announced = crate::verbosity::last_concise_state(&loaded.messages);
         agent.orchestrate_announced = crate::mode::last_orchestrate_state(&loaded.messages);
         for message in &loaded.messages {
@@ -117,6 +99,7 @@ impl Agent {
                 }
             }
         }
+        agent.restore_todos(&loaded.messages);
         agent.accounted_messages = loaded.messages.len();
         agent.messages = Rc::new(loaded.messages);
         agent.stats.context = loaded.context;
@@ -153,7 +136,7 @@ impl Agent {
                 if skipped == 1 { "line" } else { "lines" }
             )));
         }
-        if let Some(logged) = logged_cwd(&log)
+        if let Some(logged) = super::restore::logged_cwd(&log)
             && logged.as_path() != cwd
         {
             (agent.sink)(Event::Notice(format!(
@@ -286,11 +269,13 @@ impl Agent {
     }
 
     /// Swaps the session's provider, resetting the size estimate and noting the switch in the log.
+    /// The floor under proactive compaction goes with it: it was measured in the old estimate.
     pub(super) fn switch_client(&mut self, client: Client) -> Result<()> {
         self.ctx.images.set(client.model.images);
         self.client = Rc::new(client);
         self.stats.context = 0;
         self.accounted_messages = 0;
+        self.compact_floor = 0;
         self.share();
         self.record_model()
     }
@@ -300,17 +285,26 @@ impl Agent {
     /// session, so no log record is needed to keep it.
     pub fn set_backup(&mut self, client: Client) {
         self.backup = Some(Rc::new(client));
+        self.share();
     }
 
     /// Drops this session's fallback provider.
     pub fn clear_backup(&mut self) {
         self.backup = None;
+        self.share();
     }
 
-    /// The backup model this session falls back to, as configured.
-    pub fn backup_alias(&self) -> Option<&str> {
+    /// The backup this session would switch to now: none while it already runs on it, so a
+    /// fallback lasts until `/model` returns to another model, which arms it again.
+    pub(super) fn armed_backup(&self) -> Option<&Rc<Client>> {
         self.backup
             .as_ref()
+            .filter(|backup| backup.model.alias != self.client.model.alias)
+    }
+
+    /// The backup model this session falls back to, as configured; none while it runs on it.
+    pub fn backup_alias(&self) -> Option<&str> {
+        self.armed_backup()
             .map(|client| client.model.alias.as_str())
     }
 
@@ -388,23 +382,27 @@ impl Agent {
         settings.search = search.clone();
         self.settings = Rc::new(settings);
         *self.ctx.search.borrow_mut() = search;
+        self.share();
     }
 
     /// Replaces the system prompt and settings on purpose, for /reload; the next request is
     /// uncached.
     pub fn reload_system(&mut self, system: &str, settings: Settings) -> Result<()> {
+        let mut messages = (*self.messages).clone();
+        messages[0] = json!({"role": "system", "content": system});
+        self.session
+            .record(&json!({"type": "compaction", "messages": messages}))?;
+        self.messages = Rc::new(messages);
         self.instructions = crate::prompt::Instructions::new(
             &self.ctx.cwd,
             &settings.instruction_files,
             &crate::memory::path(),
         );
-        let search = settings.search.clone();
+        *self.ctx.search.borrow_mut() = settings.search.clone();
+        self.swarm_parallel.set(settings.swarm_parallel.max(1));
         self.settings = Rc::new(settings);
-        *self.ctx.search.borrow_mut() = search;
-        Rc::make_mut(&mut self.messages)[0] = json!({"role": "system", "content": system});
         self.share();
-        self.session
-            .record(&json!({"type": "compaction", "messages": *self.messages}))
+        Ok(())
     }
 
     pub fn model_alias(&self) -> &str {
@@ -422,20 +420,19 @@ impl Agent {
 
     /// The name to show for the backup model, when it has a display name.
     pub fn backup_display(&self) -> Option<&str> {
-        self.backup
-            .as_ref()
+        self.armed_backup()
             .and_then(|c| c.model.display_name.as_deref())
     }
 
-    /// Why the primary can't be asked right now, when the backup should take over: after the
-    /// retries it still rate-limits, has spent its quota, rejects the key or the request (any
-    /// 4xx), fails on its side (5xx), can't be reached or answers with garbage. Only overflow
-    /// and rejected media don't switch: compaction and stripping the images fix those on the
-    /// same model, and the turn loop does it.
+    /// Why the primary can't be asked right now, so the backup takes over: after the retries it
+    /// still rate-limits, has spent its quota, rejects the key, doesn't know the model, fails on
+    /// its side, can't be reached or answers with garbage. The turn loop fixes overflow and media
+    /// on the same model, and the backup would refuse or reject a malformed request the same way.
     pub(super) fn fallback_reason(error: &anyhow::Error) -> Option<&'static str> {
         let provider = error.downcast_ref::<ProviderError>()?;
         match provider.kind {
             ErrorKind::Overflow | ErrorKind::Media => None,
+            ErrorKind::Refused | ErrorKind::Invalid => None,
             ErrorKind::RateLimited => Some("is rate-limited"),
             ErrorKind::Quota => Some("has spent its quota"),
             ErrorKind::Auth => Some("rejected its credentials"),
@@ -462,18 +459,19 @@ impl Agent {
 
     /// Deletes this session's log if nothing was ever said in it, so opening killi and leaving
     /// doesn't leave a file behind. Reminders alone don't count: a prompt taken back with Esc
-    /// leaves the ones sent after it. A pair counts as use: its note in the log points at the
-    /// children's logs, which would be orphaned otherwise.
+    /// leaves the ones sent after it; a compaction's summary does count. A pair counts as use:
+    /// its note in the log points at the children's logs, which would be orphaned otherwise.
     pub fn discard_if_unused(&self) {
         if self.pair.is_some() {
             return;
         }
-        let said = self.messages.iter().skip(1).any(|m| {
-            m["role"] != "user"
-                || !m["content"]
-                    .as_str()
-                    .is_some_and(|text| text.starts_with("<system-reminder>"))
-        });
+        let compacted = |text: &str| text.starts_with(crate::session::COMPACTED_MARK);
+        let said = !self.user_prompts().is_empty()
+            || self
+                .messages
+                .iter()
+                .skip(1)
+                .any(|m| m["role"] != "user" || m["content"].as_str().is_none_or(compacted));
         if !said {
             // A pair that ended lives on only as a `pair` note pointing at its children's
             // logs, and a resumed session has no `pair` agent to guard them.

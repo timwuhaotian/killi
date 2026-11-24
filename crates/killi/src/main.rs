@@ -2,6 +2,7 @@ mod agent;
 mod awake;
 mod broker;
 mod config;
+mod crash;
 mod fs_atomic;
 mod goal;
 mod hooks;
@@ -13,6 +14,7 @@ mod mcp;
 mod memory;
 mod mode;
 mod plan;
+mod printer;
 mod prompt;
 mod session;
 mod setup;
@@ -27,7 +29,6 @@ mod update;
 mod verbosity;
 
 use std::cell::RefCell;
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -36,8 +37,10 @@ use std::time::Instant;
 
 use anyhow::{Result, bail};
 use serde_json::json;
+use tokio::sync::Notify;
 
-use agent::{Controls, Event, Sink, Stop};
+use agent::{Controls, Sink, Stop};
+use printer::Printer;
 use setup::Setup;
 
 const USAGE: &str = "\
@@ -87,8 +90,9 @@ fn main() -> ExitCode {
         .expect("tokio runtime");
     match runtime.block_on(dispatch(args)) {
         Ok(code) => code,
+        Err(error) if error.is::<printer::Closed>() => ExitCode::from(printer::CLOSED_EXIT),
         Err(error) => {
-            eprintln!("killi: {error:#}");
+            printer::err(&format!("killi: {error:#}\n"));
             ExitCode::FAILURE
         }
     }
@@ -111,12 +115,10 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
                 Some(name) => Some(name),
                 None => None,
             };
-            config::sync_models(only).await.map(|lines| {
-                for line in lines {
-                    println!("{line}");
-                }
-                ExitCode::SUCCESS
-            })
+            for line in config::sync_models(only).await? {
+                printer::say(line)?;
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Some("login") => login::login(args.get(1).map(String::as_str))
             .await
@@ -131,11 +133,11 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
             live::command(&args).await
         }
         Some("-V" | "--version") => {
-            println!("killi {}", env!("CARGO_PKG_VERSION"));
+            printer::say(format_args!("killi {}", env!("CARGO_PKG_VERSION")))?;
             Ok(ExitCode::SUCCESS)
         }
         Some("-h" | "--help") => {
-            println!("{USAGE}");
+            printer::say(USAGE)?;
             Ok(ExitCode::SUCCESS)
         }
         _ => {
@@ -180,6 +182,12 @@ async fn dispatch(args: Vec<String>) -> Result<ExitCode> {
     }
 }
 
+thread_local! {
+    /// The one-shot run in progress, which Ctrl+C ends before the process: its request in
+    /// flight logs an `abort` and the text it held back is printed.
+    static ONE_SHOT: RefCell<Option<Rc<Notify>>> = const { RefCell::new(None) };
+}
+
 /// Quitting on a signal runs no destructors, so this first ends what killi started and gives
 /// the terminal back: closing the window sends SIGHUP, `kill` SIGTERM, Ctrl+C under `-p` SIGINT.
 fn quit_on_signals() {
@@ -191,11 +199,24 @@ fn quit_on_signals() {
             return;
         };
         interrupt.recv().await;
-        tools::kill_all();
-        live::leave();
-        tui::restore_terminal();
-        std::process::exit(130);
+        // The runtime has one thread, so this is the run's own.
+        let ended = ONE_SHOT.with(|run| run.borrow_mut().take().map(|run| run.notify_one()));
+        if ended.is_some() {
+            // The run ends the process; a second Ctrl+C doesn't wait for it.
+            interrupt.recv().await;
+        }
+        quit(130, "SIGINT");
     });
+}
+
+/// Ends what killi started, notes `signal` in the session log, gives the terminal back and
+/// exits with `code`.
+fn quit(code: i32, signal: &str) -> ! {
+    tools::kill_all();
+    live::leave();
+    crash::note_signal(signal);
+    tui::restore_terminal();
+    std::process::exit(code);
 }
 
 /// The write end of the pipe a hangup/terminate handler pokes.
@@ -244,15 +265,11 @@ fn quit_on_hangup_or_terminate() {
         if n != 1 {
             return;
         }
-        let code = if byte[0] == libc::SIGHUP as u8 {
-            129
+        if byte[0] == libc::SIGHUP as u8 {
+            quit(129, "SIGHUP")
         } else {
-            143
-        };
-        tools::kill_all();
-        live::leave();
-        tui::restore_terminal();
-        std::process::exit(code);
+            quit(143, "SIGTERM")
+        }
     });
 }
 
@@ -326,7 +343,9 @@ async fn run_once(
     tui::install_crash_hook();
     let cwd = std::env::current_dir()?;
     let setup = Setup::new(config, &cwd, model.as_deref(), false).await?;
-    let printer = Rc::new(RefCell::new(Printer::new(&cwd)));
+    // Ends the run early: Ctrl+C, or a stdout whose reader went away.
+    let halt = Rc::new(Notify::new());
+    let printer = Rc::new(RefCell::new(Printer::new(&cwd, halt.clone())));
     let sink: Sink = if json_mode {
         Rc::new(|_| {})
     } else {
@@ -361,24 +380,42 @@ async fn run_once(
         });
     }
     if !json_mode {
-        let p = printer.borrow();
+        let mut p = printer.borrow_mut();
         let info = setup.describe();
         let info = if info.is_empty() {
             String::new()
         } else {
             format!(" · {info}")
         };
-        eprintln!(
+        let line = format!(
             "{}killi {} · {}{info}{}\n",
             p.dim,
             env!("CARGO_PKG_VERSION"),
             agent.model_alias(),
             p.reset
         );
+        p.note(&line);
     }
 
     let started = Instant::now();
-    let result = agent.run(&prompt, &[]).await;
+    ONE_SHOT.with(|run| *run.borrow_mut() = Some(halt.clone()));
+    let result = tokio::select! {
+        result = agent.run(&prompt, &[]) => Some(result),
+        () = halt.notified() => None,
+    };
+    ONE_SHOT.with(|run| run.borrow_mut().take());
+    let closed = printer.borrow().closed();
+    let result = match result {
+        Some(result) => result,
+        // Ctrl+C: the turn was dropped, so its request logged an `abort`; what the reply
+        // had so far is printed before the process ends.
+        None if !closed => {
+            tools::kill_all();
+            printer.borrow_mut().finish();
+            quit(130, "SIGINT");
+        }
+        None => Err(printer::Closed.into()),
+    };
     let stopped = agent.stop_tasks();
     let stats = &agent.stats;
     let elapsed = started.elapsed();
@@ -391,6 +428,7 @@ async fn run_once(
         Some(Stop::Completed) => "completed",
         Some(Stop::MaxTokens) => "max_tokens",
         Some(Stop::RepeatBreaker) => "repeat_breaker",
+        Some(Stop::StepLimit) => "step_limit",
         None => "error",
     };
     agent.session_end(stop_reason).await;
@@ -415,19 +453,23 @@ async fn run_once(
             "stopped": stopped,
             "final_text": text,
         });
-        println!("{summary}");
+        if printer::say(summary).is_err() {
+            return Ok(ExitCode::from(printer::CLOSED_EXIT));
+        }
     } else {
         let mut p = printer.borrow_mut();
         p.finish();
         if let Some(error) = &error {
-            eprintln!("{}killi: {error}{}", p.red, p.reset);
+            let line = format!("{}killi: {error}{}", p.red, p.reset);
+            p.note(&line);
         }
         if let Some(note) = tui::stopped_note(&stopped) {
-            eprintln!("{}{note}{}", p.dim, p.reset);
+            let line = format!("{}{note}{}", p.dim, p.reset);
+            p.note(&line);
         }
         let usage = &stats.usage;
         let cached = (usage.cached * 100).checked_div(usage.prompt).unwrap_or(0);
-        eprintln!(
+        let line = format!(
             "\n{}{stop_reason} · {} · {} · {} tokens in, {cached}% cached · {} out · {:.1}s{}",
             p.dim,
             tools::count(stats.requests as usize, "request"),
@@ -437,215 +479,16 @@ async fn run_once(
             elapsed.as_secs_f32(),
             p.reset
         );
+        p.note(&line);
+        if p.closed() {
+            return Ok(ExitCode::from(printer::CLOSED_EXIT));
+        }
     }
     Ok(if stop == Some(Stop::Completed) {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     })
-}
-
-#[derive(PartialEq)]
-enum Last {
-    Nothing,
-    Text,
-    Tool,
-}
-
-/// Prints a one-shot run as compact lines: the model's text on stdout, one line per tool call
-/// on stderr, a blank line between the two. Colors only when stderr is a terminal.
-struct Printer {
-    cwd: String,
-    last: Last,
-    /// The current attempt's text, held back so a retried attempt never reaches stdout: only
-    /// the final reply is printed, when the attempt ends.
-    attempt: String,
-    /// The model's text is mid-line in the attempt.
-    line_open: bool,
-    /// Newlines at the end of the text so far, printed only if more text follows.
-    held_newlines: usize,
-    /// A tool line is waiting for its end mark on stderr.
-    tool_open: bool,
-    dim: &'static str,
-    accent: &'static str,
-    red: &'static str,
-    reset: &'static str,
-}
-
-impl Printer {
-    fn new(cwd: &std::path::Path) -> Self {
-        use std::io::IsTerminal;
-        let color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-        let pick = |code: &'static str| if color { code } else { "" };
-        Self {
-            cwd: cwd.display().to_string(),
-            last: Last::Nothing,
-            attempt: String::new(),
-            line_open: false,
-            held_newlines: 0,
-            tool_open: false,
-            dim: pick("\x1b[2m"),
-            accent: pick("\x1b[34m"),
-            red: pick("\x1b[31m"),
-            reset: pick("\x1b[0m"),
-        }
-    }
-
-    fn event(&mut self, event: Event) {
-        match event {
-            Event::Text(text) => {
-                let text = if self.last == Last::Text {
-                    text.as_str()
-                } else {
-                    text.trim_start()
-                };
-                let body = text.trim_end_matches('\n');
-                if body.is_empty() {
-                    if self.last == Last::Text {
-                        self.held_newlines += text.len();
-                    }
-                    return;
-                }
-                if self.last == Last::Tool {
-                    self.attempt.push('\n');
-                }
-                self.attempt.push_str(&"\n".repeat(self.held_newlines));
-                self.attempt.push_str(body);
-                self.held_newlines = text.len() - body.len();
-                self.line_open = true;
-                self.last = Last::Text;
-            }
-            Event::Retry {
-                attempt,
-                wait,
-                reason,
-            } => {
-                let dropped = self.line_open || self.held_newlines > 0 || !self.attempt.is_empty();
-                self.attempt.clear();
-                self.line_open = false;
-                self.held_newlines = 0;
-                eprintln!(
-                    "{}retry {attempt} in {:.1}s: {}{}",
-                    self.dim,
-                    wait.as_secs_f32(),
-                    llm::truncate(&reason, 300),
-                    self.reset
-                );
-                if dropped {
-                    eprintln!(
-                        "{}the partial reply above was discarded; retrying …{}",
-                        self.dim, self.reset
-                    );
-                }
-            }
-            Event::ToolStart { summary, .. } => {
-                if self.last == Last::Text {
-                    self.end_text();
-                    println!();
-                }
-                let summary = summary
-                    .replace(&format!("{}/", self.cwd), "")
-                    .replace(&self.cwd, ".");
-                eprint!("{}●{} {summary}", self.accent, self.reset);
-                self.tool_open = true;
-                self.last = Last::Tool;
-            }
-            Event::ToolEnd { is_error, .. } => {
-                let mark = if is_error {
-                    format!(" {}✗{}", self.red, self.reset)
-                } else {
-                    String::new()
-                };
-                if std::mem::take(&mut self.tool_open) || !mark.is_empty() {
-                    eprintln!("{mark}");
-                }
-            }
-            Event::Notice(text) => {
-                self.end_text();
-                eprintln!("{}{text}{}", self.dim, self.reset);
-            }
-            Event::PairTurn {
-                role,
-                model,
-                effort,
-                what,
-            } => {
-                self.end_text();
-                eprintln!("→ {} · {what} — {model} ({effort})", role.label());
-            }
-            Event::Sub { label, event, .. } => {
-                if matches!(
-                    *event,
-                    Event::ToolStart { .. }
-                        | Event::ToolEnd { is_error: true, .. }
-                        | Event::Finished { .. }
-                ) && std::mem::take(&mut self.tool_open)
-                {
-                    eprintln!();
-                }
-                match *event {
-                    Event::ToolStart { summary, .. } => {
-                        eprintln!("  {}↳ {label}: {summary}{}", self.dim, self.reset)
-                    }
-                    Event::ToolEnd {
-                        is_error: true,
-                        brief,
-                        ..
-                    } => eprintln!("  {}↳ {label}: ✗ {brief}{}", self.red, self.reset),
-                    Event::Retry {
-                        attempt,
-                        wait,
-                        reason,
-                    } => eprintln!(
-                        "  {}↳ {label}: retry {attempt} in {:.1}s: {}{}",
-                        self.dim,
-                        wait.as_secs_f32(),
-                        llm::truncate(&reason, 300),
-                        self.reset
-                    ),
-                    Event::Finished { is_error } => eprintln!(
-                        "  {}↳ {label}: {}{}",
-                        self.dim,
-                        if is_error { "failed" } else { "done" },
-                        self.reset
-                    ),
-                    _ => {}
-                }
-            }
-            Event::Reasoning(_)
-            | Event::ToolDelta(_)
-            | Event::Usage(_)
-            | Event::Todos(_)
-            | Event::Ask(_)
-            | Event::Swarm { .. }
-            | Event::Started
-            | Event::Finished { .. }
-            | Event::Detached => {}
-        }
-    }
-
-    /// Prints the attempt's text so far.
-    fn flush_attempt(&mut self) {
-        if !self.attempt.is_empty() {
-            print!("{}", self.attempt);
-            let _ = std::io::stdout().flush();
-            self.attempt.clear();
-        }
-    }
-
-    /// Ends the model's text with exactly one newline, dropping any it held back.
-    fn end_text(&mut self) {
-        self.flush_attempt();
-        if self.line_open {
-            println!();
-            self.line_open = false;
-        }
-        self.held_newlines = 0;
-    }
-
-    fn finish(&mut self) {
-        self.end_text();
-    }
 }
 
 #[cfg(test)]

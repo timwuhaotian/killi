@@ -43,7 +43,7 @@ pub(super) async fn run_peer_task(
     let asked = crate::agent::subagent_prompt(&prompt);
     let outcome = tokio::select! {
         result = agent.run(&asked, &[]) => match result {
-            Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => Ok(text),
+            Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => Ok((text, stop)),
             Ok((_, stop)) => Err(format!("its agent stopped without a final report ({stop:?}).")),
             Err(e) => Err(format!("its agent failed: {e:#}")),
         },
@@ -58,10 +58,10 @@ pub(super) async fn run_peer_task(
     let mut view = view.borrow_mut();
     view.log = Some(agent.session.log_path.clone());
     match outcome {
-        Ok(text) => {
-            let (state, message) = outcome_of(&text);
+        Ok((text, stop)) => {
+            let (state, message, report) = ended_with(text, stop);
             view.state = state;
-            view.report = Some(text);
+            view.report = Some(report);
             view.message = message;
         }
         Err(why) => {
@@ -78,6 +78,30 @@ pub(super) async fn run_peer_task(
         }
     }
     id
+}
+
+/// Where a task stands once its agent replied, with the reason it isn't completed and its
+/// report. Its final line says, except that a reply the step limit cut short is no finished
+/// task however it ends: it fails unless it asks the sender something, and its report says
+/// where it stopped.
+pub(super) fn ended_with(text: String, stop: Stop) -> (live::TaskState, Option<String>, String) {
+    let (state, message) = outcome_of(&text);
+    if stop != Stop::StepLimit {
+        return (state, message, text);
+    }
+    let state = match state {
+        live::TaskState::InputRequired => state,
+        _ => live::TaskState::Failed,
+    };
+    let message = match message {
+        Some(why) => format!("{why} (stopped at the step limit)"),
+        None => "it stopped at the step limit before it finished".to_string(),
+    };
+    (
+        state,
+        Some(message),
+        format!("{text}\n\n(stopped at the step limit)"),
+    )
 }
 
 /// Where a task's final line puts it: `Status: blocked` or `waiting` needs an answer from the

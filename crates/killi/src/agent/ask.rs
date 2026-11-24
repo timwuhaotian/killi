@@ -73,9 +73,14 @@ impl Agent {
             Err(why) => return tools::Output::error(why),
         };
         match self.wait_for_answer(text, options, false).await {
-            Some(answer) => tools::Output::ok(format!("The user answered: {answer}")).brief(answer),
-            None => tools::Output::ok("The question was dismissed without an answer.")
-                .brief("dismissed"),
+            Reply::Answered(answer) => {
+                tools::Output::ok(format!("The user answered: {answer}")).brief(answer)
+            }
+            Reply::Dismissed(notes) => tools::Output::ok(with_notes(
+                "The question was dismissed without an answer.",
+                notes,
+            ))
+            .brief("dismissed"),
         }
     }
 
@@ -89,6 +94,9 @@ impl Agent {
             );
         }
         let plan = args["plan"].as_str().unwrap_or_default().to_string();
+        if plan_dismissed(&self.messages) {
+            return tools::Output::ok(PLAN_DISMISSED_AGAIN).brief("dismissed");
+        }
         if !self.controls.interactive {
             self.controls.plan.set(false);
             self.plan_announced = false;
@@ -97,13 +105,19 @@ impl Agent {
             );
         }
         let options = vec!["Approve and start".to_string(), "Keep planning".to_string()];
-        match self.wait_for_answer(plan, options, true).await.as_deref() {
-            Some("Approve and start") => {
+        let feedback = match self.wait_for_answer(plan, options, true).await {
+            Reply::Answered(answer) => answer,
+            Reply::Dismissed(notes) => {
+                return tools::Output::ok(with_notes(PLAN_DISMISSED, notes)).brief("dismissed");
+            }
+        };
+        match feedback.as_str() {
+            "Approve and start" => {
                 self.controls.plan.set(false);
                 self.plan_announced = false;
                 tools::Output::ok("The user approved the plan. Plan mode is off; carry it out now.").brief("approved")
             }
-            Some(feedback) if feedback != "Keep planning" => {
+            feedback if feedback != "Keep planning" => {
                 tools::Output::ok(format!("The user wants changes to the plan: {feedback}\nStay in plan mode and revise it."))
                     .brief("changes requested")
             }
@@ -112,12 +126,7 @@ impl Agent {
         }
     }
 
-    async fn wait_for_answer(
-        &self,
-        text: String,
-        options: Vec<String>,
-        plan: bool,
-    ) -> Option<String> {
+    async fn wait_for_answer(&self, text: String, options: Vec<String>, plan: bool) -> Reply {
         let _asleep_ok = self.awake.pause();
         let (reply, answer) = oneshot::channel();
         (self.sink)(Event::Ask(Question {
@@ -126,8 +135,93 @@ impl Agent {
             plan,
             reply,
         }));
-        answer.await.ok().filter(|a| !a.trim().is_empty())
+        Reply::of(answer.await.unwrap_or_default())
     }
+}
+
+/// Ends a reply that dismissed its question but carries corrections to earlier answers the
+/// user made while it waited.
+const NOT_ANSWERED: &str = "(this question was not answered)";
+
+impl Question {
+    /// Ends the question unanswered, as Esc does. Corrections to earlier answers made while it
+    /// waited still reach the model, and the reply still reads as a dismissal.
+    pub fn dismiss(self, corrections: &[String]) {
+        let reply = if corrections.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n{NOT_ANSWERED}", corrections.join("\n"))
+        };
+        let _ = self.reply.send(reply);
+    }
+}
+
+/// What the user did with a question.
+#[derive(Debug, PartialEq)]
+enum Reply {
+    Answered(String),
+    /// Dismissed, with the corrections to earlier answers sent beside it, if any.
+    Dismissed(Option<String>),
+}
+
+impl Reply {
+    /// Reads the text a question's reply carried: empty, or ending in `NOT_ANSWERED`, is a
+    /// dismissal.
+    fn of(text: String) -> Self {
+        if text.trim().is_empty() {
+            return Reply::Dismissed(None);
+        }
+        match text.strip_suffix(NOT_ANSWERED) {
+            Some(notes) => {
+                Reply::Dismissed(Some(notes.trim().to_string()).filter(|n| !n.is_empty()))
+            }
+            None => Reply::Answered(text),
+        }
+    }
+}
+
+/// A dismissal's answer to the model, with the corrections that came with it.
+fn with_notes(answer: &str, notes: Option<String>) -> String {
+    match notes {
+        Some(notes) => format!("{answer}\n{notes}"),
+        None => answer.to_string(),
+    }
+}
+
+/// What `exit_plan_mode` answers when the user dismisses the plan (Esc, or an empty reply):
+/// they mean "stop", so the model ends its turn and waits rather than asking again.
+const PLAN_DISMISSED: &str = "The user dismissed the plan without approving it. Stop now: end your turn with one short line saying the plan awaits their feedback, and don't call exit_plan_mode again until they reply.";
+
+/// The answer to `exit_plan_mode` called again before the user said anything since a
+/// dismissal; the plan isn't shown, so a model that misses the first answer can't loop on it.
+const PLAN_DISMISSED_AGAIN: &str = "The user already dismissed the plan and hasn't replied since; it wasn't shown again. Stop now: end your turn with one short line saying the plan awaits their feedback, and don't call exit_plan_mode again until they reply.";
+
+/// Whether the last plan was dismissed and the user hasn't spoken since: going back from the
+/// end, a dismissal's result comes before any message the user wrote. Reminders, replies and
+/// other tool results don't count as the user's reply.
+fn plan_dismissed(messages: &[Value]) -> bool {
+    for message in messages.iter().rev() {
+        let content = &message["content"];
+        match message["role"].as_str() {
+            Some("tool") => {
+                let text = content.as_str().unwrap_or_default();
+                if text.starts_with(PLAN_DISMISSED) || text.starts_with(PLAN_DISMISSED_AGAIN) {
+                    return true;
+                }
+            }
+            Some("user") => {
+                let reminder = content.as_str().is_some_and(|text| {
+                    let text = text.trim();
+                    text.starts_with("<system-reminder>") && text.ends_with("</system-reminder>")
+                });
+                if !reminder {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The question and choices of an `ask_user_question` call. Malformed arguments are an error
@@ -183,5 +277,187 @@ fn option_text(option: &Value) -> Option<String> {
         }),
         None if option.get("question").is_none() => description.map(str::to_string),
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::idle_agent;
+    use super::*;
+
+    fn exit_plan_call(id: &str) -> (String, ToolCall) {
+        (
+            id.to_string(),
+            ToolCall {
+                id: id.into(),
+                name: "exit_plan_mode".into(),
+                arguments: json!({"plan": format!("plan {id}")}).to_string(),
+            },
+        )
+    }
+
+    fn result(agent: &Agent, id: &str) -> String {
+        agent
+            .messages
+            .iter()
+            .find(|m| m["tool_call_id"] == id)
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// A user who answers every plan with `reply`, counting the plans shown.
+    fn planning_agent(name: &str, reply: &'static str) -> (Agent, Rc<Cell<usize>>) {
+        let shown = Rc::new(Cell::new(0));
+        let count = shown.clone();
+        let sink: Sink = Rc::new(move |event| {
+            if let Event::Ask(question) = event {
+                count.set(count.get() + 1);
+                let _ = question.reply.send(reply.to_string());
+            }
+        });
+        let controls = Controls {
+            interactive: true,
+            ..Controls::default()
+        };
+        controls.plan.set(true);
+        (idle_agent(name, controls, sink), shown)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_dismissed_plan_stops_the_turn_and_is_not_shown_again_until_the_user_speaks() {
+        let (mut agent, shown) = planning_agent("plan-dismissed", "");
+        agent
+            .execute_calls(vec![exit_plan_call("a")], false)
+            .await
+            .unwrap();
+        assert_eq!(shown.get(), 1);
+        let first = result(&agent, "a");
+        assert!(first.starts_with(PLAN_DISMISSED), "{first}");
+        assert!(first.contains("Stop now"), "{first}");
+        assert!(!first.contains("ask again"), "{first}");
+        assert!(agent.controls.plan.get(), "plan mode stays on");
+
+        agent
+            .push(json!({"role": "user", "content": "<system-reminder>a note</system-reminder>"}))
+            .unwrap();
+        agent
+            .execute_calls(vec![exit_plan_call("b")], false)
+            .await
+            .unwrap();
+        assert_eq!(shown.get(), 1, "a repeat in the same turn isn't shown");
+        let again = result(&agent, "b");
+        assert!(again.starts_with(PLAN_DISMISSED_AGAIN), "{again}");
+
+        agent
+            .push(json!({"role": "user", "content": "try a smaller plan"}))
+            .unwrap();
+        agent
+            .execute_calls(vec![exit_plan_call("c")], false)
+            .await
+            .unwrap();
+        assert_eq!(
+            shown.get(),
+            2,
+            "the user's reply lets the plan be shown again"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn keep_planning_still_asks_for_a_refined_plan() {
+        let (mut agent, shown) = planning_agent("plan-keep", "Keep planning");
+        for id in ["a", "b"] {
+            agent
+                .execute_calls(vec![exit_plan_call(id)], false)
+                .await
+                .unwrap();
+        }
+        assert_eq!(shown.get(), 2);
+        assert!(result(&agent, "b").contains("ask again"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_plan_dismissed_with_a_correction_pending_is_a_dismissal_that_keeps_it() {
+        let shown = Rc::new(Cell::new(0));
+        let count = shown.clone();
+        let sink: Sink = Rc::new(move |event| {
+            if let Event::Ask(question) = event {
+                count.set(count.get() + 1);
+                question.dismiss(&[
+                    "Corrected an earlier answer to “Which db?”: now “sqlite” (was “pg”)"
+                        .to_string(),
+                ]);
+            }
+        });
+        let controls = Controls {
+            interactive: true,
+            ..Controls::default()
+        };
+        controls.plan.set(true);
+        let mut agent = idle_agent("plan-dismissed-noted", controls, sink);
+        agent
+            .execute_calls(vec![exit_plan_call("a")], false)
+            .await
+            .unwrap();
+        let first = result(&agent, "a");
+        assert!(first.starts_with(PLAN_DISMISSED), "{first}");
+        assert!(first.contains("now “sqlite” (was “pg”)"), "{first}");
+        assert!(!first.contains("wants changes"), "{first}");
+        assert!(agent.controls.plan.get(), "plan mode stays on");
+        agent
+            .execute_calls(vec![exit_plan_call("b")], false)
+            .await
+            .unwrap();
+        assert_eq!(shown.get(), 1, "it counts as a dismissal: not shown again");
+        assert!(result(&agent, "b").starts_with(PLAN_DISMISSED_AGAIN));
+    }
+
+    #[test]
+    fn a_reply_reads_as_an_answer_or_a_dismissal() {
+        assert_eq!(Reply::of("  ".into()), Reply::Dismissed(None));
+        assert_eq!(Reply::of("sqlite".into()), Reply::Answered("sqlite".into()));
+        let (reply, answer) = oneshot::channel();
+        let question = Question {
+            text: "q".into(),
+            options: Vec::new(),
+            plan: false,
+            reply,
+        };
+        question.dismiss(&["fixed one".into(), "fixed two".into()]);
+        assert_eq!(
+            Reply::of(answer.blocking_recv().unwrap()),
+            Reply::Dismissed(Some("fixed one\nfixed two".into()))
+        );
+        let (reply, answer) = oneshot::channel();
+        Question {
+            text: "q".into(),
+            options: Vec::new(),
+            plan: false,
+            reply,
+        }
+        .dismiss(&[]);
+        assert_eq!(
+            Reply::of(answer.blocking_recv().unwrap()),
+            Reply::Dismissed(None)
+        );
+    }
+
+    #[test]
+    fn only_a_dismissal_since_the_users_last_message_counts() {
+        let dismissed = json!({"role": "tool", "tool_call_id": "a", "content": PLAN_DISMISSED});
+        let reminder = json!({"role": "user", "content": "<system-reminder>x</system-reminder>"});
+        let prompt =
+            json!({"role": "user", "content": "<system-reminder>x</system-reminder>\n\ngo"});
+        let reply = json!({"role": "assistant", "content": "ok"});
+        assert!(plan_dismissed(&[
+            dismissed.clone(),
+            reminder.clone(),
+            reply.clone()
+        ]));
+        assert!(!plan_dismissed(&[dismissed.clone(), prompt.clone()]));
+        assert!(!plan_dismissed(&[prompt, reply]));
+        assert!(!plan_dismissed(&[
+            json!({"role": "tool", "tool_call_id": "r", "content": format!("1: {PLAN_DISMISSED}")})
+        ]));
     }
 }

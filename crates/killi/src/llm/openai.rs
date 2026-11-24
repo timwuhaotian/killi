@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::{
     Delta, ErrorKind, Failure, IMAGE_OMITTED, Prepared, Reply, StreamParser, ToolCall, Usage,
-    arguments_valid, cap_output, truncate,
+    arguments_valid, cap_output, classify_stream_error, truncate,
 };
 use crate::config::{ResolvedModel, Thinking};
 
@@ -258,10 +258,13 @@ impl StreamParser for Parser {
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<(), Failure> {
         if let Some(error) = event.get("error").filter(|e| !e.is_null()) {
-            let code = error.get("code").and_then(Value::as_u64).map(|c| c as u16);
-            return Err(Failure::from_status(
+            let code = error
+                .get("code")
+                .filter(|code| !code.is_null())
+                .or_else(|| error.get("type"));
+            return Err(classify_stream_error(
                 code,
-                format!(
+                &format!(
                     "provider error mid-stream: {}",
                     truncate(&error.to_string(), 2000)
                 ),
@@ -284,7 +287,7 @@ impl StreamParser for Parser {
             .and_then(Value::as_str)
             .is_some_and(|text| !text.is_empty())
         {
-            return Err(Failure::fatal("provider refused the request".into()));
+            return Err(Failure::refused("provider refused the request".into()));
         }
         if let Some(text) = delta.get("content").and_then(Value::as_str) {
             reply.text.push_str(text);
@@ -322,12 +325,40 @@ impl StreamParser for Parser {
             .flatten()
         {
             let index = call.get("index").and_then(Value::as_u64);
-            let slot = match index.and_then(|index| {
-                self.call_slots
+            let id = call
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty());
+            let named = call
+                .pointer("/function/name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| !name.is_empty());
+            // A fragment continues the slot its index was given or the call its id names;
+            // with neither it continues the latest call. A different id starts a new call
+            // only beside a name: some providers number separate calls the same, others
+            // send a fresh id on every fragment of one call.
+            let latest = reply.tool_calls.len().checked_sub(1);
+            let known = match index {
+                Some(index) => self
+                    .call_slots
                     .iter()
+                    .rev()
                     .find(|(seen, _)| *seen == index)
                     .map(|(_, slot)| *slot)
-            }) {
+                    .filter(|slot| {
+                        let current = &reply.tool_calls[*slot].id;
+                        !named || id.is_none_or(|id| current.is_empty() || current == id)
+                    }),
+                None => match id {
+                    Some(id) => reply
+                        .tool_calls
+                        .iter()
+                        .position(|call| call.id == id)
+                        .or(latest.filter(|_| !named)),
+                    None => latest,
+                },
+            };
+            let slot = match known {
                 Some(slot) => slot,
                 None if reply.tool_calls.len() < MAX_STREAMED_CALLS => {
                     let slot = reply.tool_calls.len();
@@ -340,11 +371,17 @@ impl StreamParser for Parser {
                 None => continue,
             };
             let slot = &mut reply.tool_calls[slot];
-            if let Some(id) = call.get("id").and_then(Value::as_str) {
-                slot.id.push_str(id);
+            if let Some(id) = id
+                && slot.id.is_empty()
+            {
+                slot.id = id.to_string();
             }
             if let Some(function) = call.get("function") {
-                if let Some(name) = function.get("name").and_then(Value::as_str) {
+                // A name arrives whole or in pieces; one sent again on a later fragment
+                // is the same name, not more of it.
+                if let Some(name) = function.get("name").and_then(Value::as_str)
+                    && slot.name != name
+                {
                     slot.name.push_str(name);
                 }
                 if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {

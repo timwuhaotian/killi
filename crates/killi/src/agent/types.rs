@@ -11,6 +11,15 @@ pub enum Event {
         wait: Duration,
         reason: String,
     },
+    /// The request's last attempt failed after it streamed part of a reply: what it streamed
+    /// is not the answer. The backup answers next, or the request fails; `reason` says which.
+    Discard {
+        reason: String,
+    },
+    /// The reply streamed so far is in the history now: a later retry or discard takes back
+    /// only what streams after this, such as the continuation of a reply cut off at the
+    /// output token limit.
+    Settled,
     ToolStart {
         id: String,
         summary: String,
@@ -439,6 +448,15 @@ pub struct Settings {
     pub mcp: Rc<crate::mcp::Mcp>,
     /// Instruction files already in the system prompt.
     pub instruction_files: Vec<std::path::PathBuf>,
+    /// Requests one turn may make when no one watches it (`-p`, subagents, swarm members, peer
+    /// tasks) before it is asked to wrap up; `None` for no limit.
+    pub max_steps: Option<u32>,
+    /// The same for a turn the user watches in the terminal; `None` for no limit.
+    pub max_steps_interactive: Option<u32>,
+    /// This agent carries out a task another session sent: it runs at the top of its own
+    /// conversation, but no user typed its prompt, so it fires the hooks a subagent does and
+    /// leaves the user's memory alone.
+    pub peer_task: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -447,6 +465,8 @@ pub enum Stop {
     Completed,
     MaxTokens,
     RepeatBreaker,
+    /// The turn made as many requests as its step limit allows, then one more to wrap up.
+    StepLimit,
 }
 
 /// The prompt the model hasn't answered yet: where its messages start in the history, how

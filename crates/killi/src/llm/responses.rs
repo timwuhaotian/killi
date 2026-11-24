@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 
 use super::{
     Delta, ErrorKind, Failure, IMAGE_OMITTED, Prepared, Reply, StreamParser, ToolCall, cap_output,
-    content_text, json_arguments, spent_quota, system_text, truncate,
+    classify_stream_error, content_text, json_arguments, system_text, truncate,
 };
 use crate::config::{ResolvedModel, Thinking};
 
@@ -52,7 +52,7 @@ pub(super) fn prepare(
         body.insert(
             "max_output_tokens".into(),
             cap_output(model, messages, &tools, max)
-                .clamp(1, 131_072)
+                .clamp(16, 131_072)
                 .into(),
         );
     }
@@ -220,7 +220,7 @@ impl StreamParser for Parser {
         match event["type"].as_str() {
             Some("response.refusal.delta") => {
                 if event["delta"].as_str().is_some_and(|text| !text.is_empty()) {
-                    return Err(Failure::fatal("provider refused the request".into()));
+                    return Err(Failure::refused("provider refused the request".into()));
                 }
             }
             Some("response.output_text.delta") => {
@@ -291,7 +291,7 @@ impl StreamParser for Parser {
                         reason.unwrap_or("unknown reason")
                     );
                     return Err(if reason == Some("content_filter") {
-                        Failure::fatal(message)
+                        Failure::refused(message)
                     } else {
                         Failure::transient(message)
                     });
@@ -309,38 +309,14 @@ impl StreamParser for Parser {
             }
             Some("response.failed" | "error") => {
                 let error = failed_error(event);
-                let text = error.to_string();
-                let message = format!("provider error mid-stream: {}", truncate(&text, 2000));
-                let code = error["code"]
-                    .as_str()
-                    .or_else(|| event["code"].as_str())
-                    .unwrap_or_default()
-                    .to_lowercase();
-                let lower = text.to_lowercase();
-                // A code names the failure; without one the text is all there is, and it
-                // says the same things a 429 body does.
-                let kind = if code.contains("rate_limit")
-                    || (code.is_empty() && lower.contains("rate limit"))
-                {
-                    ErrorKind::RateLimited
-                } else if code.contains("usage_limit")
-                    || spent_quota(&code)
-                    || (code.is_empty() && spent_quota(&lower))
-                {
-                    ErrorKind::Quota
-                } else {
-                    ErrorKind::Other
-                };
-                let retry = match kind {
-                    ErrorKind::Quota => false,
-                    ErrorKind::RateLimited => true,
-                    _ => {
-                        code.contains("server_error")
-                            || code.ends_with("_unavailable")
-                            || code.is_empty()
-                    }
-                };
-                return Err(Failure::of(kind, None, retry, message));
+                let message = format!(
+                    "provider error mid-stream: {}",
+                    truncate(&error.to_string(), 2000)
+                );
+                let code = [&error["code"], &event["code"]]
+                    .into_iter()
+                    .find(|code| code.as_str().is_some_and(|code| !code.is_empty()));
+                return Err(classify_stream_error(code, &message));
             }
             _ => {}
         }

@@ -167,9 +167,436 @@ fn statuses_classify_into_kinds() {
         ErrorKind::Other
     );
     assert_eq!(
-        Failure::from_status(Some(429), "mid-stream".into()).kind,
+        classify_stream_error(Some(&serde_json::json!(429)), "mid-stream").kind,
         ErrorKind::RateLimited
     );
+}
+
+#[test]
+fn a_rejected_request_is_invalid_unless_it_names_an_unknown_model() {
+    let bad = classify(
+        StatusCode::BAD_REQUEST,
+        None,
+        "messages: roles must alternate",
+    );
+    assert_eq!((bad.kind, bad.retryable), (ErrorKind::Invalid, false));
+    assert_eq!(
+        classify(StatusCode::UNPROCESSABLE_ENTITY, None, "bad schema").kind,
+        ErrorKind::Invalid
+    );
+    for body in [
+        r#"{"error":{"message":"The model `gpt-9` does not exist","code":"model_not_found"}}"#,
+        r#"{"error":{"message":"Model Not Exist"}}"#,
+        "models/gemini-9 is not found for API version v1beta",
+    ] {
+        assert_eq!(
+            classify(StatusCode::BAD_REQUEST, None, body).kind,
+            ErrorKind::Other,
+            "{body}"
+        );
+    }
+    assert_eq!(
+        classify(StatusCode::NOT_FOUND, None, "nope").kind,
+        ErrorKind::Other
+    );
+}
+
+#[test]
+fn a_rejection_for_spent_credit_is_a_spent_quota() {
+    for (status, body) in [
+        (
+            StatusCode::BAD_REQUEST,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#,
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            "insufficient credits to make this request",
+        ),
+        (StatusCode::FORBIDDEN, "Insufficient balance"),
+        (StatusCode::FORBIDDEN, "余额不足或无可用资源包,请充值。"),
+        (StatusCode::PAYMENT_REQUIRED, "Payment Required"),
+    ] {
+        let failure = classify(status, None, body);
+        assert_eq!(
+            (failure.kind, failure.retryable),
+            (ErrorKind::Quota, false),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        classify(StatusCode::FORBIDDEN, None, "key revoked").kind,
+        ErrorKind::Auth
+    );
+}
+
+#[test]
+fn more_overflow_wordings_are_overflow_only_on_a_rejection() {
+    for body in [
+        "input length and `max_tokens` exceed context limit: 190000 + 32000 > 200000",
+        "Invalid request: exceeded model token limit: 262144",
+        "The input token count exceeds the maximum number of tokens allowed",
+        "This request exceeds the context of the model",
+        r#"{"type":"error","error":{"type":"request_too_large"}}"#,
+    ] {
+        assert_eq!(
+            classify(StatusCode::BAD_REQUEST, None, body).kind,
+            ErrorKind::Overflow,
+            "{body}"
+        );
+    }
+    assert_eq!(
+        classify(StatusCode::PAYLOAD_TOO_LARGE, None, "request_too_large").kind,
+        ErrorKind::Overflow
+    );
+    assert_eq!(
+        classify(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            "token limit per minute"
+        )
+        .kind,
+        ErrorKind::RateLimited
+    );
+}
+
+#[test]
+fn stream_errors_classify_by_code_then_text() {
+    let kind = |code: Value, text: &str| {
+        let failure = classify_stream_error(Some(&code).filter(|c| !c.is_null()), text);
+        (failure.kind, failure.retryable)
+    };
+    use serde_json::json;
+    assert_eq!(
+        kind(json!("rate_limit_exceeded"), "slow down"),
+        (ErrorKind::RateLimited, true)
+    );
+    assert_eq!(
+        kind(json!("rate_limit_error"), "slow down"),
+        (ErrorKind::RateLimited, true)
+    );
+    assert_eq!(
+        kind(
+            json!("insufficient_quota"),
+            "You exceeded your current quota"
+        ),
+        (ErrorKind::Quota, false)
+    );
+    assert_eq!(
+        kind(json!("rate_limit_error"), "已达到 Token Plan 用量上限"),
+        (ErrorKind::Quota, false),
+        "a rate limit worded as a spent plan is a spent plan"
+    );
+    assert_eq!(
+        kind(json!("context_length_exceeded"), "too long"),
+        (ErrorKind::Overflow, false)
+    );
+    assert_eq!(
+        kind(
+            json!(400),
+            "This model's maximum context length is 128000 tokens"
+        ),
+        (ErrorKind::Overflow, false)
+    );
+    assert_eq!(
+        kind(
+            json!("invalid_request_error"),
+            "prompt is too long: 210000 tokens"
+        ),
+        (ErrorKind::Overflow, false)
+    );
+    assert_eq!(
+        kind(json!("request_too_large"), "too big"),
+        (ErrorKind::Overflow, false)
+    );
+    assert_eq!(
+        kind(json!("content_filter"), "blocked"),
+        (ErrorKind::Refused, false)
+    );
+    assert_eq!(
+        kind(json!("authentication_error"), "bad key"),
+        (ErrorKind::Auth, false)
+    );
+    assert_eq!(kind(json!(401), "bad key"), (ErrorKind::Auth, false));
+    assert_eq!(
+        kind(json!("invalid_request_error"), "bad"),
+        (ErrorKind::Invalid, false)
+    );
+    assert_eq!(
+        kind(json!("invalid_request_error"), "model: claude-9 not found"),
+        (ErrorKind::Other, false)
+    );
+    assert_eq!(
+        kind(json!("overloaded_error"), "busy"),
+        (ErrorKind::Other, true)
+    );
+    assert_eq!(kind(json!("api_error"), "oops"), (ErrorKind::Other, true));
+    assert_eq!(
+        kind(json!("server_error"), "context length unknown"),
+        (ErrorKind::Other, true),
+        "a server-side failure is retried whatever its text says"
+    );
+    assert_eq!(kind(json!(503), "down"), (ErrorKind::Other, true));
+    assert_eq!(kind(json!("502"), "down"), (ErrorKind::Other, true));
+    assert_eq!(
+        kind(Value::Null, "Rate limit reached"),
+        (ErrorKind::RateLimited, true)
+    );
+    assert_eq!(kind(Value::Null, "boom"), (ErrorKind::Other, true));
+    assert_eq!(
+        kind(json!("mystery_code"), "boom"),
+        (ErrorKind::Other, false),
+        "a code nobody knows fails at once"
+    );
+    for code in [
+        json!(1302),
+        json!("1302"),
+        json!(" 1302 "),
+        json!("99999999999999999999"),
+    ] {
+        assert_eq!(
+            kind(code.clone(), "Rate limit reached for requests"),
+            (ErrorKind::RateLimited, true),
+            "{code}"
+        );
+        assert_eq!(
+            kind(code.clone(), "boom"),
+            (ErrorKind::Other, true),
+            "{code}"
+        );
+    }
+    assert_eq!(
+        kind(json!("mystery_code"), "Rate limit reached"),
+        (ErrorKind::RateLimited, true),
+        "a code nobody knows lets the text decide"
+    );
+    assert_eq!(
+        kind(json!("mystery_code"), "已达到 5 小时的使用上限"),
+        (ErrorKind::Quota, false)
+    );
+    assert_eq!(
+        kind(json!("mystery_code"), "maximum context length exceeded"),
+        (ErrorKind::Overflow, false)
+    );
+    assert_eq!(
+        kind(json!("mystery_code"), "blocked by content_policy"),
+        (ErrorKind::Refused, false)
+    );
+    assert_eq!(
+        kind(json!("mystery_code"), "insufficient credits"),
+        (ErrorKind::Quota, false)
+    );
+    for code in [
+        "service_unavailable_error",
+        "internal_error",
+        "upstream_error",
+        "bad_gateway",
+        "network_error",
+    ] {
+        assert_eq!(
+            kind(json!(code), "try later"),
+            (ErrorKind::Other, true),
+            "{code}"
+        );
+    }
+    assert_eq!(
+        kind(
+            json!("rate_limit_exceeded"),
+            "add a payment method at https://platform.example/account/billing"
+        ),
+        (ErrorKind::RateLimited, true),
+        "a rate limit pointing at billing is still a rate limit"
+    );
+}
+
+#[test]
+fn a_status_beside_a_code_reads_both() {
+    let kind = |status: u16, code: &str| {
+        let failure = classify_stream_status(Some(status), Some(&serde_json::json!(code)), "error");
+        (failure.kind, failure.retryable, failure.status)
+    };
+    assert_eq!(
+        kind(400, "rate_limit_exceeded"),
+        (ErrorKind::RateLimited, true, Some(400))
+    );
+    assert_eq!(kind(400, "mystery"), (ErrorKind::Invalid, false, Some(400)));
+    assert_eq!(kind(503, "mystery"), (ErrorKind::Other, true, Some(503)));
+}
+
+#[test]
+fn finish_reasons_say_what_a_reply_is_worth() {
+    let reply = |text: &str, reason: &str| Reply {
+        text: text.into(),
+        finish_reason: Some(reason.into()),
+        ..Reply::default()
+    };
+    for reason in ["model_length", "model_context_window_exceeded"] {
+        let kept = validate_reply(reply("long answer", reason)).unwrap();
+        assert_eq!(kept.finish_reason.as_deref(), Some("length"), "{reason}");
+        let empty = validate_reply(reply("", reason)).unwrap_err();
+        assert_eq!(
+            (empty.kind, empty.retryable),
+            (ErrorKind::Overflow, false),
+            "{reason}"
+        );
+    }
+    for reason in ["insufficient_system_resource", "error", "overloaded"] {
+        assert!(
+            validate_reply(reply("partial", reason))
+                .unwrap_err()
+                .retryable,
+            "{reason}"
+        );
+    }
+    for reason in [
+        "refusal",
+        "content_filter",
+        "content-filter",
+        "safety",
+        "sensitive",
+    ] {
+        let refused = validate_reply(reply("partial", reason)).unwrap_err();
+        assert_eq!(
+            (refused.kind, refused.retryable),
+            (ErrorKind::Refused, false),
+            "{reason}"
+        );
+    }
+    let odd = validate_reply(reply("x", "something_else")).unwrap_err();
+    assert_eq!((odd.kind, odd.retryable), (ErrorKind::Other, false));
+}
+
+#[test]
+fn only_missing_arguments_become_empty_json() {
+    let call = |arguments: &str| ToolCall {
+        id: "c".into(),
+        name: "write".into(),
+        arguments: arguments.into(),
+    };
+    let mut reply = Reply {
+        tool_calls: vec![
+            call(""),
+            call("  \n"),
+            call(r#"{"path":"a.rs","content":"fn ma"#),
+            call(r#"{"path":"a"}"#),
+        ],
+        ..Reply::default()
+    };
+    reply.repair_call_arguments();
+    let arguments: Vec<_> = reply
+        .tool_calls
+        .iter()
+        .map(|call| call.arguments.as_str())
+        .collect();
+    assert_eq!(
+        arguments,
+        [
+            "{}",
+            "{}",
+            r#"{"path":"a.rs","content":"fn ma"#,
+            r#"{"path":"a"}"#
+        ]
+    );
+}
+
+/// A cut-off call kept as streamed goes back to every protocol as valid JSON, on the copy
+/// being sent, and the same bytes every time.
+#[test]
+fn a_cut_off_call_in_history_is_sent_back_valid_by_every_protocol() {
+    let history = vec![
+        serde_json::json!({"role": "user", "content": "write it"}),
+        serde_json::json!({"role": "assistant", "content": null, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "write", "arguments": "{\"path\":\"a.rs\",\"content\":\"fn ma"}}
+        ]}),
+        serde_json::json!({"role": "tool", "tool_call_id": "c1", "content": "Invalid arguments"}),
+    ];
+    let original = history.clone();
+    for protocol in [
+        Protocol::OpenAi,
+        Protocol::Anthropic,
+        Protocol::Responses,
+        Protocol::CommandCode,
+    ] {
+        let mut model = test_model("http://localhost");
+        model.protocol = protocol;
+        let send = || {
+            let prepared = match protocol {
+                Protocol::OpenAi => openai::prepare(&model, &history, &[], "k"),
+                Protocol::Anthropic => anthropic::prepare(&model, &history, &[]),
+                Protocol::Responses => responses::prepare(&model, &history, &[], "k"),
+                Protocol::CommandCode => commandcode::prepare(&model, &history, &[], "k"),
+            };
+            prepared.unwrap().body
+        };
+        let body = send();
+        let text = String::from_utf8(body.clone()).unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert!(!text.contains("fn ma"), "{protocol:?}: {text}");
+        let mut found = Vec::new();
+        collect_arguments(&parsed, &mut found);
+        assert!(!found.is_empty(), "{protocol:?}: {text}");
+        for arguments in found {
+            match arguments {
+                Value::String(raw) => assert!(arguments_valid(&raw), "{protocol:?}: {raw}"),
+                other => assert!(other.is_object(), "{protocol:?}: {other}"),
+            }
+        }
+        if protocol != Protocol::CommandCode {
+            assert_eq!(
+                send(),
+                body,
+                "{protocol:?} converts the same way every time"
+            );
+        }
+    }
+    assert_eq!(history, original, "history stays as stored");
+}
+
+/// Every tool call's arguments in a request body: `arguments` in the OpenAI dialects,
+/// `input` on an Anthropic `tool_use` or a Command Code `tool-call`.
+fn collect_arguments(value: &Value, found: &mut Vec<Value>) {
+    match value {
+        Value::Object(map) => {
+            let call = matches!(
+                map.get("type").and_then(Value::as_str),
+                Some("tool_use" | "tool-call")
+            );
+            for (key, value) in map {
+                if key == "arguments" || (call && key == "input") {
+                    found.push(value.clone());
+                } else {
+                    collect_arguments(value, found);
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| collect_arguments(item, found)),
+        _ => {}
+    }
+}
+
+#[test]
+fn retry_after_reads_milliseconds_first() {
+    let headers = |pairs: &[(&'static str, &'static str)]| {
+        let mut map = reqwest::header::HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(*name, value.parse().unwrap());
+        }
+        map
+    };
+    assert_eq!(
+        retry_after(&headers(&[("retry-after", "3")])),
+        Some(Duration::from_secs(3))
+    );
+    assert_eq!(
+        retry_after(&headers(&[
+            ("retry-after-ms", "1500"),
+            ("retry-after", "3")
+        ])),
+        Some(Duration::from_millis(1500))
+    );
+    assert_eq!(retry_after(&headers(&[("retry-after", "soon")])), None);
+    assert_eq!(retry_after(&headers(&[])), None);
+    assert_eq!(retry_after(&headers(&[("retry-after-ms", "1e300")])), None);
+    assert_eq!(retry_after(&headers(&[("retry-after", "-1")])), None);
 }
 
 #[test]
@@ -424,7 +851,13 @@ async fn a_named_thinking_signature_rejection_is_retried_once() {
         })
         .await
         .unwrap_err();
-    assert_eq!(error.downcast_ref::<ProviderError>().unwrap().attempts, 2);
+    let provider = error.downcast_ref::<ProviderError>().unwrap();
+    assert_eq!(provider.attempts, 2);
+    assert_eq!(
+        provider.kind,
+        ErrorKind::Other,
+        "a rejection the retry didn't cure may not be another model's"
+    );
     assert_eq!(arrivals.lock().unwrap().len(), 2);
     assert_eq!(retries, 1);
     assert_eq!(history[1]["reasoning_items"][0]["signature"], "sig");
@@ -744,4 +1177,102 @@ async fn a_quota_429_that_clears_gets_its_answer_and_one_that_stays_fails_after_
     assert_eq!(provider.kind, ErrorKind::Quota);
     assert_eq!(provider.attempts, 2);
     assert_eq!(arrivals.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_final_429_too_long_to_wait_out_leaves_no_cooldown_behind() {
+    let limited = "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 3600\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"come back in an hour\"}}".to_string();
+    let (url, arrivals) = serve(vec![limited, sse_ok()]).await;
+    let client = Client::new(test_model(&url)).unwrap();
+    let message = [serde_json::json!({"role": "user", "content": "hi"})];
+    let error = client
+        .complete(&message, &[], "k", &mut |_| {})
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<ProviderError>().unwrap().attempts,
+        1,
+        "an hour isn't sat out"
+    );
+    assert!(client.cooldown.get().is_none());
+    let started = Instant::now();
+    client
+        .complete(&message, &[], "k", &mut |_| {})
+        .await
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(arrivals.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_final_429_paces_the_next_call_for_a_minute_at_most() {
+    let limited = "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 50\r\nconnection: close\r\n\r\n{\"error\":{\"message\":\"slow down\"}}".to_string();
+    let (url, _) = serve(vec![limited]).await;
+    let mut client = Client::new(test_model(&url)).unwrap();
+    client.wait_budget = Duration::ZERO;
+    let message = [serde_json::json!({"role": "user", "content": "hi"})];
+    let before = Instant::now();
+    client
+        .complete(&message, &[], "k", &mut |_| {})
+        .await
+        .unwrap_err();
+    let deadline = client.cooldown.get().expect("the server named a wait");
+    assert!(deadline <= before + Duration::from_secs(60) + Duration::from_secs(1));
+    assert!(deadline >= before + Duration::from_secs(49));
+}
+
+#[tokio::test]
+async fn a_shared_cooldown_wait_is_announced_and_bounded_by_the_budget() {
+    let (url, arrivals) = serve(vec![sse_ok()]).await;
+    let mut client = Client::new(test_model(&url)).unwrap();
+    client.wait_budget = Duration::from_millis(300);
+    client
+        .cooldown
+        .set(Some(Instant::now() + Duration::from_secs(3600)));
+    let mut announced = Vec::new();
+    let started = Instant::now();
+    client
+        .complete(
+            &[serde_json::json!({"role": "user", "content": "hi"})],
+            &[],
+            "k",
+            &mut |delta| {
+                if let Delta::Retry { wait, reason, .. } = delta {
+                    announced.push((wait, reason.to_string()));
+                }
+            },
+        )
+        .await
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(arrivals.lock().unwrap().len(), 1);
+    assert_eq!(announced.len(), 1, "{announced:?}");
+    assert!(announced[0].0 <= Duration::from_millis(300));
+    assert!(announced[0].1.contains("rate limit"), "{announced:?}");
+}
+
+#[tokio::test]
+async fn a_rate_limit_mid_stream_sets_the_shared_cooldown() {
+    let limited = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"slow down\"}\n\n".to_string();
+    let completed = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{}}}\n\n".to_string();
+    let (url, arrivals) = serve(vec![limited, completed]).await;
+    let mut model = test_model(&url);
+    model.protocol = Protocol::Responses;
+    let client = Client::new(model).unwrap();
+    let peer = client.clone();
+    let reply = client
+        .complete(
+            &[serde_json::json!({"role": "user", "content": "hi"})],
+            &[],
+            "k",
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.text, "ok");
+    assert_eq!(arrivals.lock().unwrap().len(), 2);
+    assert!(
+        peer.cooldown.get().is_some(),
+        "a clone sees the rate limit the stream named"
+    );
 }

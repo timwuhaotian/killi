@@ -5,6 +5,7 @@ mod crew;
 pub(super) use crew::{Child, ChildDone, Crew, Job, Unfinished, add_stats, tag};
 
 use background::{BgStart, BgWork, Route, moved_note};
+use dispatch::neutralize_in_place;
 
 const MAX_PARALLEL_AGENTS: usize = 4;
 pub(super) const MAX_SWARM_AGENTS_PER_TURN: usize = swarm::MAX_ITEMS;
@@ -36,7 +37,8 @@ async fn steered(steer: &RefCell<VecDeque<Steered>>) {
 }
 
 impl Agent {
-    /// Runs a group of `agent` calls in parallel and returns each one's result as a tool output.
+    /// Runs a group of `agent` calls in parallel and returns each one's result as history
+    /// stores it (see `post_hook`).
     /// Hooks see each call like any other: a blocked call reports why instead of starting. In
     /// orchestrate mode every call starts in the background at once; otherwise the group runs
     /// in the foreground until the user sends a message, which moves what is left there.
@@ -99,11 +101,16 @@ impl Agent {
             self.run_agent_group(jobs, &labels, &ids).await
         };
         for ((args, output), id) in hooked.into_iter().zip(outputs.iter_mut()).zip(&ids) {
-            if let Some(args) = args {
-                self.post_hook("agent", &args, output).await;
+            let note = match &args {
+                Some(args) => self.hook_note("agent", args, &output.text).await,
+                None => None,
+            };
+            if args.is_some() || !self.partial_agents.contains_key(id) {
                 self.save_agent_result(id, output);
-            } else if !self.partial_agents.contains_key(id) {
-                self.save_agent_result(id, output);
+            }
+            neutralize_in_place(&mut output.text);
+            if let Some(note) = note {
+                output.text.push_str(&note);
             }
         }
         outputs
@@ -278,14 +285,25 @@ impl Agent {
     /// Runs an `agent_swarm` call: one fresh subagent per item, `swarm_parallel` at a time,
     /// bounded by the turn's total swarm budget, with every report in item order. In
     /// orchestrate mode, or once the user sends a message, the swarm goes on in the background
-    /// as one task.
+    /// as one task. The report is returned as history stores it (see `post_hook`).
     pub(super) async fn run_swarm(&mut self, id: &str, call: &ToolCall) -> tools::Output {
+        let (mut report, args) = self.swarm_call(id, call).await;
+        match args {
+            Some(args) => self.post_hook("agent_swarm", &args, &mut report).await,
+            None => neutralize_in_place(&mut report.text),
+        }
+        report
+    }
+
+    /// Runs a swarm and returns its raw report, with the call's arguments once its PreToolUse
+    /// hooks let it start and it ran or moved to the background.
+    async fn swarm_call(&mut self, id: &str, call: &ToolCall) -> (tools::Output, Option<Value>) {
         self.stats.tool_calls += 1;
         let args = match parse_args(call) {
             Ok(args) => args,
             Err(why) => {
                 self.tool_start(id, "agent_swarm (invalid arguments)");
-                return invalid_arguments(call, &why, false);
+                return (invalid_arguments(call, &why, false), None);
             }
         };
         self.tool_start(id, &tools::summary("agent_swarm", &args, &self.ctx.cwd));
@@ -297,14 +315,15 @@ impl Agent {
             )
             .await;
         if let Some(reason) = before.block {
-            return tools::Output::error(format!("A hook blocked this call: {reason}"));
+            let blocked = format!("A hook blocked this call: {reason}");
+            return (tools::Output::error(blocked), None);
         }
         let prompts = match swarm::prompts(&args) {
             Ok(prompts) => prompts,
-            Err(why) => return tools::Output::error(why),
+            Err(why) => return (tools::Output::error(why), None),
         };
         if let Err(why) = reserve_swarm(self.swarm_used, prompts.len()) {
-            return tools::Output::error(why);
+            return (tools::Output::error(why), None);
         }
         self.swarm_used += prompts.len();
         let description = args["description"]
@@ -339,9 +358,8 @@ impl Agent {
         let since = Instant::now();
         let crew = Crew::new(jobs, self.swarm_parallel.get(), self.ctx.clone());
         if self.orchestrating() {
-            let mut report = self.move_swarm(crew, &description, &items, &logs, false, since);
-            self.post_hook("agent_swarm", &args, &mut report).await;
-            return report;
+            let report = self.move_swarm(crew, &description, &items, &logs, false, since);
+            return (report, Some(args));
         }
         let _ = self
             .session
@@ -375,10 +393,8 @@ impl Agent {
                 Step::Steered => {
                     // The call is answered by the task it moved to, not by partial results.
                     self.partial_swarm = None;
-                    let mut report =
-                        self.move_swarm(crew, &description, &items, &logs, true, since);
-                    self.post_hook("agent_swarm", &args, &mut report).await;
-                    return report;
+                    let report = self.move_swarm(crew, &description, &items, &logs, true, since);
+                    return (report, Some(args));
                 }
             };
             let index = done.index;
@@ -399,15 +415,14 @@ impl Agent {
         }
         let children = crew.finish();
         let logs = unrun_logs(logs, &children.unrun);
-        let mut report = swarm::report(
+        let report = swarm::report(
             &self.ctx,
             &items,
             &children.outputs,
             &logs,
             MAX_RESULT_BYTES,
         );
-        self.post_hook("agent_swarm", &args, &mut report).await;
-        report
+        (report, Some(args))
     }
 
     /// Hands a swarm to the background as one task that reports every item in order when the
@@ -635,7 +650,7 @@ impl Agent {
     }
 }
 
-pub(super) const CHILD_REMINDER: &str = "&lt;system-reminder>You are a subagent and cannot start other subagents. Do not call agent or agent_swarm, even if earlier instructions or a mode such as swarm or orchestrate ask you to delegate. Do the assigned work yourself, without waiting on anything in the background, and report any blockers to your parent.&lt;/system-reminder>";
+pub(super) const CHILD_REMINDER: &str = "<system-reminder>You are a subagent and cannot start other subagents. Do not call agent or agent_swarm, even if earlier instructions or a mode such as swarm or orchestrate ask you to delegate. Do the assigned work yourself, without waiting on anything in the background, and report any blockers to your parent.</system-reminder>";
 
 fn child_prompt(prompt: &str) -> String {
     format!("{}\n\n{CHILD_REMINDER}", subagent_prompt(prompt))
@@ -701,6 +716,10 @@ mod tests {
         assert!(prompt.contains("Status: ready"));
         assert!(prompt.ends_with(CHILD_REMINDER));
         assert!(CHILD_REMINDER.contains("agent_swarm"));
+        assert!(
+            CHILD_REMINDER.starts_with("<system-reminder>")
+                && CHILD_REMINDER.ends_with("</system-reminder>")
+        );
         assert!(!subagent_prompt("Do the task.").contains(CHILD_REMINDER));
     }
 }

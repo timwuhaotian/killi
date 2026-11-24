@@ -2,7 +2,9 @@
 //! paste Kil sends on Cmd+V, and the files a terminal pastes when they are dropped on it.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::path::PathBuf;
 use std::process::Command;
 
 use super::mention;
@@ -17,6 +19,46 @@ pub fn dropped_files(text: &str) -> Option<Vec<PathBuf>> {
         .map(PathBuf::from)
         .collect();
     (!paths.is_empty() && paths.iter().all(|p| p.is_absolute() && p.exists())).then_some(paths)
+}
+
+/// A private folder for one paste's image file, removed with it. Its name is new to this call
+/// and it is created only if nothing holds that name, so no one else can plant a link where
+/// the image is written or read the image back.
+struct PasteDir(PathBuf);
+
+impl PasteDir {
+    fn new() -> Result<Self, String> {
+        let mut last = None;
+        for attempt in 0..8 {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let dir = std::env::temp_dir().join(format!(
+                "killi-paste-{}-{nanos}-{attempt}",
+                std::process::id()
+            ));
+            match fs::DirBuilder::new().mode(0o700).create(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+                Err(e) => return Err(format!("Could not read the clipboard: {e}")),
+            }
+        }
+        Err(format!(
+            "Could not read the clipboard: {}",
+            last.map_or_else(String::new, |e| e.to_string())
+        ))
+    }
+
+    /// The path of the image file, named for its extension.
+    fn file(&self, ext: &str) -> PathBuf {
+        self.0.join(format!("clipboard.{ext}"))
+    }
+}
+
+impl Drop for PasteDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Asks for a file copied in Finder first, so its icon isn't taken for the image; then writes
@@ -57,7 +99,8 @@ pub fn clipboard_image() -> Result<String, String> {
 /// The clipboard's image through `osascript`, as PNG bytes or a Finder file.
 #[cfg(target_os = "macos")]
 fn macos_clipboard_image() -> Result<String, String> {
-    let file = std::env::temp_dir().join(format!("killi-paste-{}.png", std::process::id()));
+    let dir = PasteDir::new()?;
+    let file = dir.file("png");
     let out = Command::new("/usr/bin/osascript")
         .args(CLIPBOARD_SCRIPT.lines().flat_map(|line| ["-e", line]))
         .arg(&file)
@@ -66,7 +109,7 @@ fn macos_clipboard_image() -> Result<String, String> {
     let answer = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let image = if answer == "png" {
         image_url("the clipboard's image", &file, "image/png")
-    } else if let Some(path) = answer.strip_prefix("file:").map(Path::new) {
+    } else if let Some(path) = answer.strip_prefix("file:").map(std::path::Path::new) {
         let name = path.file_name().map_or_else(
             || path.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
@@ -78,7 +121,6 @@ fn macos_clipboard_image() -> Result<String, String> {
     } else {
         Err("There's no image on the clipboard.".to_string())
     };
-    let _ = fs::remove_file(&file);
     image.map(|(url, _)| url)
 }
 
@@ -147,24 +189,27 @@ fn media_type_from_magic(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
     None
 }
 
-/// Clipboard bytes as a data URL, through a temp file so `image_url` checks the magic.
+/// Clipboard bytes as a data URL, through a file in a private folder so `image_url` checks
+/// the magic and can shrink it.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn image_url_from_bytes(bytes: &[u8]) -> Result<String, String> {
     let Some((_, ext)) = media_type_from_magic(bytes) else {
         return Err("There's no image on the clipboard.".to_string());
     };
-    let file: PathBuf =
-        std::env::temp_dir().join(format!("killi-paste-{}.{}", std::process::id(), ext));
-    let path: &Path = &file;
-    if let Err(e) = fs::write(path, bytes) {
-        return Err(format!("Could not read the clipboard: {e}"));
-    }
+    let dir = PasteDir::new()?;
+    let path = dir.file(ext);
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut file| file.write_all(bytes))
+        .map_err(|e| format!("Could not read the clipboard: {e}"))?;
     let name = "the clipboard's image";
-    let image = match image_type(path) {
-        Some(found) => image_url(name, path, found),
+    let image = match image_type(&path) {
+        Some(found) => image_url(name, &path, found),
         None => Err(format!("{name} isn't an image (png, jpg, gif or webp).")),
     };
-    let _ = fs::remove_file(path);
     image.map(|(url, _)| url)
 }
 
@@ -236,6 +281,34 @@ mod tests {
         );
         assert_eq!(media_type_from_magic(b"hello"), None);
         assert_eq!(media_type_from_magic(b""), None);
+    }
+
+    #[test]
+    fn each_paste_gets_its_own_private_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let first = PasteDir::new().unwrap();
+        let second = PasteDir::new().unwrap();
+        assert_ne!(first.0, second.0);
+        let mode = fs::metadata(&first.0).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        let path = first.0.clone();
+        fs::write(first.file("png"), "x").unwrap();
+        drop(first);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_link_planted_in_the_temp_dir_is_not_written_through() {
+        let dir = crate::test_temp::TempDir::new("killi-paste-target");
+        let target = dir.join("victim");
+        fs::write(&target, "keep").unwrap();
+        let planted = std::env::temp_dir().join(format!("killi-paste-{}.png", std::process::id()));
+        let _ = fs::remove_file(&planted);
+        std::os::unix::fs::symlink(&target, &planted).unwrap();
+        let url = image_url_from_bytes(b"\x89PNG\r\n\x1a\n\x00\x01");
+        let _ = fs::remove_file(&planted);
+        assert!(url.unwrap().starts_with("data:image/png;base64,"));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep");
     }
 
     #[test]

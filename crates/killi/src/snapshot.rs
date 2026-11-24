@@ -1,15 +1,27 @@
 //! Undo: before each turn, the working tree is recorded in a separate git directory under
 //! `~/.killi/snapshots/`, through the user's `git`. Their own repository is never touched.
-//! Files ignored by `.gitignore` are skipped, so build output doesn't slow it down.
+//! Files ignored by `.gitignore` are skipped, so build output doesn't slow it down, and so
+//! are files over 50 MB; undo never deletes either kind.
 //!
 //! Sessions in one work tree share its snapshot directory, each staging through its own index
 //! file in it, so their git steps never interleave; `/undo` is told when another session worked
 //! in the tree since, because putting the tree back undoes its work too.
 
+mod deadline;
+mod gc;
+mod keep;
+
+pub use gc::prune_store;
+
+use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -18,9 +30,16 @@ use crate::config::killi_home;
 
 const MAX_FILES: usize = 50_000;
 
+/// Files larger than this stay out of snapshots: hashing one would hold up the turn and
+/// copying it would fill the disk. Undo never deletes one.
+const BIG_FILE: u64 = 50 * 1024 * 1024;
+
 /// How often a git command that found a lock on this session's index file is tried again,
 /// 100 ms apart.
 const LOCK_TRIES: u32 = 30;
+
+/// How long one git command of a snapshot or an undo may run before it is stopped.
+const GIT_DEADLINE: Duration = Duration::from_secs(60);
 
 pub struct Snapshots {
     git_dir: PathBuf,
@@ -30,9 +49,21 @@ pub struct Snapshots {
     /// Why the last turn has no snapshot, if it doesn't; the turns before it can still be
     /// undone.
     pub skipped: Option<String>,
-    /// One tree per turn, oldest first: the state just before that turn, and when it was
-    /// taken in ms since the epoch.
-    trees: Vec<(String, u64)>,
+    /// One entry per turn, oldest first: the snapshot of the state just before that turn and
+    /// when it was taken in ms since the epoch, or `None` when that turn's snapshot failed.
+    trees: Vec<Option<(Taken, u64)>>,
+    /// How long one git command may run; `GIT_DEADLINE`, shorter in tests.
+    deadline: Duration,
+}
+
+/// A finished snapshot: the tree, the files left out of it for their size, and the
+/// `.gitignore` files left out because they ignore themselves, as paths with their blob ids.
+/// Undo reads the rules of both kinds of `.gitignore`.
+#[derive(Clone)]
+pub struct Taken {
+    tree: String,
+    big: Vec<Vec<u8>>,
+    ignores: Vec<(Vec<u8>, String)>,
 }
 
 /// The blocking half of a snapshot: everything the git commands need, owned so the work
@@ -43,56 +74,194 @@ pub struct TakeWork {
     work_tree: PathBuf,
     index_file: PathBuf,
     lock_name: String,
+    deadline: Duration,
+    cancel: Cancel,
 }
 
 impl TakeWork {
-    /// The git commands of a snapshot: init once, stage everything, hash the tree.
-    pub fn run(&self) -> Result<String> {
-        write_tree(self).or_else(|_| write_tree(self))
+    /// The git commands of a snapshot: init once, stage everything, hash the tree. A git
+    /// command that ran out of time or was given up on isn't tried again.
+    pub fn run(&self) -> Result<Taken> {
+        write_tree(self).or_else(|e| {
+            if deadline::stopped(&e) {
+                Err(e)
+            } else {
+                write_tree(self)
+            }
+        })
+    }
+
+    /// A handle that gives up on this work from another thread.
+    pub fn canceler(&self) -> Cancel {
+        self.cancel.clone()
     }
 }
 
-fn git(work: &TakeWork, args: &[&str]) -> Result<String> {
+/// Gives up on a `TakeWork` running elsewhere: the git command it is on is stopped with what
+/// it started, its lock on the session's index goes, and `run` ends with an error at once.
+/// Nothing is left running to hold the index, or to hold up the exit, after the caller
+/// stopped waiting.
+#[derive(Clone, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    /// Gives up on the work.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the work was given up on.
+    pub fn is_set(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// git with the snapshot repo's settings, for `work_tree` and run from it.
+fn base(git_dir: &Path, work_tree: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .arg("--git-dir")
+        .arg(git_dir)
+        .arg("--work-tree")
+        .arg(work_tree)
+        .args(["-c", "gc.auto=0", "-c", "core.autocrlf=false"])
+        .current_dir(work_tree);
+    command
+}
+
+/// Runs git through this session's index, writing `input` to its stdin, and returns what it
+/// printed. A lock on that index is waited out; each try has the work's deadline. A command
+/// stopped at its deadline, or because the work was given up on, can leave its lock on the
+/// index behind; nothing else of this session's writes it, so it is removed, or every later
+/// snapshot would wait on it and fail.
+fn git_bytes<S: AsRef<OsStr>>(
+    work: &TakeWork,
+    args: &[S],
+    input: Option<&[u8]>,
+) -> Result<Vec<u8>> {
+    let shown = || {
+        args.iter()
+            .map(|arg| arg.as_ref().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     let mut tries = 0;
     loop {
-        let output = Command::new("git")
-            .arg("--git-dir")
-            .arg(&work.git_dir)
-            .arg("--work-tree")
-            .arg(&work.work_tree)
-            .env("GIT_INDEX_FILE", &work.index_file)
-            .args(["-c", "gc.auto=0", "-c", "core.autocrlf=false"])
-            .args(args)
-            .current_dir(&work.work_tree)
-            .output()
-            .context("could not run git")?;
+        if work.cancel.is_set() {
+            return Err(anyhow::Error::new(deadline::Canceled))
+                .with_context(|| format!("git {}", shown()));
+        }
+        let mut command = base(&work.git_dir, &work.work_tree);
+        command.env("GIT_INDEX_FILE", &work.index_file).args(args);
+        let output = deadline::output(
+            &mut command,
+            input.map(<[u8]>::to_vec),
+            work.deadline,
+            &work.cancel.0,
+        );
+        if output.as_ref().is_err_and(deadline::stopped) {
+            let _ = fs::remove_file(work.git_dir.join(&work.lock_name));
+        }
+        let output = output.with_context(|| format!("git {}", shown()))?;
         if output.status.success() {
-            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+            return Ok(output.stdout);
         }
         let error = String::from_utf8_lossy(&output.stderr);
         tries += 1;
         if !error.contains(&work.lock_name) || tries >= LOCK_TRIES {
-            bail!("git {} failed: {}", args.join(" "), error.trim());
+            bail!("git {} failed: {}", shown(), error.trim());
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
-fn write_tree(work: &TakeWork) -> Result<String> {
+fn git(work: &TakeWork, args: &[&str]) -> Result<String> {
+    Ok(String::from_utf8_lossy(&git_bytes(work, args, None)?).into_owned())
+}
+
+/// NUL-separated paths as git prints them with `-z`, without the empty end.
+fn paths(listed: &[u8]) -> impl Iterator<Item = &[u8]> {
+    listed.split(|b| *b == 0).filter(|path| !path.is_empty())
+}
+
+/// Paths as git reads them with `-z --stdin`.
+fn nul_joined(paths: &[Vec<u8>]) -> Vec<u8> {
+    paths
+        .iter()
+        .flat_map(|path| path.iter().chain([&0]))
+        .copied()
+        .collect()
+}
+
+/// Takes these paths out of the session's index, leaving the files alone.
+fn unstage(work: &TakeWork, paths: &[Vec<u8>]) -> Result<()> {
+    git_bytes(
+        work,
+        &["update-index", "-z", "--force-remove", "--stdin"],
+        Some(&nul_joined(paths)),
+    )?;
+    Ok(())
+}
+
+fn write_tree(work: &TakeWork) -> Result<Taken> {
     if !work.git_dir.exists() {
         create_private_dir(&work.git_dir)?;
-        let status = Command::new("git")
-            .args(["init", "--bare", "-q"])
-            .arg(&work.git_dir)
-            .status()
-            .context("could not run git")?;
-        if !status.success() {
+        let output = deadline::output(
+            Command::new("git")
+                .args(["init", "--bare", "-q"])
+                .arg(&work.git_dir),
+            None,
+            work.deadline,
+            &work.cancel.0,
+        )
+        .context("git init")?;
+        if !output.status.success() {
             bail!("git init failed for {}", work.git_dir.display());
         }
     }
     tighten_private_dir(&work.git_dir);
-    git(work, &["add", "-A", "."])?;
-    Ok(git(work, &["write-tree"])?.trim().to_string())
+    gc::mark(&work.git_dir, &work.work_tree);
+    let big = big_files(work)?;
+    let mut add: Vec<OsString> = ["add", "-A", "--", "."].map(OsString::from).into();
+    for path in &big {
+        let mut exclude = OsString::from(":(exclude,literal)");
+        exclude.push(OsStr::from_bytes(path));
+        add.push(exclude);
+    }
+    git_bytes(work, &add, None)?;
+    if !big.is_empty() {
+        unstage(work, &big)?;
+    }
+    let ignores = keep::self_ignored(work)?;
+    Ok(Taken {
+        tree: git(work, &["write-tree"])?.trim().to_string(),
+        big,
+        ignores,
+    })
+}
+
+/// New and changed files over `BIG_FILE`, as git prints their paths.
+fn big_files(work: &TakeWork) -> Result<Vec<Vec<u8>>> {
+    let listed = git_bytes(
+        work,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--modified",
+            "--exclude-standard",
+        ],
+        None,
+    )?;
+    Ok(paths(&listed)
+        .filter(|path| is_big(&work.work_tree, path))
+        .map(<[u8]>::to_vec)
+        .collect())
+}
+
+fn is_big(work_tree: &Path, path: &[u8]) -> bool {
+    fs::symlink_metadata(work_tree.join(OsStr::from_bytes(path)))
+        .is_ok_and(|meta| meta.is_file() && meta.len() > BIG_FILE)
 }
 
 impl Snapshots {
@@ -111,13 +280,23 @@ impl Snapshots {
         } else {
             None
         };
+        gc::sweep_indexes(&git_dir);
         Self {
             git_dir,
             work_tree,
             disabled,
             skipped: None,
             trees: Vec::new(),
+            deadline: GIT_DEADLINE,
         }
+    }
+
+    /// Snapshots of `root` kept in `git_dir` rather than under the user's home.
+    #[cfg(test)]
+    pub(crate) fn in_dir(root: &Path, git_dir: &Path) -> Self {
+        let mut snapshots = Self::new(root);
+        snapshots.git_dir = git_dir.to_path_buf();
+        snapshots
     }
 
     /// This session's own index inside the shared snapshot directory, so sessions running in
@@ -142,6 +321,8 @@ impl Snapshots {
             work_tree: self.work_tree.clone(),
             index_file: self.index_file(),
             lock_name: self.lock_name(),
+            deadline: self.deadline,
+            cancel: Cancel::default(),
         }
     }
 
@@ -159,11 +340,13 @@ impl Snapshots {
 
     /// Records a finished `TakeWork`: the tree, or why this turn has no snapshot. The tree
     /// still predates the turn's changes when the caller waited for the work before running
-    /// the first tool call.
-    pub fn commit_take(&mut self, tree: Result<String>) {
+    /// the first tool call. A turn without one still gets its place, so `/undo` can't skip
+    /// past it to the turn before.
+    pub fn commit_take(&mut self, tree: Result<Taken>) {
         match tree {
-            Ok(tree) => self.trees.push((tree, crate::live::now())),
+            Ok(tree) => self.trees.push(Some((tree, crate::live::now()))),
             Err(e) => {
+                self.trees.push(None);
                 self.skipped = Some(format!("undo snapshot skipped for this turn: {e:#}"));
             }
         }
@@ -197,7 +380,7 @@ impl Snapshots {
         &self.work_tree
     }
 
-    /// How many turns have a snapshot, for `forget_after`.
+    /// How many turns have a place in the undo list, snapshot or not, for `forget_after`.
     pub fn taken(&self) -> usize {
         self.trees.len()
     }
@@ -207,37 +390,81 @@ impl Snapshots {
         self.trees.truncate(count);
     }
 
-    /// When the snapshot the next undo goes back to was taken, in ms since the epoch.
+    /// When the newest snapshot there is was taken, in ms since the epoch.
     pub fn last_taken(&self) -> Option<u64> {
-        self.trees.last().map(|(_, at)| *at)
+        self.trees.iter().rev().flatten().map(|(_, at)| *at).next()
     }
 
     /// Puts the working tree back as it was before the last turn and returns what changed,
     /// as `git diff --name-status` lines. The snapshot is dropped only by a successful
-    /// restore, so a failed undo can just be tried again.
+    /// restore, so a failed undo can just be tried again. When the last turns have no
+    /// snapshot this refuses once, forgetting them, so the next undo goes back further
+    /// only when asked again.
     pub fn undo(&mut self) -> Result<Vec<String>> {
         if let Some(why) = &self.disabled {
             bail!("{why}");
         }
-        let Some(tree) = self.trees.last().map(|(tree, _)| tree.clone()) else {
-            bail!("there is nothing to undo yet")
+        let snapshot = match self.trees.last() {
+            None => bail!("there is nothing to undo yet"),
+            Some(Some((taken, _))) => taken.clone(),
+            Some(None) => {
+                let missing = self.trees.iter().rev().take_while(|t| t.is_none()).count();
+                self.trees.truncate(self.trees.len() - missing);
+                if self.trees.is_empty() {
+                    bail!("the last turn has no undo snapshot, and no turn before it has one");
+                }
+                if missing == 1 {
+                    bail!(
+                        "the last turn has no undo snapshot; /undo again goes back to the turn before it, which undoes both"
+                    );
+                }
+                bail!(
+                    "the last {missing} turns have no undo snapshot; /undo again goes back to the turn before them, which undoes those too"
+                );
+            }
         };
-        let now = write_tree(&self.work())?;
+        let work = self.work();
+        let now = write_tree(&work)?.tree;
+        let kept = keep::kept(&work, &snapshot, &now)?;
+        let now = if kept.is_empty() {
+            now
+        } else {
+            unstage(&work, &kept)?;
+            self.git(&["write-tree"])?.trim().to_string()
+        };
         let changes: Vec<String> = self
-            .git(&["diff", "--name-status", "--no-renames", &tree, &now])?
+            .git(&[
+                "diff",
+                "--name-status",
+                "--no-renames",
+                &snapshot.tree,
+                &now,
+            ])?
             .lines()
             .map(String::from)
             .collect();
-        self.git(&["read-tree", "--reset", "-u", &tree])?;
-        for path in self
-            .git(&["ls-files", "--others", "--exclude-standard", "-z"])?
-            .split('\0')
-            .filter(|p| !p.is_empty())
-        {
-            let _ = std::fs::remove_file(self.work_tree.join(path));
+        self.git(&["read-tree", "--reset", "-u", &snapshot.tree])?;
+        let kept: HashSet<&[u8]> = kept.iter().map(Vec::as_slice).collect();
+        let untracked = git_bytes(
+            &work,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            None,
+        )?;
+        for path in paths(&untracked) {
+            if !kept.contains(path) && !is_big(&self.work_tree, path) {
+                let _ = fs::remove_file(self.work_tree.join(OsStr::from_bytes(path)));
+            }
         }
         self.trees.pop();
         Ok(changes)
+    }
+}
+
+impl Drop for Snapshots {
+    /// The session is done with the snapshot repo: its index goes, and the repo's gc may
+    /// start in the background.
+    fn drop(&mut self) {
+        gc::on_drop(&self.git_dir, &self.index_file());
     }
 }
 
@@ -265,217 +492,4 @@ fn too_many_files(root: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::time::SystemTime;
-
-    #[test]
-    fn undo_restores_changed_and_deleted_files_and_removes_new_ones() {
-        let root = std::env::temp_dir().join(format!("killi-snap-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join(".gitignore"), "target/\n").unwrap();
-        fs::write(root.join("a.txt"), "one").unwrap();
-        fs::write(root.join("b.txt"), "keep").unwrap();
-        let mut snaps = Snapshots::new(&root);
-        snaps.git_dir = root.with_extension("shadow.git");
-        let _ = fs::remove_dir_all(&snaps.git_dir);
-        snaps.take();
-        assert_eq!(snaps.disabled, None);
-        fs::write(root.join("a.txt"), "two").unwrap();
-        fs::remove_file(root.join("b.txt")).unwrap();
-        fs::write(root.join("c.txt"), "new").unwrap();
-        fs::create_dir_all(root.join("target")).unwrap();
-        fs::write(root.join("target/out"), "build").unwrap();
-        let changes = snaps.undo().unwrap();
-        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one");
-        assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "keep");
-        assert!(!root.join("c.txt").exists());
-        assert!(
-            root.join("target/out").exists(),
-            "ignored files are left alone"
-        );
-        assert_eq!(changes.len(), 3, "{changes:?}");
-        fs::remove_dir_all(&snaps.git_dir).unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn a_snapshot_waits_out_a_lock_on_its_index_instead_of_turning_undo_off() {
-        let root = std::env::temp_dir().join(format!("killi-snap-lock-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join("a.txt"), "one").unwrap();
-        let mut snaps = Snapshots::new(&root);
-        snaps.git_dir = root.with_extension("shadow.git");
-        let _ = fs::remove_dir_all(&snaps.git_dir);
-        snaps.take();
-        assert!(snaps.last_taken().is_some());
-        let lock = snaps.git_dir.join(snaps.lock_name());
-        fs::write(&lock, "").unwrap();
-        let held = lock.clone();
-        let other = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(300));
-            fs::remove_file(held).unwrap();
-        });
-        snaps.take();
-        other.join().unwrap();
-        assert_eq!(snaps.disabled, None);
-        assert_eq!(snaps.skipped, None);
-        assert_eq!(snaps.trees.len(), 2);
-        fs::remove_dir_all(&snaps.git_dir).unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn undo_touches_only_changed_files() {
-        let root = std::env::temp_dir().join(format!("killi-snap-mtime-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join("a.txt"), "one").unwrap();
-        fs::write(root.join("b.txt"), "keep").unwrap();
-        let mut snaps = Snapshots::new(&root);
-        snaps.git_dir = root.with_extension("shadow.git");
-        let _ = fs::remove_dir_all(&snaps.git_dir);
-        snaps.take();
-        let old = SystemTime::now() - Duration::from_secs(3600);
-        fs::File::options()
-            .write(true)
-            .open(root.join("a.txt"))
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-        fs::File::options()
-            .write(true)
-            .open(root.join("b.txt"))
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-        fs::write(root.join("a.txt"), "two").unwrap();
-        snaps.undo().unwrap();
-        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one");
-        assert_eq!(
-            fs::metadata(root.join("b.txt"))
-                .unwrap()
-                .modified()
-                .unwrap(),
-            old,
-            "an untouched file keeps its mtime"
-        );
-        fs::remove_dir_all(&snaps.git_dir).unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn a_failed_undo_keeps_its_snapshot() {
-        let root = std::env::temp_dir().join(format!("killi-snap-keep-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join("a.txt"), "one").unwrap();
-        let mut snaps = Snapshots::new(&root);
-        snaps.git_dir = root.with_extension("shadow.git");
-        let _ = fs::remove_dir_all(&snaps.git_dir);
-        snaps.take();
-        fs::write(root.join("a.txt"), "two").unwrap();
-        snaps.take();
-        fs::write(root.join("a.txt"), "three").unwrap();
-        let tree = snaps.work_tree.clone();
-        snaps.work_tree = root.join("gone");
-        assert!(snaps.undo().is_err());
-        snaps.work_tree = tree;
-        snaps.undo().unwrap();
-        assert_eq!(
-            fs::read_to_string(root.join("a.txt")).unwrap(),
-            "two",
-            "the retry undoes one turn, not two"
-        );
-        assert_eq!(snaps.trees.len(), 1);
-        snaps.undo().unwrap();
-        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one");
-        fs::remove_dir_all(&snaps.git_dir).unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn a_failed_snapshot_skips_the_turn_without_turning_undo_off() {
-        let root = std::env::temp_dir().join(format!("killi-snap-skip-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join("a.txt"), "one").unwrap();
-        let mut snaps = Snapshots::new(&root);
-        snaps.git_dir = root.with_extension("shadow.git");
-        let _ = fs::remove_dir_all(&snaps.git_dir);
-        snaps.take();
-        fs::write(root.join("a.txt"), "two").unwrap();
-        let tree = snaps.work_tree.clone();
-        snaps.work_tree = root.join("gone");
-        snaps.take();
-        snaps.work_tree = tree;
-        assert_eq!(snaps.disabled, None);
-        assert!(
-            snaps
-                .skipped
-                .as_deref()
-                .is_some_and(|why| why.starts_with("undo snapshot skipped for this turn:"))
-        );
-        assert_eq!(snaps.trees.len(), 1);
-        snaps.undo().unwrap();
-        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one");
-        fs::remove_dir_all(&snaps.git_dir).unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn an_async_take_and_a_split_take_match_a_sync_one() {
-        let root = std::env::temp_dir().join(format!("killi-snap-async-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join("a.txt"), "one").unwrap();
-        let mut snaps = Snapshots::new(&root);
-        snaps.git_dir = root.with_extension("shadow.git");
-        let _ = fs::remove_dir_all(&snaps.git_dir);
-        snaps.take_async().await;
-        assert!(snaps.last_taken().is_some());
-        assert_eq!(snaps.skipped, None);
-        assert_eq!(snaps.trees.len(), 1);
-        fs::write(root.join("a.txt"), "two").unwrap();
-        let work = snaps.start_take().expect("enabled");
-        assert_eq!(snaps.skipped, None, "starting clears the last turn's skip");
-        snaps.commit_take(work.run());
-        assert_eq!(snaps.trees.len(), 2);
-        snaps.undo().unwrap();
-        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "two");
-        snaps.disabled = Some("off".to_string());
-        assert!(snaps.start_take().is_none());
-        snaps.take_async().await;
-        assert_eq!(snaps.trees.len(), 1, "a disabled tree takes nothing");
-        fs::remove_dir_all(&snaps.git_dir).unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn snapshot_repos_are_private_to_this_user() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("killi-snap-perms-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join("a.txt"), "one").unwrap();
-        let mut snaps = Snapshots::new(&root);
-        snaps.git_dir = root.with_extension("shadow.git");
-        let _ = fs::remove_dir_all(&snaps.git_dir);
-        snaps.take();
-        assert_eq!(
-            snaps.git_dir.metadata().unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        fs::set_permissions(&snaps.git_dir, fs::Permissions::from_mode(0o755)).unwrap();
-        snaps.take();
-        assert_eq!(
-            snaps.git_dir.metadata().unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        fs::remove_dir_all(&snaps.git_dir).unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-}
+mod tests;

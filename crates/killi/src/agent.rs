@@ -12,6 +12,8 @@ mod near;
 mod pair;
 mod peer_guard;
 mod request;
+mod restore;
+mod step_limit;
 mod subagent;
 mod task;
 mod turn;
@@ -54,7 +56,8 @@ pub(crate) use task::task_agent;
 
 use background::Background;
 use compact::CompactMode;
-use dispatch::{invalid_arguments, neutralize_reminder_tags, parse_args};
+pub(crate) use dispatch::neutralize_reminder_tags;
+use dispatch::{invalid_arguments, parse_args};
 use ending::{ends_with_question, interrupted_note, unfinished};
 use near::{NEAR_BASH_WARN_AT, NEAR_REPEAT_WARN_AT, near_key};
 use request::{is_media, is_overflow, provider_limit, reasoning_evidence};

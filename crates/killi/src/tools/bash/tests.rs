@@ -735,3 +735,44 @@ async fn a_subagents_running_commands_move_to_its_parent_under_new_ids() {
     assert!(child.tasks.borrow().list.is_empty());
     assert_eq!(parent.tasks.borrow_mut().stop_all(), vec!["sleep 5"]);
 }
+
+#[test]
+fn a_flood_of_output_keeps_its_tail_and_counts_what_it_dropped() {
+    let mut captured = process::Captured::default();
+    let chunk: Vec<u8> = (0..16 * 1024).map(|i| (i % 251) as u8).collect();
+    let total = 64 * 1024 * 1024;
+    let mut appended = 0;
+    while captured.dropped == 0 {
+        captured.append(&chunk);
+        appended += chunk.len();
+    }
+    assert_eq!(captured.bytes.len(), MAX_CAPTURE / 4 * 3);
+    while appended < total {
+        captured.append(&chunk);
+        appended += chunk.len();
+    }
+    assert!(captured.bytes.len() <= MAX_CAPTURE);
+    assert!(captured.bytes.len() >= MAX_CAPTURE / 4 * 3);
+    assert_eq!(captured.dropped + captured.bytes.len(), total);
+    assert!(captured.bytes.capacity() <= 2 * MAX_CAPTURE);
+    let tail = &captured.bytes[captured.bytes.len() - chunk.len()..];
+    assert_eq!(tail, &chunk[..]);
+    let expected = |offset: usize| ((offset % chunk.len()) % 251) as u8;
+    assert_eq!(captured.bytes[0], expected(captured.dropped));
+    assert_eq!(captured.head.len(), HEAD_CAPTURE);
+}
+
+#[test]
+fn spilled_output_is_private_to_this_user() {
+    use std::os::unix::fs::PermissionsExt;
+    let ctx = ctx();
+    fs::create_dir(&ctx.spill_dir).unwrap();
+    fs::set_permissions(&ctx.spill_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    let first = spill(&ctx, "bash", "secret").unwrap();
+    let second = spill(&ctx, "bash", "secret").unwrap();
+    assert_ne!(first, second);
+    let mode = |path: &std::path::Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&first), 0o600);
+    assert_eq!(mode(&ctx.spill_dir), 0o700);
+    assert_eq!(fs::read_to_string(&second).unwrap(), "secret");
+}

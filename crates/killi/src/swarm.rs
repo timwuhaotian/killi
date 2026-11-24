@@ -16,6 +16,21 @@ pub const ON: &str = "<system-reminder>Swarm mode is on. When a task splits into
 
 pub const OFF: &str = "<system-reminder>Swarm mode is off. Use agent_swarm only when a request clearly benefits from it.</system-reminder>";
 
+/// Whether the log's last swarm reminder turned swarm mode on, so a resumed session knows
+/// whether a change needs saying instead of announcing the mode it ended in again.
+pub fn last_swarm_state(messages: &[Value]) -> bool {
+    messages
+        .iter()
+        .rev()
+        .filter(|message| message["role"] == "user")
+        .find_map(|message| match message["content"].as_str()? {
+            ON => Some(true),
+            OFF => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 /// Each item with its filled-in prompt, or why the call can't run.
 pub fn prompts(args: &Value) -> Result<Vec<(String, String)>, String> {
     let template = args["prompt_template"].as_str().unwrap_or_default().trim();

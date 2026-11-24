@@ -16,10 +16,21 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use crate::tools::{OwnSession, Tracked, track};
+
+/// Bytes of a hook's stdout or stderr kept; the rest is read and dropped, so a chatty hook
+/// neither grows memory nor blocks on a full pipe.
+const OUTPUT_CAP: usize = 64 * 1024;
+
+/// Bytes of one hook's text that reach the model, as context or a block reason.
+const MODEL_TEXT_BYTES: usize = 16 * 1024;
+
+/// How long the pipes may stay open after the hook exits: something it started in the
+/// background (`afplay x &`) holds them, and the hook's answer is already in.
+const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
 thread_local! {
@@ -54,6 +65,9 @@ pub struct Hook {
 pub struct Outcome {
     /// Set when a hook blocked: the reason, for the model or the user.
     pub block: Option<String>,
+    /// Set when a hook answered `"continue": false`: the reason it gave. On `Stop` and
+    /// `SubagentStop` it ends the turn; on other events it blocks like `block`.
+    pub halt: Option<String>,
     /// Text the hooks asked to add to the model's context.
     pub context: Vec<String>,
     /// Commands of hooks that never ran: timed out or failed to start. Staying fail-open,
@@ -108,7 +122,7 @@ impl HooksConfig {
                 let reason = if stderr.trim().is_empty() {
                     format!("blocked by hook `{}`", hook.command)
                 } else {
-                    stderr.trim().to_string()
+                    for_model(stderr.trim())
                 };
                 outcome.block.get_or_insert(reason);
                 continue;
@@ -119,34 +133,57 @@ impl HooksConfig {
             match serde_json::from_str::<Value>(stdout.trim()) {
                 Ok(answer) if answer.is_object() => {
                     let specific = &answer["hookSpecificOutput"];
+                    let halt = answer["continue"] == false;
+                    if halt {
+                        let reason = answer["stopReason"]
+                            .as_str()
+                            .or(answer["reason"].as_str())
+                            .unwrap_or("no reason given");
+                        outcome.halt.get_or_insert(for_model(reason));
+                    }
+                    // On a stop event `block` means "keep going", the opposite of a halt.
+                    let stop_event = matches!(event, "Stop" | "SubagentStop");
                     if answer["decision"] == "block"
                         || specific["permissionDecision"] == "deny"
-                        || answer["continue"] == false
+                        || (halt && !stop_event)
                     {
                         let reason = answer["reason"]
                             .as_str()
                             .or(specific["permissionDecisionReason"].as_str())
                             .or(answer["stopReason"].as_str())
                             .unwrap_or("blocked by a hook");
-                        outcome.block.get_or_insert(reason.to_string());
+                        outcome.block.get_or_insert(for_model(reason));
                     }
                     if let Some(context) = specific["additionalContext"]
                         .as_str()
                         .filter(|c| !c.is_empty())
                     {
-                        outcome.context.push(context.to_string());
+                        outcome.context.push(for_model(context));
                     }
                 }
                 _ if !stdout.trim().is_empty()
                     && matches!(event, "UserPromptSubmit" | "SessionStart") =>
                 {
-                    outcome.context.push(stdout.trim().to_string());
+                    outcome.context.push(for_model(stdout.trim()));
                 }
                 _ => {}
             }
         }
         outcome
     }
+}
+
+/// A hook's text as the model gets it: cut at `MODEL_TEXT_BYTES`, saying so.
+fn for_model(text: &str) -> String {
+    let kept = crate::llm::truncate(text, MODEL_TEXT_BYTES);
+    if kept.len() == text.len() {
+        return text.to_string();
+    }
+    format!(
+        "{kept}\n[hook output cut at {} of {} bytes]",
+        kept.len(),
+        text.len()
+    )
 }
 
 fn matches(matcher: Option<&str>, tool: Option<&str>) -> bool {
@@ -205,6 +242,9 @@ fn spawn_hook(command: &str, cwd: &Path) -> std::io::Result<tokio::process::Chil
         .spawn()
 }
 
+/// Runs a hook to its exit and returns its exit code, stdout and stderr, or `None` when it
+/// timed out or could not run. The hook's own exit ends the wait: what it left running in the
+/// background may hold the pipes open, so they get only `DRAIN_AFTER_EXIT` more.
 async fn execute(
     command: &str,
     cwd: &Path,
@@ -214,26 +254,53 @@ async fn execute(
     let mut child = spawn_hook(command, cwd).ok()?;
     let mut group = Group::new(child.id());
     let mut stdin = child.stdin.take();
-    // The input is written beside the wait, under the same timeout: a hook that never reads it
-    // would otherwise block the write, and the agent, for as long as the hook runs.
-    let feed = async move {
-        if let Some(stdin) = stdin.as_mut() {
-            let _ = stdin.write_all(input.as_bytes()).await;
-        }
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let status = {
+        // The input is written beside the wait, under the same timeout: a hook that never
+        // reads it would otherwise block the write, and the agent, for as long as it runs.
+        let io = async {
+            let feed = async {
+                if let Some(stdin) = stdin.as_mut() {
+                    let _ = stdin.write_all(input.as_bytes()).await;
+                }
+                drop(stdin);
+            };
+            tokio::join!(feed, drain(stdout, &mut out), drain(stderr, &mut err))
+        };
+        let wait = child.wait();
+        tokio::pin!(io, wait);
+        tokio::time::timeout(timeout, async {
+            tokio::select! {
+                status = &mut wait => {
+                    let _ = tokio::time::timeout(DRAIN_AFTER_EXIT, &mut io).await;
+                    status
+                }
+                _ = &mut io => wait.await,
+            }
+        })
+        .await
     };
-    let (_, output) = tokio::time::timeout(timeout, async {
-        tokio::join!(feed, child.wait_with_output())
-    })
-    .await
-    .ok()?;
-    let output = output.ok()?;
+    let status = status.ok()?.ok()?;
     group.pgid = None;
     group._tracked = None;
     Some((
-        output.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
+        status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out).into_owned(),
+        String::from_utf8_lossy(&err).into_owned(),
     ))
+}
+
+/// Reads `pipe` to its end into `kept`, keeping at most `OUTPUT_CAP` bytes.
+async fn drain(pipe: Option<impl AsyncRead + Unpin>, kept: &mut Vec<u8>) {
+    let Some(mut pipe) = pipe else {
+        return;
+    };
+    let mut buf = [0; 8192];
+    while let Ok(read @ 1..) = pipe.read(&mut buf).await {
+        let room = OUTPUT_CAP.saturating_sub(kept.len());
+        kept.extend_from_slice(&buf[..read.min(room)]);
+    }
 }
 
 /// The payload for tool events, in Claude Code's shape.
@@ -246,157 +313,4 @@ pub fn tool_payload(name: &str, input: &Value, response: Option<&str>) -> Value 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn config(toml_text: &str) -> HooksConfig {
-        #[derive(Deserialize)]
-        struct Wrapper {
-            hooks: HooksConfig,
-        }
-        toml::from_str::<Wrapper>(toml_text).unwrap().hooks
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn exit_code_two_blocks_with_stderr() {
-        let hooks = config(
-            "[[hooks.PreToolUse]]\nmatcher = \"bash\"\ncommand = \"grep -q 'rm -rf' && echo 'no rm -rf' >&2 && exit 2; exit 0\"\n",
-        );
-        let cwd = std::env::temp_dir();
-        let blocked = hooks
-            .run(
-                "PreToolUse",
-                Some("bash"),
-                &cwd,
-                "s",
-                tool_payload("bash", &json!({"command": "rm -rf /"}), None),
-            )
-            .await;
-        assert_eq!(blocked.block.as_deref(), Some("no rm -rf"));
-        let allowed = hooks
-            .run(
-                "PreToolUse",
-                Some("bash"),
-                &cwd,
-                "s",
-                tool_payload("bash", &json!({"command": "ls"}), None),
-            )
-            .await;
-        assert!(allowed.block.is_none());
-        let other = hooks
-            .run(
-                "PreToolUse",
-                Some("read"),
-                &cwd,
-                "s",
-                tool_payload("read", &json!({}), None),
-            )
-            .await;
-        assert!(other.block.is_none());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_hook_that_ignores_a_large_input_still_times_out_and_leaves_nothing_running() {
-        let marker = std::env::temp_dir().join(format!("killi-hook-orphan-{}", std::process::id()));
-        let _ = std::fs::remove_file(&marker);
-        let hooks = config(&format!(
-            "[[hooks.PostToolUse]]\ncommand = \"(sleep 2; touch {}) & sleep 30\"\ntimeout = 1\n",
-            marker.display()
-        ));
-        let big = "x".repeat(300_000);
-        let cwd = std::env::temp_dir();
-        let started = std::time::Instant::now();
-        hooks
-            .run(
-                "PostToolUse",
-                Some("bash"),
-                &cwd,
-                "s",
-                tool_payload("bash", &json!({}), Some(&big)),
-            )
-            .await;
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the timeout did not apply: {:?}",
-            started.elapsed()
-        );
-        tokio::time::sleep(Duration::from_millis(2500)).await;
-        assert!(
-            !marker.exists(),
-            "a process the hook started outlived its timeout"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_running_hook_is_tracked_so_kill_all_covers_it() {
-        use crate::tools::registered;
-
-        let tmp = crate::test_temp::TempDir::new("killi-hook-track");
-        let mut child = spawn_hook("sleep 30", tmp.path()).unwrap();
-        let pgid = child.id().unwrap();
-        {
-            let _group = Group::new(child.id());
-            assert!(
-                registered(pgid),
-                "the hook's group is tracked while the hook runs"
-            );
-        }
-        assert!(!registered(pgid), "a finished hook unregisters its group");
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
-
-    #[test]
-    fn tool_hooks_are_detected() {
-        assert!(!config("[hooks]\n").has_tool_hooks());
-        assert!(!config("[[hooks.SessionStart]]\ncommand = ':'\n").has_tool_hooks());
-        assert!(config("[[hooks.PreToolUse]]\ncommand = ':'\n").has_tool_hooks());
-        assert!(config("[[hooks.PostToolUse]]\ncommand = ':'\n").has_tool_hooks());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn no_hooks_env_runs_nothing() {
-        let hooks = config("[[hooks.PreToolUse]]\ncommand = \"echo blocked >&2; exit 2\"\n");
-        NO_HOOKS.with(|v| v.set(true));
-        assert!(disabled());
-        assert!(hooks.is_empty());
-        assert!(!hooks.has_tool_hooks());
-        let outcome = hooks
-            .run(
-                "PreToolUse",
-                Some("bash"),
-                &std::env::temp_dir(),
-                "s",
-                json!({}),
-            )
-            .await;
-        NO_HOOKS.with(|v| v.set(false));
-        assert!(outcome.block.is_none());
-        assert!(outcome.context.is_empty());
-        assert!(outcome.failures.is_empty());
-        assert!(!disabled());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn json_answers_block_or_add_context() {
-        let hooks = config(concat!(
-            "[[hooks.UserPromptSubmit]]\ncommand = \"echo 'Today is release day.'\"\n",
-            "[[hooks.Stop]]\ncommand = \"echo '{\\\"decision\\\": \\\"block\\\", \\\"reason\\\": \\\"run the tests first\\\"}'\"\n",
-        ));
-        let cwd = std::env::temp_dir();
-        let prompt = hooks
-            .run(
-                "UserPromptSubmit",
-                None,
-                &cwd,
-                "s",
-                json!({"prompt": "ship it"}),
-            )
-            .await;
-        assert_eq!(prompt.context, vec!["Today is release day.".to_string()]);
-        let stop = hooks
-            .run("Stop", None, &cwd, "s", json!({"stop_hook_active": false}))
-            .await;
-        assert_eq!(stop.block.as_deref(), Some("run the tests first"));
-    }
-}
+mod tests;

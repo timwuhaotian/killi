@@ -27,7 +27,10 @@ pub(super) struct Captured {
 }
 
 impl Captured {
-    fn append(&mut self, chunk: &[u8]) {
+    /// Adds `chunk` to the output. Past `MAX_CAPTURE` the oldest bytes go down to three
+    /// quarters of it, so the memmove of what remains happens once per 4 MB of output, not on
+    /// every read.
+    pub(super) fn append(&mut self, chunk: &[u8]) {
         let head = HEAD_CAPTURE
             .saturating_sub(self.head.len())
             .min(chunk.len());
@@ -35,7 +38,7 @@ impl Captured {
         self.bytes.extend_from_slice(chunk);
         self.last = Some(Instant::now());
         if self.bytes.len() > MAX_CAPTURE {
-            self.trim(MAX_CAPTURE);
+            self.trim(MAX_CAPTURE / 4 * 3);
         }
     }
 
@@ -215,8 +218,40 @@ impl OwnSession for std::process::Command {
     }
 }
 
+/// Git config forced on a read-only command: a bare repository committed inside a project is
+/// used only when named with `--git-dir`, and no repository's `core.fsmonitor` runs, so a
+/// `git status` in one can't run code its config names.
+const READ_ONLY_GIT: [(&str, &str); 2] = [
+    ("safe.bareRepository", "explicit"),
+    ("core.fsmonitor", "false"),
+];
+
+/// More inherited `GIT_CONFIG_COUNT` entries than any real setup has: git would fail looking
+/// for keys that aren't there.
+const MAX_INHERITED_GIT_CONFIG: usize = 1_000;
+
+/// The environment that adds `READ_ONLY_GIT` to git's command-line config, after the entries
+/// `count` (the inherited `GIT_CONFIG_COUNT`) says are already set, so those still apply. A
+/// count git would reject, or one past `MAX_INHERITED_GIT_CONFIG`, is replaced: git then
+/// runs with `READ_ONLY_GIT` alone instead of failing on it.
+fn read_only_git_env(count: Option<&str>) -> Vec<(String, String)> {
+    let (first, total) = count
+        .and_then(|n| n.trim().parse::<usize>().ok())
+        .filter(|n| *n <= MAX_INHERITED_GIT_CONFIG)
+        .and_then(|n| Some((n, n.checked_add(READ_ONLY_GIT.len())?)))
+        .unwrap_or((0, READ_ONLY_GIT.len()));
+    let mut env = vec![("GIT_CONFIG_COUNT".to_string(), total.to_string())];
+    for (n, (key, value)) in READ_ONLY_GIT.iter().enumerate() {
+        env.push((format!("GIT_CONFIG_KEY_{}", first + n), key.to_string()));
+        env.push((format!("GIT_CONFIG_VALUE_{}", first + n), value.to_string()));
+    }
+    env
+}
+
 impl Process {
-    pub(super) fn spawn(dir: &Path, command: &str) -> std::io::Result<Self> {
+    /// Starts `command` in `dir`. A `read_only` command (plan mode's) runs its git under
+    /// `READ_ONLY_GIT`.
+    pub(super) fn spawn(dir: &Path, command: &str, read_only: bool) -> std::io::Result<Self> {
         // A command with a pipe gets an EXIT trap that saves `PIPESTATUS`, so a failure before
         // the last stage (`npm test | tail`) isn't hidden by the last stage's exit 0. One without
         // runs as it was written. A command that sets its own EXIT trap, or `exec`s, loses the
@@ -229,7 +264,13 @@ impl Process {
             ),
             None => format!("exec 2>&1\n{command}"),
         };
+        let git = if read_only {
+            read_only_git_env(std::env::var("GIT_CONFIG_COUNT").ok().as_deref())
+        } else {
+            Vec::new()
+        };
         let spawned = Command::new("/bin/bash")
+            .envs(git)
             .arg("-c")
             .arg(script)
             .current_dir(dir)
@@ -350,5 +391,52 @@ pub(super) async fn wait_for_group(
     let _ = tokio::time::timeout(limit, exit.wait_for(Option::is_some)).await;
     while exit.borrow().is_some() && group_running(pgid, true) && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_only_git_env;
+
+    #[test]
+    fn read_only_git_config_follows_the_entries_already_set() {
+        let pairs = |count| {
+            read_only_git_env(count)
+                .into_iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            pairs(None),
+            [
+                "GIT_CONFIG_COUNT=2",
+                "GIT_CONFIG_KEY_0=safe.bareRepository",
+                "GIT_CONFIG_VALUE_0=explicit",
+                "GIT_CONFIG_KEY_1=core.fsmonitor",
+                "GIT_CONFIG_VALUE_1=false",
+            ]
+        );
+        assert_eq!(
+            pairs(Some("3")),
+            [
+                "GIT_CONFIG_COUNT=5",
+                "GIT_CONFIG_KEY_3=safe.bareRepository",
+                "GIT_CONFIG_VALUE_3=explicit",
+                "GIT_CONFIG_KEY_4=core.fsmonitor",
+                "GIT_CONFIG_VALUE_4=false",
+            ]
+        );
+        let alone = pairs(None);
+        for bogus in [
+            "x",
+            "-1",
+            "",
+            "18446744073709551615",
+            "99999999999999999999",
+            "1001",
+        ] {
+            assert_eq!(pairs(Some(bogus)), alone, "GIT_CONFIG_COUNT={bogus:?}");
+        }
+        assert_eq!(pairs(Some(" 1000 "))[0], "GIT_CONFIG_COUNT=1002");
     }
 }

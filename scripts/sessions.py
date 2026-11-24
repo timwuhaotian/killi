@@ -54,7 +54,7 @@ def read(path):
 def looks_failed(output):
     """For logs from before tool results kept how they ended."""
     last = output.rstrip().splitlines()[-1:] or [""]
-    return last[0].startswith("[Command ") or output.startswith(("Interrupted by the user", "Could not "))
+    return last[0].startswith("[Command ") or output.startswith(("Interrupted by the user", "Interrupted before", "Could not "))
 
 
 def elsewhere(command, base, cwd):

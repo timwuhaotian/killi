@@ -7,6 +7,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
+use crate::printer::{err, say};
+
 use super::{
     Entry, MAX_TASK_TIMEOUT, MAX_TEXT, PID_VAR, Request, card, card_text, describe, follow, list,
     now, send, span, status_of, task_owner,
@@ -69,13 +71,13 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
                     let entry = find(Some(pid))?;
                     let status = status_of(&entry).await?;
                     if json_mode {
-                        println!("{}", json!({"session": entry, "status": status}));
+                        say(json!({"session": entry, "status": status}))?;
                     } else {
-                        println!("{}", status_text(&entry, status.as_ref(), now()));
+                        say(status_text(&entry, status.as_ref(), now()))?;
                     }
                 }
-                None if json_mode => println!("{}", serde_json::to_string(&sessions)?),
-                None => println!("{}", list_text(&sessions, me, now())),
+                None if json_mode => say(serde_json::to_string(&sessions)?)?,
+                None => say(list_text(&sessions, me, now()))?,
             }
         }
         "card" => {
@@ -83,9 +85,9 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
             let entry = find(args.get(1))?;
             let status = status_of(&entry).await?;
             if json_mode {
-                println!("{}", serde_json::to_string(&card(&entry, status.as_ref()))?);
+                say(serde_json::to_string(&card(&entry, status.as_ref()))?)?;
             } else {
-                println!("{}", card_text(&entry, status.as_ref(), now()));
+                say(card_text(&entry, status.as_ref(), now()))?;
             }
         }
         "ask" => {
@@ -98,7 +100,7 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
                 },
             )
             .await?;
-            println!("{}", reply["answer"].as_str().unwrap_or_default());
+            say(reply["answer"].as_str().unwrap_or_default())?;
         }
         "tell" => {
             let to = find(args.get(1))?;
@@ -110,7 +112,7 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
                 },
             )
             .await?;
-            println!("{}", reply["delivered"].as_str().unwrap_or("Delivered."));
+            say(reply["delivered"].as_str().unwrap_or("Delivered."))?;
         }
         "send" => {
             let to = find(args.get(1))?;
@@ -128,18 +130,18 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
             .await?;
             let id = reply["id"].as_str().unwrap_or_default();
             if quick {
-                println!("{id}");
+                say(id)?;
             } else if reply["state"].as_str() == Some("completed") {
-                println!("{}", reply["report"].as_str().unwrap_or_default());
+                say(reply["report"].as_str().unwrap_or_default())?;
             } else {
                 if let Some(report) = reply["report"].as_str() {
-                    println!("{report}");
+                    say(report)?;
                 }
                 let why = reply["message"].as_str().unwrap_or("it gave no report");
-                eprintln!(
-                    "killi: task {id} {}: {why}",
+                err(&format!(
+                    "killi: task {id} {}: {why}\n",
                     reply["state"].as_str().unwrap_or("failed")
-                );
+                ));
                 return Ok(ExitCode::FAILURE);
             }
         }
@@ -171,9 +173,9 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
                 }
             }
             if json_mode {
-                println!("{}", serde_json::to_string(&tasks)?);
+                say(serde_json::to_string(&tasks)?)?;
             } else {
-                println!("{}", tasks_text(&tasks, now()));
+                say(tasks_text(&tasks, now()))?;
             }
         }
         "task" => {
@@ -190,9 +192,9 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
                 let mut state = String::new();
                 while let Some(event) = next_event(&mut lines).await? {
                     if json_mode {
-                        println!("{event}");
+                        say(&event)?;
                     } else {
-                        println!("{}", event_text(&event));
+                        say(event_text(&event))?;
                     }
                     state = event["state"].as_str().unwrap_or_default().to_string();
                 }
@@ -211,9 +213,9 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
             } else {
                 let reply = send(&entry, Request::Get { id: id.clone() }).await?;
                 if json_mode {
-                    println!("{}", reply["task"]);
+                    say(&reply["task"])?;
                 } else {
-                    println!("{}", task_detail(&reply["task"], now()));
+                    say(task_detail(&reply["task"], now()))?;
                 }
             }
         }
@@ -224,10 +226,10 @@ pub async fn command(args: &[String]) -> Result<ExitCode> {
                 .ok_or_else(|| anyhow!("say which task, by its id; `killi tasks` lists them"))?;
             let entry = locate(task_owner(id).ok_or_else(|| anyhow!("`{id}` is not a task id"))?)?;
             let reply = send(&entry, Request::Cancel { id: id.clone() }).await?;
-            println!(
+            say(format_args!(
                 "Task {id} {}.",
                 reply["state"].as_str().unwrap_or("canceled")
-            );
+            ))?;
         }
         other => bail!("unknown command `{other}`"),
     }

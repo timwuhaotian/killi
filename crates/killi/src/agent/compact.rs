@@ -43,7 +43,7 @@ impl Agent {
     /// minus room for one reply (capped at a quarter of the limit, since the output cap already
     /// fits each request into the window). The log keeps these numbers at each compaction so a
     /// session that compacts too often shows which part forced it. `None` at limit 0 (off).
-    fn compaction_pressure(&self) -> Option<(u64, u64, u64, u64)> {
+    pub(super) fn compaction_pressure(&self) -> Option<(u64, u64, u64, u64)> {
         // A share of the window by default, an explicit `compact_at` instead, and never above
         // 85%, where the reply and the framing overhead start to squeeze the request.
         let limit = match self.client.model.context_window {
@@ -81,7 +81,18 @@ impl Agent {
     ) -> Result<()> {
         (self.sink)(Event::Notice("Compacting the conversation…".into()));
         // Taken before the summary request accounts its own usage over these numbers.
-        let (context, suffix, limit, reserve) = self.compaction_pressure().unwrap_or_default();
+        let pressure = self.compaction_pressure().unwrap_or_default();
+        self.summarize(focus, mode, pressure).await
+    }
+
+    /// Asks the model for a summary and replaces the conversation with it, as `compact_with`
+    /// describes; `pressure` is what the log keeps as the compaction's cause.
+    async fn summarize(
+        &mut self,
+        focus: Option<&str>,
+        mode: CompactMode,
+        (context, suffix, limit, reserve): (u64, u64, u64, u64),
+    ) -> Result<()> {
         let mut request = match mode {
             CompactMode::Full => self.messages.to_vec(),
             CompactMode::Reduced => reduced(&self.messages),
@@ -94,23 +105,23 @@ impl Agent {
         }
         let instruction = json!({"role": "user", "content": instruction});
         request.push(instruction.clone());
+        // The summary goes through the backup like any other request, its retries shown and
+        // logged; only its text isn't streamed, since it isn't a reply to the user.
         let mut unsettled = super::request::Unsettled::new(&self.session, Some("compaction"));
         let reply = match self
-            .client
-            .complete(&request, &self.tools, &self.cache_key, &mut |_| {})
+            .complete_with_fallback(&request, false, &mut unsettled)
             .await
         {
             // Too long to be read even to summarize it: summarize it with its bulk cut.
             Err(error) if mode == CompactMode::Full && is_overflow(&error) => {
                 request = reduced(&self.messages);
                 request.push(instruction);
-                self.client
-                    .complete(&request, &self.tools, &self.cache_key, &mut |_| {})
+                self.complete_with_fallback(&request, false, &mut unsettled)
                     .await
             }
             reply => reply,
         };
-        unsettled.disarm();
+        self.settle(&mut unsettled)?;
         let reply = reply?;
         self.stats.requests += 1;
         self.account(
@@ -162,26 +173,34 @@ impl Agent {
             reply.text.trim(),
             mark = crate::session::COMPACTED_MARK,
         );
-        self.messages = Rc::new(vec![
+        let messages = vec![
             self.messages[0].clone(),
             json!({"role": "user", "content": summary}),
-        ]);
-        // The reminders for plan, swarm and reply mode and the other sessions went with the old
-        // messages: the next step tells the model again what is still on.
+        ];
+        self.session.record(&json!({
+            "type": "compaction",
+            "cause": {"context": context, "suffix": suffix, "limit": limit, "reserve": reserve, "kept_chars": summary.chars().count()},
+            "messages": messages,
+        }))?;
+        self.messages = Rc::new(messages);
+        // The reminders for plan, swarm and reply mode, the goal and the other sessions went with
+        // the old messages: the next step tells the model again what is still on.
         self.plan_announced = false;
         self.swarm_announced = false;
         self.concise_announced = false;
         self.orchestrate_announced = false;
+        self.goal_announced = None;
         self.model_announced = None;
         self.peers_announced.clear();
         self.share();
-        self.session.record(&json!({
-            "type": "compaction",
-            "cause": {"context": context, "suffix": suffix, "limit": limit, "reserve": reserve, "kept_chars": summary.chars().count()},
-            "messages": *self.messages,
-        }))?;
         self.after_compaction(limit);
-        if self.depth > 0 && self.pair.is_none() {
+        // A child's step never announces plan mode, so a child in it hears it again here.
+        if self.depth > 0 && self.controls.plan.get() {
+            self.push(json!({"role": "user", "content": plan::ON}))?;
+            self.plan_announced = true;
+        }
+        // The pair's executor may delegate; every other child was told it can't.
+        if self.depth > 0 && !self.pair_exec {
             self.push(json!({"role": "user", "content": super::subagent::CHILD_REMINDER}))?;
         }
         (self.sink)(Event::Notice("Compacted.".into()));
@@ -254,7 +273,7 @@ impl Agent {
                 }).any(|call| call["id"] == *id && call["function"]["name"] == "agent") => {
                     "Interrupted before this agent finished. It may have performed work or caused side effects; inspect its subagent log before retrying.".to_string()
                 }
-                _ => "Interrupted by the user before this finished.".to_string(),
+                _ => "Interrupted before this finished; it may have partly run, so check its effects before running it again.".to_string(),
             };
             self.push(json!({"role": "tool", "tool_call_id": id, "content": content}))?;
         }
@@ -297,7 +316,8 @@ impl Agent {
         !self.controls.steer.borrow().is_empty()
     }
 
-    /// Keeps the first 4096 and last 1024 characters and saves the whole result to a file.
+    /// Keeps the first 4096 and last 1024 bytes, each cut at a character boundary, and saves
+    /// the whole result to a file.
     pub(super) fn shorten(&self, text: &str) -> String {
         let head = truncate(text, 4096);
         let mut tail_start = text.len() - 1024;
@@ -313,7 +333,7 @@ impl Agent {
         };
         format!(
             "{head}\n\n[… {} characters omitted. {saved}]\n\n{}",
-            tail_start - head.len(),
+            text[head.len()..tail_start].chars().count(),
             &text[tail_start..]
         )
     }
@@ -379,14 +399,13 @@ impl Agent {
 }
 
 pub(super) fn kept_prompt(prompt: &str) -> String {
-    let chars = prompt.chars().count();
-    if chars <= KEPT_PROMPT_CHARS {
+    let Some((end, _)) = prompt.char_indices().nth(KEPT_PROMPT_CHARS) else {
         return prompt.to_string();
-    }
+    };
     format!(
         "{}\n[… {} characters cut]",
-        truncate(prompt, KEPT_PROMPT_CHARS),
-        chars - KEPT_PROMPT_CHARS
+        &prompt[..end],
+        prompt[end..].chars().count()
     )
 }
 

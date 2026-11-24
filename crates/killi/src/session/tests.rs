@@ -659,6 +659,39 @@ fn prune_skips_a_locked_log_and_a_live_listed_one() {
 }
 
 #[test]
+fn prune_deletes_a_log_only_while_holding_its_lock() {
+    let root = std::env::temp_dir().join(format!("killi-prune-lock-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("proj/1-1")).unwrap();
+    let log = root.join("proj/1-1.jsonl");
+    fs::write(&log, "x".repeat(50)).unwrap();
+    fs::write(root.join("proj/1-1/spill.txt"), "y".repeat(10)).unwrap();
+    let nowhere = Path::new("nowhere");
+    let resumed = Session::open(&log).unwrap();
+    assert_eq!(
+        super::prune::remove_unlocked(&log, nowhere, &HashSet::new()).unwrap(),
+        None,
+        "a session that resumed the log after the list was taken keeps it"
+    );
+    assert!(log.exists() && root.join("proj/1-1/spill.txt").exists());
+    drop(resumed);
+    crate::test_temp::await_unlocked(&log);
+    let live: HashSet<PathBuf> = [log.clone()].into_iter().collect();
+    assert_eq!(
+        super::prune::remove_unlocked(&log, nowhere, &live).unwrap(),
+        None
+    );
+    assert_eq!(
+        super::prune::remove_unlocked(&log, &log, &HashSet::new()).unwrap(),
+        None
+    );
+    let freed = super::prune::remove_unlocked(&log, nowhere, &HashSet::new()).unwrap();
+    assert!(freed.is_some_and(|bytes| bytes >= 60), "{freed:?}");
+    assert!(!log.exists() && !root.join("proj/1-1").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn opening_a_torn_log_starts_the_next_record_on_its_own_line() {
     let dir = std::env::temp_dir().join(format!("killi-torn-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
@@ -902,4 +935,95 @@ fn a_log_names_its_highest_task_id() {
     let text: String = entries.iter().map(|e| format!("{e}\n")).collect();
     std::fs::write(&log, text).unwrap();
     assert_eq!(load_reported(&log).unwrap().loaded.last_task, 7);
+}
+
+/// Writes the first half of what it is given to the log, then fails, as a full disk does.
+struct Torn<'a>(&'a File);
+
+impl Write for Torn<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let half = buf.len() / 2;
+        (&mut &*self.0).write_all(&buf[..half])?;
+        Err(std::io::Error::other("disk full"))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_record_that_fails_partway_leaves_no_torn_line() {
+    let dir = crate::test_temp::TempDir::new("killi-torn-record");
+    let mut session = Session::create_in(dir.path()).unwrap();
+    let message = |role: &str, content: &str| json!({"type": "message", "message": {"role": role, "content": content}});
+    session.record(&message("system", "sys")).unwrap();
+    session.record(&message("user", "first")).unwrap();
+    let before = fs::metadata(&session.log_path).unwrap().len();
+    let line = stamped(&message("user", "lost"), 1);
+    let torn = append_line(
+        &session.file,
+        &mut Torn(&session.file),
+        line.as_bytes(),
+        &mut session.torn,
+    );
+    assert!(torn.is_err() && !session.torn);
+    assert_eq!(fs::metadata(&session.log_path).unwrap().len(), before);
+    session.record(&message("user", "second")).unwrap();
+    let report = load_reported(&session.log_path).unwrap();
+    let contents: Vec<_> = report
+        .loaded
+        .messages
+        .iter()
+        .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(contents, ["sys", "first", "second"]);
+    assert_eq!(report.skipped, 0);
+}
+
+#[test]
+fn a_torn_line_that_cannot_be_cut_off_ends_before_the_next_record() {
+    let dir = crate::test_temp::TempDir::new("killi-torn-uncut");
+    let mut session = Session::create_in(dir.path()).unwrap();
+    let message = |role: &str, content: &str| json!({"type": "message", "message": {"role": role, "content": content}});
+    session.record(&message("system", "sys")).unwrap();
+    let read_only = File::open(&session.log_path).unwrap();
+    let line = stamped(&message("user", "lost"), 1);
+    let torn = append_line(
+        &read_only,
+        &mut Torn(&session.file),
+        line.as_bytes(),
+        &mut session.torn,
+    );
+    assert!(torn.is_err() && session.torn);
+    session.record(&message("user", "second")).unwrap();
+    assert!(!session.torn);
+    session.record(&message("user", "third")).unwrap();
+    let report = load_reported(&session.log_path).unwrap();
+    let contents: Vec<_> = report
+        .loaded
+        .messages
+        .iter()
+        .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(contents, ["sys", "second", "third"]);
+    assert_eq!(report.skipped, 1);
+}
+
+#[test]
+fn existing_session_folders_are_made_private() {
+    let dir = crate::test_temp::TempDir::new("killi-private-dir");
+    let root = dir.join("project");
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    create_private_dir(&root).unwrap();
+    assert_eq!(
+        fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    let nested = root.join("a/b");
+    create_private_dir(&nested).unwrap();
+    assert_eq!(
+        fs::metadata(&nested).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
 }

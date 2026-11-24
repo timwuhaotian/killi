@@ -105,7 +105,7 @@ fn git_global_options_and_xargs_read_through() {
         "ls | xargs wc -l",
         "ls | xargs -0 -I{} wc -l {}",
         "ls | xargs -n 1 -P 4 wc -c",
-        "ls | xargs --max-args=1 sort | uniq -c",
+        "ls | xargs --max-args=1 wc -l | sort",
         "ls | xargs",
     ] {
         assert!(bash_allowed(command, &[]), "{command}");
@@ -124,6 +124,9 @@ fn git_global_options_and_xargs_read_through() {
         "ls | xargs sort -o out",
         "xargs sh -c 'rm x'",
         "xargs 'rm' -rf",
+        "ls | xargs sort",
+        "echo -delete | xargs find .",
+        "echo --pre=sh | xargs rg x",
     ] {
         assert!(!bash_allowed(command, &[]), "{command}");
     }
@@ -180,6 +183,413 @@ fn writers_behind_read_only_names_are_refused() {
         "sed -n '/x/p' f",
         "sed -n 's/a/w/' f",
         "sed -n 's/a/b/p' words.txt",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+}
+
+#[test]
+fn quotes_come_off_before_the_checks() {
+    for command in [
+        "find . -name '*.tmp' '-delete'",
+        r#"find . -name x "-exec" rm {} +"#,
+        "sort '-o' out in",
+        "fd x '-x' rm",
+        "rg '--pre=sh' foo",
+        "sed -n '-i' s/a/b/ f",
+        "git diff '--output=x'",
+        r#"find . -de""lete"#,
+        r"find . -del\ete",
+        "find . $'-delete'",
+        r"find . $'\x2ddelete'",
+        "find . -{delete,name} x",
+        "sort -{n..o} out f",
+        "find . ${X:--delete}",
+        "echo -delete; find . $_",
+        "printf -v X %s -delete; find . $X",
+        "find . -name 'x",
+        "rg foo *",
+        "sort -* f",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "grep -E 'a\\|b' src",
+        "rg 'foo bar' src",
+        "git log --format='%h %s' -5",
+        "find . -name '*.rs'",
+        "sed -n '1,20p' src/lib.rs",
+        r#""ls" -la"#,
+        "ls src/{plan,agent}.rs",
+        "wc -l src/*.rs",
+        "cat *.md",
+        "rg foo -- *",
+        "grep -rn 'fn ' --include='*.rs' .",
+        "rg '-> Result' src",
+        "grep -n '<<<<<<<\\|>>>>>>>' f",
+        "ls \"$HOME/.killi\" $HOME",
+        "cargo check 2>&1 | tail -3; echo \"exit ${PIPESTATUS[0]}\"",
+        "git -C sub remote -v 2>/dev/null",
+        "find . -name '*.rs' | xargs wc -l",
+        "ls | xargs -I{} grep -l foo {}",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+}
+
+#[test]
+fn words_are_what_bash_passes() {
+    let words = |segment: &str| words::unquote_words(segment);
+    assert_eq!(
+        words(r#"a 'b c' "d\"e" f\ g -de""lete $'h\ti'"#).unwrap(),
+        ["a", "b c", "d\"e", "f g", "-delete", "h\ti"]
+    );
+    assert_eq!(
+        words("x{a,b}y {1..3} {}").unwrap(),
+        ["xay", "xby", "1", "2", "3", "{}"]
+    );
+    assert_eq!(words("'{a,b}'").unwrap(), ["{a,b}"]);
+    assert_eq!(words(r#""a\|b" 'a\|b'"#).unwrap(), [r"a\|b", r"a\|b"]);
+    let home = std::env::var("HOME").unwrap_or_default();
+    assert_eq!(words("$HOME").unwrap(), std::slice::from_ref(&home));
+    assert_eq!(words("\"${HOME}/x\"").unwrap(), [format!("{home}/x")]);
+    for refused in [
+        "'open",
+        "\"open",
+        "a > b",
+        "`id`",
+        "$(id)",
+        "${X:-y}",
+        "$_",
+        "$@",
+        "{1..99999}",
+    ] {
+        assert!(words(refused).is_none(), "{refused}");
+    }
+}
+
+#[test]
+fn read_only_names_that_write_are_refused() {
+    for command in [
+        "git log -p --output=F",
+        "git show --output=F",
+        "git show HEAD --out=F",
+        "git remote add evil https://x",
+        "git remote -v add evil https://x",
+        "git remote set-url origin x",
+        "find . -fls F",
+        "find . -fprintf F %p",
+        "find . -fprint0 F",
+        "sed -n --in-place s/a/b/ f",
+        "sed -n --in=bak s/a/b/ f",
+        "sed -ni s/a/b/ f",
+        "sed -n -I '' s/a/b/ f",
+        r#"sed -n "p;w out" f"#,
+        "sed -n 's/a;b/c/w out' f",
+        "sed -n '/[/]/w out' f",
+        "sed -n -e p -e 'W out' f",
+        "sed -n '1{p;w out' f",
+        "less -o F f",
+        "less -SoF f",
+        "less --log-file=F f",
+        "less --log=F f",
+        "tsc --noEmit --generateTrace D",
+        "tsc --noEmit --generatetrace D",
+        "tsc --noEmit --init",
+        "tsc --noEmit false",
+        "file -C -m magic",
+        "file -bC",
+        "tree -ao out",
+        "sort --o=out f",
+        "fd . -Hx rm",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "git remote",
+        "git remote -v",
+        "git remote get-url origin",
+        "git log --output-indicator-new=+ -p",
+        "less -R f",
+        "tsc --noEmit -p tsconfig.json",
+        "file -b x",
+        "tree -a -L 2",
+        "fd -tx foo",
+        "sed -n '/fn main/,/^}/p' src/main.rs",
+        "sed -n -e 1p -e '$p' f",
+        "sed -n '1~3p;$=' f",
+        "sed -n 's/[0-9]/N/gp' f",
+        "sed -n '/x/{p;q}' f",
+        "sed -n 's/a/b/gp' window.rs",
+        "sed -n '2,8p' src/web/window.rs",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+}
+
+#[test]
+fn read_only_names_that_run_programs_are_refused() {
+    for command in [
+        "git grep -O'touch pwn' foo",
+        "git grep -nO'touch pwn' foo",
+        "git grep --open-files-in-pager=x foo",
+        "git grep --open-files-in=x foo",
+        "git --git-dir=evil.git status",
+        "git --git-dir evil log",
+        "git -C sub --git-dir=../bare status",
+        "sed -n '1e touch pwn' f",
+        "sed -n 's/x/touch pwn/e' f",
+        "sed -n -f script.sed f",
+        "sed -n --file=script.sed f",
+        r#"cargo check --config 'build.rustc-wrapper="/tmp/x"'"#,
+        "cargo clippy -Zunstable-options",
+        "cargo tree -Z avoid-dev-deps",
+        "go vet -vettool=/tmp/evil ./...",
+        "go list -toolexec=/tmp/evil -export ./...",
+        "go list --toolexec /tmp/evil ./...",
+        "sort --compress-program=prog f",
+        "sort --compress=prog f",
+        "less -k evil.keys f",
+        "less --lesskey-src=evil f",
+        "less '+!touch pwn' f",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "git --git-dir=.git --work-tree=. status",
+        "git --git-dir=sub/.git/ log --oneline",
+        "git grep -n foo",
+        "git grep -e Oops",
+        "go vet ./...",
+        "go list -m all",
+        "cargo check -p killi",
+        "sort -k2 -t: f",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+}
+
+#[test]
+fn variables_bash_sets_itself_are_unseen() {
+    for command in [
+        "find . $BASH_COMMAND -name 'x -o -delete -o -name y'",
+        "find -name $BASH_COMMAND -o -name 'x -o -delete -o -name y'",
+        "find . -name x $BASH_EXECUTION_STRING",
+        "find . \"$BASH_COMMAND\"",
+        "find . ${BASH_COMMAND}",
+        "find $PWD -name x",
+        "sort $X f",
+        "$X -la",
+        "ls$X",
+        "git $X",
+        "xargs $X",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "echo $HOME",
+        "echo $PATH",
+        "echo \"PATH=$PATH\"",
+        "cat $BASH_COMMAND",
+        "find \"$PWD\" -name '*.rs'",
+        "ls \"$TMPDIR\"",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+    assert_eq!(
+        words::unquote_words("a $BASH_COMMAND").unwrap(),
+        ["a", "$BASH_COMMAND"]
+    );
+}
+
+#[test]
+fn a_command_name_matches_word_by_word() {
+    for command in [
+        "'cat /x' README",
+        "'git log' --x",
+        "\"ls -la\"",
+        "git 'log --output=x'",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    assert!(!bash_allowed("'make -n' all", &["make -n".to_string()]));
+    assert!(!bash_allowed("rm x", &[String::new()]));
+    assert!(bash_allowed("git 'log' -1", &[]));
+}
+
+#[test]
+fn comments_and_heredocs_hide_nothing() {
+    for command in [
+        "ls # what's here\nfind . -delete # it's done",
+        "cat <<EOF\ncat '\nEOF\nrm -f a #'",
+        "cat <<EOF\nhi\nEOF",
+        "cat <<'EOF'\nhi\nEOF",
+        "cat <<-EOF\n\thi\n\tEOF",
+        "git commit -F - <<EOF\nFix the parser's bug\nEOF\ngit checkout main",
+        "ls #\nrm x",
+        "ls;#x\nrm x",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    assert_eq!(
+        bash_refused("cat <<EOF\ncat '\nEOF\nrm -f a #'", &[]).as_deref(),
+        Some("cat <<EOF")
+    );
+    for command in [
+        "ls # list",
+        "ls # what's here",
+        "# where are we\npwd",
+        "ls a#b",
+        "echo $# 'x'",
+        "grep -n '#' f",
+        "cat <<<'hi'",
+        "cat <<< \"$HOME\"",
+        "wc -l < f",
+        "sort <f",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+    assert_eq!(
+        segments("git commit -F - <<'EOF'\nit's\nEOF\ngit stash"),
+        ["git commit -F - <<'EOF'", "git stash"]
+    );
+    assert_eq!(segments("ls # a; b | c\npwd"), ["ls ", "", "pwd"]);
+    assert_eq!(
+        words::unquote_words("sed -n p <in 2<&1 <<<'x y'").unwrap(),
+        ["sed", "-n", "p"]
+    );
+}
+
+#[test]
+fn xargs_putting_input_in_the_command_name_is_refused() {
+    for command in [
+        "echo rm | xargs -J cat cat -f zz",
+        "echo rm | xargs -I cat cat x",
+        "echo rm | xargs -Icat cat x",
+        "echo rm | xargs -I a cat x",
+        "echo rm | xargs -i{} {}",
+        "echo rm | xargs -i x",
+        "echo rm | xargs --replace=cat cat",
+        "echo rm | xargs --repl {} x",
+        "echo rm | xargs -0I c cat",
+        "echo rm | xargs -I '' cat",
+        "echo f | xargs -0n cat rm",
+        "echo f | xargs -n cat rm",
+        "echo f | xargs --max-args cat rm",
+        "echo f | xargs --arg-file cat rm",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "ls | xargs -I{} grep -l foo {}",
+        "ls | xargs -I % cat %",
+        "ls | xargs -0n1 wc -l",
+        "ls | xargs -n 1 -P 4 wc -c",
+        "ls | xargs --max-args=1 wc -l",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+}
+
+#[test]
+fn huge_brace_words_refuse_fast_without_deep_recursion() {
+    let inputs = [
+        format!("cat {}", "{a,b}".repeat(200_000)),
+        format!("cat {}", "{1..1}".repeat(200_000)),
+        format!("cat {}", "{".repeat(500_000)),
+        format!("cat {}a,b{}", "{".repeat(200_000), "}".repeat(200_000)),
+        format!("cat {{{}}}", "a,".repeat(500_000)),
+        format!("cat x{{{}}}", "{a,b}".repeat(100_000)),
+        format!("cat {}", "{a,{b,{c,".repeat(50_000)),
+    ];
+    let started = std::time::Instant::now();
+    let checked = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            for input in &inputs {
+                bash_refused(input, &[]);
+                words::unquote_words(input);
+            }
+        })
+        .unwrap()
+        .join();
+    assert!(checked.is_ok());
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    assert!(!bash_allowed(
+        &format!("cat {}", "{a,b}".repeat(20_000)),
+        &[]
+    ));
+    assert!(bash_allowed("ls {a,b}{c,d}", &[]));
+}
+
+#[test]
+fn brace_expansion_matches_bash() {
+    let words = |segment: &str| words::unquote_words(segment).unwrap();
+    assert_eq!(words("{a,b}{c,d}"), ["ac", "ad", "bc", "bd"]);
+    assert_eq!(words("x{a,{b,c}}y"), ["xay", "xby", "xcy"]);
+    assert_eq!(words("{{a,b}"), ["{a", "{b"]);
+    assert_eq!(words("{a,b}}"), ["a}", "b}"]);
+    assert_eq!(words("{a}b,c}"), ["{a}b,c}"]);
+    assert_eq!(words("{3..1} {a..c..2}"), ["3", "2", "1", "a", "c"]);
+    assert_eq!(words("{1..9..4} {-1..1}"), ["1", "5", "9", "-1", "0", "1"]);
+    assert_eq!(
+        words("{x..} {1..a} {\"1\"..2}"),
+        ["{x..}", "{1..a}", "{1..2}"]
+    );
+    assert_eq!(words("{1..2..-9223372036854775808}"), ["1"]);
+    for refused in [
+        "{-9223372036854775807..9223372036854775807}",
+        "{9223372036854775807..-9223372036854775808}",
+        "{1..99999999999999999999}",
+        "{1..2..99999999999999999999}",
+    ] {
+        assert!(words::unquote_words(refused).is_none(), "{refused}");
+    }
+}
+
+#[test]
+fn bypasses_through_read_only_names_are_refused() {
+    for command in [
+        "rg --hostname-bin=/tmp/x --hyperlink-format=default foo",
+        "rg --hostname-bin /tmp/x foo",
+        "rg --hostname=/tmp/x foo",
+        "git branch --unset-u",
+        "git branch --set-up=origin/main",
+        "git branch --edit",
+        "git branch --del old",
+        "git branch --mo old new",
+        "cat x >2>&1/dev/null",
+        "echo hi >/dev/nullx",
+        "echo hi 12>&1",
+        "find -- . *",
+        "cargo clippy -- *",
+    ] {
+        assert!(!bash_allowed(command, &[]), "{command}");
+    }
+    for command in [
+        "rg --hidden foo",
+        "git branch --cont HEAD",
+        "git branch --sort=-committerdate",
+        "git branch --format '%(refname)'",
+        "cargo check 2>&1|tail -3",
+        "ls >/dev/null 2>&1",
+        "ls &>/dev/null",
+        "rg foo -- *",
+    ] {
+        assert!(bash_allowed(command, &[]), "{command}");
+    }
+}
+
+#[test]
+fn ordinary_exploration_still_runs() {
+    for command in [
+        "grep -E 'a|b' src",
+        "rg 'foo bar' src",
+        "find . -name '*.rs' | xargs wc -l",
+        "sed -n '1,20p' f",
+        "git log --format='%h %s'",
+        "ls # list",
+        "echo $HOME",
     ] {
         assert!(bash_allowed(command, &[]), "{command}");
     }

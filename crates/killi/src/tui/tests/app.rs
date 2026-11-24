@@ -794,12 +794,55 @@ fn left_and_right_walk_answered_questions_and_a_change_rides_the_next_answer() {
     app.on_key_asking(key(KeyCode::Tab));
     let payload = second.try_recv().unwrap();
     assert!(
-        payload.contains("更正之前的问题「Delete all?」：答案改为「all」（原为「biggest」）"),
+        payload.contains("Corrected an earlier answer to “Delete all?”: now “all” (was “biggest”)"),
         "{payload}"
     );
-    assert!(payload.ends_with("本问答案：yes"), "{payload}");
+    assert!(
+        payload.ends_with("\nAnswer to this question: yes"),
+        "{payload}"
+    );
     assert_eq!(app.ask_past.len(), 2);
     assert!(app.ask_corrections.is_empty());
+}
+
+#[test]
+fn esc_on_a_plan_with_a_correction_pending_dismisses_it_and_keeps_the_correction() {
+    let mut app = test_app();
+    app.width = 80;
+    let question = |plan| {
+        let (reply, answer) = oneshot::channel::<String>();
+        let question = Question {
+            text: "the plan".into(),
+            options: vec!["Approve and start".into(), "Keep planning".into()],
+            plan,
+            reply,
+        };
+        (question, answer)
+    };
+    let correction = "Corrected an earlier answer to “Which db?”: now “sqlite” (was “pg”)";
+    let (asked, mut sent) = question(true);
+    app.asking = Some(Asking {
+        question: asked,
+        selected: 0,
+        internal: false,
+        secret: false,
+    });
+    app.ask_corrections.push(correction.into());
+    app.on_key_asking(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    // The agent reads a dismissal by the shape `Question::dismiss` gives it.
+    let (reference, mut dismissed) = question(true);
+    reference.dismiss(&[correction.to_string()]);
+    assert_eq!(sent.try_recv().unwrap(), dismissed.try_recv().unwrap());
+    assert!(app.asking.is_none() && app.ask_corrections.is_empty());
+    let shown: Vec<String> = app.pending.iter().map(|row| unstyled(row)).collect();
+    assert!(
+        shown.iter().any(|row| row.contains("now “sqlite”")),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|row| row.contains("(dismissed)")),
+        "{shown:?}"
+    );
 }
 
 #[test]
@@ -1707,4 +1750,255 @@ fn the_custom_flow_collects_its_answers_and_the_tick_picker_saves_them() {
             .iter()
             .any(|line| unstyled(line).contains("/provider custom cancelled"))
     );
+}
+
+#[test]
+fn text_typed_during_a_command_returns_to_the_prompt() {
+    let mut app = test_app();
+    // /btw, /compact and the like run no agent turn, so nothing takes the queue.
+    app.controls
+        .steer
+        .borrow_mut()
+        .push_back(("why X? (expanded)".into(), Vec::new()));
+    app.queued.push("why X?".into());
+    app.editor.insert("draft");
+    app.restore_queued(&Ended::Done(Ok((String::new(), Stop::Completed))));
+    assert_eq!(app.editor.text(), "why X?\n\ndraft");
+    assert!(app.controls.steer.borrow().is_empty() && app.queued.is_empty());
+    assert!(
+        app.pending
+            .iter()
+            .any(|line| unstyled(line).contains("back in the prompt"))
+    );
+
+    // A command that ends with nothing typed says nothing.
+    let mut app = test_app();
+    app.restore_queued(&Ended::Done(Ok((String::new(), Stop::Completed))));
+    assert!(app.pending.is_empty(), "{:?}", app.pending);
+}
+
+#[test]
+fn esc_during_a_command_drops_what_was_typed_and_says_so() {
+    let mut app = test_app();
+    app.controls
+        .steer
+        .borrow_mut()
+        .push_back(("next".into(), Vec::new()));
+    app.queued.push("next".into());
+    app.restore_queued(&Ended::Interrupted);
+    assert!(app.editor.is_empty());
+    assert!(app.controls.steer.borrow().is_empty() && app.queued.is_empty());
+    assert!(
+        app.pending
+            .iter()
+            .any(|line| unstyled(line).trim() == "Cancelled.")
+    );
+
+    // Ctrl+S cancels to send the queue at once: it stays for the next prompt.
+    let mut app = test_app();
+    app.controls
+        .steer
+        .borrow_mut()
+        .push_back(("now".into(), Vec::new()));
+    app.queued.push("now".into());
+    app.send_now = true;
+    app.restore_queued(&Ended::Interrupted);
+    assert_eq!(app.queued, ["now"]);
+    assert_eq!(app.controls.steer.borrow().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn esc_gives_up_on_an_undo_snapshot_the_turn_outlived() {
+    use futures_util::stream;
+    let mut app = test_app();
+    app.busy = Some(Instant::now());
+    let esc = TermEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let mut keys = stream::iter(vec![Ok(esc)]).chain(stream::pending());
+    // A snapshot that never ends, as a slow `git add -A` in a big tree.
+    let never = std::future::pending();
+    let cancel = crate::snapshot::Cancel::default();
+    let tree = run::finish_snapshot(&mut app, &mut keys, never, &cancel)
+        .await
+        .unwrap();
+    let why = format!("{:#}", tree.err().expect("no tree"));
+    assert!(why.contains("Esc"), "{why}");
+    assert!(cancel.is_set(), "the snapshot's git is stopped");
+    assert!(app.running.is_empty(), "the wait's row goes with it");
+}
+
+#[test]
+fn esc_on_a_slow_snapshot_stops_its_git_so_the_exit_and_the_next_snapshot_go_through() {
+    use futures_util::stream;
+    let root = crate::test_temp::TempDir::new("killi-esc-snap");
+    let store = crate::test_temp::TempDir::new("killi-esc-snap-store");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("a.txt"), "one").unwrap();
+    let git_dir = store.join("shadow.git");
+    let mut snapshots = Snapshots::in_dir(&root, &git_dir);
+    snapshots.take();
+    assert_eq!(snapshots.skipped, None);
+    // A clean filter that takes far longer than anyone waits, as a huge file on a slow disk.
+    let started = store.join("filter-started");
+    let mut config = std::fs::read_to_string(git_dir.join("config")).unwrap();
+    config.push_str(&format!(
+        "[filter \"slow\"]\n\tclean = \"touch '{}'; sleep 30\"\n",
+        started.display()
+    ));
+    std::fs::write(git_dir.join("config"), config).unwrap();
+    std::fs::write(root.join(".gitattributes"), "*.new filter=slow\n").unwrap();
+    std::fs::write(root.join("b.new"), "new").unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tree = runtime.block_on(async {
+        let work = snapshots.start_take().expect("enabled");
+        let cancel = work.canceler();
+        let snap = tokio::task::spawn_blocking(move || work.run());
+        let waited = Instant::now() + Duration::from_secs(10);
+        while !started.exists() && Instant::now() < waited {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(started.exists(), "git is in the clean filter");
+        let mut app = test_app();
+        app.busy = Some(Instant::now());
+        let esc = TermEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let mut keys = stream::iter(vec![Ok(esc)]).chain(stream::pending());
+        run::finish_snapshot(&mut app, &mut keys, snap, &cancel)
+            .await
+            .unwrap()
+    });
+    snapshots.commit_take(tree);
+    let quitting = Instant::now();
+    // Dropping the runtime waits for its blocking tasks, as quitting does.
+    drop(runtime);
+    assert!(
+        quitting.elapsed() < Duration::from_secs(5),
+        "the skipped snapshot's git doesn't hold up the exit"
+    );
+    let lock = git_dir.join(format!("index-{}.lock", std::process::id()));
+    assert!(
+        !lock.exists(),
+        "the stopped git's lock on the index is gone"
+    );
+    std::fs::remove_file(root.join(".gitattributes")).unwrap();
+    snapshots.take();
+    assert_eq!(snapshots.skipped, None, "the next snapshot goes through");
+    assert_eq!(snapshots.taken(), 3);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_snapshot_the_turn_outlived_is_waited_for() {
+    use futures_util::stream;
+    let mut app = test_app();
+    app.busy = Some(Instant::now());
+    let mut keys = stream::pending();
+    let (done, finished) = oneshot::channel::<()>();
+    let snap = async {
+        let _ = finished.await;
+        Ok(Err(anyhow::anyhow!("git failed")))
+    };
+    let tree = {
+        let cancel = crate::snapshot::Cancel::default();
+        let waiting = run::finish_snapshot(&mut app, &mut keys, snap, &cancel);
+        tokio::pin!(waiting);
+        tokio::select! {
+            _ = &mut waiting => panic!("the snapshot hasn't finished"),
+            () = tokio::task::yield_now() => {}
+        }
+        drop(done);
+        waiting.await.unwrap()
+    };
+    assert!(format!("{:#}", tree.err().unwrap()).contains("git failed"));
+    assert!(app.running.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_status_line_follows_a_model_the_agent_moved_to() {
+    // A fallback switches the agent's model mid-turn, without a command to say so.
+    let agent = crate::agent::tests::unanswered_agent("follow-model", "hi").await;
+    let mut app = test_app();
+    app.status.model = "primary".into();
+    app.status.backup = Some("test".into());
+    follow_model(&mut app, &agent, &Config::default());
+    assert_eq!(app.status.model, agent.model_display());
+    assert_eq!(app.status.backup, None);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_undo_snapshot_wait_has_a_row_of_its_own_at_any_width() {
+    use futures_util::stream;
+    for width in [80, 60] {
+        let mut app = test_app();
+        app.width = width;
+        app.busy = Some(Instant::now());
+        app.snapshotting = true;
+        let mut keys = stream::pending();
+        // Polled once and dropped mid-wait, the row it put up is still there to draw.
+        {
+            let cancel = crate::snapshot::Cancel::default();
+            let waiting =
+                run::finish_snapshot(&mut app, &mut keys, std::future::pending(), &cancel);
+            tokio::pin!(waiting);
+            tokio::select! {
+                _ = &mut waiting => panic!("the snapshot never finishes"),
+                () = tokio::task::yield_now() => {}
+            }
+        }
+        assert_eq!(app.running.len(), 1);
+        let (live, _, _) = app.live();
+        let shown: Vec<String> = live.iter().map(|row| unstyled(row)).collect();
+        assert!(
+            shown
+                .iter()
+                .any(|row| row.starts_with("◐ Finishing the undo snapshot… Esc skips it")),
+            "{shown:?}"
+        );
+        assert!(
+            shown.iter().all(|row| text::width(row) <= width),
+            "{shown:?}"
+        );
+    }
+}
+
+#[test]
+fn a_discarded_attempt_is_marked_and_not_counted_twice() {
+    let mut app = test_app();
+    app.status.completion = 100;
+    app.begin_busy();
+    app.on_agent(Event::Reasoning("weighing".into()));
+    app.on_agent(Event::Text("The primary's half".into()));
+    assert_eq!(app.turn_out(), "~7 out");
+    app.on_agent(Event::Discard {
+        reason: "the backup model answers instead".into(),
+    });
+    assert_eq!(
+        app.turn_out(),
+        "0 out",
+        "the backup's reply streams again from nothing"
+    );
+    assert!(app.thinking.is_none());
+    assert!(app.retry.is_none(), "no countdown, unlike a retry");
+    let rows: Vec<String> = app.pending.iter().map(|row| unstyled(row)).collect();
+    let half = rows
+        .iter()
+        .position(|row| row == "The primary's half")
+        .expect("what streamed stays: {rows:?}");
+    let note = rows
+        .iter()
+        .position(|row| row == "the partial reply was discarded; the backup model answers instead")
+        .expect("and is marked: {rows:?}");
+    assert!(half < note, "{rows:?}");
+}
+
+#[test]
+fn a_crash_record_says_where_the_panic_was() {
+    let at = std::panic::Location::caller();
+    let message = super::super::start::located("boom".into(), Some(at));
+    assert_eq!(
+        message,
+        format!("boom (at {}:{}:{})", at.file(), at.line(), at.column())
+    );
+    assert_eq!(super::super::start::located("boom".into(), None), "boom");
 }

@@ -1,4 +1,13 @@
+mod drive;
+mod provider;
+
 use super::*;
+#[cfg(test)]
+pub(super) use drive::{finish_snapshot, wants_recap};
+pub(super) use drive::{flush_recap, prompt_turn, wake_turn};
+#[cfg(test)]
+pub(super) use provider::provider_switch_notice;
+pub(super) use provider::{provider_add, provider_custom, provider_custom_add};
 
 /// The next request from another session; never, for a session that takes none.
 pub(super) async fn next_incoming(
@@ -59,12 +68,13 @@ where
         tokio::select! {
             biased;
             Some(event) = rx.recv() => app.on_agent(event),
+            // Before the keys: an Esc that lands as the work ends doesn't undo its result.
+            result = &mut future, if done.is_none() => done = Some(result),
             Some(Ok(event)) = keys.next() => {
                 if app.on_key_busy(event) {
                     break done.take().map_or(Ended::Interrupted, Ended::Done);
                 }
             }
-            result = &mut future, if done.is_none() => done = Some(result),
             Some(incoming) = next_incoming(&mut app.peers) => app.on_peer(incoming),
             Some(answered) = app.peer_asks.next(), if !app.peer_asks.is_empty() => app.on_peer_answer(answered),
             Some(done) = app.peer_running.next(), if !app.peer_running.is_empty() => app.on_peer_task_done(done),
@@ -84,18 +94,41 @@ where
         }
         if app.queued.len() > app.controls.steer.borrow().len() {
             // The agent took queued messages between steps: what it did before that comes first.
-            while let Ok(event) = rx.try_recv() {
-                app.on_agent(event);
-            }
+            show_events(app, rx);
             app.show_sent();
         }
         app.draw()?;
     };
     drop(future);
+    show_events(app, rx);
+    app.show_sent();
+    Ok(ended)
+}
+
+/// Shows the agent's events already sent: the end of a turn's, or the notes a resume leaves
+/// before any turn runs.
+pub(super) fn show_events(app: &mut App, rx: &mut mpsc::UnboundedReceiver<Event>) {
     while let Ok(event) = rx.try_recv() {
         app.on_agent(event);
     }
-    app.show_sent();
+}
+
+/// Runs a command's work — /btw, /recap, /compact, /schedule, /provider — as a busy spell
+/// with the keys live. No agent turn takes what is typed meanwhile, so it goes back into the
+/// prompt afterwards; Esc drops it and cancels the command.
+pub(super) async fn command_turn<F>(
+    app: &mut App,
+    keys: &mut EventStream,
+    rx: &mut mpsc::UnboundedReceiver<Event>,
+    future: F,
+) -> Result<Ended>
+where
+    F: Future<Output = Result<(String, Stop)>>,
+{
+    app.begin_busy();
+    let ended = run_turn(app, keys, rx, future).await?;
+    app.end_busy();
+    app.restore_queued(&ended);
     Ok(ended)
 }
 
@@ -131,28 +164,33 @@ pub(super) async fn handle_command(
         "btw" => {
             app.aside_asked = Some(arg.to_string());
             app.begin_busy();
-            run_turn(
+            let ended = run_turn(
                 app,
                 keys,
                 rx,
                 std::future::ready(Ok((String::new(), Stop::Completed))),
             )
             .await?;
+            // The spell waits only for the answer: a question still out was cut off by Esc.
+            let ended = if app.aside.is_some() {
+                Ended::Interrupted
+            } else {
+                ended
+            };
             app.end_busy();
+            app.restore_queued(&ended);
         }
         "recap" if agent.user_prompts().is_empty() => app.notice("Nothing to recap yet."),
         "recap" => {
             let ask = app.controls.aside.borrow().recap();
             let used = Rc::new(RefCell::new(None));
             let slot = used.clone();
-            app.begin_busy();
-            let ended = run_turn(app, keys, rx, async move {
+            let ended = command_turn(app, keys, rx, async move {
                 let (text, usage) = ask.await?;
                 *slot.borrow_mut() = Some(usage);
                 Ok((text, Stop::Completed))
             })
             .await?;
-            app.end_busy();
             match (ended, used.take()) {
                 (Ended::Done(Ok((text, _))), Some(usage)) => {
                     app.show_recap(&text, &usage);
@@ -289,15 +327,13 @@ pub(super) async fn handle_command(
         "compact" if agent.user_prompts().is_empty() => app.notice("Nothing to compact yet."),
         "compact" => {
             let focus = arg.to_string();
-            app.begin_busy();
-            let ended = run_turn(app, keys, rx, async {
+            let ended = command_turn(app, keys, rx, async {
                 agent
                     .compact(Some(&focus))
                     .await
                     .map(|()| (String::new(), Stop::Completed))
             })
             .await?;
-            app.end_busy();
             match ended {
                 Ended::Done(Err(e)) => app.error_from("Compaction failed", &e),
                 Ended::Done(Ok(_)) => app.status.context = agent.stats.context,
@@ -424,241 +460,6 @@ pub(super) async fn handle_command(
     Ok(true)
 }
 
-/// Applies a /provider pick: writes the preset's provider and models with the key, or
-/// repairs the provider the config has, then re-reads the config so /model lists them at
-/// once and a session already on that provider uses it as written from its next request.
-/// The write itself runs inside a turn, so keys stay live while OpenCode Go's model list is
-/// fetched.
-pub(super) async fn provider_add(
-    app: &mut App,
-    session: &mut Setup,
-    agent: &mut Agent,
-    keys: &mut EventStream,
-    rx: &mut mpsc::UnboundedReceiver<Event>,
-    preset: &str,
-    key: &str,
-) -> Result<()> {
-    let outcome = Rc::new(RefCell::new(None));
-    let slot = outcome.clone();
-    let (preset, key) = (preset.to_string(), key.to_string());
-    app.begin_busy();
-    run_turn(app, keys, rx, async move {
-        *slot.borrow_mut() = Some(match preset.as_str() {
-            "opencode-go" => crate::login::opencode_go_add(Some(&key))
-                .await
-                .map(|go| (go.added, go.notes)),
-            "command-code" => crate::login::commandcode_add(&key)
-                .await
-                .map(|code| (code.added, code.notes)),
-            "anthropic" => crate::config::add_anthropic(&key).map(|added| (added, Vec::new())),
-            "kimi" => crate::config::add_kimi(&key).map(|added| (added, Vec::new())),
-            "mimo" => crate::config::add_mimo(&key).map(|added| (added, Vec::new())),
-            "minimax" => crate::config::add_minimax(&key).map(|added| (added, Vec::new())),
-            "qwen" => crate::config::add_qwen(&key).map(|added| (added, Vec::new())),
-            "stepfun" => crate::config::add_stepfun(&key).map(|added| (added, Vec::new())),
-            "unisound" => crate::config::add_unisound(&key).map(|added| (added, Vec::new())),
-            "zai" => crate::config::add_zai(&key)
-                .await
-                .map(|added| (added, Vec::new())),
-            _ => crate::config::add_muse(&key).map(|added| (added, Vec::new())),
-        });
-        Ok((String::new(), Stop::Completed))
-    })
-    .await?;
-    app.end_busy();
-    let Some(outcome) = outcome.take() else {
-        return Ok(());
-    };
-    provider_written(app, session, agent, outcome);
-    Ok(())
-}
-
-/// `/provider custom` between the key and the ticks: reads the endpoint's model list
-/// inside a turn (the key stays live while it runs), then offers the models to tick. A
-/// failed list call ends the flow with the reason; nothing is written.
-pub(super) async fn provider_custom(
-    app: &mut App,
-    keys: &mut EventStream,
-    rx: &mut mpsc::UnboundedReceiver<Event>,
-    flow: CustomFlow,
-) -> Result<()> {
-    let outcome = Rc::new(RefCell::new(None));
-    let slot = outcome.clone();
-    // The closure takes copies: the answers also build the flow the ticked models write.
-    let (ask, kept) = (
-        (
-            flow.protocol.clone(),
-            flow.endpoint.clone(),
-            flow.key.clone(),
-        ),
-        flow,
-    );
-    app.begin_busy();
-    run_turn(app, keys, rx, async move {
-        let (protocol, endpoint, key) = ask;
-        *slot.borrow_mut() = Some(crate::config::custom_served(&protocol, &endpoint, &key).await);
-        Ok((String::new(), Stop::Completed))
-    })
-    .await?;
-    app.end_busy();
-    let Some(ids) = outcome.take() else {
-        return Ok(());
-    };
-    match ids {
-        Err(e) => app.error_from("/provider", &e),
-        Ok(ids) => {
-            app.notice(&format!(
-                "The endpoint lists {}.",
-                crate::tools::count(ids.len(), "model")
-            ));
-            app.custom = Some(kept);
-            let options: Vec<_> = ids
-                .into_iter()
-                .map(|id| (id, String::new(), PickerChoice::Stay))
-                .collect();
-            let mut picker = Picker::new("Models to add".into(), options, 0);
-            picker.multi = true;
-            app.picker = Some(picker);
-        }
-    }
-    Ok(())
-}
-
-/// `/provider custom`'s write: the provider and the ticked models, inside a turn so the
-/// key stays live; then the same reload and notices as a preset.
-pub(super) async fn provider_custom_add(
-    app: &mut App,
-    session: &mut Setup,
-    agent: &mut Agent,
-    keys: &mut EventStream,
-    rx: &mut mpsc::UnboundedReceiver<Event>,
-    flow: CustomFlow,
-    models: Vec<String>,
-) -> Result<()> {
-    let outcome = Rc::new(RefCell::new(None));
-    let slot = outcome.clone();
-    let CustomFlow {
-        name,
-        protocol,
-        endpoint,
-        key,
-    } = flow;
-    app.begin_busy();
-    run_turn(app, keys, rx, async move {
-        *slot.borrow_mut() = Some(
-            crate::config::add_custom(&name, &protocol, &endpoint, &key, &models)
-                .map(|added| (added, Vec::new())),
-        );
-        Ok((String::new(), Stop::Completed))
-    })
-    .await?;
-    app.end_busy();
-    let Some(outcome) = outcome.take() else {
-        return Ok(());
-    };
-    provider_written(app, session, agent, outcome);
-    Ok(())
-}
-
-/// What a /provider write leaves: the notices, the reload, and the model switch when the
-/// session sat on the provider or on a model it no longer serves.
-fn provider_written(
-    app: &mut App,
-    session: &mut Setup,
-    agent: &mut Agent,
-    outcome: anyhow::Result<(crate::config::Added, Vec<String>)>,
-) {
-    match outcome {
-        Err(e) => app.error_from("/provider", &e),
-        Ok((added, notes)) => {
-            if added.aliases.is_empty() {
-                app.notice("Its models are already in the config; /model picks one.");
-            } else {
-                app.notice(&format!(
-                    "Added {} — /model picks one.",
-                    added.aliases.join(", ")
-                ));
-                if let Some(default) = &added.starts_on {
-                    app.notice(&format!(
-                        "killi starts on `{default}`; /model picks another."
-                    ));
-                }
-            }
-            if let Some(note) = added.repair_note() {
-                app.notice(&note);
-            }
-            if !added.dropped.is_empty() {
-                app.notice(&format!(
-                    "Removed models no longer served: {}.",
-                    added.dropped.join(", ")
-                ));
-            }
-            for note in &added.notes {
-                app.notice(note);
-            }
-            for note in &notes {
-                app.notice(note);
-            }
-            if let Err(e) = session.reload() {
-                app.error_from("/reload", &e);
-                return;
-            }
-            let alias = agent.model_alias().to_string();
-            let on_it = session
-                .config()
-                .models
-                .get(&alias)
-                .is_some_and(|model| model.provider == added.provider);
-            if on_it {
-                match session.config().resolve(Some(&alias)).and_then(Client::new) {
-                    Ok(client) => match agent.switch_model(client) {
-                        Ok(()) => {
-                            app.show_model(agent, session.config());
-                            app.notice("This session takes it from its next request.");
-                        }
-                        Err(e) => app.error_report(&e),
-                    },
-                    Err(e) => app.error_report(&e),
-                }
-            } else if !session.config().models.contains_key(&alias) {
-                // The list sync removed the model this session was on; move to one the
-                // provider still serves rather than leaving the status on a stale alias.
-                let first = session
-                    .config()
-                    .models
-                    .iter()
-                    .find(|(name, model)| {
-                        model.provider == added.provider
-                            && session.config().model_allowed(name)
-                            && !session.config().missing_key(Some(name))
-                    })
-                    .map(|(name, _)| name.clone());
-                if let Some(first) = first {
-                    match session.config().resolve(Some(&first)).and_then(Client::new) {
-                        Ok(client) => match agent.switch_model(client) {
-                            Ok(()) => {
-                                app.show_model(agent, session.config());
-                                app.notice(&provider_switch_notice(&alias, &first));
-                            }
-                            Err(e) => app.error_report(&e),
-                        },
-                        Err(e) => app.error_report(&e),
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// The model switch after `/provider`: first configuration has no removed model to name.
-pub(super) fn provider_switch_notice(alias: &str, first: &str) -> String {
-    if alias.is_empty() {
-        format!("Now on `{first}`; /model picks another.")
-    } else {
-        format!("`{alias}` is no longer served; switched to `{first}`.")
-    }
-}
-
 /// `/memory` lists what is saved, `/memory add <fact>` and `/remember <fact>` save one, and
 /// `/memory forget N` removes one. The model hears a save or removal at its next prompt, since
 /// the system prompt was built before it.
@@ -748,174 +549,6 @@ fn goal_command(app: &mut App, agent: &mut Agent, arg: &str) {
                 Err(e) => app.error_report(&e),
             },
         },
-    }
-}
-
-/// Runs one turn started by a command: `shown` goes in the transcript, `prompt` to the agent,
-/// with the images pasted beside the command.
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn prompt_turn(
-    app: &mut App,
-    agent: &mut Agent,
-    snapshots: &mut Snapshots,
-    keys: &mut EventStream,
-    rx: &mut mpsc::UnboundedReceiver<Event>,
-    shown: &str,
-    prompt: &str,
-    images: &[Image],
-) -> Result<()> {
-    app.begin_turn(shown, images);
-    app.draw()?;
-    app.peer_tells = 0;
-    // A scheduled task is no message from the user: it leaves the count of turns background
-    // reports started where it was.
-    if app.scheduled.is_none() {
-        app.wakes = 0;
-        app.wake_held = false;
-    }
-    app.undo_wake = false;
-    drive_turn(
-        app,
-        agent,
-        snapshots,
-        keys,
-        rx,
-        shown,
-        Some((prompt, images)),
-    )
-    .await
-}
-
-/// Runs a turn the session starts by itself because background work ended while it sat idle:
-/// no prompt of the user's is shown or sent, and the reports come first.
-pub(super) async fn wake_turn(
-    app: &mut App,
-    agent: &mut Agent,
-    snapshots: &mut Snapshots,
-    keys: &mut EventStream,
-    rx: &mut mpsc::UnboundedReceiver<Event>,
-) -> Result<()> {
-    app.wakes += 1;
-    app.undo_wake = true;
-    app.drop_suggestion();
-    app.notice("Background work ended; the agent reads its report.");
-    app.begin_busy();
-    app.draw()?;
-    drive_turn(
-        app,
-        agent,
-        snapshots,
-        keys,
-        rx,
-        "background work ended",
-        None,
-    )
-    .await
-}
-
-/// The body of a turn: snapshot, run, and what follows its end. `prompt` is the user's message
-/// with its images, or none for a turn background reports started.
-async fn drive_turn(
-    app: &mut App,
-    agent: &mut Agent,
-    snapshots: &mut Snapshots,
-    keys: &mut EventStream,
-    rx: &mut mpsc::UnboundedReceiver<Event>,
-    shown: &str,
-    prompt: Option<(&str, &[Image])>,
-) -> Result<()> {
-    app.undo_warned = false;
-    app.live_turn(Some(shown));
-    let before = Totals::of(agent);
-    let taken = snapshots.taken();
-    // The snapshot's git commands run on a blocking thread while the turn's first request
-    // is already in flight; the agent waits for the tree before its first tool call, so the
-    // tree still predates every change the turn makes.
-    let ended = if let Some(work) = snapshots.start_take() {
-        app.snapshotting = true;
-        app.snapshot_seq += 1;
-        let (snap_tx, snap_rx) = oneshot::channel();
-        agent.set_snapshot_wait(snap_rx);
-        let turn = run_turn(app, keys, rx, start(agent, prompt));
-        let snap = async {
-            let tree = tokio::task::spawn_blocking(move || work.run())
-                .await
-                .map_err(|e| anyhow::anyhow!("the snapshot task ended: {e}"))
-                .and_then(|tree| tree);
-            snapshots.commit_take(tree);
-            let _ = snap_tx.send(());
-        };
-        let (ended, _) = tokio::join!(turn, snap);
-        app.snapshotting = false;
-        ended?
-    } else {
-        run_turn(app, keys, rx, start(agent, prompt)).await?
-    };
-    if matches!(ended, Ended::Interrupted) && app.take_back(agent)? {
-        app.wake_held = true;
-        // Nothing ran, so /undo still goes back to the turn before this one.
-        snapshots.forget_after(taken);
-        app.live_turn(None);
-        return Ok(());
-    }
-    if let Some(why) = &snapshots.skipped {
-        app.notice(why);
-    }
-    let completed = matches!(ended, Ended::Done(Ok((_, Stop::Completed))));
-    // A turn that ended with the model's answer leaves the prompt empty, so it can offer
-    // what to ask next.
-    let answered = matches!(ended, Ended::Done(Ok(_)));
-    let failed_on = match &ended {
-        Ended::Done(Err(error)) => Some(first_line(&gist(&format!("{error:#}")), 200)),
-        _ => None,
-    };
-    let after = Totals::of(agent);
-    app.finish_turn(agent, ended, before, after);
-    app.live_turn(None);
-    if !app.controls.peer_notes.borrow().is_empty() {
-        app.notice("A message from another session came as the turn ended; the agent gets it with your next prompt.");
-    }
-    match failed_on {
-        Some(error) => agent.recover_failed(&error)?,
-        None if !matches!(app.last_end, Some(LastEnd::Done)) => agent.recover()?,
-        None => {}
-    }
-    if wants_recap(
-        app.auto_recap,
-        completed,
-        Totals::of(agent).tool_calls - before.tool_calls,
-    ) {
-        app.recap = Some(Box::pin(app.controls.aside.borrow().recap()));
-    }
-    if answered {
-        app.ask_suggestion();
-    }
-    Ok(())
-}
-
-/// A turn's run of the agent, whichever way it started.
-type TurnRun<'a> = Pin<Box<dyn Future<Output = Result<(String, Stop)>> + 'a>>;
-
-/// The agent's run for a turn: the user's prompt, or a wake when there is none.
-fn start<'a>(agent: &'a mut Agent, prompt: Option<(&'a str, &'a [Image])>) -> TurnRun<'a> {
-    match prompt {
-        Some((prompt, images)) => Box::pin(agent.run(prompt, images)),
-        None => Box::pin(agent.wake()),
-    }
-}
-
-/// Whether a finished turn gets a recap by itself: a turn that only answered is its own recap.
-pub(super) fn wants_recap(on: bool, completed: bool, tool_calls: u32) -> bool {
-    on && completed && tool_calls > 0
-}
-
-/// Keeps a shown recap in the session's log, so a resume shows it again. Best effort:
-/// a failed save stays unsaved for the next flush, and never interrupts the session.
-pub(super) fn flush_recap(app: &mut App, agent: &mut Agent) {
-    if let Some(text) = app.recap_unsaved.clone()
-        && agent.record_recap(&text).is_ok()
-    {
-        app.recap_unsaved = None;
     }
 }
 

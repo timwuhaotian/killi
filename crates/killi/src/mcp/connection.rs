@@ -1,9 +1,11 @@
 use super::*;
 
 use futures_util::StreamExt;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncWriteExt, BufReader};
+use tokio::process::Child;
 
-use crate::broker::Launch;
+use crate::broker::{BrokerRefused, Launch};
+use crate::tools::Tracked;
 
 /// A server's error reply, kept as an error with its code so a caller can tell a reply that
 /// rejected the arguments it was sent (invalid params) from a tool that failed to run.
@@ -24,8 +26,69 @@ impl std::fmt::Display for RpcError {
 
 impl std::error::Error for RpcError {}
 
+/// An HTTP server's 404 for a request that carried a session id: the server has forgotten
+/// the session, so the client starts a new one.
+#[derive(Debug)]
+struct SessionExpired(String);
+
+impl std::fmt::Display for SessionExpired {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SessionExpired {}
+
+/// A server started directly. Its whole group is killed when the connection goes, so the
+/// real server behind a wrapper such as `npx` or `uvx` doesn't outlive it. The child is
+/// never waited on here, so its pid can't be reused while this holds it.
+pub(super) struct Direct {
+    child: Child,
+    _tracked: Option<Tracked>,
+}
+
+impl Drop for Direct {
+    fn drop(&mut self) {
+        if let Some(pgid) = self.child.id() {
+            // SAFETY: killpg only signals the process group this server was started in.
+            unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
+/// Marks the connection closed if dropped before `done`: a line cut short by a timeout or a
+/// cancel would garble every message after it.
+struct Unfinished<'a>(Option<&'a AtomicBool>);
+
+impl Unfinished<'_> {
+    fn done(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        if let Some(closed) = self.0 {
+            closed.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+type Writer = tokio::sync::Mutex<Box<dyn AsyncWrite + Unpin + Send>>;
+
+fn initialize_params() -> Value {
+    json!({"protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "clientInfo": {"name": "killi", "version": env!("CARGO_PKG_VERSION")}})
+}
+
 impl Connection {
-    pub(super) async fn open(config: &ServerConfig, broker: Option<&Path>) -> Result<Self> {
+    /// Connects to the server `config` names, through the broker when there is one. `stuck`
+    /// says the last connection's request went unanswered past the timeout, so the broker
+    /// can start the server afresh if it has said nothing since.
+    pub(super) async fn open(
+        config: &ServerConfig,
+        broker: Option<&Path>,
+        stuck: bool,
+    ) -> Result<Self> {
         let timeout = config
             .tool_timeout_ms
             .map_or(DEFAULT_TIMEOUT, Duration::from_millis);
@@ -39,7 +102,18 @@ impl Connection {
                     cwd: config.cwd.clone(),
                 };
                 let attached = match broker {
-                    Some(socket) => broker::attach(socket, &launch, true).await.ok(),
+                    Some(socket) => {
+                        match broker::attach(socket, &launch, true, stuck.then_some(timeout)).await
+                        {
+                            Ok(stream) => Some(stream),
+                            // The broker ran the server and gave up waiting on it, or is still
+                            // waiting; a direct start would only wait as long again.
+                            Err(e) if e.is::<BrokerRefused>() => return Err(e),
+                            // No usable broker, or one whose start failed where this session's
+                            // own environment may succeed.
+                            Err(_) => None,
+                        }
+                    }
                     None => None,
                 };
                 let (reader, writer, child): (
@@ -57,14 +131,18 @@ impl Connection {
                         let tracked = child.id().map(crate::tools::track);
                         let stdout = child.stdout.take().expect("stdout is piped");
                         let stdin = child.stdin.take().expect("stdin is piped");
-                        (Box::new(stdout), Box::new(stdin), Some((child, tracked)))
+                        let direct = Direct {
+                            child,
+                            _tracked: tracked,
+                        };
+                        (Box::new(stdout), Box::new(stdin), Some(direct))
                     }
                 };
                 let pending: Pending = Arc::default();
                 let (routes, hung_up) = (pending.clone(), closed.clone());
                 tokio::spawn(async move {
-                    let mut lines = BufReader::new(reader).lines();
-                    while let Ok(Some(line)) = lines.next_line().await {
+                    let mut reader = BufReader::new(reader);
+                    while let Ok(Some(line)) = broker::read_line(&mut reader).await {
                         let Ok(message) = serde_json::from_str::<Value>(&line) else {
                             continue;
                         };
@@ -113,20 +191,17 @@ impl Connection {
             next_id: Cell::new(1),
             timeout,
             closed,
+            timed_out: Cell::new(false),
         };
         connection
-            .request(
-                "initialize",
-                json!({"protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "clientInfo": {"name": "killi", "version": env!("CARGO_PKG_VERSION")}}),
-            )
+            .request("initialize", initialize_params())
             .await?;
         connection.notify("notifications/initialized").await?;
         Ok(connection)
     }
 
     pub(super) async fn request(&self, method: &str, params: Value) -> Result<Value> {
-        let id = self.next_id.get();
-        self.next_id.set(id + 1);
+        let id = self.take_id();
         let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let reply = match &self.transport {
             Transport::Lines {
@@ -138,20 +213,29 @@ impl Connection {
                     pending: pending.clone(),
                     id,
                 };
-                let mut line = message.to_string();
-                line.push('\n');
-                writer
-                    .lock()
-                    .await
-                    .write_all(line.as_bytes())
-                    .await
-                    .context("the server closed its input")?;
-                tokio::time::timeout(self.timeout, rx)
-                    .await
-                    .map_err(|_| anyhow!("{method} timed out after {}s", self.timeout.as_secs()))?
-                    .map_err(|_| anyhow!("the server exited"))?
+                let exchange = async {
+                    self.send(writer, &message).await?;
+                    rx.await.map_err(|_| anyhow!("the server exited"))
+                };
+                match tokio::time::timeout(self.timeout, exchange).await {
+                    Ok(reply) => reply?,
+                    // A server that doesn't answer in time may never answer: the next call
+                    // reconnects and tells the broker, which restarts a server that has said
+                    // nothing since.
+                    Err(_) => {
+                        self.closed.store(true, Ordering::SeqCst);
+                        self.timed_out.set(true);
+                        bail!("{method} timed out after {}s", self.timeout.as_secs())
+                    }
+                }
             }
-            Transport::Http { .. } => self.post(&message, Some(id)).await?,
+            Transport::Http { .. } => match self.post(&message, Some(id)).await {
+                Err(e) if e.is::<SessionExpired>() && method != "initialize" => {
+                    self.reinitialize().await?;
+                    self.post(&message, Some(id)).await?
+                }
+                reply => reply?,
+            },
         };
         if let Some(error) = reply.get("error") {
             return Err(RpcError {
@@ -166,20 +250,54 @@ impl Connection {
         Ok(reply["result"].clone())
     }
 
+    fn take_id(&self) -> u64 {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        id
+    }
+
+    /// Writes one message as a line, marking the connection closed if the write is cut short.
+    async fn send(&self, writer: &Writer, message: &Value) -> Result<()> {
+        let mut writer = writer.lock().await;
+        let unfinished = Unfinished(Some(&self.closed));
+        writer
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .context("the server closed its input")?;
+        unfinished.done();
+        Ok(())
+    }
+
     async fn notify(&self, method: &str) -> Result<()> {
         let message = json!({"jsonrpc": "2.0", "method": method});
         match &self.transport {
             Transport::Lines { writer, .. } => {
-                writer
-                    .lock()
+                tokio::time::timeout(self.timeout, self.send(writer, &message))
                     .await
-                    .write_all(format!("{message}\n").as_bytes())
-                    .await?;
+                    .map_err(|_| {
+                        anyhow!("{method} timed out after {}s", self.timeout.as_secs())
+                    })??;
             }
             Transport::Http { .. } => {
                 self.post(&message, None).await?;
             }
         }
+        Ok(())
+    }
+
+    /// Starts a new HTTP session after the server forgot the old one.
+    async fn reinitialize(&self) -> Result<()> {
+        let id = self.take_id();
+        let message = json!({"jsonrpc": "2.0", "id": id, "method": "initialize", "params": initialize_params()});
+        let reply = self.post(&message, Some(id)).await?;
+        if let Some(error) = reply.get("error") {
+            bail!("initialize failed: {error}");
+        }
+        self.post(
+            &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -204,10 +322,21 @@ impl Connection {
         for (name, value) in headers {
             request = request.header(name.as_str(), value.as_str());
         }
-        if let Some(id) = session.borrow().as_deref() {
+        let sent_session = session.borrow().clone();
+        if let Some(id) = &sent_session {
             request = request.header("mcp-session-id", id);
         }
         let response = request.send().await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND && sent_session.is_some() {
+            if *session.borrow() == sent_session {
+                *session.borrow_mut() = None;
+            }
+            return Err(SessionExpired(format!(
+                "HTTP 404 for the session: {}",
+                crate::llm::truncate(&response.text().await.unwrap_or_default(), 500)
+            ))
+            .into());
+        }
         if let Some(id) = response
             .headers()
             .get("mcp-session-id")

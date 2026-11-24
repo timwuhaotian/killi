@@ -42,6 +42,9 @@ impl Agent {
         self.near_repeats.clear();
         self.swarm_used = 0;
         self.pending_prompt = None;
+        // Only a prompt someone typed into the session itself is the user's: a subagent's,
+        // a pair role's or a peer task's comes from another agent.
+        let typed = typed && self.depth == 0 && !self.settings.peer_task;
         // A blocked prompt leaves no trace: the notes below are taken only once this passes,
         // so nothing already consumed is lost to a prompt the model never sees.
         let submitted = if typed {
@@ -77,9 +80,16 @@ impl Agent {
                     .to_string(),
             );
         }
-        if !std::mem::replace(&mut self.session_started, true) {
+        // A peer task runs inside another session, which already started.
+        if !std::mem::replace(&mut self.session_started, true) && !self.settings.peer_task {
+            // History beyond the system prompt is a log this session resumed.
+            let source = if self.messages.len() > 1 {
+                "resume"
+            } else {
+                "startup"
+            };
             notes.extend(
-                self.hook("SessionStart", None, json!({"source": "startup"}))
+                self.hook("SessionStart", None, json!({"source": source}))
                     .await
                     .context,
             );
@@ -128,13 +138,22 @@ impl Agent {
         // A skill's turn that ends before any tool call is asked to go on (`unfinished`).
         let skill = crate::skills::typed(user).is_some();
         let mut called = false;
+        let (cap, _) = self.step_limit();
+        let mut steps: u32 = 0;
+        let mut wrapping = false;
         loop {
             self.before_request().await?;
+            if !wrapping && let Some(cap) = cap.filter(|cap| steps >= *cap) {
+                wrapping = true;
+                self.ask_to_wrap_up(cap)?;
+            }
             let reply = match self.request().await {
                 Ok(reply) => reply,
                 Err(error) if !overflow_compacted && is_overflow(&error) => {
                     overflow_compacted = true;
                     self.compact_with(None, CompactMode::Reduced).await?;
+                    // The summary may have taken the step-limit reminder with it.
+                    wrapping = false;
                     continue;
                 }
                 Err(error) if !media_stripped && is_media(&error) => {
@@ -144,8 +163,14 @@ impl Agent {
                 }
                 Err(error) => return Err(error),
             };
+            steps += 1;
             let truncated = reply.finish_reason.as_deref() == Some("length");
             let calls = self.record_reply(&reply)?;
+            if wrapping {
+                self.end_wrap_up(&calls, stop_blocks > 0).await?;
+                continued_text.push_str(&reply.text);
+                return Ok((continued_text, Stop::StepLimit));
+            }
             if calls.is_empty() {
                 if truncated && continuations < MAX_CONTINUATIONS {
                     continuations += 1;
@@ -203,15 +228,17 @@ impl Agent {
                     self.push(json!({"role": "user", "content": note}))?;
                     continue;
                 }
-                let event = if self.depth == 0 {
-                    "Stop"
-                } else {
-                    "SubagentStop"
-                };
                 let stop = self
-                    .hook(event, None, json!({"stop_hook_active": stop_blocks > 0}))
+                    .hook(
+                        self.stop_event(),
+                        None,
+                        json!({"stop_hook_active": stop_blocks > 0}),
+                    )
                     .await;
-                if let Some(reason) = stop.block.filter(|_| stop_blocks < 3) {
+                // `continue: false` ends the turn here, whatever another hook asked.
+                if let Some(reason) = &stop.halt {
+                    (self.sink)(Event::Notice(format!("A hook ended the turn: {reason}")));
+                } else if let Some(reason) = stop.block.filter(|_| stop_blocks < 3) {
                     stop_blocks += 1;
                     self.push(json!({"role": "user", "content": format!("<system-reminder>A hook asked you to keep going: {reason}</system-reminder>")}))?;
                     continue;
@@ -248,14 +275,19 @@ impl Agent {
     /// then messages typed meanwhile, a plan- or swarm-mode change and finished background
     /// tasks. Compaction runs first so nothing just pushed is summarized away.
     pub(super) async fn before_request(&mut self) -> Result<()> {
-        if self.compaction_due()
-            && let Err(error) = self.compact(None).await
-        {
-            // Proactive compaction is a saving, not a need: the request may still fit, and an
-            // overflow compacts the reduced history on the way back.
-            (self.sink)(Event::Notice(format!(
-                "Compaction failed: {error:#}. Continuing without it."
-            )));
+        if self.compaction_due() {
+            // Taken before the summary request accounts its own usage over these numbers.
+            let (context, suffix, _, _) = self.compaction_pressure().unwrap_or_default();
+            if let Err(error) = self.compact(None).await {
+                // A summary that failed now would fail the same way before the next step:
+                // proactive compaction waits for the history to grow as it does after one that
+                // worked. A saving, not a need: the request may still fit, and an overflow
+                // compacts the reduced history on the way back.
+                self.compact_floor = context.saturating_add(suffix);
+                (self.sink)(Event::Notice(format!(
+                    "Compaction failed: {error:#}. Continuing without it."
+                )));
+            }
         }
         let steered: Vec<_> = self.controls.steer.borrow_mut().drain(..).collect();
         let steered_any = !steered.is_empty();
@@ -345,20 +377,31 @@ impl Agent {
             return Ok(false);
         };
         let end = prompt.at + prompt.count;
-        if self.messages.len() < end || self.messages[prompt.at]["role"] != "user" {
+        if prompt.count == 0
+            || self.messages.len() < end
+            || self.messages[prompt.at]["role"] != "user"
+        {
             return Ok(false);
         }
-        Rc::make_mut(&mut self.messages).drain(prompt.at..end);
+        // The log takes the shorter history before memory does: a failed write leaves the
+        // prompt in both, and still retractable.
+        let mut kept = (*self.messages).clone();
+        kept.drain(prompt.at..end);
+        let recorded = self.session.record(&json!({
+            "type": "compaction",
+            "cause": {"retracted": prompt.at},
+            "messages": kept,
+        }));
+        if let Err(error) = recorded {
+            self.pending_prompt = Some(prompt);
+            return Err(error);
+        }
+        self.messages = Rc::new(kept);
         self.accounted_messages = self.accounted_messages.min(prompt.at);
         let mut notes = prompt.notes;
         notes.append(&mut self.next_notes);
         self.next_notes = notes;
         self.share();
-        self.session.record(&json!({
-            "type": "compaction",
-            "cause": {"retracted": prompt.at},
-            "messages": *self.messages,
-        }))?;
         Ok(true)
     }
 

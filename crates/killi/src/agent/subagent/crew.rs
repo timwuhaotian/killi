@@ -242,6 +242,10 @@ async fn run_child(index: usize, job: Job, parent: Rc<tools::Context>) -> ChildD
             )),
             None,
         ),
+        Ok((text, Stop::StepLimit)) if !text.trim().is_empty() => (
+            tools::Output::ok(format!("{text}\n\n(stopped at the step limit)")),
+            None,
+        ),
         Ok((text, stop)) if !text.trim().is_empty() && stop != Stop::RepeatBreaker => {
             (tools::Output::ok(text), None)
         }

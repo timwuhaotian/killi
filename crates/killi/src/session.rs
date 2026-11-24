@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -44,6 +44,9 @@ pub struct Session {
     /// Holds files saved for this session: full outputs of truncated commands, subagent logs.
     pub dir: PathBuf,
     file: File,
+    /// A failed write left part of a line that could not be cut off again, so the next record
+    /// starts on a line of its own.
+    torn: bool,
 }
 
 pub(crate) fn project_dir(cwd: &Path) -> PathBuf {
@@ -56,6 +59,9 @@ impl Session {
     pub fn create(cwd: &Path) -> Result<Self> {
         let root = project_dir(cwd);
         create_private_dir(&root)?;
+        if let Some(sessions) = root.parent() {
+            make_private(sessions);
+        }
         Self::create_in(&root)
     }
 
@@ -173,6 +179,7 @@ impl Session {
             id,
             log_path,
             file,
+            torn: false,
         }
     }
 
@@ -204,8 +211,7 @@ impl Session {
             .unwrap_or_default()
             .as_millis();
         let line = stamped(entry, u64::try_from(ts).unwrap_or(u64::MAX));
-        self.file
-            .write_all(line.as_bytes())
+        append_line(&self.file, &mut &self.file, line.as_bytes(), &mut self.torn)
             .with_context(|| format!("could not write {}", self.log_path.display()))
     }
 }
@@ -250,19 +256,64 @@ fn lock(file: &File, log_path: &Path) -> Result<()> {
     }
 }
 
-/// A folder for session logs, private to this user: logs keep pasted secrets and tool output.
-fn create_private_dir(root: &Path) -> Result<()> {
+/// A folder for session logs and the files saved beside them, private to this user: they keep
+/// pasted secrets and tool output. One that already exists is made private too.
+pub(crate) fn create_private_dir(root: &Path) -> Result<()> {
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(root)
-        .with_context(|| format!("could not create {}", root.display()))
+        .with_context(|| format!("could not create {}", root.display()))?;
+    make_private(root);
+    Ok(())
+}
+
+/// Takes group and other access off an existing folder. A folder this user doesn't own is
+/// left as it is; writing into it fails on its own.
+fn make_private(dir: &Path) {
+    if let Ok(meta) = fs::metadata(dir)
+        && meta.permissions().mode() & 0o077 != 0
+    {
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+    }
 }
 
 /// Whether a session that is still running holds this log: each session locks its log for its
 /// life, so a lock that can't be taken belongs to one.
 pub fn is_locked(path: &Path) -> bool {
     File::open(path).is_ok_and(|file| matches!(file.try_lock(), Err(TryLockError::WouldBlock)))
+}
+
+/// Appends `line` to the log `file` through `out` (the file itself, outside tests) whole or
+/// not at all: a write that fails partway, on a full disk, is cut off again, so the next
+/// record doesn't land on the end of a torn line and get skipped with it at load. When the
+/// cut fails too, `torn` is set and the next line written starts with a newline.
+fn append_line(
+    file: &File,
+    out: &mut impl Write,
+    line: &[u8],
+    torn: &mut bool,
+) -> std::io::Result<()> {
+    let before = file.metadata()?.len();
+    let fresh;
+    let line = if *torn {
+        fresh = [b"\n", line].concat();
+        &fresh[..]
+    } else {
+        line
+    };
+    match out.write_all(line) {
+        Ok(()) => {
+            *torn = false;
+            Ok(())
+        }
+        Err(err) => {
+            if file.set_len(before).is_err() {
+                *torn = true;
+            }
+            Err(err)
+        }
+    }
 }
 
 /// `entry` as one log line ending in a newline, with `ts` added to an object.

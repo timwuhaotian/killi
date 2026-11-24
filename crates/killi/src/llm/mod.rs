@@ -22,8 +22,8 @@ use serde_json::Value;
 use crate::config::{Protocol, ResolvedModel};
 
 use error::{
-    backoff, body_excerpt, classify, excerpt, kind_for_status, retryable_status, spent_quota,
-    transport_failure,
+    LONGEST_WAIT, backoff, body_excerpt, classify, classify_stream_error, classify_stream_status,
+    excerpt, transport_failure,
 };
 use history::{arguments_object, arguments_valid, content_text, json_arguments, system_text};
 use tokens::cap_output;
@@ -49,9 +49,11 @@ const TRANSPORT_ATTEMPTS: u32 = 3;
 /// members of a swarm, so peers pushing the cooldown back can't keep it alive forever.
 const HARD_ATTEMPTS: u32 = 2 * MAX_ATTEMPTS;
 
-/// The longest one request may spend waiting between attempts in all, every backoff and every
-/// shared 429 cooldown together. A limit that hasn't cleared by then isn't going to, and a
-/// swarm's members share one client, so their waits add up to a session that looks stopped.
+/// The longest one request may spend waiting out rate limits in all: its own 429 and
+/// rate-limit cooldowns and the ones other members of a swarm set on the shared client. A
+/// limit that hasn't cleared by then isn't going to, and a swarm's members share one client,
+/// so their waits add up to a session that looks stopped. Other backoff (5xx, timeouts,
+/// transport) is bounded by attempt counts instead.
 const MAX_WAIT: Duration = Duration::from_secs(180);
 
 /// Body bytes kept from a response, enough for an error message's excerpt.
@@ -119,12 +121,14 @@ impl Reply {
         }
     }
 
-    /// Tool-call arguments that aren't valid JSON become `{}`: whatever a provider streamed,
-    /// the stored history must stay replayable, or every request after it fails with a 400.
-    /// Each adapter calls this as its stream finishes.
+    /// Tool-call arguments a provider never sent become `{}`. Anything else is kept as
+    /// streamed, even when it isn't valid JSON: the call then fails with the raw arguments
+    /// shown (and, cut off at the output limit, says so), and each adapter repairs the copy
+    /// it sends, so the stored history stays replayable. Each adapter calls this as its
+    /// stream finishes.
     pub fn repair_call_arguments(&mut self) {
         for call in &mut self.tool_calls {
-            if !arguments_valid(&call.arguments) {
+            if call.arguments.trim().is_empty() {
                 call.arguments = "{}".into();
             }
         }
@@ -232,11 +236,8 @@ impl Failure {
     fn transient(message: String) -> Self {
         Self::of(ErrorKind::Other, None, true, message)
     }
-    fn from_status(status: Option<u16>, message: String) -> Self {
-        let retryable = status
-            .and_then(|status| StatusCode::from_u16(status).ok())
-            .is_none_or(retryable_status);
-        Self::of(kind_for_status(status), status, retryable, message)
+    fn refused(message: String) -> Self {
+        Self::of(ErrorKind::Refused, None, false, message)
     }
 }
 
@@ -269,8 +270,9 @@ impl Client {
 
     /// Sends one request, retrying transient failures. A failed attempt's partial output is
     /// discarded, so history only ever holds complete replies. Every attempt first waits out
-    /// a 429 cooldown shared with the other members of a swarm, and the retries stop once the
-    /// request has waited out its budget in all, however many of those waits were shared.
+    /// a rate-limit cooldown shared with the other members of a swarm, and the retries stop
+    /// once the request has waited out its budget in all, however many of those waits were
+    /// shared.
     pub async fn complete(
         &self,
         messages: &[Value],
@@ -303,7 +305,14 @@ impl Client {
         let mut mine = None;
         let mut waited = Duration::ZERO;
         loop {
-            let (slept, waited_peer) = self.wait_cooldown(mine).await;
+            let (slept, waited_peer) = self
+                .wait_cooldown(
+                    mine,
+                    attempt,
+                    self.wait_budget.saturating_sub(waited),
+                    on_delta,
+                )
+                .await;
             waited += slept;
             let mut failure = match self.attempt(&prepared, &mut renewed, on_delta).await {
                 Ok(reply) => return Ok(reply),
@@ -344,12 +353,14 @@ impl Client {
                 || attempt >= HARD_ATTEMPTS
                 || waited >= self.wait_budget
             {
-                // Even a final 429 paces the next call on this client: the server just
-                // named a wait, and a clone starting now should observe it.
-                if failure.status == Some(429) {
-                    let deadline =
-                        Instant::now() + failure.retry_after.unwrap_or_else(|| backoff(attempt));
-                    self.cooldown.set(Some(deadline));
+                // Even a final rate limit paces the next call on this client for a wait worth
+                // sitting out: the server just named one, and a clone starting now should
+                // observe it. A wait too long to sit out sets none, so the next call fails
+                // at once instead of sleeping on it.
+                if failure.retryable && shares_cooldown(&failure) {
+                    let wait = failure.retry_after.unwrap_or_else(|| backoff(attempt));
+                    self.cooldown
+                        .set(Some(Instant::now() + wait.min(LONGEST_WAIT)));
                 }
                 let advice = if self.model.chatgpt {
                     crate::login::chatgpt::advice(&failure.message)
@@ -374,7 +385,7 @@ impl Client {
                 wait,
                 reason: &failure.message,
             });
-            if failure.status == Some(429) {
+            if shares_cooldown(&failure) {
                 let deadline = Instant::now() + wait;
                 self.cooldown.set(Some(deadline));
                 mine = Some(deadline);
@@ -385,10 +396,17 @@ impl Client {
         }
     }
 
-    /// Sleeps until the shared 429 cooldown passes. Returns how long it waited, and whether
-    /// this call actually waited out a deadline another member set; such an attempt doesn't
-    /// burn this call's budget.
-    async fn wait_cooldown(&self, mine: Option<Instant>) -> (Duration, bool) {
+    /// Sleeps until the shared rate-limit cooldown passes, or for `budget` at most. Returns
+    /// how long it waited, and whether this call actually waited out a deadline another
+    /// member (or an earlier request) set; such an attempt doesn't burn this call's budget,
+    /// and it is announced as a retry, since nothing else says why the request is waiting.
+    async fn wait_cooldown(
+        &self,
+        mine: Option<Instant>,
+        attempt: u32,
+        budget: Duration,
+        on_delta: &mut dyn FnMut(Delta),
+    ) -> (Duration, bool) {
         let Some(shared) = self.cooldown.get() else {
             return (Duration::ZERO, false);
         };
@@ -397,9 +415,17 @@ impl Client {
         if deadline <= now {
             return (Duration::ZERO, false);
         }
-        let wait = deadline - now;
+        let wait = (deadline - now).min(budget);
+        let shared = mine.is_none_or(|mine| deadline > mine);
+        if shared && !wait.is_zero() {
+            on_delta(Delta::Retry {
+                attempt,
+                wait,
+                reason: "waiting out the provider's rate limit",
+            });
+        }
         tokio::time::sleep(wait).await;
-        (wait, mine.is_none_or(|mine| deadline > mine))
+        (wait, shared)
     }
 
     /// One request. On a ChatGPT plan it carries the current token, and the first 401 of a
@@ -428,13 +454,8 @@ impl Client {
         self.answered.set(true);
         let status = response.status();
         if !status.is_success() {
-            let retry_after = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(Duration::from_secs);
-            let text = response.text().await.unwrap_or_default();
+            let retry_after = retry_after(response.headers());
+            let text = body_excerpt(&mut response).await;
             if let Some(token) = token
                 .as_deref()
                 .filter(|_| status == StatusCode::UNAUTHORIZED && !*renewed)
@@ -566,6 +587,24 @@ impl Client {
     }
 }
 
+/// Whether a failure paces every clone of the client: a 429, or a rate limit a stream named.
+fn shares_cooldown(failure: &Failure) -> bool {
+    failure.status == Some(429) || failure.kind == ErrorKind::RateLimited
+}
+
+/// The wait a response asks for: `retry-after-ms` when it names one, else `retry-after` in
+/// seconds. A date or anything unreadable names none.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let header = |name: &str, unit: f64| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .and_then(|v| Duration::try_from_secs_f64(v / unit).ok())
+    };
+    header("retry-after-ms", 1000.0).or_else(|| header("retry-after", 1.0))
+}
+
 fn parse_sse_data(data: &str) -> Result<Option<Value>, Failure> {
     if data == "[DONE]" {
         return Ok(None);
@@ -595,13 +634,28 @@ fn ensure_stream_consumed(buffer: &[u8]) -> Result<(), Failure> {
 
 /// Only normal termination and an output-limit reply are usable; in particular, a content
 /// filter must not turn a partial or reasoning-only attempt into a committed assistant turn.
-fn validate_reply(reply: Reply) -> Result<Reply, Failure> {
+/// A reply cut off at the context window is an output-limit reply, or an overflow when
+/// nothing came back; a provider short of capacity is asked again.
+fn validate_reply(mut reply: Reply) -> Result<Reply, Failure> {
     if let Some(reason) = reply.finish_reason.as_deref()
         && !matches!(reason, "stop" | "length" | "tool_calls")
     {
-        return Err(Failure::fatal(format!(
-            "response terminated abnormally: {reason}"
-        )));
+        let message = format!("response terminated abnormally: {reason}");
+        match reason {
+            "model_length" | "model_context_window_exceeded" => {
+                if reply.text.trim().is_empty() && reply.tool_calls.is_empty() {
+                    return Err(Failure::of(ErrorKind::Overflow, None, false, message));
+                }
+                reply.finish_reason = Some("length".into());
+            }
+            "insufficient_system_resource" | "error" | "overloaded" => {
+                return Err(Failure::transient(message));
+            }
+            "refusal" | "content_filter" | "content-filter" | "safety" | "sensitive" => {
+                return Err(Failure::refused(message));
+            }
+            _ => return Err(Failure::fatal(message)),
+        }
     }
     if reply.text.trim().is_empty() && reply.tool_calls.is_empty() && reply.finish_reason.is_none()
     {

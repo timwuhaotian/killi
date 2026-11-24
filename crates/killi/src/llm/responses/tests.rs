@@ -437,3 +437,55 @@ fn an_unknown_error_mid_stream_is_not_retried() {
         .unwrap_err();
     assert!(!failure.retryable);
 }
+
+#[test]
+fn an_overflow_or_bad_request_mid_stream_is_classified() {
+    let mut sink = |_: Delta| {};
+    let failed = |code: &str| json!({"type": "response.failed", "response": {"error": {"code": code, "message": "no"}}});
+    let long = Parser::default()
+        .event(
+            &failed("context_length_exceeded"),
+            &mut Reply::default(),
+            &mut sink,
+        )
+        .unwrap_err();
+    assert_eq!((long.kind, long.retryable), (ErrorKind::Overflow, false));
+    let bad = Parser::default()
+        .event(
+            &failed("invalid_request_error"),
+            &mut Reply::default(),
+            &mut sink,
+        )
+        .unwrap_err();
+    assert_eq!(bad.kind, ErrorKind::Invalid);
+    let filtered = json!({"type": "response.incomplete", "response": {"incomplete_details": {"reason": "content_filter"}}});
+    let refused = Parser::default()
+        .event(&filtered, &mut Reply::default(), &mut sink)
+        .unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::Refused);
+}
+
+#[test]
+fn the_output_cap_never_goes_below_what_the_api_accepts() {
+    let model = ResolvedModel {
+        alias: "m".into(),
+        model: "gpt-5".into(),
+        display_name: None,
+        protocol: crate::config::Protocol::Responses,
+        base_url: "http://localhost".into(),
+        api_key: String::new(),
+        headers: Default::default(),
+        tool_names: Default::default(),
+        session_header: None,
+        max_output: Some(4_000),
+        context_window: Some(100),
+        images: false,
+        thinking: Thinking::Off,
+        cache_control: false,
+        chatgpt: false,
+    };
+    let messages = vec![json!({"role": "user", "content": "x".repeat(4_000)})];
+    let prepared = prepare(&model, &messages, &[], "cache").unwrap();
+    let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+    assert_eq!(body["max_output_tokens"], 16);
+}

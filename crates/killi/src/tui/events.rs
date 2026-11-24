@@ -76,6 +76,15 @@ impl App {
                 self.begin(Kind::Tool);
                 self.emit(Line::Fit(line));
             }
+            // A retry's discard without its countdown: what streamed stays on screen, marked
+            // as not the answer, and isn't counted again.
+            Event::Discard { reason } => {
+                self.streamed_bytes = 0;
+                self.flush_partial();
+                self.thinking = None;
+                let _ = self.reasoning.finish();
+                self.notice(&format!("the partial reply was discarded; {reason}"));
+            }
             Event::ToolStart { id, summary, .. } => {
                 let summary = text::sanitize_row(&summary).into_owned();
                 if summary == "later" || summary.starts_with("later ") {
@@ -226,7 +235,8 @@ impl App {
                 self.swarm = Some(swarm::Swarm::new(id, description, items));
                 self.swarm_send_armed = false;
             }
-            Event::Started | Event::Finished { .. } | Event::Detached => {}
+            // What streamed stays on screen either way; only `-p` holds a reply back.
+            Event::Settled | Event::Started | Event::Finished { .. } | Event::Detached => {}
             Event::Sub { label, slot, event } => self.on_sub(label, slot, *event),
         }
     }

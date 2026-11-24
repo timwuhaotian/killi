@@ -27,7 +27,6 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncWrite;
-use tokio::process::Child;
 use tokio::sync::oneshot;
 
 use crate::broker;
@@ -69,6 +68,8 @@ pub struct Mcp {
     /// user server of the same name), so global eager entries naming them need trust too.
     project: BTreeSet<String>,
     live: RefCell<HashMap<String, Rc<Connection>>>,
+    /// One open at a time per server, so callers that arrive together share one connection.
+    opening: RefCell<HashMap<String, Rc<tokio::sync::Mutex<()>>>>,
     listed: RefCell<HashMap<String, Vec<Value>>>,
     /// Native tool names of eager servers' tools, to their server and tool.
     native: HashMap<String, (String, String)>,
@@ -261,24 +262,46 @@ impl Mcp {
         std::mem::take(&mut self.notes.borrow_mut())
     }
 
+    /// The open connection to `server`, opened now when there is none. A server turned off
+    /// while it was opening still serves this call but isn't kept.
     async fn connection(&self, server: &str) -> Result<Rc<Connection>> {
-        if let Some(connection) = self
-            .live
-            .borrow()
-            .get(server)
-            .filter(|c| !c.closed.load(Ordering::SeqCst))
-        {
-            return Ok(connection.clone());
+        if let Some(connection) = self.open_connection(server) {
+            return Ok(connection);
         }
         let config = self
             .servers
             .get(server)
             .ok_or_else(|| anyhow!("no MCP server `{server}`"))?;
-        let connection = Rc::new(Connection::open(config, self.broker.as_deref()).await?);
-        self.live
+        let opening = self
+            .opening
             .borrow_mut()
-            .insert(server.to_string(), connection.clone());
+            .entry(server.to_string())
+            .or_default()
+            .clone();
+        let _opening = opening.lock().await;
+        if let Some(connection) = self.open_connection(server) {
+            return Ok(connection);
+        }
+        let stuck = self
+            .live
+            .borrow()
+            .get(server)
+            .is_some_and(|c| c.timed_out.get());
+        let connection = Rc::new(Connection::open(config, self.broker.as_deref(), stuck).await?);
+        if !self.off.borrow().contains(server) {
+            self.live
+                .borrow_mut()
+                .insert(server.to_string(), connection.clone());
+        }
         Ok(connection)
+    }
+
+    fn open_connection(&self, server: &str) -> Option<Rc<Connection>> {
+        self.live
+            .borrow()
+            .get(server)
+            .filter(|c| !c.closed.load(Ordering::SeqCst))
+            .cloned()
     }
 }
 
@@ -301,8 +324,11 @@ struct Connection {
     transport: Transport,
     next_id: Cell<u64>,
     timeout: Duration,
-    /// Set once a stdio server or the broker hangs up, so the next use reconnects.
+    /// Set once a stdio server or the broker hangs up, a request goes unanswered past the
+    /// timeout, or a write is cut short, so the next use reconnects.
     closed: Arc<AtomicBool>,
+    /// Set once a request goes unanswered past the timeout.
+    timed_out: Cell<bool>,
 }
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
@@ -322,11 +348,12 @@ impl Drop for PendingSlot {
 
 enum Transport {
     /// JSON lines to the broker, or to a server started directly when no broker answers.
-    /// A directly started server's group stays tracked while it runs, for quitting on a signal.
+    /// A directly started server's group stays tracked while it runs, for quitting on a
+    /// signal, and is killed whole when the connection goes.
     Lines {
         writer: tokio::sync::Mutex<Box<dyn AsyncWrite + Unpin + Send>>,
         pending: Pending,
-        _child: Option<(Child, Option<crate::tools::Tracked>)>,
+        _child: Option<connection::Direct>,
     },
     Http {
         client: reqwest::Client,

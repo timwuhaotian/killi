@@ -331,3 +331,64 @@ fn mapped_tool_names_go_out_and_come_back() {
         "the call comes back under killi's name"
     );
 }
+
+/// An `error` event's failure.
+fn mid_stream(kind: &str, message: &str) -> Failure {
+    let event = json!({"type": "error", "error": {"type": kind, "message": message}});
+    Parser::default()
+        .event(&event, &mut Reply::default(), &mut |_: Delta| {})
+        .unwrap_err()
+}
+
+#[test]
+fn errors_mid_stream_are_classified_by_type_and_text() {
+    let limited = mid_stream("rate_limit_error", "slow down");
+    assert_eq!(
+        (limited.kind, limited.retryable),
+        (ErrorKind::RateLimited, true)
+    );
+    let busy = mid_stream("overloaded_error", "Overloaded");
+    assert_eq!((busy.kind, busy.retryable), (ErrorKind::Other, true));
+    let down = mid_stream("service_unavailable_error", "Service unavailable");
+    assert_eq!((down.kind, down.retryable), (ErrorKind::Other, true));
+    let long = mid_stream(
+        "invalid_request_error",
+        "prompt is too long: 210000 tokens > 200000 maximum",
+    );
+    assert_eq!((long.kind, long.retryable), (ErrorKind::Overflow, false));
+    let bad = mid_stream("invalid_request_error", "messages: roles must alternate");
+    assert_eq!((bad.kind, bad.retryable), (ErrorKind::Invalid, false));
+    let key = mid_stream("authentication_error", "invalid x-api-key");
+    assert_eq!((key.kind, key.retryable), (ErrorKind::Auth, false));
+    let unknown = mid_stream("not_found_error", "model: claude-9");
+    assert_eq!((unknown.kind, unknown.retryable), (ErrorKind::Other, false));
+}
+
+#[test]
+fn stop_reasons_past_the_window_or_refused_are_classified() {
+    let stopped = |text: &str, reason: &str| {
+        let mut parser = Parser::default();
+        let mut reply = Reply::default();
+        let mut sink = |_: Delta| {};
+        let events = [
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}),
+            json!({"type": "message_delta", "delta": {"stop_reason": reason}}),
+            json!({"type": "message_stop"}),
+        ];
+        for event in &events {
+            parser.event(event, &mut reply, &mut sink).unwrap();
+        }
+        parser.finish(&mut reply).unwrap();
+        super::super::validate_reply(reply)
+    };
+    let kept = stopped("a long answer", "model_context_window_exceeded").unwrap();
+    assert_eq!(kept.finish_reason.as_deref(), Some("length"));
+    let full = stopped("", "model_context_window_exceeded").unwrap_err();
+    assert_eq!(full.kind, ErrorKind::Overflow);
+    let refused = stopped("I can't", "refusal").unwrap_err();
+    assert_eq!(
+        (refused.kind, refused.retryable),
+        (ErrorKind::Refused, false)
+    );
+}

@@ -103,7 +103,7 @@ fn provider_hint(kind: ErrorKind, status: Option<u16>) -> Option<&'static str> {
             Some("Check api_key or api_key_env for this model's provider in ~/.killi/config.toml.")
         }
         ErrorKind::Quota => Some(
-            "This provider's usage limit is spent: pick another model with /model, or wait until the reset time above.",
+            "This provider's usage limit or credit is spent: pick another model with /model, or wait until it resets or is topped up.",
         ),
         ErrorKind::RateLimited => Some(
             "The provider is limiting requests: wait a moment, or pick another model with /model.",
@@ -111,18 +111,23 @@ fn provider_hint(kind: ErrorKind, status: Option<u16>) -> Option<&'static str> {
         ErrorKind::Transport => {
             Some("Can't reach the provider: check your network, proxy and base_url.")
         }
-        ErrorKind::Media | ErrorKind::BadResponse | ErrorKind::Other => match status {
-            Some(401 | 403) => Some(
-                "Check api_key or api_key_env for this model's provider in ~/.killi/config.toml.",
-            ),
-            Some(402) => Some(
-                "This provider's usage limit is spent: pick another model with /model, or wait until the reset time above.",
-            ),
-            Some(429) => Some(
-                "The provider is limiting requests: wait a moment, or pick another model with /model.",
-            ),
-            _ => None,
-        },
+        ErrorKind::Refused => Some(
+            "The provider refused or filtered this request; rephrase it or pick another model with /model.",
+        ),
+        ErrorKind::Media | ErrorKind::BadResponse | ErrorKind::Invalid | ErrorKind::Other => {
+            match status {
+                Some(401 | 403) => Some(
+                    "Check api_key or api_key_env for this model's provider in ~/.killi/config.toml.",
+                ),
+                Some(402) => Some(
+                    "This provider's usage limit is spent: pick another model with /model, or wait until the reset time above.",
+                ),
+                Some(429) => Some(
+                    "The provider is limiting requests: wait a moment, or pick another model with /model.",
+                ),
+                _ => None,
+            }
+        }
     }
 }
 
