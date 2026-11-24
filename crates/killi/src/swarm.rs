@@ -12,9 +12,22 @@ use crate::tools::{self, Output};
 pub const ITEM: &str = "{{item}}";
 pub const MAX_ITEMS: usize = 128;
 
-pub const ON: &str = "<system-reminder>Swarm mode is on. When a task splits into independent parts (several files, PRs, modules, questions), explore only as much as you need to split it, then hand the parts to agent_swarm: a prompt_template with {{item}} and one item per part, with no two subagents touching the same thing. Give each only the background it needs, and don't hold back on the number of subagents (up to 128) unless the user sets a limit. A task with one part, or a small one, you do yourself.</system-reminder>";
+/// The start of the swarm mode reminder; the cap it names follows.
+pub const ON_HEAD: &str = "<system-reminder>Swarm mode is on.";
+
+/// The clause that names the cap, and the number that follows it.
+const CAP: &str = "the user lets ";
 
 pub const OFF: &str = "<system-reminder>Swarm mode is off. Use agent_swarm only when a request clearly benefits from it.</system-reminder>";
+
+/// The swarm mode reminder, with the number of subagents a swarm runs at once. The cap is the
+/// user's, and the model needs it to size a swarm: without it the model splits the work into
+/// as many parts as it likes, and a swarm the user allowed 32 of at a time runs five.
+pub fn on(limit: usize) -> String {
+    format!(
+        "<system-reminder>Swarm mode is on. When a task splits into independent parts (several files, PRs, modules, questions), explore only as much as you need to split it, then hand the parts to agent_swarm: a prompt_template with {{item}} and one item per part, with no two subagents touching the same thing. Give each only the background it needs, and don't hold back on the number of subagents (up to {MAX_ITEMS}) unless the user sets a limit; the user lets {limit} run at once, so a swarm can have that many items. A task with one part, or a small one, you do yourself.</system-reminder>"
+    )
+}
 
 /// Whether the log's last swarm reminder turned swarm mode on, so a resumed session knows
 /// whether a change needs saying instead of announcing the mode it ended in again.
@@ -24,11 +37,28 @@ pub fn last_swarm_state(messages: &[Value]) -> bool {
         .rev()
         .filter(|message| message["role"] == "user")
         .find_map(|message| match message["content"].as_str()? {
-            ON => Some(true),
+            text if text.starts_with(ON_HEAD) => Some(true),
             OFF => Some(false),
             _ => None,
         })
         .unwrap_or(false)
+}
+
+/// The cap the log's last swarm reminder named, so a resumed session knows what the model was
+/// told; `None` when it named none, as a log from before the cap was in the reminder does.
+pub fn last_swarm_cap(messages: &[Value]) -> Option<usize> {
+    messages
+        .iter()
+        .rev()
+        .filter(|message| message["role"] == "user")
+        .find_map(|message| {
+            let text = message["content"].as_str()?;
+            if !text.starts_with(ON_HEAD) {
+                return None;
+            }
+            let (_, after) = text.rsplit_once(CAP)?;
+            after.split_whitespace().next()?.parse().ok()
+        })
 }
 
 /// Each item with its filled-in prompt, or why the call can't run.

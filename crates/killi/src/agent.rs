@@ -129,6 +129,8 @@ pub struct Agent {
     /// Subagents one `agent_swarm` call runs at once; `/swarm parallel <n>` changes it for
     /// this session.
     swarm_parallel: Cell<usize>,
+    /// The cap the model was last told, so a changed cap is said again; 0 when none was.
+    swarm_cap: Cell<usize>,
     sink: Sink,
     ids: HashSet<String>,
     /// Identical tool calls made in the current turn, by a hash of the call.

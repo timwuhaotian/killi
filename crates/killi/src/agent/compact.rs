@@ -187,6 +187,7 @@ impl Agent {
         // the old messages: the next step tells the model again what is still on.
         self.plan_announced = false;
         self.swarm_announced = false;
+        self.swarm_cap.set(0);
         self.concise_announced = false;
         self.orchestrate_announced = false;
         self.goal_announced = None;

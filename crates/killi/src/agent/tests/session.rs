@@ -1724,7 +1724,7 @@ fn backup_changes_reach_side_questions_and_peer_tasks() {
 
 /// Resumes the log written from `messages` with default settings.
 fn resume_messages(name: &str, messages: &[Value]) -> (crate::test_temp::TempDir, Agent) {
-    resume_messages_to(name, messages, Rc::new(|_| {}))
+    resume_messages_to(name, messages, Rc::new(|_| {}), Settings::default())
 }
 
 /// `resume_messages`, with the resumed session's events going to `sink`.
@@ -1732,6 +1732,7 @@ fn resume_messages_to(
     name: &str,
     messages: &[Value],
     sink: Sink,
+    settings: Settings,
 ) -> (crate::test_temp::TempDir, Agent) {
     let dir = crate::test_temp::TempDir::new(name);
     let log = dir.join("session.jsonl");
@@ -1748,7 +1749,7 @@ fn resume_messages_to(
         locked,
         report,
         Vec::new(),
-        Settings::default(),
+        settings,
         Controls::default(),
         sink,
     )
@@ -1756,34 +1757,84 @@ fn resume_messages_to(
     (dir, agent)
 }
 
+/// The swarm reminders in a history, in order.
+fn swarm_reminders(agent: &Agent) -> Vec<String> {
+    agent
+        .messages
+        .iter()
+        .filter_map(|message| message["content"].as_str())
+        .filter(|text| text.starts_with(swarm::ON_HEAD))
+        .map(str::to_string)
+        .collect()
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn a_resumed_session_keeps_the_swarm_mode_it_ended_in() {
-    let (_dir, mut agent) = resume_messages(
+    let settings = Settings {
+        swarm_parallel: 8,
+        ..Settings::default()
+    };
+    let (_dir, mut agent) = resume_messages_to(
         "killi-resume-swarm",
         &[
             json!({"role": "system", "content": "sys"}),
-            json!({"role": "user", "content": swarm::ON}),
+            json!({"role": "user", "content": swarm::on(8)}),
             json!({"role": "user", "content": "split it"}),
         ],
+        Rc::new(|_| {}),
+        settings,
     );
     assert!(agent.swarm_announced, "the log ended in swarm mode");
     agent.controls.swarm.set(true);
     agent.before_request().await.unwrap();
-    let ons = agent
-        .messages
-        .iter()
-        .filter(|m| m["content"] == swarm::ON)
-        .count();
-    assert_eq!(ons, 1, "swarm mode isn't announced again on resume");
+    assert_eq!(
+        swarm_reminders(&agent).len(),
+        1,
+        "swarm mode isn't announced again on resume"
+    );
     let (_dir, agent) = resume_messages(
         "killi-resume-swarm-off",
         &[
             json!({"role": "system", "content": "sys"}),
-            json!({"role": "user", "content": swarm::ON}),
+            json!({"role": "user", "content": swarm::on(8)}),
             json!({"role": "user", "content": swarm::OFF}),
         ],
     );
     assert!(!agent.swarm_announced, "the log ended out of swarm mode");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_swarm_reminder_names_the_cap_and_says_a_changed_one_again() {
+    let mut agent = idle_agent("swarm-cap", Controls::default(), Rc::new(|_| {}));
+    agent.controls.swarm.set(true);
+    agent.swarm_parallel.set(32);
+    agent.before_request().await.unwrap();
+    let reminders = swarm_reminders(&agent);
+    assert_eq!(reminders.len(), 1, "{reminders:?}");
+    assert!(reminders[0].contains("32 run at once"), "{}", reminders[0]);
+    // A cap the model was told about is said again, so the swarm it plans uses the new one.
+    agent.swarm_parallel.set(8);
+    agent.before_request().await.unwrap();
+    let reminders = swarm_reminders(&agent);
+    assert_eq!(reminders.len(), 2, "{reminders:?}");
+    assert!(reminders[1].contains("8 run at once"), "{}", reminders[1]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_resumed_session_says_a_cap_the_log_did_not_name() {
+    let (_dir, mut agent) = resume_messages(
+        "killi-resume-swarm-cap",
+        &[
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "split it"}),
+        ],
+    );
+    agent.controls.swarm.set(true);
+    agent.swarm_parallel.set(32);
+    agent.before_request().await.unwrap();
+    let reminders = swarm_reminders(&agent);
+    assert_eq!(reminders.len(), 1, "{reminders:?}");
+    assert!(reminders[0].contains("32 run at once"), "{}", reminders[0]);
 }
 
 #[test]
@@ -1829,6 +1880,7 @@ fn a_resumed_session_keeps_its_last_set_task_list() {
             json!({"role": "tool", "tool_call_id": "t2", "content": refused.text}),
         ],
         sink,
+        Settings::default(),
     );
     let todos: Vec<(&str, &str)> = agent
         .todos

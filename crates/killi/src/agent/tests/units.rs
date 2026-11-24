@@ -1584,7 +1584,7 @@ fn every_reminder_killi_writes_is_a_real_tag() {
         super::super::subagent::CHILD_REMINDER.to_string(),
         plan::ON.to_string(),
         plan::OFF.to_string(),
-        swarm::ON.to_string(),
+        swarm::on(8),
         swarm::OFF.to_string(),
         verbosity::ON.to_string(),
         verbosity::OFF.to_string(),

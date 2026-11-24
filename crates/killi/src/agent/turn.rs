@@ -304,11 +304,18 @@ impl Agent {
             self.push(json!({"role": "user", "content": if plan { plan::ON } else { plan::OFF }}))?;
         }
         let swarming = self.controls.swarm.get();
-        if swarming != self.swarm_announced && self.depth == 0 {
+        let cap = self.swarm_parallel.get();
+        // The cap is the user's, and the model needs it to size a swarm: a changed cap is said
+        // again, so a swarm that was told of the old one uses the new one.
+        if self.depth == 0 && (swarming != self.swarm_announced || (swarming && cap != self.swarm_cap.get()))
+        {
             self.swarm_announced = swarming;
-            self.push(
-                json!({"role": "user", "content": if swarming { swarm::ON } else { swarm::OFF }}),
-            )?;
+            self.swarm_cap.set(if swarming { cap } else { 0 });
+            self.push(json!({"role": "user", "content": if swarming {
+                swarm::on(cap)
+            } else {
+                swarm::OFF.to_string()
+            }}))?;
         }
         let concise = self.controls.verbosity.get() == Verbosity::UltraConcise;
         if concise != self.concise_announced && self.depth == 0 {

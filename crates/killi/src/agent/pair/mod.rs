@@ -276,6 +276,7 @@ impl Agent {
             },
             settings: self.settings.clone(),
             swarm_parallel: Cell::new(self.swarm_parallel.get()),
+            swarm_cap: Cell::new(0),
             sink: forward_sink(&self.sink, role),
             ids: self.ids.clone(),
             repeats: HashMap::new(),

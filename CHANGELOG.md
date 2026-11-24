@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.6 — 2026-11-25
+
+- Swarm mode tells the model how many subagents a swarm runs at once, so a swarm the user allows 32 of at a time is planned with that many items instead of the five the model picked on its own. A cap changed with `/swarm parallel <n>` is said again, and a resumed session says the cap it has now.
+
 ## 0.9.5 — 2026-11-24
 
 - `killi login` no longer reprints the whole service list on every ↑/↓: the picker redraws over its previous frame instead of relying on a saved cursor.

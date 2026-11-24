@@ -90,6 +90,9 @@ impl Agent {
         agent.plan_announced = last_plan_state(&loaded.messages);
         agent.model_announced = last_model_state(&loaded.messages);
         agent.swarm_announced = swarm::last_swarm_state(&loaded.messages);
+        agent
+            .swarm_cap
+            .set(swarm::last_swarm_cap(&loaded.messages).unwrap_or(0));
         agent.concise_announced = crate::verbosity::last_concise_state(&loaded.messages);
         agent.orchestrate_announced = crate::mode::last_orchestrate_state(&loaded.messages);
         for message in &loaded.messages {
@@ -201,6 +204,7 @@ impl Agent {
             controls,
             settings: Rc::new(settings),
             swarm_parallel,
+            swarm_cap: Cell::new(0),
             sink,
             ids: HashSet::new(),
             repeats: HashMap::new(),
