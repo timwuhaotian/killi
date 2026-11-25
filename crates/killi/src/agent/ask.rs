@@ -255,7 +255,7 @@ pub(super) fn question_args(args: &Value) -> Result<(String, Vec<String>), Strin
 }
 
 /// An option as the user sees it: a string, the `label` of an object with its `description`
-/// after it, or the same two as XML tags inside a string (the shape MiniMax sends). The
+/// after it, or the same two as XML elements inside a string, whatever their names. The
 /// object shape is the one other agents' question tools take. `option` stands in for `label`
 /// (the key some models reach for), and a lone `description` is the option's whole text; an
 /// object with its own `question` is a nested question, not a choice, and stays an error so
@@ -291,21 +291,30 @@ fn choice(label: Option<String>, description: Option<String>) -> Option<String> 
     }
 }
 
-/// The `option` (or `label`) and `description` elements of a choice written as XML, such as
-/// `<description>17G</description><option>All of it</option>`. Only when those elements are
-/// the whole string: anything else, a stray `<` included, is the choice's own text.
+/// The `label` and `description` elements of a choice written as XML, whatever names the model
+/// gives them: `<desc>17G</desc><value>All of it</value>`. Only when those elements are the
+/// whole string: anything else, a stray `<` or an element of another name included, is the
+/// choice's own text.
 fn tagged_option(text: &str) -> Option<(Option<String>, Option<String>)> {
+    /// Element names that hold a choice's label.
+    const LABELS: [&str; 6] = ["option", "label", "text", "value", "title", "name"];
+    /// Element names that hold a choice's description.
+    const DESCRIPTIONS: [&str; 5] = ["description", "desc", "detail", "details", "summary"];
     let mut rest = text.trim();
     let (mut label, mut description) = (None, None);
     while !rest.is_empty() {
         let after = rest.strip_prefix('<')?;
         let (name, inner) = after.split_once('>')?;
         let (value, tail) = inner.split_once(&format!("</{name}>"))?;
-        let value = Some(value.trim().to_string()).filter(|v| !v.is_empty());
-        match name {
-            "option" | "label" => label = value,
-            "description" => description = value,
-            _ => return None,
+        let value = value.trim().to_string();
+        let value = (!value.is_empty()).then_some(value);
+        let lower = name.to_ascii_lowercase();
+        if LABELS.contains(&lower.as_str()) {
+            label = value;
+        } else if DESCRIPTIONS.contains(&lower.as_str()) {
+            description = value;
+        } else {
+            return None;
         }
         rest = tail.trim_start();
     }

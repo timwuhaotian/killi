@@ -7,7 +7,7 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## 0.9.10 — 2026-11-25
 
-- `ask_user_question` options that MiniMax writes as XML tags inside a string (`<description>…</description><option>…</option>`) are shown and answered as "label — description", like the object shape, instead of drawing the raw tags in the picker. A string with any other markup stays as it is.
+- `ask_user_question` options that a model writes as XML elements inside a string (`<description>…</description><option>…</option>`, the shape MiniMax sends) are shown and answered as "label — description", like the object shape, instead of drawing the raw tags in the picker. The label may sit in an `option`, `label`, `text`, `value`, `title` or `name` element and the description in a `description`, `desc`, `detail`, `details` or `summary` one; a string with any other markup stays as it is.
 
 ## 0.9.9 — 2026-11-25
 
