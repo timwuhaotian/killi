@@ -153,8 +153,9 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
             }
             n if n > 1 && !edit.all => {
                 return Err(format!(
-                    "Found {n} matches for {} in {path}. Include more surrounding lines to make it unique, or set replace_all.",
-                    label(i)
+                    "Found {n} matches for {} in {path}{}. Include more surrounding lines to make it unique, or set replace_all.",
+                    label(i),
+                    where_found(text, &found)
                 ));
             }
             _ => ranges.extend(found.into_iter().map(|(s, e)| (s, e, i))),
@@ -220,6 +221,33 @@ fn apply(text: &str, edits: &[Edit], path: &str) -> Result<Applied, String> {
         removed,
         diff,
     })
+}
+
+/// The lines that hold the matches in `found` (sorted byte ranges), as " at lines 3, 9 and 14",
+/// so a model can widen its `old_string` around the copy it means instead of searching for
+/// the others. Past `MAX_LINES` the rest are counted, not listed.
+fn where_found(text: &str, found: &[(usize, usize)]) -> String {
+    const MAX_LINES: usize = 8;
+    let (mut lines, mut line, mut counted) = (Vec::<usize>::new(), 1, 0);
+    for &(start, _) in found {
+        line += text[counted..start].matches('\n').count();
+        counted = start;
+        if lines.last() != Some(&line) {
+            lines.push(line);
+        }
+    }
+    if let [only] = lines[..] {
+        return format!(", all on line {only}");
+    }
+    let shown: Vec<String> = lines.iter().take(MAX_LINES).map(usize::to_string).collect();
+    let list = match lines.len().checked_sub(MAX_LINES) {
+        Some(more) if more > 0 => format!("{} and {more} more", shown.join(", ")),
+        _ => {
+            let (last, rest) = shown.split_last().expect("two or more lines");
+            format!("{} and {last}", rest.join(", "))
+        }
+    };
+    format!(" at lines {list}")
 }
 
 /// The lines that changed between `old` and `new`, and how many were added and removed. Each
@@ -349,7 +377,11 @@ fn closest_hint(text: &str, old: &str) -> Option<String> {
 /// An unrelated file gets nothing.
 fn nearest_line(text: &str, old: &str) -> Option<usize> {
     let needle = old.lines().map(str::trim).find(|line| !line.is_empty())?;
-    if let Some((line, _)) = text.lines().enumerate().find(|(_, line)| line.contains(needle)) {
+    if let Some((line, _)) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains(needle))
+    {
         return Some(line + 1);
     }
     let limit = (needle.chars().count() / 2).max(1);
@@ -476,6 +508,37 @@ mod tests {
     }
 
     #[test]
+    fn an_ambiguous_match_names_the_lines_it_was_found_on() {
+        let err =
+            |text: &str| run(text, json!({"old_string": "x", "new_string": "y"})).unwrap_err();
+        assert_eq!(
+            err("a\nx\nb\nx\nx\n"),
+            "Found 3 matches for old_string in f at lines 2, 4 and 5. Include more surrounding lines to make it unique, or set replace_all."
+        );
+        assert!(
+            err("x x\n").contains("in f, all on line 1."),
+            "{}",
+            err("x x")
+        );
+        let many = "x\n".repeat(11);
+        assert!(
+            err(&many).contains("at lines 1, 2, 3, 4, 5, 6, 7, 8 and 3 more."),
+            "{}",
+            err(&many)
+        );
+        // A match found only after normalizing (a trailing space) is located in the original.
+        let loose = run(
+            "a\nx  \nb\nx\n",
+            json!({"edits": [{"old_string": "x \n", "new_string": "y"}, {"old_string": "a", "new_string": "c"}]}),
+        )
+        .unwrap_err();
+        assert!(
+            loose.contains("edits[0].old_string in f at lines 2 and 4."),
+            "{loose}"
+        );
+    }
+
+    #[test]
     fn a_missing_match_points_at_the_closest_line() {
         let text = "fn main() {\n    let credits_balance = 0;\n}\n";
         let err = run(
@@ -496,7 +559,8 @@ mod tests {
     fn a_missing_match_names_the_line_that_contains_it() {
         // The first line of the old string was taken from the middle of one long line: no
         // line is close in edit distance, but one contains it.
-        let text = "fn main() {\n    render(<div className=\"h-full bg-primary transition-all\">\n}\n";
+        let text =
+            "fn main() {\n    render(<div className=\"h-full bg-primary transition-all\">\n}\n";
         let err = run(
             text,
             json!({

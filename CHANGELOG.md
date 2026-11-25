@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.11 — 2026-11-25
+
+- When `edit` finds its `old_string` more than once, the error now says which lines the copies are on ("Found 3 matches for old_string in f.rs at lines 2, 5 and 9"), so the model can widen the right one instead of searching the file for them.
+
 ## 0.9.10 — 2026-11-25
 
 - `ask_user_question` options that a model writes as XML elements inside a string (`<description>…</description><option>…</option>`, the shape MiniMax sends) are shown and answered as "label — description", like the object shape, instead of drawing the raw tags in the picker. The label may sit in an `option`, `label`, `text`, `value`, `title` or `name` element and the description in a `description`, `desc`, `detail`, `details` or `summary` one; a string with any other markup stays as it is.
