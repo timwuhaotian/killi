@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.7 — 2026-11-25
+
+- The inline live area no longer repeats its rows when something writes to the terminal behind killi's back. While the UI runs, killi points its stderr at /dev/null, so a forked child's message before it starts its command (macOS's "MallocStackLogging: can't turn off malloc stack logging") no longer scrolls the screen under the redraw. stderr goes back to the terminal whenever killi gives the terminal back: on quitting, a crash, Ctrl+Z and the interactive shell.
+
 ## 0.9.6 — 2026-11-25
 
 - Swarm mode tells the model how many subagents a swarm runs at once, so a swarm the user allows 32 of at a time is planned with that many items instead of the five the model picked on its own. A cap changed with `/swarm parallel <n>` is said again, and a resumed session says the cap it has now.

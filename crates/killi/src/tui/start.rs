@@ -176,6 +176,10 @@ pub(super) static CURSOR_ROW: AtomicUsize = AtomicUsize::new(0);
 /// the cursor is, since the shell wrote below the erased one meanwhile.
 pub(super) static RESUMED: AtomicBool = AtomicBool::new(false);
 
+/// The terminal's stderr while the UI holds the terminal and stderr points at /dev/null, so
+/// `restore_terminal` can give it back; -1 otherwise.
+static SAVED_STDERR: AtomicI32 = AtomicI32::new(-1);
+
 /// The write end of the pipe a stop signal's handler pokes.
 static SUSPEND_PIPE: AtomicI32 = AtomicI32::new(-1);
 
@@ -207,6 +211,7 @@ impl TerminalGuard {
 /// every pointer move.
 pub(super) fn take_terminal(fullscreen: bool, enhanced: bool) -> Result<()> {
     terminal::enable_raw_mode()?;
+    quiet_stderr();
     let mut out = stdout();
     execute!(out, EnableBracketedPaste)?;
     if enhanced {
@@ -384,6 +389,7 @@ pub(super) fn located(message: String, at: Option<&std::panic::Location>) -> Str
 /// Gives the terminal back as it was before the UI took it; also on quitting from a signal,
 /// when the guard is never dropped.
 pub fn restore_terminal() {
+    restore_stderr();
     if !terminal::is_raw_mode_enabled().unwrap_or(false) {
         return;
     }
@@ -395,4 +401,43 @@ pub fn restore_terminal() {
     let _ = execute!(out, DisableBracketedPaste, Show);
     let _ = terminal::disable_raw_mode();
     let _ = writeln!(out);
+}
+
+/// Points stderr at /dev/null while the UI draws, when it is the terminal. Anything written
+/// there lands in the middle of the live area and scrolls it, so the next redraw starts a row
+/// lower and leaves a stale copy behind. That covers children that inherit it (a desktop
+/// notification's) and a forked child between fork and exec, before its own stderr is in
+/// place: macOS's malloc stack logging prints "can't turn off malloc stack logging" there.
+fn quiet_stderr() {
+    use std::io::IsTerminal;
+    if SAVED_STDERR.load(Ordering::Relaxed) >= 0 || !std::io::stderr().is_terminal() {
+        return;
+    }
+    // SAFETY: dup, open, dup2 and close act on descriptors this process owns.
+    unsafe {
+        let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
+        if null < 0 {
+            return;
+        }
+        let saved = libc::fcntl(libc::STDERR_FILENO, libc::F_DUPFD_CLOEXEC, 3);
+        if saved >= 0 && libc::dup2(null, libc::STDERR_FILENO) >= 0 {
+            SAVED_STDERR.store(saved, Ordering::Relaxed);
+        } else if saved >= 0 {
+            libc::close(saved);
+        }
+        libc::close(null);
+    }
+}
+
+/// Gives stderr back to the terminal once the UI lets it go, so a panic's report, a shell
+/// opened from killi and anything printed after quitting reach it.
+fn restore_stderr() {
+    let saved = SAVED_STDERR.swap(-1, Ordering::Relaxed);
+    if saved >= 0 {
+        // SAFETY: `saved` is the duplicate `quiet_stderr` made and nothing else closes.
+        unsafe {
+            libc::dup2(saved, libc::STDERR_FILENO);
+            libc::close(saved);
+        }
+    }
 }
