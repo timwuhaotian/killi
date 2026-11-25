@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.8 — 2026-11-25
+
+- A new icon: one letter K drawn as a single stroke, with a coral dot for the "i" of killi, on the dark slate squircle. One shape, one accent, and it still reads at 32 pixels.
+
 ## 0.9.7 — 2026-11-25
 
 - The inline live area no longer repeats its rows when something writes to the terminal behind killi's back. While the UI runs, killi points its stderr at /dev/null, so a forked child's message before it starts its command (macOS's "MallocStackLogging: can't turn off malloc stack logging") no longer scrolls the screen under the redraw. stderr goes back to the terminal whenever killi gives the terminal back: on quitting, a crash, Ctrl+Z and the interactive shell.

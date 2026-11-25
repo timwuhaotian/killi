@@ -1,14 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="k" gradientUnits="userSpaceOnUse" x1="150" y1="360" x2="310" y2="140">
+      <stop offset="0" stop-color="#6FA8DC"/>
+      <stop offset="1" stop-color="#CFE2F3"/>
+    </linearGradient>
+  </defs>
+
   <rect x="16" y="16" width="480" height="480" rx="112" fill="#1E3049"/>
-  <rect x="302" y="38" width="46" height="230" rx="23" fill="#EF6868" transform="rotate(18 325 153)"/>
-  <path d="M 88 380 L 95.8 402.2 L 118 410 L 95.8 417.8 L 88 440 L 80.2 417.8 L 58 410 L 80.2 402.2 Z" fill="#E09C26"/>
-  <g transform="rotate(-5 256 292)">
-    <rect x="120" y="176" width="276" height="276" rx="72" fill="#6FA8DC"/>
-    <rect x="120" y="156" width="276" height="276" rx="72" fill="#CFE2F3"/>
-    <rect x="154" y="190" width="70" height="23" rx="11.5" fill="#FFFFFF" transform="rotate(-28 189 201)"/>
-    <circle cx="244" cy="194" r="9" fill="#FFFFFF"/>
-    <ellipse cx="340" cy="284" rx="21" ry="14" fill="#F4CCCC"/>
-    <path d="M 184 256 L 242 296 L 184 336" fill="none" stroke="#223853" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M 278 336 L 338 336" fill="none" stroke="#223853" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
-  </g>
+
+  <!-- one continuous stroke: the stem, the arm and the leg of the K -->
+  <path d="M 158 150 L 158 366 M 158 254 C 200 234 244 200 292 168 M 158 254 C 204 288 252 324 296 350"
+        fill="none" stroke="url(#k)" stroke-width="52"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- the dot of the "i" -->
+  <circle cx="356" cy="132" r="30" fill="#EF6868"/>
 </svg>
