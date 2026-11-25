@@ -254,30 +254,62 @@ pub(super) fn question_args(args: &Value) -> Result<(String, Vec<String>), Strin
     Ok((text.to_string(), options))
 }
 
-/// An option as the user sees it: a string, or the `label` of an object with its `description`
-/// after it, which is the shape other agents' question tools take. `option` stands in for
-/// `label` (the key some models reach for), and an object holding only a `description` shows
-/// that, as it is the option's whole text; an object with its own `question` is a nested
-/// question, not a choice, and stays an error so nothing is silently dropped.
+/// An option as the user sees it: a string, the `label` of an object with its `description`
+/// after it, or the same two as XML tags inside a string (the shape MiniMax sends). The
+/// object shape is the one other agents' question tools take. `option` stands in for `label`
+/// (the key some models reach for), and a lone `description` is the option's whole text; an
+/// object with its own `question` is a nested question, not a choice, and stays an error so
+/// nothing is silently dropped.
 fn option_text(option: &Value) -> Option<String> {
     if let Some(text) = option.as_str() {
-        return Some(text.to_string());
+        return match tagged_option(text) {
+            Some((label, description)) => choice(label, description),
+            None => Some(text.to_string()),
+        };
     }
     let field = |key: &str| {
         option[key]
             .as_str()
-            .map(str::trim)
+            .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty())
     };
-    let description = field("description");
-    match field("label").or_else(|| field("option")) {
-        Some(label) => Some(match description {
-            Some(description) => format!("{label} — {description}"),
-            None => label.to_string(),
-        }),
-        None if option.get("question").is_none() => description.map(str::to_string),
-        None => None,
+    if option.get("question").is_some() {
+        return None;
     }
+    choice(
+        field("label").or_else(|| field("option")),
+        field("description"),
+    )
+}
+
+/// A label with its description after it, as one line of text.
+fn choice(label: Option<String>, description: Option<String>) -> Option<String> {
+    match (label, description) {
+        (Some(label), Some(description)) => Some(format!("{label} — {description}")),
+        (Some(label), None) => Some(label),
+        (None, description) => description,
+    }
+}
+
+/// The `option` (or `label`) and `description` elements of a choice written as XML, such as
+/// `<description>17G</description><option>All of it</option>`. Only when those elements are
+/// the whole string: anything else, a stray `<` included, is the choice's own text.
+fn tagged_option(text: &str) -> Option<(Option<String>, Option<String>)> {
+    let mut rest = text.trim();
+    let (mut label, mut description) = (None, None);
+    while !rest.is_empty() {
+        let after = rest.strip_prefix('<')?;
+        let (name, inner) = after.split_once('>')?;
+        let (value, tail) = inner.split_once(&format!("</{name}>"))?;
+        let value = Some(value.trim().to_string()).filter(|v| !v.is_empty());
+        match name {
+            "option" | "label" => label = value,
+            "description" => description = value,
+            _ => return None,
+        }
+        rest = tail.trim_start();
+    }
+    (label.is_some() || description.is_some()).then_some((label, description))
 }
 
 #[cfg(test)]

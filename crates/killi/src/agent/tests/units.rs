@@ -268,7 +268,35 @@ fn options_under_an_option_key_a_lone_description_or_an_extra_layer_are_asked() 
 }
 
 #[test]
-fn a_poll_repeats_only_when_its_result_does() {
+fn options_written_as_xml_tags_read_as_label_and_description() {
+    let options = json!([
+        "<description>Safe cache deletions, incl. pnpm store, WeChat, npm, tap, Spotify, node-gyp, Homebrew, Logs — keeps Playwright</description><option>Clean all safe ones (~8.6 GB)</option>",
+        "<description>Do nothing</description><option>Cancel</option>",
+        "<label>pnpm store only</label>",
+        " <description>Only the 4.6 GB store</description> ",
+        "<b>Keep bold tags</b>",
+        "Use <option> tags",
+        "<description>unterminated",
+        "<description></description><option></option>",
+    ]);
+    let (_, options) = question_args(&json!({"question": "Proceed?", "options": options})).unwrap();
+    assert_eq!(
+        options,
+        [
+            "Clean all safe ones (~8.6 GB) — Safe cache deletions, incl. pnpm store, WeChat, npm, tap, Spotify, node-gyp, Homebrew, Logs — keeps Playwright",
+            "Cancel — Do nothing",
+            "pnpm store only",
+            "Only the 4.6 GB store",
+            "<b>Keep bold tags</b>",
+            "Use <option> tags",
+            "<description>unterminated",
+            "<description></description><option></option>",
+        ]
+    );
+}
+
+#[test]
+fn a_poll_repeats_only_when_its_result_does_not() {
     let wait = ToolCall {
         extra_content: None,
         id: "a".into(),
