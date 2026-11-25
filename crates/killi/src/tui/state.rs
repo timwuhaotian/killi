@@ -98,6 +98,9 @@ pub(super) enum Input {
     /// The model every session falls back to when the primary keeps failing: `/backup-model <alias>`, or
     /// `none` to drop it. Saved in the config, so every session starts on it.
     BackupModel(String),
+    /// The model every session's `advisor` tool asks: `/advisor <alias>`, or `off` to drop
+    /// it. Saved in the config, so every session started after it has the tool.
+    Advisor(String),
     Effort(String),
     /// A `/theme` pick: a name from `text::THEMES`. Saved in the config, so every session
     /// starts on it.

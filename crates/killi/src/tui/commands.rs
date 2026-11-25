@@ -128,6 +128,12 @@ pub(super) const COMMANDS: &[Command] = &[
         about: "Set the model every session falls back to when the primary keeps failing",
     },
     Command {
+        name: "advisor",
+        aliases: &[],
+        args: "[alias|off]",
+        about: "Set the stronger model every session's model can ask for advice",
+    },
+    Command {
         name: "mcp",
         aliases: &[],
         args: "[server]",

@@ -1195,3 +1195,28 @@ fn prompt_section_reads_back_as_the_built_in_guidance() {
     let blank: super::Config = toml::from_str("[prompt]\nsystem = \"  \"").unwrap();
     assert_eq!(blank.guidance(), crate::prompt::DEFAULT);
 }
+
+#[test]
+fn an_advisor_model_is_written_beside_the_backup_and_removed_with_its_model() {
+    let root = crate::test_temp::TempDir::new("killi-advisor-model");
+    let path = root.join("config.toml");
+    std::fs::write(&path, "# my config\nbackup_model = \"go/kept\"\n\n[providers.go]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"go/kept\"]\nprovider = \"go\"\nmodel = \"kept\"\n\n[models.\"go/strong\"]\nprovider = \"go\"\nmodel = \"strong\"\n").unwrap();
+
+    super::set_advisor_model(&path, Some("go/strong")).unwrap();
+    super::set_advisor_model(&path, Some("go/strong")).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text.matches("advisor_model").count(), 1, "{text}");
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert_eq!(config.advisor_model.as_deref(), Some("go/strong"));
+    assert_eq!(config.backup_model.as_deref(), Some("go/kept"), "{text}");
+
+    super::remove_models(&path, "go", &["go/kept".to_string()]).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let config: super::Config = toml::from_str(&text).unwrap();
+    assert_eq!(
+        config.advisor_model, None,
+        "a removed advisor isn't swapped for a weaker model: {text}"
+    );
+    assert_eq!(config.backup_model.as_deref(), Some("go/kept"));
+    assert!(text.contains("# my config"), "{text}");
+}

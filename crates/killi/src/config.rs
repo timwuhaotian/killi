@@ -32,8 +32,8 @@ pub use custom::{
     suggested_name as custom_suggested_name,
 };
 pub use edit::{
-    remove_models, remove_provider_key, set_backup_model, set_mode, set_model_effort, set_search,
-    set_swarm, set_swarm_parallel, set_ui_theme, set_verbosity,
+    remove_models, remove_provider_key, set_advisor_model, set_backup_model, set_mode,
+    set_model_effort, set_search, set_swarm, set_swarm_parallel, set_ui_theme, set_verbosity,
 };
 pub use gemini::{ABOUT as GEMINI_ABOUT, add as add_gemini, ours as gemini_ours};
 pub use grok::{
@@ -76,6 +76,9 @@ pub struct Config {
     /// The model every session falls back to when its own exhausts its retries on a rate
     /// limit; `/backup-model` sets it.
     pub backup_model: Option<String>,
+    /// The model the session's model consults through the `advisor` tool, usually the
+    /// strongest one configured; `/advisor` sets it, and every session started after it has the tool.
+    pub advisor_model: Option<String>,
     #[serde(default)]
     pub providers: BTreeMap<String, Provider>,
     #[serde(default)]

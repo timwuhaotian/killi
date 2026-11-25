@@ -145,11 +145,20 @@ impl Picker {
     }
 }
 
+/// Which model `open_model_picker` picks: the session's, the backup or the advisor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ModelPick {
+    Session,
+    Backup,
+    Advisor,
+}
+
 #[derive(Clone)]
 pub(super) enum PickerChoice {
     Session(PathBuf),
     Model(String),
     BackupModel(String),
+    Advisor(String),
     Effort(String),
     Theme(String),
     Mcp(String),
@@ -319,6 +328,7 @@ impl App {
                         PickerChoice::Session(path) => Idle::Input(Input::Resume(path)),
                         PickerChoice::Model(alias) => Idle::Input(Input::Model(alias)),
                         PickerChoice::BackupModel(alias) => Idle::Input(Input::BackupModel(alias)),
+                        PickerChoice::Advisor(alias) => Idle::Input(Input::Advisor(alias)),
                         PickerChoice::Effort(effort) => Idle::Input(Input::Effort(effort)),
                         PickerChoice::Theme(name) => Idle::Input(Input::Theme(name)),
                         PickerChoice::Mcp(name) => Idle::Input(Input::Mcp(name, true)),
@@ -572,27 +582,27 @@ impl App {
         ));
     }
 
-    pub(super) fn open_model_picker(&mut self, config: &Config, backup: bool) {
-        let chosen = if backup {
-            self.status.backup.clone().unwrap_or_default()
-        } else {
-            self.status.model.clone()
+    pub(super) fn open_model_picker(&mut self, config: &Config, pick: ModelPick) {
+        let chosen = match pick {
+            ModelPick::Session => self.status.model.clone(),
+            ModelPick::Backup => self.status.backup.clone().unwrap_or_default(),
+            ModelPick::Advisor => config.advisor_model.clone().unwrap_or_default(),
         };
-        let options: Vec<_> = config
+        let mut options: Vec<_> = config
             .models
             .iter()
             .filter(|(alias, _)| config.model_allowed(alias) && !config.missing_key(Some(alias)))
             .map(|(alias, model)| {
                 let current = if *alias == chosen { " · current" } else { "" };
-                let pick = if backup {
-                    PickerChoice::BackupModel(alias.clone())
-                } else {
-                    PickerChoice::Model(alias.clone())
+                let choice = match pick {
+                    ModelPick::Session => PickerChoice::Model(alias.clone()),
+                    ModelPick::Backup => PickerChoice::BackupModel(alias.clone()),
+                    ModelPick::Advisor => PickerChoice::Advisor(alias.clone()),
                 };
                 (
                     config.display_name(alias).to_string(),
                     format!("{}{current}", model.provider),
-                    pick,
+                    choice,
                 )
             })
             .collect();
@@ -608,11 +618,18 @@ impl App {
             };
             return self.notice(hint);
         }
-        let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) | PickerChoice::BackupModel(a) if *a == chosen)).unwrap_or(0);
-        let title = if backup {
-            "Backup model, for every session"
-        } else {
-            "Switch model"
+        if pick == ModelPick::Advisor && !chosen.is_empty() {
+            options.push((
+                "Off".to_string(),
+                "no advisor".to_string(),
+                PickerChoice::Advisor("off".to_string()),
+            ));
+        }
+        let selected = options.iter().position(|(_, _, c)| matches!(c, PickerChoice::Model(a) | PickerChoice::BackupModel(a) | PickerChoice::Advisor(a) if *a == chosen)).unwrap_or(0);
+        let title = match pick {
+            ModelPick::Session => "Switch model",
+            ModelPick::Backup => "Backup model, for every session",
+            ModelPick::Advisor => "Advisor model, for every session",
         }
         .to_string();
         self.picker = Some(Picker::new(title, options, selected));

@@ -2,6 +2,7 @@
 //! prompt and tool list are fixed for the session, so every request reuses the cached prefix.
 //! Notes from killi to the model are appended as user messages, never edited into old ones.
 
+mod advisor;
 mod ask;
 mod background;
 mod compact;
@@ -112,6 +113,9 @@ pub struct Agent {
     /// on a 4xx, 5xx or network failure. `/backup-model` sets it in the config's `backup_model`, so every
     /// session — new or resumed — starts with it.
     backup: Option<Rc<Client>>,
+    /// The model the `advisor` tool asks: the config's `advisor_model`, which `/advisor` sets.
+    /// None when no advisor is set, and in subagents, which don't consult one.
+    advisor: Option<Rc<Client>>,
     tools: Rc<Vec<Value>>,
     messages: Rc<Vec<Value>>,
     ctx: Rc<tools::Context>,

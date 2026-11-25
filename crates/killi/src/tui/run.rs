@@ -408,12 +408,16 @@ pub(super) async fn handle_command(
                 );
             }
         }
-        "model" if arg.is_empty() => app.open_model_picker(session.config(), false),
+        "model" if arg.is_empty() => app.open_model_picker(session.config(), ModelPick::Session),
         "model" => app.next_input = Some(Input::Model(arg.to_string())),
         "provider" if arg.is_empty() => app.open_provider_picker(session.config()),
         "provider" => app.provider_pick(arg),
-        "backup-model" if arg.is_empty() => app.open_model_picker(session.config(), true),
+        "backup-model" if arg.is_empty() => {
+            app.open_model_picker(session.config(), ModelPick::Backup)
+        }
         "backup-model" => app.next_input = Some(Input::BackupModel(arg.to_string())),
+        "advisor" if arg.is_empty() => app.open_model_picker(session.config(), ModelPick::Advisor),
+        "advisor" => app.next_input = Some(Input::Advisor(arg.to_string())),
         "effort" | "thinking" if arg.is_empty() => app.open_effort_picker(session.config()),
         "effort" | "thinking" => app.next_input = Some(Input::Effort(arg.to_lowercase())),
         "theme" if arg.is_empty() => app.open_theme_picker(),

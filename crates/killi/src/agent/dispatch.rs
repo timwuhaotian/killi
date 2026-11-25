@@ -283,6 +283,7 @@ impl Agent {
                 output
             }
             "ask_user_question" => self.ask(&args).await,
+            "advisor" => self.consult_advisor().await,
             "exit_plan_mode" => self.exit_plan(&args).await,
             "agent" | "agent_swarm" | "agent_message" if self.depth > 0 && !self.pair_exec => {
                 tools::Output::error(
@@ -491,7 +492,7 @@ impl Agent {
         let result = same_as.unwrap_or_else(|| hash_text(&output.text));
         if same_as.is_none()
             && !parallel_read(call)
-            && !matches!(call.name.as_str(), "todo_write" | "later")
+            && !matches!(call.name.as_str(), "todo_write" | "later" | "advisor")
         {
             // Calls that can change external state invalidate observations, even on error:
             // a command or subagent may have changed files before failing.
@@ -582,10 +583,10 @@ impl Agent {
     /// An identical call that has already returned the same result twice is not run again:
     /// re-running it cannot get anything new, and the model must change the call or reply in
     /// text instead of looping. Returns the previous result's hash (so `finish_call` counts
-    /// this call as the same result) and the output to record. Waits on background tasks are
-    /// never blocked: polling is the point, and their key already carries the result.
+    /// this call as the same result) and the output to record. Waits on background tasks and
+    /// `advisor` calls are never blocked: their key already carries the result.
     pub(super) fn repeat_block(&self, call: &ToolCall) -> Option<(u64, tools::Output)> {
-        if call.name == "task_output" {
+        if answer_keyed(call) {
             return None;
         }
         let repeat = self.repeats.get(&hash_call(call))?;
@@ -765,6 +766,11 @@ const REPEAT_READ: u64 = 1 << 62;
 const REPEAT_BASH: u64 = 2 << 62;
 
 /// Identifies a tool call by its name and exact arguments, without keeping the arguments.
+/// Calls the repeat breaker keys by their result as well, and never refuses before they run.
+fn answer_keyed(call: &ToolCall) -> bool {
+    matches!(call.name.as_str(), "task_output" | "advisor")
+}
+
 pub(super) fn hash_call(call: &ToolCall) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut hasher = DefaultHasher::new();
@@ -781,10 +787,12 @@ pub(super) fn hash_call(call: &ToolCall) -> u64 {
 
 /// What the repeat breaker counts as the same call. A wait on a background task is a poll:
 /// asking again is the point, and its result says how long the task has run, so it only repeats
-/// when the result does too. Every other call repeats whatever it returns.
+/// when the result does too. An `advisor` call has no arguments and reads a conversation that
+/// has moved on since the last one, so it too repeats only when its answer does. Every other
+/// call repeats whatever it returns.
 pub(super) fn repeat_key(call: &ToolCall, result: u64) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
-    if call.name != "task_output" {
+    if !answer_keyed(call) {
         return hash_call(call);
     }
     let mut hasher = DefaultHasher::new();

@@ -195,6 +195,7 @@ impl Agent {
         Self {
             client: Rc::new(client),
             backup: None,
+            advisor: None,
             tools: Rc::new(tools),
             messages: Rc::default(),
             ctx: Rc::new(ctx),

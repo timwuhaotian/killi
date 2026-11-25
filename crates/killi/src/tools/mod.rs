@@ -235,8 +235,18 @@ fn tool(name: &str, description: &str, parameters: Value) -> Value {
     json!({"type": "function", "function": {"name": name, "description": description, "parameters": parameters}})
 }
 
-/// Every tool the model always has. The optional `skill` and `mcp` tools are added by the
-/// agent when the session starts with skills or MCP servers.
+/// The `advisor` tool, which a session has when it starts with an advisor model set. It takes
+/// no arguments: the advisor reads the whole conversation.
+pub fn advisor_definition() -> Value {
+    tool(
+        "advisor",
+        "Ask a stronger model for advice; it reads this whole conversation, so send nothing. Use it before committing to an approach on hard or unclear work, when stuck or going in circles, and before calling long work done. Call it alone in a reply and weigh the advice; you still decide.",
+        json!({"type": "object", "properties": {}}),
+    )
+}
+
+/// Every tool the model always has. The optional `skill`, `mcp` and `advisor` tools are added
+/// when the session starts with skills, MCP servers or an advisor model.
 pub fn definitions() -> Vec<Value> {
     vec![
         tool(

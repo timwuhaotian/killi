@@ -357,7 +357,7 @@ fn the_model_picker_hides_models_the_filter_excludes() {
         "default_model = \"b/keep\"\n\n[providers.b]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"b/keep\"]\nprovider = \"b\"\nmodel = \"keep\"\n\n[models.\"b/hide\"]\nprovider = \"b\"\nmodel = \"hide\"\n\n[models_filter.b]\nexclude = [\"b/hide\"]\n",
     )
     .unwrap();
-    app.open_model_picker(&config, false);
+    app.open_model_picker(&config, ModelPick::Session);
     let picker = app.picker.as_ref().expect("a picker");
     let values: Vec<&str> = picker
         .options
@@ -374,7 +374,7 @@ fn the_model_picker_explains_when_the_filter_hides_every_keyed_model() {
         "default_model = \"b/hide\"\n\n[providers.b]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"b/hide\"]\nprovider = \"b\"\nmodel = \"hide\"\n\n[models_filter.b]\nexclude = [\"b/hide\"]\n",
     )
     .unwrap();
-    app.open_model_picker(&config, false);
+    app.open_model_picker(&config, ModelPick::Session);
     assert!(app.picker.is_none());
     let shown = app
         .pending
@@ -402,7 +402,7 @@ fn the_model_picker_skips_models_whose_provider_has_no_key() {
         "default_model = \"a/model\"\n\n[providers.a]\ntype = \"openai\"\napi_key_env = \"KILLI_TEST_ABSENT_KEY\"\n\n[providers.b]\ntype = \"openai\"\napi_key = \"sk-b\"\n\n[models.\"a/model\"]\nprovider = \"a\"\nmodel = \"model\"\n\n[models.\"b/model\"]\nprovider = \"b\"\nmodel = \"model\"\n",
     )
     .unwrap();
-    app.open_model_picker(&config, false);
+    app.open_model_picker(&config, ModelPick::Session);
     let picker = app.picker.as_ref().expect("a picker");
     let values: Vec<&str> = picker
         .options

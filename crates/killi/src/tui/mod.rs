@@ -8,6 +8,7 @@
 //! kept in `history`, and printed to the terminal once more when killi quits. A drag across it
 //! selects text, which is copied when the button is let go (`select`).
 
+mod advisor;
 mod app;
 mod background;
 pub(crate) mod banner;
@@ -103,7 +104,7 @@ use format::{
 use input::newline_key;
 use notify::{copy_to_clipboard, first_line, notify};
 use pair::{pair_kickoff, pair_pick, pair_turn};
-use picker::{CustomFlow, Picker, PickerChoice, ProviderFlow, SearchFlow};
+use picker::{CustomFlow, ModelPick, Picker, PickerChoice, ProviderFlow, SearchFlow};
 use rows::{
     aside_rows, ask_rows, choice_rows, diff_rows, first_sentence, handoff, help_rows, hidden_row,
     hint_row, is_bookkeeping, key_hints, label, overview_rows, placeholder, prompt_rows,
@@ -541,6 +542,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
                     Err(e) => app.error_report(&e),
                 }
             }
+            Input::Advisor(alias) => app.advisor_pick(&mut agent, &mut session, alias.trim()),
             Input::Theme(arg) => {
                 let name = arg.trim().to_lowercase().replace([' ', '_'], "-");
                 // A pick the picker previewed is already showing; saving it is still a pick,

@@ -255,6 +255,7 @@ impl Agent {
         let mut agent = Agent {
             client: Rc::new(client),
             backup: self.backup.clone(),
+            advisor: None,
             tools: self.tools.clone(),
             messages,
             ctx: self.ctx.clone(),

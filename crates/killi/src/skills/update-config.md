@@ -34,6 +34,10 @@ A model is named `<provider>/<model>`, picked with `-m`, `/model` or `default_mo
 - `backup_model = "alias"`: the model every session switches to when its own exhausts its
   retries on a 429 rate limit. `/backup-model` sets and applies it at once, in this session
   and every new one (`/backup-model none` drops it); a hand edit takes the next killi start.
+- `advisor_model = "alias"`: the stronger model a session's model asks through its `advisor`
+  tool when it wants a second opinion. A session has the tool only when it starts with an
+  advisor set, so `/advisor` applies it at once where the tool is already there and from `/new`
+  otherwise (`/advisor off` drops it); a hand edit takes the next killi start.
 - `[providers.<name>]`: `type` ("openai" for Chat Completions and compatible APIs,
   "anthropic" for Messages, "openai_responses" for Responses, "chatgpt" for the user's
   ChatGPT plan: no key, `killi login chatgpt` signs in and adds the plan's models; "grok" the

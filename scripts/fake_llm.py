@@ -8,7 +8,8 @@ The prompt picks the scenario: one containing "FIX" or "slugify" is a bug fix (a
 read, a failing run, a thought, an edit with a diff, a passing run and a Markdown answer),
 one containing "QUESTION" is an `ask_user_question`, "AGENTS" six `agent` calls in one reply, "SWARM" an `agent_swarm` of five subagents
 ("SWARMBIG": forty) whose prompts say "SWARMCHILD" and that each run a few slow commands,
-a question from another session (`killi ask`) a line about the work, "SLOW" a one-line answer
+a question from another session (`killi ask`) a line about the work, "ADVISE" an `advisor` call
+(the advisor's own request, which ends in its note, gets a few lines of advice), "SLOW" a one-line answer
 that starts only after three seconds (time to press Esc first), the next-prompt suggestion
 a short line to offer in the empty prompt, a paused draft its last line with " in slug.py" added
 (both thirty seconds late in a conversation that said "carefully"),
@@ -76,6 +77,19 @@ QUESTION = [{"calls": [call(1, "ask_user_question", {
     "options": ["Drop them: don't becomes dont", "Separator: don't becomes don-t", "Keep the current behavior"]})]}]
 SHORT = [{"text": "Hello! Ask me to read, change or run something in this folder."}]
 
+ADVISE = [
+    {"reason": "Unicode titles could go several ways; worth a second opinion before changing slugify.",
+     "calls": [call(1, "advisor", {})]},
+    {"text": "Following the advice, the plan is to transliterate with `unicodedata.normalize(\"NFKD\")` and to test an "
+             "all-symbol title before the regex changes. Should titles keep their Unicode instead?"},
+]
+
+ADVICE = """The current regex drops every non-ASCII letter, so `"Café Déjà Vu"` becomes `caf-d-j-vu`. Before changing it:
+
+1. Decide transliteration vs. keeping Unicode; `unicodedata.normalize("NFKD")` plus dropping combining marks is the usual middle ground.
+2. A title of only symbols becomes an empty slug: add a test and pick a fallback.
+3. Keep `test_slug.py` passing as is; it pins the ASCII behavior."""
+
 PRS = ["pr-1581", "pr-1594", "pr-1602", "pr-1611", "pr-1617"]
 MODULES = [f"packages/service-{n:02d}" for n in range(1, 41)]
 
@@ -126,6 +140,8 @@ def step_for(messages):
         return {"text": "The five reviews are in: nothing blocks a merge."}
     if messages and "A question about your work from" in text_of(messages[-1]):
         return {"text": "Fixing `slugify` in `slug.py`, on master. The tests pass now; nothing is committed yet."}
+    if messages and "You are now the advisor" in text_of(messages[-1]):
+        return {"text": ADVICE}
     real = [i for i, m in enumerate(messages) if m.get("role") == "user" and not text_of(m).lstrip().startswith("<system-reminder>")]
     start = real[-1] if real else 0
     prompt = text_of(messages[start]) if messages else ""
@@ -137,6 +153,8 @@ def step_for(messages):
         steps = swarm(MODULES)
     elif "SWARM" in prompt:
         steps = swarm(PRS)
+    elif "ADVISE" in prompt:
+        steps = ADVISE
     elif "SLOW" in prompt:
         steps = [{"wait": 3, "text": SHORT[0]["text"]}]
     else:

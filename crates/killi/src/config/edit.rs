@@ -277,21 +277,31 @@ pub(super) fn set_default_model(path: &Path, alias: &str) -> Result<()> {
         .with_context(|| format!("could not write {}", path.display()))
 }
 
-/// Writes or removes the config's `backup_model` — the fallback every session starts with —
-/// the way `set_default_model` writes its line: replaced where the file has one before its
-/// first table, and added at the top where it has none. `None` takes the line out, so no
-/// session starts on a backup. The rest of the file, comments included, is left as it is.
+/// Writes or removes the config's `backup_model` — the fallback every session starts with.
+/// `None` takes the line out, so no session starts on a backup.
 pub fn set_backup_model(path: &Path, alias: Option<&str>) -> Result<()> {
+    set_top_string(path, "backup_model", alias)
+}
+
+/// Writes or removes the config's `advisor_model` — the model every session's `advisor` tool
+/// asks. `None` takes the line out, so later sessions start without the tool.
+pub fn set_advisor_model(path: &Path, alias: Option<&str>) -> Result<()> {
+    set_top_string(path, "advisor_model", alias)
+}
+
+/// Writes or removes a top-level string `key` the way `set_default_model` writes its line:
+/// replaced where the file has one before its first table, and added at the top where it has
+/// none. `None` takes the line out. The rest of the file, comments included, is left as it is.
+fn set_top_string(path: &Path, key: &str, value: Option<&str>) -> Result<()> {
     let text =
         fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
-    let line =
-        alias.map(|alias| format!("backup_model = {}", toml::Value::String(alias.to_string())));
+    let line = value.map(|value| format!("{key} = {}", toml::Value::String(value.to_string())));
     let spans = table_spans(&text);
     let mut out: Vec<String> = Vec::new();
     let mut written = false;
     for (n, text_line) in text.lines().enumerate() {
         let before_tables = spans.first().is_none_or(|(_, span)| n < span.start);
-        if before_tables && text_line.trim().starts_with("backup_model") {
+        if before_tables && sets_key(text_line.trim(), key) {
             if !written && let Some(line) = &line {
                 out.push(line.clone());
                 written = true;
@@ -304,7 +314,8 @@ pub fn set_backup_model(path: &Path, alias: Option<&str>) -> Result<()> {
         out.insert(0, line);
     }
     let new = format!("{}\n", out.join("\n"));
-    toml::from_str::<Config>(&new).context("setting the backup model would break the config")?;
+    toml::from_str::<Config>(&new)
+        .with_context(|| format!("setting `{key}` would break the config"))?;
     crate::fs_atomic::write(path, new.as_bytes(), None)
         .with_context(|| format!("could not write {}", path.display()))
 }
@@ -390,6 +401,10 @@ pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<Vec
         .backup_model
         .as_ref()
         .is_some_and(|alias| stale.iter().any(|stale| stale == alias));
+    let advisor_stale = config
+        .advisor_model
+        .as_ref()
+        .is_some_and(|alias| stale.iter().any(|stale| stale == alias));
     let replacement = keep
         .iter()
         .find(|alias| config.models.contains_key(*alias))
@@ -426,6 +441,11 @@ pub fn remove_models(path: &Path, provider: &str, keep: &[String]) -> Result<Vec
     }
     if backup_stale {
         set_backup_model(path, replacement.as_deref())?;
+    }
+    // An advisor is picked to be the strongest model, so a gone one isn't swapped for whatever
+    // model is left: later sessions start without the tool until `/advisor` picks again.
+    if advisor_stale {
+        set_advisor_model(path, None)?;
     }
     Ok(stale)
 }

@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.9 — 2026-11-25
+
+- `/advisor <alias>` sets an advisor: usually your strongest model, saved as `advisor_model` so every session can use it. A session that starts with one has an `advisor` tool; when the model wants a second opinion (before committing to an approach, when stuck, before calling long work done), the advisor reads the whole conversation and its advice comes back as the call's result, drawn under the call. `/advisor` alone opens a picker with an Off row, and `/advisor off` drops it. A session that started without the tool gets it from `/new`. The advisor's tokens count in the session's totals but not its context, and a failing advisor never stops the turn.
+
 ## 0.9.8 — 2026-11-25
 
 - A new icon: one letter K drawn as a single stroke, with a coral dot for the "i" of killi, on the dark slate squircle. One shape, one accent, and it still reads at 32 pixels.

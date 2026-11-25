@@ -123,7 +123,12 @@ impl App {
                 if display.is_none() && summary.starts_with("bash ") {
                     self.output_preview(&output, is_error);
                 }
-                if let Some(display) = display {
+                if summary == "advisor"
+                    && let Some(advice) = display
+                {
+                    self.advice_rows(&advice);
+                    self.push_detail(summary, text::sanitize(&advice).into_owned());
+                } else if let Some(display) = display {
                     let shown: Vec<String> = display
                         .lines()
                         .take(DIFF_ROWS)
@@ -413,7 +418,7 @@ impl App {
     /// The row under a call's output that says `count` lines were left out, and, the first time
     /// in a session, that Ctrl+O shows them: only the newest call's key does anything, so the
     /// rows after it would just repeat themselves.
-    fn hidden_note(&mut self, count: usize, which: &str) {
+    pub(super) fn hidden_note(&mut self, count: usize, which: &str) {
         if count == 0 {
             return;
         }

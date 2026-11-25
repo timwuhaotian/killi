@@ -366,7 +366,8 @@ prompt already sent. The terminal title shows the folder, model and working/idle
 </p>
 
 Commands: `/provider [name]` (add a provider from a pasted key), `/model [alias]`, `/theme [name]` (color theme),
-`/backup-model [alias]` (the fallback when the primary keeps failing), `/mcp [server]`
+`/backup-model [alias]` (the fallback when the primary keeps failing),
+`/advisor [alias|off]` (a stronger model the session's model can ask for advice), `/mcp [server]`
 (turn servers on or off), `/web-search-config`, `/effort [level]` (thinking effort),
 `/new` (or `/clear`), `/resume`, `/btw <question>` (a side question, never kept),
 `/schedule <interval> <task>`, `/compact [focus]`, `/recap`, `/undo`, `/plan`,

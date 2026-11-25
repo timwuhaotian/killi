@@ -22,6 +22,16 @@ use crate::tools;
 const DEFAULT_SWARM_PARALLEL: usize = 8;
 const DEFAULT_SUBAGENT_TIMEOUT_MINUTES: u64 = 30;
 
+/// The advisor client the config's `advisor_model` names, if it resolves; an unknown or
+/// filtered advisor, or one without a key, is none.
+fn advisor_client(config: &Config) -> Option<Client> {
+    config
+        .advisor_model
+        .as_deref()
+        .filter(|alias| config.model_allowed(alias))
+        .and_then(|alias| config.resolve(Some(alias)).and_then(Client::new).ok())
+}
+
 /// `[agent] subagent_timeout` as a duration; zero is no limit.
 fn subagent_timeout(config: &Config) -> std::time::Duration {
     let minutes = config
@@ -148,6 +158,14 @@ impl Setup {
             tools.extend(native);
             notes.extend(problems);
         }
+        if let Some(alias) = &config.advisor_model {
+            match advisor_client(&config) {
+                Some(_) => tools.push(tools::advisor_definition()),
+                None => notes.push(format!(
+                    "advisor_model `{alias}` can't run (unknown, filtered or without a key), so sessions start without the advisor; /advisor picks another."
+                )),
+            }
+        }
         let settings = Settings {
             compact_at: config.agent.compact_at,
             plan_allow: config.agent.plan_allow.clone(),
@@ -205,6 +223,7 @@ impl Setup {
         if let Some(backup) = self.backup_client() {
             agent.set_backup(backup);
         }
+        self.arm_advisor(&mut agent);
         Ok(agent)
     }
 
@@ -225,7 +244,7 @@ impl Setup {
         sink: Sink,
     ) -> Result<Agent> {
         let client = self.client(&report.loaded.choice)?;
-        Agent::resume_reported(
+        let mut agent = Agent::resume_reported(
             client,
             self.backup_client(),
             &self.cwd,
@@ -235,7 +254,18 @@ impl Setup {
             self.settings.clone(),
             controls,
             sink,
-        )
+        )?;
+        self.arm_advisor(&mut agent);
+        Ok(agent)
+    }
+
+    /// Gives `agent` the advisor the config names, when its tools have the `advisor` tool.
+    fn arm_advisor(&self, agent: &mut Agent) {
+        if agent.has_advisor_tool()
+            && let Some(advisor) = advisor_client(&self.config)
+        {
+            agent.set_advisor(advisor);
+        }
     }
 
     /// The backup client the config's `backup_model` names, if it resolves: every session —
@@ -359,6 +389,18 @@ impl Setup {
     /// it too, as every later run of killi does from the config file.
     pub fn set_backup_model(&mut self, alias: Option<&str>) {
         self.config.backup_model = alias.map(String::from);
+    }
+
+    /// Applies an `/advisor` pick: sessions started later in this run of killi have the
+    /// `advisor` tool and ask `alias`, as every later run of killi does from the config file;
+    /// `None` starts them without the tool. The tool goes last, where a fresh start puts it.
+    pub fn set_advisor_model(&mut self, alias: Option<&str>) {
+        self.config.advisor_model = alias.map(String::from);
+        self.tools
+            .retain(|tool| tool["function"]["name"] != "advisor");
+        if alias.is_some() && advisor_client(&self.config).is_some() {
+            self.tools.push(tools::advisor_definition());
+        }
     }
 
     /// Applies a `/theme` pick to the config this run holds, so it says what the file says.

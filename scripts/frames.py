@@ -27,7 +27,9 @@ Tab filling it into the prompt, the model then continuing it), draft (a typed dr
 suggesting and completing (the island the prompt carries while those two are on their way), shell (a local command being typed),
 snapshot-wait (a quick reply outrunning a slow undo snapshot: the row that waits for it) and
 snapshot-skipped (Esc giving it up), and cancelled (Esc on a slow `/btw` still out) and btw-queued
-(a message typed while that `/btw` ran, back in the prompt). Three scenes feed the
+(a message typed while that `/btw` ran, back in the prompt), advisor (an `advisor` call and the
+advice drawn under it, with `advisor_model` set) and advisor-picker (`/advisor`'s picker, its Off
+row last). Three scenes feed the
 README: readme (the slugify fix under its natural prompt, banner and all, at a tall inline size),
 skin (`/theme` just opened, previewing the session's own theme) and slash (the `/` menu narrowed
 by `/re`, a skill among the commands) — draw them with
@@ -118,6 +120,8 @@ SCENES = {
     "snapshot-skipped": dict(keys=["hi\r", "WAITFOR:Esc skips it", "\x1b"], settle=0.5, slow_snapshot=True),
     "cancelled": dict(keys=["SLOW hi\r", "IDLE", "/btw why?\r", "WAIT:1", "\x1b"], settle=0.5),
     "btw-queued": dict(keys=["SLOW hi\r", "IDLE", "/btw why?\r", "WAIT:0.5", "keep it short\r"], until="back in the prompt", settle=0.3),
+    "advisor": dict(keys=["ADVISE how should slugify treat unicode titles?\r"], until="Following the advice", advisor=True),
+    "advisor-picker": dict(keys=["/advisor\r"], advisor=True),
     "peer": dict(keys=["ASK:Which files are you changing, and is anything committed?", "TELL:The base branch is pushed and green; rebase on it when you get there."], peer=True),
 }
 
@@ -333,6 +337,8 @@ def run_scene(args, scratch, scene, cols, rows, theme):
     background, foreground, _ = THEMES[theme]
     peer = hold_peer(scratch) if scene.get("peer") else None
     site, releases = release_site(scratch) if scene.get("update") else (None, None)
+    if scene.get("advisor"):
+        (scratch.home / ".killi" / "config.toml").write_text('advisor_model = "zai/glm-5.3"\n' + scratch.config)
     if scene.get("slow_snapshot"):
         (scratch.home / ".gitconfig").write_text(SLOW_FILTER)
         (scratch.project / ".gitattributes").write_text("*.dat filter=slow\n")

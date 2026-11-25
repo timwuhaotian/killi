@@ -583,6 +583,7 @@ impl Agent {
             // finishes its work on the backup instead of losing it: the swarm's report
             // still holds every item, and the model that takes over doesn't run it again.
             backup: self.backup.clone(),
+            advisor: None,
             tools: self.tools.clone(),
             messages,
             // Its background tasks are its own while it runs; what it leaves running moves to

@@ -447,3 +447,55 @@ fn reload_without_the_skill_tool_keeps_skills_out_of_the_prompt() {
     assert!(setup.skills_need_restart());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn an_advisor_gives_sessions_the_tool_and_an_advisor_pick_applies_to_the_next() {
+    let root = crate::test_temp::TempDir::new("killi-setup-advisor");
+    let _home = crate::test_temp::Home::set(root.path());
+    let models = "default_model = \"test/model\"\n\n[providers.test]\ntype = \"openai\"\napi_key = \"k\"\n\n[models.\"test/model\"]\nprovider = \"test\"\nmodel = \"model\"\n\n[models.\"test/strong\"]\nprovider = \"test\"\nmodel = \"strong\"\n";
+    let advisors = |setup: &Setup| {
+        setup
+            .tools
+            .iter()
+            .filter(|tool| tool["function"]["name"] == "advisor")
+            .count()
+    };
+
+    let config: Config =
+        toml::from_str(&format!("advisor_model = \"test/strong\"\n{models}")).unwrap();
+    let mut setup = Setup::new(config, root.path(), None, false).await.unwrap();
+    assert_eq!(advisors(&setup), 1);
+    assert_eq!(setup.tools.last().unwrap()["function"]["name"], "advisor");
+    let agent = setup.start(Controls::default(), Rc::new(|_| {})).unwrap();
+    assert!(agent.has_advisor_tool());
+    drop(agent);
+
+    setup.set_advisor_model(None);
+    assert_eq!(advisors(&setup), 0, "later sessions start without the tool");
+    setup.set_advisor_model(Some("test/strong"));
+    setup.set_advisor_model(Some("test/strong"));
+    assert_eq!(
+        advisors(&setup),
+        1,
+        "picking again never adds a second tool"
+    );
+    setup.set_advisor_model(Some("test/missing"));
+    assert_eq!(
+        advisors(&setup),
+        0,
+        "an advisor that can't run gives no tool"
+    );
+
+    let config: Config =
+        toml::from_str(&format!("advisor_model = \"test/missing\"\n{models}")).unwrap();
+    let setup = Setup::new(config, root.path(), None, false).await.unwrap();
+    assert_eq!(advisors(&setup), 0);
+    assert!(
+        setup
+            .notes
+            .iter()
+            .any(|note| note.contains("advisor_model `test/missing`")),
+        "{:?}",
+        setup.notes
+    );
+}
