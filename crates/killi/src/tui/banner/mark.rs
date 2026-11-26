@@ -21,7 +21,7 @@ use super::{RESET, color, gradient, is_light, truecolor};
 
 /// Tallest the mark is drawn, in rows; it is twice as many columns wide, since a cell is about
 /// twice as tall as it is wide.
-const MOST_ROWS: usize = 16;
+const MOST_ROWS: usize = 18;
 /// Fewest rows worth drawing it in; a smaller window keeps its blank rows.
 const LEAST_ROWS: usize = 7;
 /// Seconds for one turn and the rest after it (two make a loop: K to cube, cube to K), and the

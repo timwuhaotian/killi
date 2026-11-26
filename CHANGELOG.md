@@ -7,7 +7,7 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## 0.9.15 — 2026-11-26
 
-- The turning K above a fresh session's prompt breathes: full and bright each time it faces you, easing smaller and dimmer through the turn. In fullscreen mode a left-click on it pushes it — it swells, flares and twists away from the side you clicked, then settles.
+- The turning K above a fresh session's prompt breathes: full and bright each time it faces you, easing smaller and dimmer through the turn. In fullscreen mode a left-click on it pushes it — it swells, flares and twists away from the side you clicked, then settles. It is also drawn taller, 18 rows instead of 16 where the window has the room.
 
 ## 0.9.14 — 2026-11-26
 
