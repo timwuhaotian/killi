@@ -354,6 +354,10 @@ pub(super) struct App {
     /// Whether the last draw actually showed the mark (enough padded room for it), so its
     /// 40 ms tick stops when it cannot appear.
     pub(super) mark_drawn: bool,
+    /// Where the last draw put the mark, so a press there pushes it.
+    pub(super) mark_rect: Option<banner::Place>,
+    /// The last press on the mark: when, and which side of its middle (-1 left, 1 right).
+    pub(super) mark_click: Option<(Instant, f32)>,
     /// When the branch was last read, so two git spawns don't run after every input.
     pub(super) branch_at: Option<Instant>,
     /// This session's file among the live sessions; none with `[agent] peers = false`.

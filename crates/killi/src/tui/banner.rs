@@ -4,7 +4,7 @@
 use super::text::{self, BOLD, DIM, FAINT, RESET, SELECT, is_light, truecolor, width};
 
 mod mark;
-pub use mark::mark;
+pub use mark::{Click, Place, mark, place};
 
 const LOGO: [&str; 6] = [
     "██╗  ██╗██╗██╗     ██╗     ██╗",

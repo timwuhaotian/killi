@@ -618,12 +618,16 @@ impl App {
             }
             (true, _) => 0,
         };
+        let click = self.mark_click.map(|(at, side)| banner::Click {
+            since: at.elapsed().as_secs_f32(),
+            side,
+        });
         let canvas = match self.idle_mark {
-            Some(since) => banner::mark(since.elapsed().as_secs_f32(), pad, width),
+            Some(since) => banner::mark(since.elapsed().as_secs_f32(), click, pad, width),
             None => vec![String::new(); pad],
         };
-        self.mark_drawn =
-            self.idle_mark.is_some() && canvas.iter().any(|row| !row.is_empty());
+        self.mark_drawn = self.idle_mark.is_some() && canvas.iter().any(|row| !row.is_empty());
+        self.mark_rect = self.mark_drawn.then(|| banner::place(pad, width)).flatten();
         rows.splice(0..0, canvas);
         input_rows.top += pad;
         self.input_rows = input_rows;

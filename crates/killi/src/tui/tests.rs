@@ -161,6 +161,8 @@ pub(super) fn test_app() -> App {
         banner_resumed: false,
         idle_mark: None,
         mark_drawn: false,
+        mark_rect: None,
+        mark_click: None,
         branch_at: None,
         live: None,
         peers: None,

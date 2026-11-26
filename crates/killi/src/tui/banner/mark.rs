@@ -1,7 +1,9 @@
 //! killi's icon turning in the blank rows between the banner and the prompt while a session has
 //! no prompt yet: the icon's K, three rounded strokes given depth, and its coral dot as a ball.
 //! Each turn eases in and out and rests a moment facing the viewer; while edge-on near the end
-//! of a turn the K melts into an ice cube, and on the next turn back.
+//! of a turn the K melts into an ice cube, and on the next turn back. It breathes once a turn,
+//! full and bright facing the viewer and easing smaller and dimmer as it turns, and a click
+//! pushes it: it swells, flares and twists away from the click, then settles.
 //!
 //! Each cell is a braille character, a 2 by 4 grid of dots, every dot the mark covers drawn; the
 //! cell's color is its dots' light averaged. The light is a studio's: a key light from above
@@ -51,6 +53,15 @@ const CUBE_ROUND: f32 = 0.14;
 /// The cube's own turn and tip (radians).
 const CUBE_TURN: f32 = 0.62;
 const CUBE_TIP: f32 = 0.5;
+/// How far the mark swells at rest and how much of its light it gives up mid-turn.
+const SWELL: f32 = 0.03;
+const DIM: f32 = 0.26;
+/// A click's push: how long it takes to ease away, how far it swells the mark, how much
+/// brighter it makes it and how far it twists it (radians).
+const PULSE: f32 = 0.9;
+const PUSH: f32 = 0.07;
+const FLARE: f32 = 0.5;
+const TWIST: f32 = 0.3;
 /// The icon's dot over the K: its middle and radius.
 const BALL: [f32; 3] = [0.81, 0.96, 0.0];
 const BALL_RADIUS: f32 = 0.25;
@@ -61,23 +72,56 @@ const BRAILLE: [[u32; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40,
 
 type Rgb = [f32; 3];
 
-/// The mark `seconds` into its breathing, centered in a canvas `rows` tall and `columns` wide:
-/// always `rows` rows, none wider than `columns`, all blank when it doesn't fit.
-pub fn mark(seconds: f32, rows: usize, columns: usize) -> Vec<String> {
-    let mut out = vec![String::new(); rows];
+/// A click on the mark: how many seconds ago, and which side of its middle (-1 left, 1 right).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Click {
+    pub since: f32,
+    pub side: f32,
+}
+
+/// Where the mark is drawn in a canvas: its first row and column, and how many of each it takes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Place {
+    pub row: usize,
+    pub rows: usize,
+    pub column: usize,
+    pub columns: usize,
+}
+
+/// Where the mark goes in a canvas `rows` tall and `columns` wide: None when it doesn't fit.
+pub fn place(rows: usize, columns: usize) -> Option<Place> {
     let size = rows.saturating_sub(2).min(MOST_ROWS);
-    if size < LEAST_ROWS || columns < 2 * size + 2 {
+    (size >= LEAST_ROWS && columns >= 2 * size + 2).then(|| Place {
+        row: (rows - size) / 2,
+        rows: size,
+        column: (columns - 2 * size) / 2,
+        columns: 2 * size,
+    })
+}
+
+/// The mark `seconds` into its breathing and `click` after a click on it, centered in a canvas
+/// `rows` tall and `columns` wide: always `rows` rows, none wider than `columns`, all blank
+/// when it doesn't fit.
+pub fn mark(seconds: f32, click: Option<Click>, rows: usize, columns: usize) -> Vec<String> {
+    let mut out = vec![String::new(); rows];
+    let Some(Place {
+        row: top,
+        rows: height,
+        column: _,
+        columns: width,
+    }) = place(rows, columns)
+    else {
         return out;
-    }
-    let (height, width) = (size, 2 * size);
-    let dots = Dots::at(seconds, 4 * height, 2 * width);
+    };
+    let pose = pose(seconds, click);
+    let dots = Dots::at(&pose, 4 * height, 2 * width);
     let lights = [Studio::k(), Studio::ball()];
     let left = " ".repeat((columns - width) / 2);
-    let top = (rows - height) / 2;
     let truecolor = truecolor();
     for y in 0..height {
-        let cells: Vec<Option<(char, Rgb)>> =
-            (0..width).map(|x| dots.cell(x, y, &lights)).collect();
+        let cells: Vec<Option<(char, Rgb)>> = (0..width)
+            .map(|x| dots.cell(x, y, &lights, pose.lit))
+            .collect();
         let Some(end) = cells.iter().rposition(Option::is_some) else {
             continue;
         };
@@ -147,8 +191,8 @@ impl Studio {
     }
 
     /// The color of a surface facing `normal` (toward the viewer is +z, up is +y) at depth `z`
-    /// (toward the viewer).
-    fn shade(&self, [nx, ny, nz]: Rgb, z: f32) -> Rgb {
+    /// (toward the viewer), `lit` times: under 1 fades toward the ground, over 1 flares.
+    fn shade(&self, [nx, ny, nz]: Rgb, z: f32, lit: f32) -> Rgb {
         let diffuse = (-0.41 * nx + 0.564 * ny + 0.718 * nz).clamp(0.0, 1.0);
         let bounce = (0.55 * nx - 0.2 * ny - 0.35 * nz).clamp(0.0, 1.0) * (1.0 - diffuse) * 0.38;
         let edge =
@@ -165,7 +209,7 @@ impl Studio {
                 + self.fill[i] * bounce * (1.0 - edge) * (1.0 - gloss)
                 + self.rim[i] * edge * (1.0 - gloss)
                 + self.highlight[i] * gloss;
-            self.ground[i] + (value - self.ground[i]) * gain
+            (self.ground[i] + (value - self.ground[i]) * gain * lit).clamp(0.0, 255.0)
         })
     }
 }
@@ -190,9 +234,20 @@ struct Dot {
     ball: bool,
 }
 
-/// Where the mark is `seconds` into its loop: its turn about upright, its tip toward the
-/// viewer and its roll (radians), and how far it has melted from the K to the cube (0 to 1).
-fn pose(seconds: f32) -> (f32, f32, f32, f32) {
+/// Where the mark is `seconds` into its loop and `click` after a click on it: its turn about
+/// upright, its tip toward the viewer and its roll (radians), how far it has melted from the K
+/// to the cube (0 to 1), how much it is swollen (0 is its size at rest) and how lit it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Pose {
+    turn: f32,
+    tip: f32,
+    roll: f32,
+    melted: f32,
+    swell: f32,
+    lit: f32,
+}
+
+fn pose(seconds: f32, click: Option<Click>) -> Pose {
     let breaths = seconds / BREATH;
     let spin = smooth(breaths.rem_euclid(1.0) / TURNING);
     let turn = (breaths.floor() + spin) * TAU;
@@ -201,7 +256,29 @@ fn pose(seconds: f32) -> (f32, f32, f32, f32) {
     let to_cube = breaths.rem_euclid(2.0) < 1.0;
     let melted = if to_cube { melt } else { 1.0 - melt };
     let roll = (breaths / 2.0 * TAU).sin() * ROLL;
-    (turn, turn.sin() * WOBBLE, roll, melted)
+    // Full and bright each time it faces the viewer, easing smaller and dimmer through the turn.
+    let breathe = (1.0 + (breaths * TAU).cos()) / 2.0;
+    let (mut swell, mut lit, mut twist) = (SWELL * breathe, 1.0 - DIM + DIM * breathe, 0.0);
+    if let Some(click) = click {
+        let push = push(click.since);
+        swell += PUSH * push;
+        lit *= 1.0 + FLARE * push;
+        twist = click.side * TWIST * push;
+    }
+    Pose {
+        turn: turn + twist,
+        tip: turn.sin() * WOBBLE,
+        roll,
+        melted,
+        swell,
+        lit,
+    }
+}
+
+/// How much of a click's push is left `since` seconds after it: it lands at once and eases away.
+fn push(since: f32) -> f32 {
+    let t = (since / PULSE).clamp(0.0, 1.0);
+    smooth(t / 0.15) * (1.0 - t).powi(2)
 }
 
 /// The mark cast onto a grid of dots `height` by `width`.
@@ -211,8 +288,15 @@ struct Dots {
 }
 
 impl Dots {
-    fn at(seconds: f32, height: usize, width: usize) -> Self {
-        let (turn, tip, roll, melted) = pose(seconds);
+    fn at(pose: &Pose, height: usize, width: usize) -> Self {
+        let Pose {
+            turn,
+            tip,
+            roll,
+            melted,
+            swell,
+            ..
+        } = *pose;
         let shape = Shape { melted };
         let (st, ct, sp, cp, sr, cr) = (
             turn.sin(),
@@ -235,8 +319,9 @@ impl Dots {
             [x * ct - z * st, y, x * st + z * ct]
         };
         // The nearest of the mark is magnified D/(D-REACH); the scale (dots per unit) keeps
-        // even that inside the grid.
-        let scale = (height as f32 / 2.0 - 1.0) / (REACH * DISTANCE / (DISTANCE - REACH));
+        // even that inside the grid, and grows with the breath and a click's push.
+        let scale =
+            (height as f32 / 2.0 - 1.0) / (REACH * DISTANCE / (DISTANCE - REACH)) * (1.0 + swell);
         let origin = unrotate([0.0, 0.0, DISTANCE]);
         let mut dots = vec![None; height * width];
         for row in 0..height {
@@ -259,7 +344,7 @@ impl Dots {
 
     /// The braille character for cell (`x`, `y`) and its dots' colors averaged, or None when
     /// the mark doesn't reach it.
-    fn cell(&self, x: usize, y: usize, lights: &[Studio; 2]) -> Option<(char, Rgb)> {
+    fn cell(&self, x: usize, y: usize, lights: &[Studio; 2], lit: f32) -> Option<(char, Rgb)> {
         let (mut bits, mut sum, mut count) = (0, [0.0; 3], 0.0);
         for (dy, row) in BRAILLE.iter().enumerate() {
             for (dx, bit) in row.iter().enumerate() {
@@ -267,7 +352,7 @@ impl Dots {
                     continue;
                 };
                 bits |= bit;
-                let rgb = lights[usize::from(dot.ball)].shade(dot.normal, dot.z);
+                let rgb = lights[usize::from(dot.ball)].shade(dot.normal, dot.z, lit);
                 sum = std::array::from_fn(|i| sum[i] + rgb[i]);
                 count += 1.0;
             }
@@ -409,119 +494,4 @@ fn normalize(v: Rgb) -> Rgb {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tui::text::width;
-
-    /// Cells holding a drawn braille character.
-    fn drawn(canvas: &[String]) -> usize {
-        canvas
-            .iter()
-            .flat_map(|row| row.chars())
-            .filter(|c| ('\u{2801}'..='\u{28ff}').contains(c))
-            .count()
-    }
-
-    #[test]
-    fn the_mark_fills_its_canvas_and_never_runs_past_it() {
-        for (rows, columns) in [(20, 118), (12, 80), (9, 30), (30, 60)] {
-            for seconds in [0.0, 0.7, 1.5, 2.4, 3.0, 5.5, 33.3] {
-                let canvas = mark(seconds, rows, columns);
-                assert_eq!(canvas.len(), rows);
-                assert!(
-                    canvas.iter().all(|row| width(row) <= columns),
-                    "{rows}x{columns}"
-                );
-                let size = (rows - 2).min(MOST_ROWS);
-                assert!(
-                    drawn(&canvas) >= size,
-                    "{rows}x{columns} at {seconds}s: the mark is drawn, edge-on too"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_whole_mark_stays_inside_the_grid_as_it_turns_and_melts() {
-        for tenth in 0..(2.0 * BREATH * 10.0) as usize {
-            let dots = Dots::at(tenth as f32 / 10.0, 64, 64);
-            for i in 0..64 {
-                for at in [i, 63 * 64 + i, i * 64, i * 64 + 63] {
-                    assert!(
-                        dots.dots[at].is_none(),
-                        "{tenth} tenths: touches the border"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn each_turn_eases_rests_and_melts_between_the_k_and_the_cube() {
-        assert_ne!(mark(1.0, 20, 80), mark(1.1, 20, 80), "turning");
-        let resting = BREATH * TURNING + 0.1;
-        for (a, b) in [
-            (resting, BREATH - 0.05),
-            (BREATH + resting, 2.0 * BREATH - 0.05),
-        ] {
-            let ((turn_a, _, _, melted_a), (turn_b, _, _, melted_b)) = (pose(a), pose(b));
-            assert_eq!((turn_a, melted_a), (turn_b, melted_b), "resting");
-        }
-        let melted = |seconds: f32| pose(seconds).3;
-        assert_eq!(melted(0.0), 0.0, "the K to start");
-        assert_eq!(melted(BREATH + 0.1), 1.0, "the cube after one turn");
-        assert_eq!(melted(2.0 * BREATH + 0.1), 0.0, "the K again after two");
-        let mid = melted(BREATH * TURNING * 0.85);
-        assert!(
-            mid > 0.0 && mid < 1.0,
-            "melting near the end of a turn: {mid}"
-        );
-        assert!(
-            (pose(2.0 * BREATH).0 - 2.0 * TAU).abs() < 1e-4,
-            "a loop is two whole turns"
-        );
-    }
-
-    #[test]
-    fn the_k_shows_its_coral_dot_and_the_cube_none() {
-        let shown = |seconds: f32| -> Vec<Dot> {
-            Dots::at(seconds, 64, 64)
-                .dots
-                .iter()
-                .flatten()
-                .copied()
-                .collect()
-        };
-        let k = shown(0.0);
-        let balls = k.iter().filter(|d| d.ball).count();
-        assert!(balls > 0, "the dot");
-        assert!(k.len() > 5 * balls, "the K is most of it");
-        for tenth in 0..(2.0 * BREATH * 10.0) as usize {
-            let seconds = tenth as f32 / 10.0;
-            if pose(seconds).3 == 1.0 {
-                assert!(
-                    shown(seconds).iter().all(|d| !d.ball),
-                    "the cube has no dot at {seconds}s"
-                );
-            }
-        }
-        let studio = Studio::k();
-        let brightness: Vec<f32> = k
-            .iter()
-            .map(|d| studio.shade(d.normal, d.z).iter().sum())
-            .collect();
-        let (low, high) = brightness
-            .iter()
-            .fold((f32::MAX, 0.0f32), |(l, h), &b| (l.min(b), h.max(b)));
-        assert!(high > 1.5 * low, "shaded and lit: {low}..{high}");
-    }
-
-    #[test]
-    fn a_canvas_too_small_for_the_mark_stays_blank() {
-        for (rows, columns) in [(0, 80), (LEAST_ROWS + 1, 80), (20, 15)] {
-            let canvas = mark(3.0, rows, columns);
-            assert_eq!(canvas.len(), rows);
-            assert!(canvas.iter().all(String::is_empty), "{rows}x{columns}");
-        }
-    }
-}
+mod tests;

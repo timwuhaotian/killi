@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.15 — 2026-11-26
+
+- The turning K above a fresh session's prompt breathes: full and bright each time it faces you, easing smaller and dimmer through the turn. In fullscreen mode a left-click on it pushes it — it swells, flares and twists away from the side you clicked, then settles.
+
 ## 0.9.14 — 2026-11-26
 
 - The turning ice cube above a fresh session's prompt is now killi's K with its coral dot, drawn in braille dots under studio light: it turns, rests facing you, and melts into the ice cube and back over each loop. Fixed the cube keeping a stray coral dot, the 1 s clocks (background work, questions from other sessions) freezing while it turns, its 25 fps redraw running when no room shows it, and a redrawn banner reviving it after the first prompt.

@@ -238,6 +238,26 @@ impl App {
         }
     }
 
+    /// A press on the turning mark, while a fresh session shows it: the mark swells, flares and
+    /// twists away from the side pressed. It takes the press, which selects nothing; any other
+    /// press ends the last one's push.
+    fn poke_mark(&mut self, (row, col): (usize, usize)) -> bool {
+        let Some(place) = self.mark_rect.filter(|place| {
+            (place.row..place.row + place.rows).contains(&row)
+                && (place.column..place.column + place.columns).contains(&col)
+        }) else {
+            self.mark_click = None;
+            return false;
+        };
+        let side = if col < place.column + place.columns / 2 {
+            -1.0
+        } else {
+            1.0
+        };
+        self.mark_click = Some((Instant::now(), side));
+        true
+    }
+
     /// Ends the selection: a key press returns the view to the newest rows, which it was not
     /// meant to select, and input between presses ends their run of double- and triple-clicks.
     pub(super) fn clear_selection(&mut self) {
@@ -258,6 +278,11 @@ impl App {
     /// on the todos' `more` row expands them, or on an expanded list collapses it; anywhere else
     /// a press ends the selection.
     fn press(&mut self, (row, col): (usize, usize)) {
+        if self.poke_mark((row, col)) {
+            self.clear_selection();
+            self.editor.deselect();
+            return;
+        }
         let todos = self.todo_rows.and_then(|(first, last)| {
             let hit = if self.todos_expanded {
                 (first..=last).contains(&row)

@@ -1,4 +1,5 @@
 use super::*;
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 #[test]
 fn shell_prompt_shows_when_input_will_run_locally() {
@@ -2036,5 +2037,51 @@ fn the_k_turns_in_a_fresh_sessions_blank_rows_until_a_prompt_is_sent() {
         rows.iter()
             .all(|row| !unstyled(row).contains(|c| ('\u{2801}'..='\u{28ff}').contains(&c))),
         "{rows:?}"
+    );
+}
+
+#[test]
+fn a_press_on_the_turning_k_pushes_it_and_a_press_elsewhere_does_not() {
+    let mut app = test_app();
+    app.content_rows = 2;
+    app.live();
+    assert!(
+        app.mark_rect.is_none() && app.mark_click.is_none(),
+        "no mark, no push"
+    );
+
+    let press = |app: &mut App, row: usize, column: usize| {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            row: row as u16,
+            column: column as u16,
+            modifiers: KeyModifiers::NONE,
+        });
+    };
+    let (row, rows, column, columns) = (10, 14, 40, 28);
+    app.mark_rect = Some(banner::Place {
+        row,
+        rows,
+        column,
+        columns,
+    });
+    press(&mut app, 2, 3);
+    assert!(app.mark_click.is_none(), "outside it");
+    for (col, side) in [
+        (column, -1.0),
+        (column + columns / 2 - 1, -1.0),
+        (column + columns / 2, 1.0),
+        (column + columns - 1, 1.0),
+    ] {
+        press(&mut app, row + rows - 1, col);
+        let (at, pushed) = app.mark_click.expect("pushed");
+        assert_eq!(pushed, side, "column {col}");
+        assert!(at.elapsed() < Duration::from_secs(1));
+    }
+    app.mark_rect = None;
+    press(&mut app, row, column);
+    assert!(
+        app.mark_click.is_none(),
+        "no mark on screen: nothing to push"
     );
 }
