@@ -3,8 +3,8 @@
 
 use super::text::{self, BOLD, DIM, FAINT, RESET, SELECT, is_light, truecolor, width};
 
-mod cube;
-pub use cube::cube;
+mod mark;
+pub use mark::mark;
 
 const LOGO: [&str; 6] = [
     "██╗  ██╗██╗██╗     ██╗     ██╗",

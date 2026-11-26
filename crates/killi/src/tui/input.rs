@@ -38,6 +38,10 @@ impl App {
         edge.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut frames = tokio::time::interval(Duration::from_millis(100));
         frames.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut mark_frames = tokio::time::interval(Duration::from_millis(40));
+        mark_frames.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut seconds = tokio::time::interval(Duration::from_secs(1));
+        seconds.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             let event = tokio::select! {
                 biased;
@@ -81,6 +85,25 @@ impl App {
                 }
                 Some(id) = self.bg_running.next(), if !self.bg_running.is_empty() => {
                     self.on_background_done(id);
+                    if let Some(input) = self.take_wake() {
+                        return Ok(Some(input));
+                    }
+                    self.draw()?;
+                    continue;
+                }
+                // The 1 s clock the branches below keep by sleeping: theirs is recreated
+                // each round and the 40 ms tick would starve it, so this one persists.
+                _ = seconds.tick(), if self.background_ticking() || !self.peer_asking.is_empty() => {
+                    self.spinner += 1;
+                    if let Some(input) = self.take_wake() {
+                        return Ok(Some(input));
+                    }
+                    self.draw()?;
+                    continue;
+                }
+                // A fresh session's icon turns at 25 frames a second, timed by the clock. Its
+                // tick would starve the 1 s ones below, so it does what they do.
+                _ = mark_frames.tick(), if self.idle_mark.is_some() && self.mark_drawn => {
                     if let Some(input) = self.take_wake() {
                         return Ok(Some(input));
                     }

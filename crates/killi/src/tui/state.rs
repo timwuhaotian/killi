@@ -348,9 +348,12 @@ pub(super) struct App {
     pub(super) todo_rows: Option<(usize, usize)>,
     /// Whether the banner says it is a resumed session, for drawing it again.
     pub(super) banner_resumed: bool,
-    /// A fresh session's banner is up and no prompt has been sent since: the blank rows above
-    /// the live area show the turning ice cube.
-    pub(super) idle_cube: bool,
+    /// When a fresh session's banner went up, while no prompt has been sent since: the blank
+    /// rows above the live area show killi's icon turning.
+    pub(super) idle_mark: Option<Instant>,
+    /// Whether the last draw actually showed the mark (enough padded room for it), so its
+    /// 40 ms tick stops when it cannot appear.
+    pub(super) mark_drawn: bool,
     /// When the branch was last read, so two git spawns don't run after every input.
     pub(super) branch_at: Option<Instant>,
     /// This session's file among the live sessions; none with `[agent] peers = false`.

@@ -278,7 +278,7 @@ impl App {
 
     /// Prints what the user typed as their message block.
     pub(super) fn commit_prompt(&mut self, prompt: &str) {
-        self.idle_cube = false;
+        self.idle_mark = None;
         self.commit(String::new());
         let prompt = prompt.to_string();
         self.emit(Line::block(move |width| prompt_rows(&prompt, width)));
@@ -332,7 +332,7 @@ impl App {
     }
 
     pub(super) fn begin_busy(&mut self) {
-        self.idle_cube = false;
+        self.idle_mark = None;
         self.busy = Some(Instant::now());
         self.spinner = 0;
         self.turn_out_base = self.status.completion;

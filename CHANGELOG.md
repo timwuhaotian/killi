@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.14 — 2026-11-26
+
+- The turning ice cube above a fresh session's prompt is now killi's K with its coral dot, drawn in braille dots under studio light: it turns, rests facing you, and melts into the ice cube and back over each loop. Fixed the cube keeping a stray coral dot, the 1 s clocks (background work, questions from other sessions) freezing while it turns, its 25 fps redraw running when no room shows it, and a redrawn banner reviving it after the first prompt.
+
 ## 0.9.13 — 2026-11-26
 
 - A new session shows an ice cube turning in the blank rows between the banner and the prompt, in the logo's colors, until the first prompt is sent. It appears on start-up and after `/clear` (not on a resumed session), in both inline and fullscreen mode, and only uses rows that are otherwise blank: a menu, a picker or a short window takes its room first.

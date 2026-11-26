@@ -106,7 +106,8 @@ impl App {
             input_rows: InputRows::default(),
             todo_rows: None,
             banner_resumed: false,
-            idle_cube: false,
+            idle_mark: None,
+            mark_drawn: false,
             branch_at: None,
             live: None,
             peers: None,
@@ -231,12 +232,14 @@ impl App {
         if let Some(since) = &mut self.since_banner {
             since.banner = self.pending.len();
         }
-        self.idle_cube = !resumed;
+        self.idle_mark = (!resumed).then(Instant::now);
     }
 
     /// Draws the banner again with the model, effort and setup now in use, when its top row is
     /// still on screen; everything printed below it is printed again as it was.
     pub(super) fn redraw_banner(&mut self, agent: &Agent, session: &Setup, snapshots: &Snapshots) {
+        // Drawing the banner again must not revive or restart the mark once a prompt ended it.
+        let idle_mark = self.idle_mark;
         if self.fullscreen {
             let Some(rest) = self.history.cut_banner() else {
                 return;
@@ -244,6 +247,7 @@ impl App {
             let (last_kind, last_blank) = (self.last_kind, self.last_blank);
             self.last_blank = false;
             self.banner(agent, session, snapshots, self.banner_resumed);
+            self.idle_mark = idle_mark;
             self.history.restore(rest);
             (self.last_kind, self.last_blank) = (last_kind, last_blank);
             return;
@@ -267,6 +271,7 @@ impl App {
         let (last_kind, last_blank) = (self.last_kind, self.last_blank);
         self.last_blank = false;
         self.banner(agent, session, snapshots, since.resumed);
+        self.idle_mark = idle_mark;
         if since.lines.len() > since.banner || !waiting.is_empty() {
             self.pending
                 .extend(since.lines.into_iter().skip(since.banner));

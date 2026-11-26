@@ -443,7 +443,8 @@ def run_scene(args, scratch, scene, cols, rows, theme):
     # The live area is painted in bursts the pty delivers in small chunks; keep reading
     # until the terminal falls quiet again, so a screen is captured whole, not mid-paint.
     quiet = time.monotonic() + 0.05
-    while time.monotonic() < quiet:
+    quiet_deadline = time.monotonic() + 3  # an animated idle screen never falls quiet
+    while time.monotonic() < quiet and time.monotonic() < quiet_deadline:
         ready, _, _ = select.select([fd], [], [], 0.05)
         if not ready:
             continue

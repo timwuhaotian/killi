@@ -2004,24 +2004,37 @@ fn a_crash_record_says_where_the_panic_was() {
 }
 
 #[test]
-fn the_ice_cube_turns_in_a_fresh_sessions_blank_rows_until_a_prompt_is_sent() {
+fn the_k_turns_in_a_fresh_sessions_blank_rows_until_a_prompt_is_sent() {
     let mut app = test_app();
     app.content_rows = 2;
-    app.idle_cube = true;
+    app.idle_mark = Some(Instant::now());
     let (rows, _, _) = app.live();
-    assert_eq!(rows.len(), app.height - 2, "the cube only fills the padding");
+    assert_eq!(
+        rows.len(),
+        app.height - 2,
+        "the cube only fills the padding"
+    );
     assert!(rows.iter().all(|row| text::width(row) <= app.width));
-    assert!(rows.iter().any(|row| unstyled(row).contains('*')), "{rows:?}");
-    app.spinner += 1;
-    assert_ne!(app.live().0, rows, "it turns");
+    assert!(
+        rows.iter()
+            .any(|row| unstyled(row).contains(|c| ('\u{2801}'..='\u{28ff}').contains(&c))),
+        "{rows:?}"
+    );
     app.content_rows = 22;
     assert!(
-        app.live().0.iter().all(|row| !unstyled(row).contains('*')),
+        app.live()
+            .0
+            .iter()
+            .all(|row| !unstyled(row).contains(|c| ('\u{2801}'..='\u{28ff}').contains(&c))),
         "no room, no cube"
     );
     app.content_rows = 2;
     app.commit_prompt("hello");
     let (rows, _, _) = app.live();
-    assert!(!app.idle_cube);
-    assert!(rows.iter().all(|row| !unstyled(row).contains('*')), "{rows:?}");
+    assert!(app.idle_mark.is_none());
+    assert!(
+        rows.iter()
+            .all(|row| !unstyled(row).contains(|c| ('\u{2801}'..='\u{28ff}').contains(&c))),
+        "{rows:?}"
+    );
 }

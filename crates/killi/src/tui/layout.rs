@@ -606,24 +606,24 @@ impl App {
             input_rows.top -= cut;
         }
         // Inline, the area is padded down to the bottom row. Fullscreen, the view above fills
-        // that room, unless the ice cube turns in it while a fresh session waits.
-        let pad = match (self.fullscreen, self.idle_cube) {
+        // that room, unless killi's K turns in it while a fresh session waits.
+        let pad = match (self.fullscreen, self.idle_mark.is_some()) {
             (false, _) => padding(
                 self.height,
                 self.content_rows + self.pending_rows(),
                 rows.len(),
             ),
-            (true, true) if self.history.below(1) == 0 => padding(
-                self.height,
-                self.history.all_rows().len(),
-                rows.len(),
-            ),
+            (true, true) if self.history.below(1) == 0 => {
+                padding(self.height, self.history.all_rows().len(), rows.len())
+            }
             (true, _) => 0,
         };
-        let canvas = match self.idle_cube {
-            true => banner::cube(self.spinner, pad, width),
-            false => vec![String::new(); pad],
+        let canvas = match self.idle_mark {
+            Some(since) => banner::mark(since.elapsed().as_secs_f32(), pad, width),
+            None => vec![String::new(); pad],
         };
+        self.mark_drawn =
+            self.idle_mark.is_some() && canvas.iter().any(|row| !row.is_empty());
         rows.splice(0..0, canvas);
         input_rows.top += pad;
         self.input_rows = input_rows;
