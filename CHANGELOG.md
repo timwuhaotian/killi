@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.16 — 2026-11-26
+
+- The idle K above a fresh session's prompt fills the rows it is given: it was drawn at about two thirds of its height, so it looked small in a short window whatever the rows spare.
+
 ## 0.9.15 — 2026-11-26
 
 - The turning K above a fresh session's prompt breathes: full and bright each time it faces you, easing smaller and dimmer through the turn. In fullscreen mode a left-click on it pushes it — it swells, flares and twists away from the side you clicked, then settles. It is also drawn taller, 18 rows instead of 16 where the window has the room.

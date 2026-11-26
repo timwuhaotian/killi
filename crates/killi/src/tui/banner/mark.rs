@@ -34,6 +34,9 @@ const WOBBLE: f32 = 0.112;
 const ROLL: f32 = 0.045;
 /// The camera's distance from the mark's middle.
 const DISTANCE: f32 = 5.3;
+/// How much of its box the mark is drawn across. Its reach bounds every pose with room to
+/// spare, and without this the mark sits small in the middle of the rows it takes.
+const FILL: f32 = 1.25;
 /// How far from its middle the mark reaches, its ball and stroke ends included.
 const REACH: f32 = 1.55;
 /// The K's strokes from docs/icon.svg (a 512 square, the K's stem at x 158), centered on the
@@ -320,8 +323,9 @@ impl Dots {
         };
         // The nearest of the mark is magnified D/(D-REACH); the scale (dots per unit) keeps
         // even that inside the grid, and grows with the breath and a click's push.
-        let scale =
-            (height as f32 / 2.0 - 1.0) / (REACH * DISTANCE / (DISTANCE - REACH)) * (1.0 + swell);
+        let scale = (height as f32 / 2.0 - 1.0) / (REACH * DISTANCE / (DISTANCE - REACH))
+            * FILL
+            * (1.0 + swell);
         let origin = unrotate([0.0, 0.0, DISTANCE]);
         let mut dots = vec![None; height * width];
         for row in 0..height {
