@@ -132,6 +132,9 @@ impl Agent {
         let mut told_unfinished = false;
         let mut told_left_running = false;
         let mut told_open_tasks = false;
+        // The goal check comes back after tool calls, up to `goal::MAX_CHECKS` per turn.
+        let mut goal_checks = 0;
+        let mut goal_check_due = true;
         // Calls a message typed meanwhile skipped, not yet re-checked at a would-be end
         // of the turn: the work they were for may still be standing.
         let mut skipped_unchecked = false;
@@ -228,6 +231,20 @@ impl Agent {
                     self.push(json!({"role": "user", "content": note}))?;
                     continue;
                 }
+                if !truncated
+                    && goal_check_due
+                    && goal_checks < goal::MAX_CHECKS
+                    && let Some(note) = self.goal_check_note()
+                {
+                    goal_checks += 1;
+                    goal_check_due = false;
+                    (self.sink)(Event::Notice(
+                        "The session goal still stands. Asked the agent to check it before ending the turn."
+                            .into(),
+                    ));
+                    self.push(json!({"role": "user", "content": note}))?;
+                    continue;
+                }
                 let stop = self
                     .hook(
                         self.stop_event(),
@@ -256,6 +273,7 @@ impl Agent {
             called = true;
             // A reminder that was followed by tool calls worked; a later stop earns its own.
             told_unfinished = false;
+            goal_check_due = true;
             let ran_from = self.messages.len();
             let stop = self.execute_calls(calls, truncated).await?;
             if self

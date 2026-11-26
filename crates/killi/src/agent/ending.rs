@@ -275,3 +275,22 @@ pub(super) fn interrupted_note(
     note.push_str(" That work isn't finished. Do what the message below asks first; unless it drops or replaces the interrupted request, carry on with what is left of it afterwards, keeping its open items on your task list until they are done.");
     note
 }
+
+impl Agent {
+    /// The check a reply that would end the turn gets while the session goal stands, or None
+    /// when no check is due. Only the terminal's main agent outside plan mode is checked:
+    /// subagents hold no goal, `-p` doesn't enforce one a resume restored (decision 57), plan
+    /// mode can't do the work, and background work
+    /// still running ends the turn properly, since its report starts a turn of its own.
+    pub(super) fn goal_check_note(&self) -> Option<String> {
+        if self.depth > 0
+            || !self.controls.interactive
+            || self.controls.plan.get()
+            || self.background_working()
+        {
+            return None;
+        }
+        let goal = self.controls.goal.borrow().clone()?;
+        Some(crate::goal::check_note(&goal))
+    }
+}

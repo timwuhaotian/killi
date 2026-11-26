@@ -16,6 +16,18 @@ pub fn end_note(goal: &str) -> String {
     )
 }
 
+/// Times one turn may be held open by `check_note`. The check comes back only after tool
+/// calls, so a reply that answers it without working ends the turn sooner.
+pub const MAX_CHECKS: u32 = 3;
+
+/// Told when a reply would end the turn while the goal stands: the turn's request may be
+/// answered with the goal still short, and the user would otherwise have to ask again.
+pub fn check_note(goal: &str) -> String {
+    format!(
+        "<system-reminder>The session goal still stands: {goal}\nBefore this turn ends, check it against the goal itself, not only the last request. Do exactly one: if any part is unfinished or unverified, carry on now with tool calls, without asking whether to; if every part is done, prove it (if this turn already shows the proof, say so in one line instead of checking again) and tell the user to confirm with /goal done; if it is blocked, needs a decision only the user can make, or the user's latest message said to stop or wait, say so in one line and stop. Don't repeat your last reply.</system-reminder>"
+    )
+}
+
 /// What `/goal` shows when no goal is set.
 pub const EMPTY: &str = "No session goal. Set one with /goal <text>.";
 
@@ -58,6 +70,19 @@ mod tests {
         assert!(note.contains("Session goal: ship v2"), "{note}");
         assert!(
             note.contains("/goal done") && note.contains("/goal clear"),
+            "{note}"
+        );
+        assert!(note.starts_with("<system-reminder>") && note.ends_with("</system-reminder>"));
+    }
+
+    #[test]
+    fn check_note_restates_the_goal_and_its_three_endings() {
+        let note = check_note("ship v2");
+        assert!(note.contains("still stands: ship v2"), "{note}");
+        assert!(
+            note.contains("carry on now")
+                && note.contains("/goal done")
+                && note.contains("blocked"),
             "{note}"
         );
         assert!(note.starts_with("<system-reminder>") && note.ends_with("</system-reminder>"));

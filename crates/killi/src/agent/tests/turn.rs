@@ -531,6 +531,112 @@ async fn the_model_hears_the_session_goal_until_it_ends() {
     );
 }
 
+/// A terminal agent with `goal` set (if any) on the stub serving `replies`.
+async fn goal_agent(
+    name: &str,
+    goal: Option<&str>,
+    interactive: bool,
+    replies: Vec<String>,
+) -> Agent {
+    let controls = Controls {
+        interactive,
+        ..Controls::default()
+    };
+    let mut agent = idle_agent(name, controls, Rc::new(|_| {}));
+    Rc::get_mut(&mut agent.client).unwrap().model.base_url = stub_replies(replies).await;
+    if let Some(goal) = goal {
+        agent.set_goal(goal).unwrap();
+    }
+    agent
+}
+
+fn goal_checks(agent: &Agent) -> usize {
+    agent
+        .messages
+        .iter()
+        .filter(|m| {
+            m["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("The session goal still stands"))
+        })
+        .count()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_reply_ending_the_turn_with_a_goal_open_is_asked_to_check_it_once() {
+    let mut agent = goal_agent(
+        "goal-check",
+        Some("ship v2"),
+        true,
+        vec![
+            sse("Fixed the first bug. Want me to continue?", "stop"),
+            sse("Blocked: the release needs your npm token.", "stop"),
+        ],
+    )
+    .await;
+    let (text, stop) = agent.run("fix the first bug", &[]).await.unwrap();
+    assert_eq!(
+        (text.as_str(), stop),
+        (
+            "Blocked: the release needs your npm token.",
+            Stop::Completed
+        )
+    );
+    assert_eq!(
+        goal_checks(&agent),
+        1,
+        "a reply without work isn't asked again"
+    );
+    assert_eq!(agent.stats.requests, 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_goal_check_comes_back_after_work_up_to_its_cap() {
+    let mut replies = Vec::new();
+    for i in 0..=goal::MAX_CHECKS {
+        replies.push(sse("Done.", "stop"));
+        replies.push(call_reply(
+            &format!("c{i}"),
+            "",
+            "glob",
+            json!({"pattern": "*.nothing"}),
+        ));
+    }
+    replies.pop();
+    let mut agent = goal_agent("goal-check-cap", Some("ship v2"), true, replies).await;
+    let (text, stop) = agent.run("go", &[]).await.unwrap();
+    assert_eq!((text.as_str(), stop), ("Done.", Stop::Completed));
+    assert_eq!(goal_checks(&agent), goal::MAX_CHECKS as usize);
+    assert_eq!(agent.stats.requests, 2 * goal::MAX_CHECKS + 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn no_goal_check_without_a_goal_outside_the_terminal_or_in_plan_mode() {
+    let mut none = goal_agent("goal-none", None, true, vec![sse("Done.", "stop")]).await;
+    none.run("go", &[]).await.unwrap();
+    let mut headless = goal_agent(
+        "goal-headless",
+        Some("ship v2"),
+        false,
+        vec![sse("Done.", "stop")],
+    )
+    .await;
+    headless.run("go", &[]).await.unwrap();
+    let mut planning = goal_agent(
+        "goal-plan",
+        Some("ship v2"),
+        true,
+        vec![sse("Plan ready.", "stop")],
+    )
+    .await;
+    planning.controls.plan.set(true);
+    planning.run("plan it", &[]).await.unwrap();
+    for agent in [&none, &headless, &planning] {
+        assert_eq!(goal_checks(agent), 0);
+        assert_eq!(agent.stats.requests, 1);
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn a_subagent_is_told_its_model_and_effort() {
     let url = stub_replies(vec![sse("ok", "stop")]).await;
