@@ -605,16 +605,26 @@ impl App {
             cursor.0 -= cut;
             input_rows.top -= cut;
         }
-        let pad = if self.fullscreen {
-            0
-        } else {
-            padding(
+        // Inline, the area is padded down to the bottom row. Fullscreen, the view above fills
+        // that room, unless the ice cube turns in it while a fresh session waits.
+        let pad = match (self.fullscreen, self.idle_cube) {
+            (false, _) => padding(
                 self.height,
                 self.content_rows + self.pending_rows(),
                 rows.len(),
-            )
+            ),
+            (true, true) if self.history.below(1) == 0 => padding(
+                self.height,
+                self.history.all_rows().len(),
+                rows.len(),
+            ),
+            (true, _) => 0,
         };
-        rows.splice(0..0, std::iter::repeat_n(String::new(), pad));
+        let canvas = match self.idle_cube {
+            true => banner::cube(self.spinner, pad, width),
+            false => vec![String::new(); pad],
+        };
+        rows.splice(0..0, canvas);
         input_rows.top += pad;
         self.input_rows = input_rows;
         self.todo_rows = todo_rows.map(|(first, last)| (first + pad, last + pad));

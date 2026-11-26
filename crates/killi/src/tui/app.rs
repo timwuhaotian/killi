@@ -106,6 +106,7 @@ impl App {
             input_rows: InputRows::default(),
             todo_rows: None,
             banner_resumed: false,
+            idle_cube: false,
             branch_at: None,
             live: None,
             peers: None,
@@ -230,6 +231,7 @@ impl App {
         if let Some(since) = &mut self.since_banner {
             since.banner = self.pending.len();
         }
+        self.idle_cube = !resumed;
     }
 
     /// Draws the banner again with the model, effort and setup now in use, when its top row is

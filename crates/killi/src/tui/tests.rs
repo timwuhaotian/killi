@@ -159,6 +159,7 @@ pub(super) fn test_app() -> App {
         input_rows: InputRows::default(),
         todo_rows: None,
         banner_resumed: false,
+        idle_cube: false,
         branch_at: None,
         live: None,
         peers: None,

@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.13 — 2026-11-26
+
+- A new session shows an ice cube turning in the blank rows between the banner and the prompt, in the logo's colors, until the first prompt is sent. It appears on start-up and after `/clear` (not on a resumed session), in both inline and fullscreen mode, and only uses rows that are otherwise blank: a menu, a picker or a short window takes its room first.
+
 ## 0.9.12 — 2026-11-26
 
 - While a `/goal` is set, a turn no longer ends on a reply that leaves the goal short. Before the turn ends, the model is asked to check the goal itself: keep working if anything is unfinished or unverified, show the proof and point you to `/goal done` if it is done, or say in one line what blocks it (including you having said to stop or wait). The check comes back only after more work, at most three times a turn, and is skipped in plan mode, in `-p` runs and while background work is still running.
