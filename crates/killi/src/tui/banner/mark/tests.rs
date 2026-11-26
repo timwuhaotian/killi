@@ -148,10 +148,10 @@ fn the_mark_breathes_once_a_turn_full_and_bright_facing_the_viewer() {
     assert_eq!(
         place(20, 80),
         Some(Place {
-            row: 2,
-            rows: 16,
-            column: 24,
-            columns: 32
+            row: 1,
+            rows: MOST_ROWS,
+            column: 22,
+            columns: 2 * MOST_ROWS
         })
     );
     assert_eq!(place(LEAST_ROWS + 1, 80), None);
