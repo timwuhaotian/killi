@@ -367,6 +367,8 @@ impl App {
                 if asking.internal {
                     self.search = None;
                     self.provider = None;
+                } else {
+                    report(TermState::Working, "");
                 }
                 // A correction with no answer to ride on goes with the dismissal, or it is lost.
                 let note = std::mem::take(&mut self.ask_corrections);
@@ -474,6 +476,7 @@ impl App {
             }
             return self.search_answer(&answer, asking.secret);
         }
+        report(TermState::Working, "");
         if !asking.question.plan {
             let selected = asking
                 .question

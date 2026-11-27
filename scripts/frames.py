@@ -164,6 +164,7 @@ capabilities = ["thinking", "tool_use"]
 
 [agent]
 notify_after = 9999
+notify = false
 
 [ui]
 recap = false

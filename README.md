@@ -79,12 +79,11 @@ curl -fsSL https://raw.githubusercontent.com/timwuhaotian/killi/main/install.sh 
 This puts `killi` in `~/.local/bin` after checking its SHA-256 against
 [`releases/latest.toml`](releases/latest.toml). Later, `killi update` does the same in place.
 It installs `releases/killi-arm64` on macOS, `releases/killi-linux-x64` or
-`releases/killi-linux-arm64` on Linux. On Linux, four optional tools complete the picture:
+`releases/killi-linux-arm64` on Linux. On Linux, three optional tools complete the picture:
 `wl-copy`/`wl-paste` (Wayland) or `xclip`/`xsel` (X11) for clipboard copy and image paste,
-`notify-send` for desktop notifications, ImageMagick (`convert`/`magick`) or `ffmpeg` for
-shrinking large images before they are sent, and a Chrome-family browser on `PATH` for pages
-that need JavaScript. Without them killi still works: copying falls back to the terminal's
-OSC 52, notifications to OSC 9 terminals, and large images are sent as-is.
+ImageMagick (`convert`/`magick`) or `ffmpeg` for shrinking large images before they are
+sent, and a Chrome-family browser on `PATH` for pages that need JavaScript. Without them killi
+still works: copying falls back to the terminal's OSC 52, and large images are sent as-is.
 
 ## Build from source
 

@@ -1,5 +1,7 @@
 use super::super::commands::is_command;
-use super::super::notify::{base64, notification_args, osc9_sequence, shows_osc9};
+use super::super::notify::{
+    TermState, base64, notification_sequence, osc9_sequence, shows_osc9, status_sequence,
+};
 use super::super::picker::{PickerChoice, prune_choices, search_options};
 use super::super::run::wants_recap;
 use super::super::start::{crash_line, parse_background, parse_ground};
@@ -84,22 +86,41 @@ fn a_notification_cannot_break_out_of_its_sequence_or_script() {
         !body.contains(['\u{7}', '\u{1b}']) && body.starts_with("done — linewith"),
         "{sequence:?}"
     );
-    let args = notification_args("say \"hi\"\u{7}", "");
+}
+
+#[test]
+fn a_terminal_without_osc9_gets_a_plain_bell_never_a_script() {
+    assert!(notification_sequence("kil", false, "Done", "x").starts_with("\x1b]9;killi: Done"));
+    for program in ["Orca", "Apple_Terminal", "vscode", "tmux", "live-check", ""] {
+        assert_eq!(
+            notification_sequence(program, false, "Done", "x"),
+            "\x07",
+            "{program}"
+        );
+    }
+}
+
+#[test]
+fn a_status_report_is_osc_7501_with_its_text_in_base64() {
     assert_eq!(
-        args,
-        [
-            "-e",
-            "display notification \"say 'hi'\" with title \"killi\""
-        ]
+        status_sequence(TermState::Working, ""),
+        "\x1b]7501;state=working:app=killi\x1b\\"
     );
-    let args = notification_args("h", "d\"etail");
     assert_eq!(
-        args,
-        [
-            "-e",
-            "display notification \"d'etail\" with title \"killi\" subtitle \"h\""
-        ]
+        status_sequence(TermState::Asking, "Which one?"),
+        format!(
+            "\x1b]7501;state=blocked:kind=question:app=killi:msg={}\x1b\\",
+            base64(b"Which one?")
+        )
     );
+    assert!(status_sequence(TermState::Failed, "x").starts_with("\x1b]7501;state=error:"));
+    assert!(status_sequence(TermState::Idle, "").starts_with("\x1b]7501;state=idle:"));
+    // Model text can't end the sequence, and a long line stays inside the 2048-byte cap.
+    let done = status_sequence(TermState::Done, &format!("ok\u{1b}\\{}", "é".repeat(2000)));
+    let body = &done[..done.len() - 2];
+    assert_eq!(body.matches(['\u{7}', '\u{1b}']).count(), 1, "{done:?}");
+    let msg = body.rsplit("msg=").next().unwrap();
+    assert!(msg.len() <= 2732, "{}", msg.len());
 }
 
 #[test]

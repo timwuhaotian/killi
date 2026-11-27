@@ -92,62 +92,54 @@ pub(super) fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// A desktop notification, `headline` over a line of `detail`: the terminal's own when it
-/// supports OSC 9 (Kil, iTerm2, WezTerm, Ghostty, kitty show it in their name, so a click
-/// comes back to the pane), otherwise the desktop's (macOS through plain `osascript`, whose
-/// notifications belong to Script Editor, Linux through `notify-send`). Kil's version is not
-/// consulted: a pane outlives the app, and its shell keeps the `TERM_PROGRAM_VERSION` it
-/// started with.
-pub(super) fn notify(headline: &str, detail: &str) {
-    let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    if shows_osc9(&program, std::env::var_os("KITTY_WINDOW_ID").is_some()) {
-        let mut out = stdout();
-        let _ = write!(out, "{}", osc9_sequence(headline, detail));
-        let _ = out.flush();
+/// Whether [`notify`] and [`report`] write anything: `[agent] notify`, read once at startup.
+/// The scripts that drive killi in a pty turn it off.
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Turns every notification and status report on or off for the rest of the process.
+pub(super) fn set_enabled(on: bool) {
+    ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Writes `sequence` to the terminal, unless notifications are off or a unit test runs.
+fn write_terminal(sequence: &str) {
+    if cfg!(test) || !ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    desktop_notify(headline, detail);
+    let mut out = stdout();
+    let _ = write!(out, "{sequence}");
+    let _ = out.flush();
 }
 
-/// macOS's notification through plain `osascript`.
-#[cfg(target_os = "macos")]
-fn desktop_notify(headline: &str, detail: &str) {
-    let mut command = std::process::Command::new("/usr/bin/osascript");
-    command.args(notification_args(headline, detail));
-    // Reaped on a thread: an unreaped child would linger as a zombie per notification.
-    if let Ok(mut child) = command.spawn() {
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-    }
+/// A notification, `headline` over a line of `detail`, always written to the terminal: only
+/// a notification the terminal posts itself can bring a click back to the pane. Terminals
+/// that show OSC 9 (Kil, iTerm2, WezTerm, Ghostty, kitty) get it with the text; every other
+/// one gets a plain BEL, which it rings, bounces or badges as it does for any bell. A desktop
+/// notification killi posts itself (`osascript`, `notify-send`) can't find the pane, and on
+/// macOS belongs to Script Editor, so killi posts none. Kil's version is not consulted: a
+/// pane outlives the app, and its shell keeps the `TERM_PROGRAM_VERSION` it started with.
+pub(super) fn notify(headline: &str, detail: &str) {
+    let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+    write_terminal(&notification_sequence(
+        &program,
+        std::env::var_os("KITTY_WINDOW_ID").is_some(),
+        headline,
+        detail,
+    ));
 }
 
-/// Linux's notification through `notify-send`, silently skipped when missing.
-#[cfg(target_os = "linux")]
-fn desktop_notify(headline: &str, detail: &str) {
-    let mut command = std::process::Command::new("notify-send");
-    command.args(notify_send_args(headline, detail));
-    if let Ok(mut child) = command.spawn() {
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn desktop_notify(_headline: &str, _detail: &str) {}
-
-/// The `notify-send` arguments showing `headline` over `detail`.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn notify_send_args(headline: &str, detail: &str) -> Vec<String> {
-    let headline = text::sanitize(headline);
-    let detail = text::sanitize(detail);
-    let body = if detail.is_empty() {
-        headline.into_owned()
+/// What [`notify`] writes for the terminal named by `TERM_PROGRAM` (or kitty, by its window id).
+pub(super) fn notification_sequence(
+    program: &str,
+    kitty: bool,
+    headline: &str,
+    detail: &str,
+) -> String {
+    if shows_osc9(program, kitty) {
+        osc9_sequence(headline, detail)
     } else {
-        format!("{headline} — {detail}")
-    };
-    vec!["killi".to_string(), body]
+        "\x07".to_string()
+    }
 }
 
 /// Whether the terminal named by `TERM_PROGRAM` (or kitty, by its window id) shows OSC 9 itself.
@@ -168,21 +160,49 @@ pub(super) fn osc9_sequence(headline: &str, detail: &str) -> String {
     format!("\x1b]9;killi: {body}\x07")
 }
 
-/// The `osascript` arguments showing `headline` over `detail`: quotes become `'`, so model
-/// text can't close the AppleScript string, and control characters are sanitized away.
-/// No `tell application` wrapper: `display notification` is a Standard Addition, so the
-/// banner belongs to Script Editor whatever application is told.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(super) fn notification_args(headline: &str, detail: &str) -> Vec<String> {
-    let quote = |text: &str| text::sanitize(text).replace('"', "'");
-    let headline = quote(headline);
-    let detail = quote(detail);
-    let plain = if detail.is_empty() {
-        format!("display notification \"{headline}\" with title \"killi\"")
-    } else {
-        format!("display notification \"{detail}\" with title \"killi\" subtitle \"{headline}\"")
+/// What the session is doing, as the Program Status Protocol (OSC 7501) names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TermState {
+    /// A turn is running.
+    Working,
+    /// A question waits for the user's answer.
+    Asking,
+    /// The turn finished.
+    Done,
+    /// The turn failed.
+    Failed,
+    /// Nothing is running and nothing waits (the user ended the turn).
+    Idle,
+}
+
+/// Reports the session's state to the terminal with OSC 7501. Terminals that read it (Orca)
+/// show it beside the pane and can notify as themselves, so a click comes back to the pane;
+/// the rest ignore an OSC they don't know.
+pub(super) fn report(status: TermState, msg: &str) {
+    write_terminal(&status_sequence(status, msg));
+}
+
+/// The OSC 7501 report of `status` with `msg` as its text: base64, as the protocol wants,
+/// so no character of it can end the sequence, and cut to stay inside its 2048-byte cap.
+pub(super) fn status_sequence(status: TermState, msg: &str) -> String {
+    let state = match status {
+        TermState::Working => "working",
+        TermState::Asking => "blocked:kind=question",
+        TermState::Done => "done",
+        TermState::Failed => "error",
+        TermState::Idle => "idle",
     };
-    vec!["-e".into(), plain]
+    let msg = text::sanitize(msg);
+    let mut cut = msg.len().min(2048);
+    while !msg.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let text = if msg.is_empty() {
+        String::new()
+    } else {
+        format!(":msg={}", base64(msg[..cut].as_bytes()))
+    };
+    format!("\x1b]7501;state={state}:app=killi{text}\x1b\\")
 }
 
 /// The first line of `text` that says something, markdown marks dropped, cut to `chars`:
@@ -226,14 +246,5 @@ mod tests {
     fn without_wayland_only_x11_tools() {
         let names: Vec<_> = copy_candidates(false).iter().map(|c| c.0).collect();
         assert_eq!(names, ["xclip", "xsel"]);
-    }
-
-    #[test]
-    fn notify_send_shows_headline_over_detail() {
-        assert_eq!(
-            notify_send_args("Done", "All tests pass"),
-            ["killi", "Done — All tests pass"]
-        );
-        assert_eq!(notify_send_args("Done", ""), ["killi", "Done"]);
     }
 }

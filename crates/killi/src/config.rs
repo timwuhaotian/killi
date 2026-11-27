@@ -219,8 +219,11 @@ pub struct AgentConfig {
     /// Extra command prefixes bash may run in plan mode, such as "make -n".
     #[serde(default)]
     pub plan_allow: Vec<String>,
-    /// Seconds a turn must take before a desktop notification (default 10).
+    /// Seconds a turn must take before it notifies (default 10).
     pub notify_after: Option<u64>,
+    /// Whether killi notifies at all (default true): the terminal's notification or bell for
+    /// turn ends, questions and messages from other sessions, and the OSC 7501 status reports.
+    pub notify: Option<bool>,
     /// Subagents an `agent_swarm` call runs at once (default 8).
     pub swarm_parallel: Option<usize>,
     /// Minutes a subagent may run before it is stopped and reported as timed out (default 30,

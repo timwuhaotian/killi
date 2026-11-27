@@ -194,6 +194,7 @@ impl App {
                     internal: false,
                     secret: false,
                 });
+                report(TermState::Asking, &asked);
                 notify("Waiting for your answer", &asked);
             }
             Event::Notice(text) => {

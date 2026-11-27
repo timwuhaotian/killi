@@ -296,7 +296,10 @@ pub(super) async fn pair_turn(
     };
     match &shown {
         Some((text, images)) => app.begin_turn(text, images),
-        None => app.begin_busy(),
+        None => {
+            app.begin_busy();
+            report(TermState::Working, "");
+        }
     }
     app.draw()?;
     app.undo_warned = false;
@@ -354,6 +357,7 @@ pub(super) async fn pair_turn(
     let elapsed = app.busy.map(|t| t.elapsed()).unwrap_or_default();
     app.release_prompt();
     app.end_busy();
+    report(TermState::Done, "");
     if let Some(outcome) = agent.pair_outcome() {
         if let Some(status) = agent.pair_status() {
             app.notice(&status);

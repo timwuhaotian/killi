@@ -102,7 +102,7 @@ use format::{
     padding, precise_clock, short, thinking_parts, tint,
 };
 use input::newline_key;
-use notify::{copy_to_clipboard, first_line, notify};
+use notify::{TermState, copy_to_clipboard, first_line, notify, report};
 use pair::{pair_kickoff, pair_pick, pair_turn};
 use picker::{CustomFlow, ModelPick, Picker, PickerChoice, ProviderFlow, SearchFlow};
 use rows::{
@@ -230,6 +230,7 @@ pub async fn run(config: Config, start: Start) -> Result<ExitCode> {
         crate::config::command_guide_if_first()?;
     }
     app.notify_after = Duration::from_secs(session.config().agent.notify_after.unwrap_or(10));
+    notify::set_enabled(session.config().agent.notify.unwrap_or(true));
     app.auto_recap = session.config().ui.recap.unwrap_or(true);
     let terminal = TerminalGuard::enter(fullscreen)?;
     app.fullscreen = fullscreen;

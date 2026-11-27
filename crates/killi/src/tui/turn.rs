@@ -274,6 +274,7 @@ impl App {
         // The suggestion belongs to the turn that just ended.
         self.drop_suggestion();
         self.begin_busy();
+        report(TermState::Working, "");
     }
 
     /// Prints what the user typed as their message block.
@@ -462,6 +463,11 @@ impl App {
             ));
         }
         self.last_kind = Kind::None;
+        match self.last_end {
+            Some(LastEnd::Done) => report(TermState::Done, &notice_line),
+            Some(LastEnd::Failed) => report(TermState::Failed, &notice_line),
+            _ => report(TermState::Idle, ""),
+        }
         if self.wants_notify(elapsed) {
             let outcome = match self.last_end {
                 Some(LastEnd::Failed) => "Failed",

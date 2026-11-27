@@ -5,6 +5,12 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.17 — 2026-11-27
+
+- Notifications never open Script Editor. killi no longer posts them through `osascript` (or `notify-send`): a click on one could not find the pane. Terminals that show OSC 9 (Kil, iTerm2, WezTerm, Ghostty, kitty) still get the banner with its text, and every other terminal gets a plain bell.
+- killi reports what it is doing with the Program Status escape (OSC 7501): working, done or failed with the reply's first line, and waiting on a question. Orca shows it beside the pane, and a finished turn in a hidden Orca tab notifies as Orca and opens that pane; other terminals ignore it.
+- `[agent] notify = false` turns every notification, bell and status report off. killi's own pty scripts (`frames.py`, `live_check.py`) set it, so their scripted questions and peer messages no longer surface as stale banners.
+
 ## 0.9.16 — 2026-11-26
 
 - The idle K above a fresh session's prompt fills the rows it is given: it was drawn at about two thirds of its height, so it looked small in a short window whatever the rows spare.

@@ -199,6 +199,7 @@ max_context_size = 200000
 capabilities = ["tool_use"]
 [agent]
 notify_after = 9999
+notify = false
 [ui]
 recap = false
 """)
