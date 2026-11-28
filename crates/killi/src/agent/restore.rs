@@ -25,10 +25,13 @@ pub(super) fn logged_cwd(log: &Path) -> Option<PathBuf> {
 }
 
 impl Agent {
-    /// Takes up the task list `messages` left, and shows it: the terminal's panel would
-    /// otherwise stay empty until the model next writes the list.
-    pub(super) fn restore_todos(&mut self, messages: &[Value]) {
-        self.todos = todos_from(messages);
+    /// Takes up the task list the log left, and shows it: the terminal's panel would
+    /// otherwise stay empty until the model next writes the list. The last `todo_write` still
+    /// in `messages` decides; without one, `kept` is the list the last compaction recorded.
+    pub(super) fn restore_todos(&mut self, messages: &[Value], kept: Option<&Value>) {
+        self.todos = todos_from(messages)
+            .or_else(|| kept.and_then(|todos| serde_json::from_value(todos.clone()).ok()))
+            .unwrap_or_default();
         if !self.todos.is_empty() {
             (self.sink)(Event::Todos(self.todos.clone()));
         }
@@ -36,8 +39,9 @@ impl Agent {
 }
 
 /// The task list the last successful `todo_write` in `messages` left, so a resumed session
-/// keeps checking its open items. A call the tool refused, or one with no result, set nothing.
-fn todos_from(messages: &[Value]) -> Vec<Todo> {
+/// keeps checking its open items. A call the tool refused, or one with no result, set nothing;
+/// None when no call in `messages` set the list.
+fn todos_from(messages: &[Value]) -> Option<Vec<Todo>> {
     let updated = |id: &str| {
         messages.iter().any(|message| {
             message["role"] == "tool"
@@ -61,5 +65,4 @@ fn todos_from(messages: &[Value]) -> Vec<Todo> {
             let args: Value = serde_json::from_str(call["function"]["arguments"].as_str()?).ok()?;
             serde_json::from_value(args["todos"].clone()).ok()
         })
-        .unwrap_or_default()
 }

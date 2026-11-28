@@ -102,7 +102,7 @@ impl Agent {
                 }
             }
         }
-        agent.restore_todos(&loaded.messages);
+        agent.restore_todos(&loaded.messages, loaded.todos.as_ref());
         agent.accounted_messages = loaded.messages.len();
         agent.messages = Rc::new(loaded.messages);
         agent.stats.context = loaded.context;
@@ -266,20 +266,21 @@ impl Agent {
         self.swarm_parallel.set(parallel.max(1));
     }
 
-    /// Continues the conversation on another model; the next request starts the cache over,
-    /// and the size estimate with it: the old model's billing no longer describes the history.
+    /// Continues the conversation on another model; the next request starts the cache over.
     /// The log notes it, so a resume continues on this model.
     pub fn switch_model(&mut self, client: Client) -> Result<()> {
         self.switch_client(client)
     }
 
-    /// Swaps the session's provider, resetting the size estimate and noting the switch in the log.
-    /// The floor under proactive compaction goes with it: it was measured in the old estimate.
+    /// Swaps the session's provider and notes the switch in the log. The size the old model
+    /// billed stays the estimate until the new one reports its own: another tokenizer counts
+    /// the same history within a fraction of it, while estimating it whole from its characters
+    /// counted two to three times as much and compacted conversations at a third of the
+    /// limit. The new model's window decides the limit, and the floor under proactive
+    /// compaction goes: it was measured against the old one.
     pub(super) fn switch_client(&mut self, client: Client) -> Result<()> {
         self.ctx.images.set(client.model.images);
         self.client = Rc::new(client);
-        self.stats.context = 0;
-        self.accounted_messages = 0;
         self.compact_floor = 0;
         self.share();
         self.record_model()

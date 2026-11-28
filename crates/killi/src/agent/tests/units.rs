@@ -1394,13 +1394,13 @@ fn an_inline_image_counts_as_its_reserve_not_its_base64() {
 #[test]
 fn a_kept_prompt_that_embeds_a_whole_document_is_cut() {
     let long = "x".repeat(9_000);
-    let kept = kept_prompt(&long);
+    let kept = kept_prompt(&long, None);
     assert!(
         kept.starts_with(&"x".repeat(4_000)) && kept.contains("[… 5000 characters cut]"),
         "{}",
         kept.len()
     );
-    assert_eq!(kept_prompt("plain"), "plain");
+    assert_eq!(kept_prompt("plain", None), "plain");
 }
 
 #[test]
@@ -1750,13 +1750,13 @@ async fn a_child_in_plan_mode_hears_it_again_after_a_compaction() {
 #[test]
 fn a_kept_prompt_counts_and_cuts_in_characters() {
     let long = "字".repeat(5_000);
-    let kept = kept_prompt(&long);
+    let kept = kept_prompt(&long, None);
     assert!(
         kept.starts_with(&"字".repeat(4_000)) && kept.ends_with("\n[… 1000 characters cut]"),
         "{} characters",
         kept.chars().count()
     );
-    assert_eq!(kept_prompt(&"字".repeat(4_000)), "字".repeat(4_000));
+    assert_eq!(kept_prompt(&"字".repeat(4_000), None), "字".repeat(4_000));
 }
 
 #[test]

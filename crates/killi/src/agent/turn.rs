@@ -126,6 +126,8 @@ impl Agent {
         // Every part of a reply cut off at the output token limit: only their whole text
         // answers the turn, whether shown, reported by a subagent or printed by `--json`.
         let mut continued_text = String::new();
+        // Replies a reminder at the turn's end sent back, still part of its answer (`hold_reply`).
+        let mut held = String::new();
         let mut overflow_compacted = false;
         let mut media_stripped = false;
         let mut stop_blocks = 0;
@@ -167,12 +169,32 @@ impl Agent {
                 Err(error) => return Err(error),
             };
             steps += 1;
+            // Each guards against a rewrite that changes nothing, not against a second one:
+            // a long turn can outgrow the window, or meet a rejected image, more than once.
+            overflow_compacted = false;
+            media_stripped = false;
             let truncated = reply.finish_reason.as_deref() == Some("length");
+            if truncated && thought_only(&reply) {
+                self.drop_cut_thought(&reply)?;
+                if continuations < MAX_CONTINUATIONS {
+                    continuations += 1;
+                    self.push(json!({"role": "user", "content": CUT_THINKING}))?;
+                    continue;
+                }
+                // Nothing to answer and no call to run: the stop hook is told, as at a wrap-up.
+                self.end_wrap_up(&[], stop_blocks > 0).await?;
+                let stop = if wrapping {
+                    Stop::StepLimit
+                } else {
+                    Stop::MaxTokens
+                };
+                return Ok((answer(held, continued_text), stop));
+            }
             let calls = self.record_reply(&reply)?;
             if wrapping {
                 self.end_wrap_up(&calls, stop_blocks > 0).await?;
                 continued_text.push_str(&reply.text);
-                return Ok((continued_text, Stop::StepLimit));
+                return Ok((answer(held, continued_text), Stop::StepLimit));
             }
             if calls.is_empty() {
                 if truncated && continuations < MAX_CONTINUATIONS {
@@ -229,6 +251,7 @@ impl Agent {
                         "The task list still has open items. Asked the agent to update it.".into(),
                     ));
                     self.push(json!({"role": "user", "content": note}))?;
+                    self.hold_reply(&mut held, &reply.text);
                     continue;
                 }
                 if !truncated
@@ -258,11 +281,12 @@ impl Agent {
                 } else if let Some(reason) = stop.block.filter(|_| stop_blocks < 3) {
                     stop_blocks += 1;
                     self.push(json!({"role": "user", "content": format!("<system-reminder>A hook asked you to keep going: {reason}</system-reminder>")}))?;
+                    self.hold_reply(&mut held, &reply.text);
                     continue;
                 }
                 continued_text.push_str(&reply.text);
                 return Ok((
-                    continued_text,
+                    answer(held, continued_text),
                     if truncated {
                         Stop::MaxTokens
                     } else {
@@ -271,6 +295,9 @@ impl Agent {
                 ));
             }
             called = true;
+            if !calls.iter().all(|(_, call)| bookkeeping(call)) {
+                held.clear();
+            }
             // A reminder that was followed by tool calls worked; a later stop earns its own.
             told_unfinished = false;
             goal_check_due = true;
@@ -465,41 +492,4 @@ impl Agent {
         (self.sink)(Event::Notice(shown));
         Some(live::tree_note(&peers, live::now()))
     }
-}
-
-/// Tool calls the task list may go unchanged for with an item open before the model is
-/// reminded of it mid-turn; otherwise a long turn can finish every item with the screen
-/// still showing the first one in progress.
-pub(super) const STALE_TASKS_AFTER: usize = 10;
-
-/// Told to the agent mid-turn when its task list hasn't changed in `calls` tool calls with
-/// items still open. None when the list is empty or finished.
-pub(super) fn stale_tasks_note(todos: &[Todo], calls: usize) -> Option<String> {
-    let current = todos
-        .iter()
-        .find(|t| t.status == "in_progress")
-        .or_else(|| todos.iter().find(|t| t.status != "completed"))?;
-    Some(format!(
-        "<system-reminder>Your task list hasn't changed in {calls} tool calls; `{}` still shows as the current item. If it or others are finished, call todo_write now with them completed and the next one in_progress; if not, carry on.</system-reminder>",
-        truncate(&current.content, 120)
-    ))
-}
-
-/// Told to the agent when it ends a turn with its task list unfinished, which shows on the
-/// user's screen as work still going: finished items are marked done, or the rest is carried on.
-pub(super) fn open_tasks_note(todos: &[Todo]) -> Option<String> {
-    let open: Vec<&str> = todos
-        .iter()
-        .filter(|t| t.status != "completed")
-        .map(|t| t.content.as_str())
-        .collect();
-    if open.is_empty() {
-        return None;
-    }
-    let list = open.join("; ");
-    Some(format!(
-        "<system-reminder>Your task list still has {} open: {}. Call todo_write now with what is finished marked completed (and dropped items removed). If work is left, do it. Don't repeat your last reply.</system-reminder>",
-        open.len(),
-        truncate(&list, 400)
-    ))
 }

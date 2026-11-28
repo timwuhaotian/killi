@@ -8,6 +8,8 @@ mod background;
 mod compact;
 mod dispatch;
 mod ending;
+mod held;
+mod history;
 mod lifecycle;
 mod near;
 mod pair;
@@ -17,6 +19,7 @@ mod restore;
 mod step_limit;
 mod subagent;
 mod task;
+mod todos;
 mod turn;
 mod types;
 
@@ -59,9 +62,13 @@ use background::Background;
 use compact::CompactMode;
 pub(crate) use dispatch::neutralize_reminder_tags;
 use dispatch::{invalid_arguments, parse_args};
-use ending::{ends_with_question, interrupted_note, unfinished};
+use ending::{
+    CUT_THINKING, answer, bookkeeping, ends_with_question, interrupted_note, thought_only,
+    unfinished,
+};
 use near::{NEAR_BASH_WARN_AT, NEAR_REPEAT_WARN_AT, near_key};
 use request::{is_media, is_overflow, provider_limit, reasoning_evidence};
+use todos::{STALE_TASKS_AFTER, open_tasks_note, stale_tasks_note, tasks_note};
 use types::{
     PartialSwarm, PendingPrompt, Repeat, last_model_state, last_plan_state, model_note, unanswered,
 };
@@ -71,7 +78,7 @@ use ask::question_args;
 #[cfg(test)]
 use compact::{
     COMPACT_INSTRUCTION, DEFAULT_COMPACT_AT, DEFAULT_OUTPUT_RESERVE, REDUCED_RESULT_CHARS,
-    REDUCED_TEXT_CHARS, estimate_tokens, kept_prompt, reduced,
+    REDUCED_TEXT_CHARS, cut_at, estimate_tokens, kept_prompt, reduced, tail_start,
 };
 #[cfg(test)]
 use dispatch::{
@@ -84,8 +91,6 @@ use ending::{ends_with_colon, ends_with_intent};
 use request::hides_reasoning;
 #[cfg(test)]
 use subagent::{MAX_SWARM_AGENTS_PER_TURN, reserve_swarm};
-#[cfg(test)]
-use turn::{STALE_TASKS_AFTER, open_tasks_note, stale_tasks_note};
 #[cfg(test)]
 use types::{
     BTW_NOTE, COMPLETE_MAX, COMPLETE_NOTE, RECAP_CHARS, RECAP_MAX, RECAP_NOTE, SUGGEST_MAX,

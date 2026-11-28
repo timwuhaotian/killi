@@ -557,8 +557,12 @@ impl Agent {
         }
         if !fork {
             // A child that starts from the system prompt alone has never heard which model
-            // and effort it runs on, so it says them itself on its first step.
+            // and effort it runs on, so it says them itself on its first step. Nor has it
+            // heard of the nested instruction files this conversation was told about, or
+            // touched the paths behind the ones still waiting to be told here.
             agent.model_announced = None;
+            agent.instructions.take_found();
+            agent.instructions.forget_told();
         }
         Ok(agent)
     }

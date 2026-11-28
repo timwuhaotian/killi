@@ -301,6 +301,19 @@ impl Instructions {
         std::mem::take(&mut self.found)
     }
 
+    /// Forgets which nested files the model was already told of, so the next path under one
+    /// names it again: for a conversation that no longer holds those reminders, because a
+    /// compaction took them or a subagent starts without its parent's history. Files found
+    /// but not yet told stay waiting.
+    pub fn forget_told(&mut self) {
+        self.known = self
+            .loaded
+            .iter()
+            .map(|(path, _)| path.clone())
+            .chain(self.found.iter().map(PathBuf::from))
+            .collect();
+    }
+
     /// Loaded instruction files that changed since the last check.
     pub fn changed(&mut self) -> Vec<String> {
         let mut changed = Vec::new();

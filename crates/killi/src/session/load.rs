@@ -42,6 +42,9 @@ pub struct Loaded {
     pub choice: Choice,
     /// The session goal `/goal` last set, if any.
     pub goal: Option<String>,
+    /// The task list as the last compaction recorded it, as `todo_write` takes it: the calls
+    /// that set it left the messages with that compaction. None for a log that kept none.
+    pub todos: Option<Value>,
     /// The last recap shown, if any: a side request like `/btw`, never in the messages.
     pub recap: Option<String>,
     /// Background work still open when the log stopped, by task id. Kept across
@@ -90,6 +93,7 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
         context: 0,
         choice: Choice::default(),
         goal: None,
+        todos: None,
         recap: None,
         background: Default::default(),
         last_task: 0,
@@ -218,6 +222,10 @@ pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<LoadReport> {
                     .collect();
                 loaded.agents.retain(|id, _| calls.contains(id.as_str()));
                 loaded.context = 0;
+                // Only a real compaction carries the list; the other rewrites keep the calls.
+                if let Some(todos) = entry.get("todos") {
+                    loaded.todos = Some(todos.clone());
+                }
             }
             _ => {}
         }

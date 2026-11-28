@@ -464,7 +464,8 @@ async fn a_subagent_ending_with_open_tasks_is_asked_to_update_them() {
     let (text, stop) = agent.run("do it", &[]).await.unwrap();
     assert_eq!(
         (text.as_str(), stop),
-        ("Updated the list.", Stop::Completed)
+        ("Done.\n\nUpdated the list.", Stop::Completed),
+        "its parent reads only this: the reply the reminder sent back is still the report"
     );
     assert!(
         agent.messages.iter().any(|m| m["content"]

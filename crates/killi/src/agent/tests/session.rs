@@ -709,7 +709,7 @@ fn a_fork_accounts_its_inherited_history_once() {
 }
 
 #[test]
-fn switching_model_returns_the_whole_conversation_to_the_estimate() {
+fn switching_model_keeps_the_billed_size_as_the_estimate() {
     let mut agent = idle_agent("switch-estimate", Controls::default(), Rc::new(|_| {}));
     agent.settings = Rc::new(Settings {
         compact_at: Some(10_000),
@@ -722,17 +722,28 @@ fn switching_model_returns_the_whole_conversation_to_the_estimate() {
     agent
         .push(json!({"role": "user", "content": "x".repeat(40_000)}))
         .unwrap();
-    agent.stats.context = 9_000;
+    agent.stats.context = 8_000;
     agent.accounted_messages = agent.messages.len();
     assert!(
         !agent.compaction_due(),
         "under the old model's billing it fits"
     );
     agent.switch_model(agent.client()).unwrap();
-    assert_eq!((agent.stats.context, agent.accounted_messages), (0, 0));
+    assert_eq!(
+        (agent.stats.context, agent.accounted_messages),
+        (8_000, agent.messages.len())
+    );
+    assert!(
+        !agent.compaction_due(),
+        "20,000 tokens by its characters, 8,000 as billed: the switch alone doesn't compact it"
+    );
+
+    let mut smaller = agent.client();
+    smaller.model.context_window = Some(10_000);
+    agent.switch_model(smaller).unwrap();
     assert!(
         agent.compaction_due(),
-        "the same conversation is estimated whole again"
+        "a model with a smaller window still compacts what no longer fits it"
     );
 }
 

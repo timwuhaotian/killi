@@ -310,7 +310,8 @@ def findings(sessions, models, versions_of):
             c = s["compactions"][-1]
             found.append(f"{who}`{name}` compacted {len(s['compactions'])} times (last: context {c.get('context', '?')}, "
                          f"suffix {c.get('suffix', '?')}, limit {c.get('limit', '?')}, reserve {c.get('reserve', '?')}, "
-                         f"kept {c.get('kept_chars', '?')} chars): which part kept forcing it is in the causes.")
+                         f"kept {c.get('kept_chars', '?')} chars and {c.get('kept_messages', 0)} newest messages): "
+                         "which part kept forcing it is in the causes.")
         if s["ended"] in ("tool", "unanswered tool call"):
             found.append(f"{who}`{name}` stopped right after a tool call ({s['ended']}): interrupted, killed or stopped by the repeat breaker.")
         for error in sorted(set(s["errors"])):

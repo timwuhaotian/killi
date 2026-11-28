@@ -552,7 +552,7 @@ that start identical:
   tools; MCP servers are reached through one fixed tool; subagents get the same prompt and tools.
 - Messages are stored exactly as sent, tool-call arguments and reasoning included, and nothing
   earlier is ever edited or merged. Notes from killi to the model go at the end. Only
-  compaction rewrites history, and it keeps your requests word for word.
+  compaction rewrites history, and it keeps your requests and the newest steps word for word.
 > On MiMo, changing the tool list mid-session dropped a request's cached tokens to zero,
 > history included. That measurement shaped the rest.
 

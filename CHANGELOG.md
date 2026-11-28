@@ -5,6 +5,18 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.18 — 2026-11-28
+
+- A compaction keeps the newest steps word for word after the summary (about 80,000 characters at most, never more than a quarter of the conversation), so the model goes on from the results it was just working with instead of reading the same files again. Signed thinking blocks are dropped from the kept steps, as the Claude API requires once the history before them is replaced.
+- After a compaction killi says again what it holds itself: the task list while items are open, and the commands and background subagents still running. The summary used to be the only carrier, and the model often rebuilt the list only after the stale-list reminder.
+- A session resumed after a compaction keeps its task list; it used to come back empty.
+- After a compaction an identical call runs again instead of being answered "Not run again": the results that refusal pointed at went with the old messages. Nested `AGENTS.md` files are named again when their folders are next touched, and a subagent that starts fresh is told of the ones its parent already heard about.
+- Switching models with `/model` no longer compacts a conversation that fits: the size the previous model billed stays the estimate until the new one reports its own, instead of a character count two to three times as high.
+- A turn that outgrows the context window a second time compacts again instead of ending on the provider's error.
+- A reply that hits the output limit while the model is still thinking is no longer kept in the conversation (one such thought was 500,000 characters), and the model is told to settle the next step and act instead of to "continue".
+- A subagent, `killi -p --json` or a task from another session returns its report even when the open-task reminder made its last reply a one-line pointer to it.
+- A request cut at 4,000 characters by a compaction is saved whole beside the session, the note says where, and a later compaction no longer shortens the note to a count of its own characters.
+
 ## 0.9.17 — 2026-11-27
 
 - Notifications never open Script Editor. killi no longer posts them through `osascript` (or `notify-send`): a click on one could not find the pane. Terminals that show OSC 9 (Kil, iTerm2, WezTerm, Ghostty, kitty) still get the banner with its text, and every other terminal gets a plain bell.

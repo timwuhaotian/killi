@@ -16,6 +16,38 @@ pub(super) const ANNOUNCED: &str = "<system-reminder>Your reply says what you wi
 /// call: a skill is a procedure, so its turn ending untouched is a stop, in any language.
 pub(super) const UNSTARTED: &str = "<system-reminder>You were asked to use a skill, and the turn ended before any of its steps ran. If the request means them to run now, start them with a tool call. If it asked you to wait, or nothing more is needed, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
 
+/// Told when a reply hit the output token limit while the model was still thinking: that
+/// reply is not kept (see `Agent::drop_cut_thought`), so "continue where it stopped" has
+/// nothing to continue.
+pub(super) const CUT_THINKING: &str = "<system-reminder>Your last reply hit the output token limit while you were still thinking, before any text or tool call, so nothing of it was kept. Don't think that long again: settle the next step in a few sentences, then make the tool call or give your answer.</system-reminder>";
+
+/// Whether a reply holds nothing but thinking: no text and no tool call.
+pub(super) fn thought_only(reply: &Reply) -> bool {
+    reply.text.trim().is_empty() && reply.tool_calls.is_empty()
+}
+
+/// The turn's answer: its last reply, after the replies `Agent::hold_reply` kept unless the
+/// last one repeats them anyway.
+pub(super) fn answer(held: String, last: String) -> String {
+    if held.is_empty() || last.contains(held.as_str()) {
+        last
+    } else if last.trim().is_empty() {
+        held
+    } else {
+        format!("{held}\n\n{last}")
+    }
+}
+
+/// Whether a call only keeps killi's own books (the task list, notes for later, background
+/// tasks) rather than doing the turn's work: a reply held back by a reminder still answers
+/// the turn after such calls, and no longer does once real work follows it.
+pub(super) fn bookkeeping(call: &ToolCall) -> bool {
+    matches!(
+        call.name.as_str(),
+        "todo_write" | "later" | "task_stop" | "task_output"
+    )
+}
+
 /// Whether the reply ends by asking the user something: its last non-empty line ends with
 /// `?` (or the full-width `？` of Chinese and Japanese replies). An open task list isn't re-announced then; the question already waits for the user.
 pub(super) fn ends_with_question(text: &str) -> bool {
@@ -277,6 +309,42 @@ pub(super) fn interrupted_note(
 }
 
 impl Agent {
+    /// Keeps a reply that a reminder at the turn's end sent back ("your task list still
+    /// has…") as part of the turn's answer, when no one watched the replies stream: the
+    /// reminder asks not to repeat it, so the reply that follows is often one line pointing at
+    /// it, and a parent agent, `--json` or another session would get that pointer without the
+    /// report. A session the user watches keeps its last reply as the answer.
+    pub(super) fn hold_reply(&self, held: &mut String, reply: &str) {
+        let reply = reply.trim();
+        if self.controls.interactive || reply.is_empty() {
+            return;
+        }
+        if !held.is_empty() {
+            held.push_str("\n\n");
+        }
+        held.push_str(reply);
+    }
+
+    /// Leaves a reply the output limit cut off mid-thought out of the conversation. Thinking
+    /// can't be continued by a later request, so keeping it would only put a runaway thought
+    /// (hundreds of thousands of characters in the logs that led here) into every later
+    /// request, count it against the compaction limit, and ask the model to carry it on. The
+    /// log says what was dropped, since its `usage` entry has no message after it.
+    pub(super) fn drop_cut_thought(&mut self, reply: &Reply) -> Result<()> {
+        self.pending_prompt = None;
+        self.session.record(&json!({
+            "type": "warn",
+            "message": format!(
+                "A reply hit the output token limit while still thinking ({} characters of reasoning, no text or tool call), so it was not kept in the conversation.",
+                reply.reasoning.chars().count()
+            ),
+        }))?;
+        (self.sink)(Event::Discard {
+            reason: "it hit the output token limit while the model was still thinking".into(),
+        });
+        Ok(())
+    }
+
     /// The check a reply that would end the turn gets while the session goal stands, or None
     /// when no check is due. Only the terminal's main agent outside plan mode is checked:
     /// subagents hold no goal, `-p` doesn't enforce one a resume restored (decision 57), plan

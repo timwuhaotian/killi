@@ -65,6 +65,7 @@ fn loaded(messages: Vec<Value>) -> Loaded {
         context: 0,
         choice: Choice::default(),
         goal: None,
+        todos: None,
         recap: None,
         background: Default::default(),
         last_task: 0,

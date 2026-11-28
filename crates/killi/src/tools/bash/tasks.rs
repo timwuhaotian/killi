@@ -22,6 +22,15 @@ pub(super) struct Task {
 }
 
 impl Task {
+    /// How the model is told of a task that still runs: its id, command and age.
+    fn named(&self, id: u32) -> String {
+        format!(
+            "task {id} `{}` ({}s)",
+            first_line(&self.command),
+            self.started.elapsed().as_secs()
+        )
+    }
+
     /// Lets go of a finished task's output: all of it once the model has read it, else the last
     /// megabyte. A task that ran for hours would otherwise hold up to 16 MB until the session ends.
     pub(super) fn release(&mut self) {
@@ -95,14 +104,20 @@ impl Tasks {
         for (id, task) in &mut self.list {
             if !task.reminded && task.process.running() {
                 task.reminded = true;
-                left.push(format!(
-                    "task {id} `{}` ({}s)",
-                    first_line(&task.command),
-                    task.started.elapsed().as_secs()
-                ));
+                left.push(task.named(*id));
             }
         }
         left
+    }
+
+    /// Every task still running, named as `left_running` names them and without counting as
+    /// that reminder: for a conversation that lost its mentions of them to a compaction.
+    pub fn running(&self) -> Vec<String> {
+        self.list
+            .iter()
+            .filter(|(_, task)| task.process.running())
+            .map(|(id, task)| task.named(*id))
+            .collect()
     }
 
     /// Kills every task still running and gives their commands' first lines.

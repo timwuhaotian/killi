@@ -1,7 +1,9 @@
 use super::*;
 
 mod background;
+mod compaction;
 mod crew;
+mod ending;
 mod session;
 mod turn;
 mod units;

@@ -214,7 +214,8 @@ pub struct McpConfig {
 /// `[agent]`: how the agent behaves.
 #[derive(Debug, Default, Deserialize)]
 pub struct AgentConfig {
-    /// Compact the conversation once a request's input passes this many tokens (default 256000).
+    /// Compact the conversation once a request's input passes this many tokens (default: 60% of
+    /// the model's context window, 256000 when the window is unknown; 0 turns it off).
     pub compact_at: Option<u64>,
     /// Extra command prefixes bash may run in plan mode, such as "make -n".
     #[serde(default)]
