@@ -12,6 +12,13 @@ pub(super) const UNFINISHED: &str = "<system-reminder>Your reply ends with a col
 /// with no tool call after it: the turn ended where the work was meant to start.
 pub(super) const ANNOUNCED: &str = "<system-reminder>Your reply says what you will do next, but the turn ended without a tool call. If you meant to do it, do it now with a tool call. If it is already done or nothing more is needed, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
 
+/// How many times one stop short is sent back before the turn is allowed to end on it.
+pub(super) const MAX_UNFINISHED: u32 = 2;
+
+/// Told when a reply stops short again after `UNFINISHED` or `ANNOUNCED`: some models answer
+/// the first reminder with another announcement, so the second one forbids a third.
+pub(super) const ANNOUNCED_AGAIN: &str = "<system-reminder>You stopped short again: your reply announces the next step instead of taking it, after being asked once already. Do not announce it again. Make the tool call for that step in this reply, or, if something blocks you or the work is actually done, say exactly that in one short sentence as your final answer.</system-reminder>";
+
 /// Told once when a turn that a skill started would end on a short reply before any tool
 /// call: a skill is a procedure, so its turn ending untouched is a stop, in any language.
 pub(super) const UNSTARTED: &str = "<system-reminder>You were asked to use a skill, and the turn ended before any of its steps ran. If the request means them to run now, start them with a tool call. If it asked you to wait, or nothing more is needed, answer in one short sentence. Don't repeat your last reply.</system-reminder>";
@@ -87,9 +94,11 @@ pub(super) fn unfinished(
     }
 }
 
-/// Replies longer than this are taken as answers even when they close on a next step: a
-/// summary that ends "I'll keep the old flag for now." is done, a one-liner that says only
-/// "Checking web-core #1601." is not.
+/// Replies longer than this are taken as answers even when their last sentence merely
+/// closes on a plain "I'll …": a summary that ends "I'll keep the old flag for now." is
+/// done. Only a strong closing signal (a coming phase, a gerund, a Chinese step, an
+/// explicit "let me"/"now I'll") counts in a long reply, and a one-liner that says only
+/// "Checking web-core #1601." counts at any reading.
 const INTENT_MAX_CHARS: usize = 200;
 
 fn is_short(text: &str) -> bool {
@@ -153,9 +162,10 @@ const NOT_STEPS: &[&str] = &[
 /// "Let me know …" closes an answer and doesn't count.
 pub(super) fn ends_with_intent(text: &str) -> bool {
     let text = text.trim();
-    if !is_short(text) || ends_with_question(text) {
+    if ends_with_question(text) {
         return false;
     }
+    let short = is_short(text);
     let Some(line) = text.lines().rev().find(|line| !line.trim().is_empty()) else {
         return false;
     };
@@ -179,9 +189,25 @@ pub(super) fn ends_with_intent(text: &str) -> bool {
         .map_or(line, |at| &line[at..])
         .trim()
         .to_lowercase();
+    if !short {
+        // A long reply is an answer unless its last sentence carries a strong signal;
+        // a plain "I'll …" closing a summary is a decision already taken, not a stop.
+        return names_a_coming_phase(&sentence)
+            || opens_with_gerund(&clause)
+            || opens_with_zh_step(&sentence)
+            || ends_with_zh_sequence(&sentence)
+            || ["let me", "let's", "now i'll", "next i'll"]
+                .iter()
+                .any(|opener| clause.starts_with(opener))
+            || INTENT_OPENERS
+                .iter()
+                .filter(|opener| !opener.is_ascii())
+                .any(|opener| clause.starts_with(opener));
+    }
     names_a_coming_phase(&sentence)
         || opens_with_gerund(&clause)
         || opens_with_zh_step(&sentence)
+        || ends_with_zh_sequence(&sentence)
         || INTENT_OPENERS.iter().any(|opener| {
             clause.strip_prefix(opener).is_some_and(|rest| {
                 rest.is_empty() || !opener.is_ascii() || rest.starts_with([' ', ','])
@@ -246,6 +272,21 @@ const ZH_STEPS: &[&str] = &["正在", "正做", "最后一轮"];
 /// What a clause that opens on "正在" says is going on without being a step the agent takes:
 /// a state the system is in ("正在运行的只有 nginx。"), as "Working now." is for the gerund.
 const ZH_NOT_STEPS: &[&str] = &["正在运行", "正在等待", "正在使用", "正在占用", "正在挂起"];
+
+/// How a final clause in Chinese opens when it is the bare next action, with no subject:
+/// a sequence word and then the verb ("提交推送，然后部署。", "现在实测一次。").
+const ZH_SEQUENCE: &[&str] = &["现在", "然后", "接着", "随后"];
+
+/// Whether the last clause of a last sentence opens on a bare next action in Chinese.
+/// A clause telling the user what to do next ("然后你重启即可") is advice, not a stop,
+/// and one that only recommends ("应", "建议") names work for later, not this turn.
+fn ends_with_zh_sequence(sentence: &str) -> bool {
+    let clause = sentence.rsplit('，').next().unwrap_or(sentence).trim();
+    !clause.contains('你')
+        && !clause.contains("应")
+        && !clause.contains("建议")
+        && ZH_SEQUENCE.iter().any(|step| clause.starts_with(step))
+}
 
 /// Whether any clause of a lowercased last sentence, split at `，`, opens on a step in Chinese.
 fn opens_with_zh_step(sentence: &str) -> bool {

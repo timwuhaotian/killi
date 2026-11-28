@@ -1341,8 +1341,8 @@ async fn tree_moving_git_runs_without_a_peer_or_in_another_tree() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn a_reply_ending_on_a_colon_is_asked_to_go_on_once() {
-    use crate::agent::ending::UNFINISHED;
+async fn a_reply_ending_on_a_colon_is_asked_to_go_on_twice() {
+    use crate::agent::ending::{ANNOUNCED_AGAIN, UNFINISHED};
     let notices = Rc::new(RefCell::new(Vec::new()));
     let seen = notices.clone();
     let sink: Sink = Rc::new(move |event| {
@@ -1368,25 +1368,30 @@ async fn a_reply_ending_on_a_colon_is_asked_to_go_on_once() {
     assert_eq!(agent.messages[3]["content"], UNFINISHED);
     assert_eq!(notices.borrow().len(), 1);
 
-    // A second colon ends the turn: it is asked once, not until it gives in.
-    let url = stub_replies(vec![sse("Digging:", "stop"), sse("Still digging:", "stop")]).await;
+    // A third colon ends the turn: it is asked twice, not until it gives in.
+    let url = stub_replies(vec![
+        sse("Digging:", "stop"),
+        sse("Still digging:", "stop"),
+        sse("More digging:", "stop"),
+    ])
+    .await;
     let mut agent = idle_agent("unfinished-twice", Controls::default(), Rc::new(|_| {}));
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
     let (text, _) = agent.run("why?", &[]).await.unwrap();
-    assert_eq!(text, "Still digging:");
+    assert_eq!(text, "More digging:");
     assert_eq!(
         agent
             .messages
             .iter()
-            .filter(|m| m["content"] == UNFINISHED)
+            .filter(|m| m["content"] == UNFINISHED || m["content"] == ANNOUNCED_AGAIN)
             .count(),
-        1
+        2
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_reply_announcing_a_next_step_is_asked_to_go_on_once() {
-    use crate::agent::ending::{ANNOUNCED, UNFINISHED};
+    use crate::agent::ending::{ANNOUNCED, ANNOUNCED_AGAIN, UNFINISHED};
     let notices = Rc::new(RefCell::new(Vec::new()));
     let seen = notices.clone();
     let sink: Sink = Rc::new(move |event| {
@@ -1409,18 +1414,25 @@ async fn a_reply_announcing_a_next_step_is_asked_to_go_on_once() {
     assert_eq!(agent.messages[3]["content"], ANNOUNCED);
     assert_eq!(notices.borrow().len(), 1);
 
-    // One reminder per turn, whichever ending earned it.
-    let url = stub_replies(vec![sse("Checking it.", "stop"), sse("Digging:", "stop")]).await;
+    // Two reminders per stop, whichever ending earned each: the second is the stronger one.
+    let url = stub_replies(vec![
+        sse("Checking it.", "stop"),
+        sse("Digging:", "stop"),
+        sse("Done.", "stop"),
+    ])
+    .await;
     let mut agent = idle_agent("announced-then-colon", Controls::default(), Rc::new(|_| {}));
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
     let (text, _) = agent.run("why?", &[]).await.unwrap();
-    assert_eq!(text, "Digging:");
+    assert_eq!(text, "Done.");
     let reminded = agent
         .messages
         .iter()
-        .filter(|m| m["content"] == ANNOUNCED || m["content"] == UNFINISHED)
+        .filter(|m| {
+            m["content"] == ANNOUNCED || m["content"] == UNFINISHED || m["content"] == ANNOUNCED_AGAIN
+        })
         .count();
-    assert_eq!(reminded, 1);
+    assert_eq!(reminded, 2);
 
     // A reminder that led to tool calls was heeded: the next stop earns its own.
     let call = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"todo_write\",\"arguments\":\"{\\\"todos\\\":[]}\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
@@ -1447,7 +1459,13 @@ async fn a_reply_announcing_a_next_step_is_asked_to_go_on_once() {
 async fn a_skill_turn_that_ends_before_any_tool_call_is_asked_to_go_on_once() {
     use crate::agent::ending::UNSTARTED;
     let skill = "Use the demo skill for this.\n\n<skill name=\"demo\" folder=\"/s\">\nOpen a PR.\n</skill>\n\njust the PR";
-    let url = stub_replies(vec![sse("Sure.", "stop"), sse("Opened #1.", "stop")]).await;
+    // The second reply still ran no step, so it earns the second (stronger) reminder too.
+    let url = stub_replies(vec![
+        sse("Sure.", "stop"),
+        sse("Opening it.", "stop"),
+        sse("Opened #1.", "stop"),
+    ])
+    .await;
     let mut agent = idle_agent("skill-unstarted", Controls::default(), Rc::new(|_| {}));
     Rc::get_mut(&mut agent.client).unwrap().model.base_url = url;
     let (text, _) = agent.run(skill, &[]).await.unwrap();

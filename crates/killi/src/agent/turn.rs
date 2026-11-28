@@ -131,7 +131,7 @@ impl Agent {
         let mut overflow_compacted = false;
         let mut media_stripped = false;
         let mut stop_blocks = 0;
-        let mut told_unfinished = false;
+        let mut told_unfinished = 0;
         let mut told_left_running = false;
         let mut told_open_tasks = false;
         // The goal check comes back after tool calls, up to `goal::MAX_CHECKS` per turn.
@@ -218,13 +218,21 @@ impl Agent {
                 // A reply that says what runs in the background and ends is how a turn should end
                 // while that work goes on: its report comes back by itself.
                 if !truncated
-                    && !told_unfinished
+                    && told_unfinished < MAX_UNFINISHED
                     && !self.background_working()
                     && let Some((notice, note)) = unfinished(&reply.text, skill && !called)
                 {
-                    told_unfinished = true;
-                    (self.sink)(Event::Notice(notice.into()));
-                    self.push(json!({"role": "user", "content": note}))?;
+                    let again = told_unfinished > 0;
+                    told_unfinished += 1;
+                    (self.sink)(Event::Notice(
+                        if again {
+                            "The reply stopped short again. Asked the agent to go on once more."
+                        } else {
+                            notice
+                        }
+                        .into(),
+                    ));
+                    self.push(json!({"role": "user", "content": if again { ANNOUNCED_AGAIN } else { note }}))?;
                     continue;
                 }
                 // `-p` stops everything as it exits, so only a session that goes on asks.
@@ -299,7 +307,7 @@ impl Agent {
                 held.clear();
             }
             // A reminder that was followed by tool calls worked; a later stop earns its own.
-            told_unfinished = false;
+            told_unfinished = 0;
             goal_check_due = true;
             let ran_from = self.messages.len();
             let stop = self.execute_calls(calls, truncated).await?;

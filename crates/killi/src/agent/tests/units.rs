@@ -1556,8 +1556,20 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         "发现一处疑似真问题：`button.tsx:21` 的 `destructive-soft` 只有 `dark:bg-destructive/20`、没有 `dark:hover:bg-*`，与同文件其他 variant 的写法不一致。正在验证 Tailwind 里 `dark:` 对 `hover:` 的覆盖顺序，避免误改。",
         "`text-background!` 语法需确认对 Tailwind v4 编译成 `!important` 才采用，正做隔离验证。",
         "最后一轮核对 console 直打错误对象的路径。",
+        // Bare next actions in Chinese: a sequence word, no subject (muse-ember's stops).
+        "存量错误确认，3个tsc报错改动前就存在。提交推送，然后部署。",
+        "新会话沿用逻辑已在上一轮确认。现在实测一次。",
     ] {
         assert!(ends_with_intent(stop), "{stop}");
+    }
+    // A long reply still stops short when its last sentence carries a strong signal.
+    for stop in [
+        format!("{} Next: start the WireGuard clients, then re-run the healthcheck.", "Checked the peers. ".repeat(12)),
+        format!("{} Let me check the logs.", "All peers are accounted for. ".repeat(8)),
+        format!("{}现在实测一次。", "配置已确认，".repeat(30)),
+        format!("{} Now verifying the edge cases.", "Core paths are mapped. ".repeat(10)),
+    ] {
+        assert!(ends_with_intent(&stop), "{stop}");
     }
     for answer in [
         "Done.",
@@ -1593,6 +1605,8 @@ fn a_short_reply_ending_on_a_next_step_announces_what_never_came() {
         // A state in progress or a result stated, not a step the agent is on.
         "正在运行的只有 nginx。",
         "服务都在，正在运行的有 2 个。",
+        // A sequence word that hands the next step to the user is advice, not a stop.
+        "结果已出，然后你重启即可。",
         "`text-background!` 在 Tailwind v4 下编译成 `!important`，可以采用。",
         "console 直打错误对象的路径没有问题。",
     ] {

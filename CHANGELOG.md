@@ -5,6 +5,10 @@ from [`releases/`](releases); the versions below match `Cargo.toml`.
 
 ## Unreleased
 
+## 0.9.19 — 2026-11-28
+
+- A reply that stops where the work was meant to start is sent back twice instead of once, the second time told not to announce the step again but to make the call or say what blocks it. Detection no longer needs the whole reply to be short: a long reply whose last sentence carries a strong signal (a coming phase, a step in progress, "let me…", "now I'll…") counts, as do bare Chinese next actions with no subject ("提交推送，然后部署。", "现在实测一次。"). A plain "I'll …" closing a long summary still ends the turn, as does advice that hands the next step to the user.
+
 ## 0.9.18 — 2026-11-28
 
 - A compaction keeps the newest steps word for word after the summary (about 80,000 characters at most, never more than a quarter of the conversation), so the model goes on from the results it was just working with instead of reading the same files again. Signed thinking blocks are dropped from the kept steps, as the Claude API requires once the history before them is replaced.
